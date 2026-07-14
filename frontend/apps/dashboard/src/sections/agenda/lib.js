@@ -174,3 +174,59 @@ export function wlWhatsAppMsg(w, appt, lang, salonName) {
   if (lang === 'en') return `Hi ${name}, a slot just opened up for ${svc} at ${slot}. Would you like to book it? 💜 ${salonName || ''}`.trim();
   return `Ciao ${name}, si è liberato un posto per ${svc} alle ${slot}. Ti interessa prenotarlo? 💜 ${salonName || ''}`.trim();
 }
+
+/* --- Anteprima passo-passo del flusso no-show / cancellazione -------------
+ * Restituiscono l'array di passi per <FlowSteps>. I contenuti rispecchiano
+ * l'esito reale del backend (apps/agenda/services.py): no-show/cancell. tardiva
+ * → caparra trattenuta; cancell. anticipata → rimborsata; senza caparra nulla.
+ * `matchCount` = voci di lista d'attesa compatibili (null finché in caricamento). */
+
+const _slotStep = (appt, t) => ({
+  n: 3,
+  title: t('Slot liberato', 'Slot freed'),
+  detail: timeLabel(aStartMin(appt)) + '–' + timeLabel(aEndMin(appt)),
+  tone: 'default',
+});
+
+const _waitlistStep = (matchCount, t) => ({
+  n: 4,
+  title: t("Proposto alla lista d'attesa", 'Offered to the waiting list'),
+  detail:
+    matchCount == null
+      ? '…'
+      : matchCount > 0
+        ? t(`${matchCount} in attesa`, `${matchCount} waiting`)
+        : t('nessuno compatibile', 'none matching'),
+  tone: matchCount ? 'default' : 'muted',
+});
+
+const _paid = (appt) => appt.deposit_status === 'paid';
+const _depEur = (appt, lang) => fmtEur(Number(appt.deposit_amount), lang);
+
+export function noShowSteps(appt, matchCount, t, lang) {
+  return [
+    { n: 1, title: t('No-show confermato', 'No-show confirmed'), tone: 'danger' },
+    _paid(appt)
+      ? { n: 2, title: t('Caparra trattenuta', 'Deposit forfeited'), detail: _depEur(appt, lang), tone: 'danger' }
+      : { n: 2, title: t('Nessuna caparra', 'No deposit'), detail: '—', tone: 'muted' },
+    _slotStep(appt, t),
+    _waitlistStep(matchCount, t),
+  ];
+}
+
+export function cancelSteps(appt, late, matchCount, t, lang) {
+  let dep;
+  if (!_paid(appt)) {
+    dep = { n: 2, title: t('Nessuna caparra', 'No deposit'), detail: '—', tone: 'muted' };
+  } else if (late) {
+    dep = { n: 2, title: t('Caparra trattenuta', 'Deposit forfeited'), detail: _depEur(appt, lang), tone: 'danger' };
+  } else {
+    dep = { n: 2, title: t('Caparra rimborsata', 'Deposit refunded'), detail: _depEur(appt, lang), tone: 'ok' };
+  }
+  return [
+    { n: 1, title: t('Cancellazione confermata', 'Cancellation confirmed'), tone: 'danger' },
+    dep,
+    _slotStep(appt, t),
+    _waitlistStep(matchCount, t),
+  ];
+}

@@ -1,6 +1,6 @@
 import json
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from common.auth import create_staff_tokens
 from common.conditions import evaluate
@@ -84,3 +84,9 @@ class SettingsApiTests(TestCase):
         self.assertEqual(
             SalonSettings.objects.get(salon=self.salon).slot_interval_min, 15
         )
+
+    @override_settings(CLIENT_MOVE_CANCEL_MIN_HOURS=48)
+    def test_salon_exposes_cancel_min_hours(self):
+        resp = self.client.get("/api/core/salon", **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["settings"]["cancel_min_hours"], 48)

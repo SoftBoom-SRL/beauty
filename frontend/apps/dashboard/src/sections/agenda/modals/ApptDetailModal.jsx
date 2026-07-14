@@ -1,22 +1,37 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, statusMeta, depositMeta } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
+import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches } from '../lib.js';
+import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps } from '../lib.js';
 
 const NOSHOW_REASONS = [['cliente', 'Mancata presenza', 'No-show'], ['salute', 'Malattia / imprevisto', 'Illness / emergency'], ['altro', 'Altro', 'Other']];
 const CANCEL_REASONS = [['cliente', 'Richiesta cliente', 'Client request'], ['salute', 'Malattia', 'Illness'], ['agenda', 'Sovrapposizione', 'Schedule clash'], ['altro', 'Altro', 'Other']];
 
 export default function ApptDetailModal({ appointment, onMutate, onClose }) {
-  const { t, lang, operators, opColors, services, serviceCategories, fireToast, openModal, setTab, setSelClient, hasScope } = useDash();
+  const { t, lang, operators, opColors, services, serviceCategories, settings, fireToast, openModal, setTab, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
   const [appt, setAppt] = useState(appointment);
   const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel'
   const [reason, setReason] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
   const [busy, setBusy] = useState(false);
+
+  /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
+  const [matchCount, setMatchCount] = useState(null);
+  useEffect(() => {
+    if (flow !== 'noshow' && flow !== 'cancel') return;
+    setMatchCount(null);
+    api.get('/api/agenda/waitlist')
+      .then((wl) => setMatchCount(wlMatches(wl, appt).length))
+      .catch(() => setMatchCount(null));
+  }, [flow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* cancellazione "tardiva" (caparra trattenuta) se manca meno della soglia salone */
+  const cancelMinH = settings?.cancel_min_hours ?? 24;
+  const lateCancel = !!appt && parseISO(appt.start).getTime() - Date.now() < cancelMinH * 3600000;
 
   /* enrich with client stats (visits, spend, categories, deposit_always) */
   const [clientDetail, setClientDetail] = useState(null);
@@ -185,20 +200,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             </button>
           </React.Fragment>
         }>
-        <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: '14px 15px', borderRadius: 12, background: 'var(--danger-tint)', border: '1px solid color-mix(in srgb, var(--danger) 25%, transparent)', marginBottom: 16 }}>
-          <Icon name="alert" size={18} color="var(--danger)" />
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-            <b>{t('La cliente non si è presentata.', 'The client did not show up.')}</b>{' '}
-            {t("Confermando, lo slot torna disponibile per la lista d'attesa.", 'On confirm, the slot becomes available for the waiting list.')}
-            {appt.deposit_status === 'paid' && <span> {t('La caparra già versata viene trattenuta.', 'The deposit already paid is forfeited.')}</span>}
-          </div>
+        <div className="t-meta" style={{ marginBottom: 12 }}>{t('Cosa succederà', 'What will happen')}</div>
+        <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
+          <FlowSteps steps={noShowSteps(appt, matchCount, t, lang)} />
         </div>
-        {appt.deposit_status === 'paid' && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '13px 15px', borderRadius: 12, background: 'var(--surface-2)', marginBottom: 16 }}>
-            <span style={{ fontWeight: 700 }}>{t('Caparra trattenuta', 'Deposit forfeited')}</span>
-            <span className="t-num" style={{ fontSize: 20, fontWeight: 800, color: 'var(--danger)' }}>{fmtEur(Number(appt.deposit_amount), lang)}</span>
-          </div>
-        )}
         <ReasonPicker reasons={NOSHOW_REASONS} />
       </DkModal>
     );
@@ -216,14 +221,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             </button>
           </React.Fragment>
         }>
-        {appt.deposit_status === 'paid' && (
-          <div style={{ display: 'flex', gap: 11, alignItems: 'flex-start', padding: '14px 15px', borderRadius: 12, background: 'var(--warn-tint)', marginBottom: 18 }}>
-            <Icon name="wallet" size={18} color="var(--warn)" />
-            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.45 }}>
-              {t(`Caparra di ${fmtEur(Number(appt.deposit_amount), lang)} già versata: se la cancellazione è tardiva viene trattenuta, altrimenti rimborsata.`, `A ${fmtEur(Number(appt.deposit_amount), lang)} deposit was paid: a late cancellation forfeits it, otherwise it is refunded.`)}
-            </div>
-          </div>
-        )}
+        <div className="t-meta" style={{ marginBottom: 12 }}>{t('Cosa succederà', 'What will happen')}</div>
+        <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
+          <FlowSteps steps={cancelSteps(appt, lateCancel, matchCount, t, lang)} />
+        </div>
         <ReasonPicker reasons={CANCEL_REASONS} />
       </DkModal>
     );
@@ -348,8 +349,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcDisplayName(it)}</span>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-                          <input type="number" min={5} step={5} value={it.duration_min}
-                            onChange={(e) => setItemDuration(it.key, e.target.value)} onBlur={() => clampItemDuration(it.key)}
+                          <NumInput integer min={5} value={it.duration_min} emptyValue=""
+                            onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
                             aria-label={t('Durata in minuti', 'Duration in minutes')}
                             style={{ width: 48, border: '1px solid var(--hair)', borderRadius: 8, padding: '4px 6px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
                           <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('min', 'min')}</span>

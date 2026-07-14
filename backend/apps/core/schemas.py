@@ -31,6 +31,9 @@ class SettingsOut(Schema):
     flexible_enabled: bool
     flexible_window_min: int
     flexible_reward_pct: int
+    # Soglia (ore) sotto la quale una cancellazione è "tardiva" → caparra trattenuta.
+    # Derivata da settings.CLIENT_MOVE_CANCEL_MIN_HOURS, sola lettura.
+    cancel_min_hours: int
 
 
 class SettingsIn(Schema):

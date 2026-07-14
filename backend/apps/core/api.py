@@ -1,3 +1,4 @@
+from django.conf import settings as django_settings
 from django.utils.dateparse import parse_date
 from ninja import File, Router
 from ninja.errors import HttpError
@@ -43,6 +44,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "flexible_enabled": s.flexible_enabled,
         "flexible_window_min": s.flexible_window_min,
         "flexible_reward_pct": s.flexible_reward_pct,
+        "cancel_min_hours": django_settings.CLIENT_MOVE_CANCEL_MIN_HOURS,
     }
 
 
