@@ -1,0 +1,192 @@
+/* yourang DESKTOP — salon staff web app. Layers on styles.css tokens. */
+:root { --side-w: 252px; --top-h: 70px; --rail-w: 312px; --dk-bg: #EFE9E1; }
+
+.dk-root { display: flex; height: 100vh; width: 100vw; overflow: hidden; background: var(--dk-bg); color: var(--ink); }
+
+/* Sidebar */
+.dk-side { width: var(--side-w); flex-shrink: 0; height: 100%; background: var(--ink); color: #fff; display: flex; flex-direction: column; padding: 22px 16px 16px; }
+.dk-logo { display: flex; align-items: center; gap: 9px; padding: 4px 10px 22px; }
+.dk-logo b { font-size: 21px; font-weight: 800; letter-spacing: -0.025em; color: #fff; }
+.dk-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; overflow-y: auto; }
+.dk-nav::-webkit-scrollbar { width: 0; }
+.dk-navitem { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 12px; color: rgba(255,255,255,0.62); font-weight: 600; font-size: 14.5px; cursor: pointer; transition: all 150ms var(--ease); text-align: left; width: 100%; position: relative; }
+.dk-navitem:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.92); }
+.dk-navitem--active { background: rgba(255,255,255,0.10); color: #fff; }
+.dk-navitem--active::before { content: ""; position: absolute; left: -16px; top: 50%; transform: translateY(-50%); width: 4px; height: 22px; border-radius: 0 4px 4px 0; background: var(--clay); }
+.dk-navitem .badge { margin-left: auto; background: var(--clay); color: #fff; font-size: 11px; font-weight: 700; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: grid; place-items: center; }
+.dk-navsection { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.32); padding: 18px 12px 8px; }
+.dk-salon { margin-top: 8px; padding: 12px; border-radius: 14px; background: rgba(255,255,255,0.07); display: flex; align-items: center; gap: 11px; cursor: pointer; transition: background 150ms; }
+.dk-salon:hover { background: rgba(255,255,255,0.11); }
+
+/* Main */
+.dk-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; }
+.dk-top { height: var(--top-h); flex-shrink: 0; background: rgba(247,243,238,0.86); backdrop-filter: blur(18px); border-bottom: 1px solid var(--hair); display: flex; align-items: center; gap: 18px; padding: 0 30px; z-index: 40; }
+.dk-content { flex: 1; overflow-y: auto; min-height: 0; position: relative; }
+.dk-content::-webkit-scrollbar { width: 10px; }
+.dk-content::-webkit-scrollbar-thumb { background: rgba(33,28,24,0.14); border-radius: 99px; border: 3px solid var(--paper); }
+.dk-search { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 999px; padding: 0 16px; height: 42px; width: 320px; transition: border-color 150ms, box-shadow 150ms; }
+.dk-search:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 4px var(--hair-2); }
+.dk-search input { flex: 1; border: none; outline: none; background: transparent; font-size: 14.5px; }
+.dk-iconbtn { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--hair); cursor: pointer; transition: all 150ms var(--ease); }
+.dk-iconbtn:hover { background: var(--surface-2); border-color: var(--line-strong); }
+.dk-page { padding: 28px 30px 40px; }
+.dk-pagehead { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; gap: 20px; }
+
+/* Cards / buttons / rows */
+.dk-card { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-card); }
+.dk-hovercard { transition: transform 160ms var(--ease), box-shadow 160ms var(--ease); cursor: pointer; }
+.dk-hovercard:hover { transform: translateY(-2px); box-shadow: var(--sh-pop); }
+.dk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 9px; height: 44px; padding: 0 20px; border-radius: 12px; font-weight: 600; font-size: 14.5px; transition: all 150ms var(--ease); white-space: nowrap; cursor: pointer; }
+.dk-btn--primary { background: var(--ink); color: #fff; }
+.dk-btn--primary:hover { background: #000; transform: translateY(-1px); box-shadow: var(--sh-card); }
+.dk-btn--clay { background: var(--clay); color: #fff; }
+.dk-btn--clay:hover { background: var(--clay-ink); transform: translateY(-1px); box-shadow: 0 8px 20px rgba(99,102,241,0.32); }
+.dk-btn--ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); }
+.dk-btn--ghost:hover { background: var(--surface-2); }
+.dk-btn--soft { background: var(--paper-2); color: var(--ink); }
+.dk-btn--soft:hover { background: #e8dfd3; }
+.dk-row { transition: background 130ms var(--ease); cursor: pointer; }
+.dk-row:hover { background: var(--surface-2); }
+
+/* Modal / drawer / toast */
+.dk-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(33,28,24,0.40); backdrop-filter: blur(3px); display: flex; animation: dkScrimIn 200ms var(--ease); }
+@keyframes dkScrimIn { from { background: rgba(33,28,24,0); backdrop-filter: blur(0); } to { background: rgba(33,28,24,0.40); backdrop-filter: blur(3px); } }
+.dk-modal { margin: auto; background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--sh-pop); width: 560px; max-width: calc(100vw - 48px); max-height: calc(100vh - 64px); display: flex; flex-direction: column; overflow: hidden; animation: dkPop 240ms var(--ease-emph); }
+@keyframes dkPop { from { transform: translateY(12px) scale(0.98); } to { transform: none; } }
+.dk-drawer { margin-left: auto; height: 100%; width: 460px; max-width: 92vw; background: var(--surface); box-shadow: -12px 0 50px rgba(33,28,24,0.18); display: flex; flex-direction: column; position: relative; animation: dkSlideR 280ms var(--ease-emph); }
+@keyframes dkSlideR { from { transform: translateX(24px); } to { transform: none; } }
+.dk-modalhead { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px 16px; }
+.dk-modalbody { overflow-y: auto; padding: 0 24px 24px; }
+.dk-toast { position: fixed; right: 28px; bottom: 96px; z-index: 300; background: var(--ink); color: #fff; border-radius: 14px; padding: 14px 18px; display: flex; align-items: center; gap: 13px; box-shadow: var(--sh-pop); max-width: 420px; animation: dkToast 280ms var(--ease-emph); }
+@keyframes dkToast { from { transform: translateY(16px); } to { transform: none; } }
+
+/* global AI analyst FAB */
+.dk-ai-fab { position: fixed; right: 28px; bottom: 28px; z-index: 150; display: inline-flex; align-items: center; gap: 10px; height: 56px; padding: 0 22px 0 18px; border-radius: 999px; cursor: pointer; background: linear-gradient(120deg, var(--clay), var(--clay-ink)); color: #fff; box-shadow: 0 10px 30px rgba(99,102,241,0.38), 0 2px 6px rgba(33,28,24,0.14); transition: transform 160ms var(--ease), box-shadow 160ms var(--ease); }
+.dk-ai-fab:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(99,102,241,0.45), 0 2px 6px rgba(33,28,24,0.18); }
+.dk-ai-fab__label { font-size: 14.5px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap; }
+@media (max-width: 1080px) { .dk-ai-fab__label { display: none; } .dk-ai-fab { padding: 0; width: 56px; justify-content: center; } }
+
+.dk-seg { display: inline-flex; background: var(--paper-2); border-radius: 999px; padding: 4px; gap: 3px; }
+.dk-seg button { height: 36px; padding: 0 18px; border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--muted); cursor: pointer; transition: all 160ms var(--ease); }
+.dk-seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--sh-sm); }
+.dk-kbd { font-size: 11px; font-weight: 700; color: var(--muted-2); background: var(--paper-2); border: 1px solid var(--hair); border-radius: 6px; padding: 2px 6px; }
+
+@media (max-width: 1180px) { :root { --rail-w: 0px; } .dk-rail { display: none !important; } }
+@media (max-width: 920px) { :root { --side-w: 76px; } .dk-navitem span.lbl, .dk-logo b, .dk-navsection, .dk-salon .meta { display: none; } .dk-navitem { justify-content: center; } .dk-search { width: 200px; } }
+
+/* ============================================================
+   VISUAL RESTYLE — modern indigo SaaS (desktop only, scoped to .dk-root)
+   Token remap: every component reads these vars, so the whole
+   desktop restyles at once. Mobile app (shared styles.css) untouched.
+   ============================================================ */
+.dk-root {
+  /* type → SF Pro via Apple system stack (proprietary, not loaded from CDN) */
+  --sans: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --serif: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+
+  /* neutrals */
+  --ink: #1A1A2E;
+  --ink-2: #374151;
+  --muted: #6B7280;
+  --muted-2: #9CA3AF;
+  --faint: #C7CAD1;
+  --paper: #F7F8FA;
+  --paper-2: #EEF0F4;
+  --surface: #FFFFFF;
+  --surface-2: #F7F8FA;
+  --hair: #ECECF1;
+  --hair-2: #F2F3F6;
+  --line-strong: #DCDDE4;
+  --dk-bg: #F7F8FA;
+
+  /* accent → indigo */
+  --clay: #6366F1;
+  --clay-ink: #4F46E5;
+  --clay-tint: #EEF0FE;
+  --clay-tint2: #E0E3FB;
+
+  /* status → modern, brighter */
+  --ok: #16A34A;        --ok-tint: #DCFCE7;
+  --warn: #D97706;      --warn-tint: #FEF3C7;
+  --danger: #DC2626;    --danger-tint: #FEE2E2;
+  --info: #2563EB;      --info-tint: #DBEAFE;
+
+  /* operator colour-coding → purple family, coordinated with indigo accent */
+  --op-sole: #6366F1;
+  --op-mara: #8B5CF6;
+  --op-lina: #7C3AED;
+  --op-giulia: #818CF8;
+  --op-asia: #A78BFA;
+  --op-noor: #C4B5FD;
+  --op-vera: #6D5BD0;
+  --op-ines: #9D7BEA;
+  --op-dafne: #B89CF5;
+
+  /* radii → softer SaaS cards */
+  --r-xs: 8px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 16px;
+  --r-xl: 18px;
+
+  /* shadows → very soft */
+  --sh-sm: 0 1px 2px rgba(17,24,39,0.04);
+  --sh-card: 0 1px 2px rgba(17,24,39,0.04);
+  --sh-pop: 0 4px 12px rgba(17,24,39,0.08), 0 12px 32px rgba(17,24,39,0.10);
+  --sh-sheet: 0 -8px 30px rgba(17,24,39,0.10);
+}
+
+/* card border so white-on-near-white reads cleanly */
+.dk-root .dk-card { border: 1px solid var(--hair); }
+
+/* SF Pro must win everywhere — inherit on all descendants */
+.dk-root, .dk-root *, .dk-root *::before, .dk-root *::after { font-family: var(--sans); }
+
+/* sidebar → white */
+.dk-root .dk-side { background: #FFFFFF; border-right: 1px solid var(--hair); }
+.dk-root .dk-logo b { color: var(--ink); }
+.dk-root .dk-navsection { color: var(--muted-2); }
+.dk-root .dk-navitem { color: var(--muted); font-weight: 500; }
+.dk-root .dk-navitem:hover { background: #F3F4F6; color: var(--ink); }
+.dk-root .dk-navitem--active { background: var(--clay-tint); color: var(--clay-ink); font-weight: 600; }
+.dk-root .dk-navitem--active::before { display: none; }
+.dk-root .dk-salon { background: #F3F4F6; }
+.dk-root .dk-salon:hover { background: #ECEDF1; }
+
+/* topbar → solid white */
+.dk-root .dk-top { background: rgba(255,255,255,0.86); }
+.dk-root .dk-iconbtn:hover { background: #F3F4F6; }
+
+/* ── Collapsible left sidebar (manual toggle) ── */
+.dk-root.dk-side-collapsed { --side-w: 78px; }
+.dk-side-collapsed .dk-navitem span.lbl,
+.dk-side-collapsed .dk-logo b,
+.dk-side-collapsed .dk-navsection,
+.dk-side-collapsed .dk-navitem .badge,
+.dk-side-collapsed .dk-salon .meta,
+.dk-side-collapsed .dk-salon .dk-salon-chev { display: none !important; }
+.dk-side-collapsed .dk-navitem { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-logo { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-side-extlink { display: none !important; }
+.dk-side-collapsed .dk-logo > span { display: none; }
+.dk-side-collapsed .dk-salon { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-subtabs { display: none !important; }
+/* collapse toggle — discoverable pill */
+.dk-collapse-btn { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; cursor: pointer; background: var(--clay-tint); color: var(--clay-ink); flex-shrink: 0; transition: background 140ms var(--ease); }
+.dk-collapse-btn:hover { background: var(--clay); color: #fff; }
+.dk-collapse-btn:hover svg { stroke: #fff; }
+/* rail collapse / expand toggle */
+.dk-rail-toggle { display: inline-grid; place-items: center; cursor: pointer; background: var(--clay-tint); color: var(--clay-ink); border-radius: 9px; transition: background 140ms var(--ease); }
+.dk-rail-toggle:hover { background: var(--clay); }
+.dk-rail-toggle:hover svg { stroke: #fff; }
+
+/* primary buttons keep ink; clay buttons now indigo via token. Soft hover. */
+.dk-root .dk-btn--soft:hover { background: var(--clay-tint); color: var(--clay-ink); }
+
+/* table header caps */
+.dk-root .t-meta { letter-spacing: 0.06em; }
+

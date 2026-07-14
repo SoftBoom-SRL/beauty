@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>yourang — app salone · desktop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="desktop.css" />
+<style>
+  html, body { height: 100%; }
+  body { background: #F7F8FA; overflow: hidden; }
+  #root { height: 100vh; }
+  /* instant loading splash — shown before React mounts, auto-replaced on mount */
+  .boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; background: #F7F8FA; font-family: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+  .boot__wm { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 26px; letter-spacing: -0.025em; color: #1A1A2E; }
+  .boot__wm i { width: 8px; height: 8px; border-radius: 50%; background: #6366F1; display: inline-block; }
+  .boot__ring { width: 30px; height: 30px; border-radius: 50%; border: 3px solid rgba(26,26,46,0.12); border-top-color: #6366F1; animation: bootspin 0.8s linear infinite; }
+  .boot__txt { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; color: #6B7280; }
+  @keyframes bootspin { to { transform: rotate(360deg); } }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"><div class="boot"><div class="boot__wm">yourang<i></i></div><div class="boot__ring"></div><div class="boot__txt">Caricamento dell'app salone…</div></div></div>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="components.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="desktop-shell.jsx"></script>
+<script type="text/babel" src="desktop-agenda.jsx"></script>
+<script type="text/babel" src="desktop-clienti.jsx"></script>
+<script type="text/babel" src="desktop-insight.jsx"></script>
+<script type="text/babel" src="desktop-automazioni.jsx"></script>
+<script type="text/babel" src="desktop-misc.jsx"></script>
+<script type="text/babel" src="desktop-fedelta.jsx"></script>
+<script type="text/babel" src="desktop-comunicazioni.jsx"></script>
+<script type="text/babel" src="desktop-pos.jsx"></script>
+<script type="text/babel" src="desktop-modals.jsx"></script>
+<script type="text/babel" src="desktop-boot.jsx"></script>
+<script>
+  /* plain JS (not Babel): self-healing boot watchdog.
+     If desktop-boot.jsx fails to load (flaky network), mount the app directly
+     as soon as DesktopApp is available. Only after 14s of real failure show the error. */
+  (function () {
+    var tries = 0;
+    var iv = setInterval(function () {
+      var root = document.getElementById('root');
+      var stuck = root && root.querySelector('.boot');
+      if (!stuck) { clearInterval(iv); return; } // app mounted normally
+      if (!window.__yrMounted && window.DesktopApp && window.ReactDOM && window.React) {
+        clearInterval(iv);
+        window.__yrMounted = true;
+        try { ReactDOM.createRoot(root).render(React.createElement(window.DesktopApp)); return; } catch (e) {}
+      }
+      if (++tries >= 28) { // ~14s
+        clearInterval(iv);
+        var txt = root.querySelector('.boot__txt');
+        var ring = root.querySelector('.boot__ring');
+        if (ring) ring.style.display = 'none';
+        if (txt) { txt.innerHTML = 'Sto impiegando pi\u00f9 del previsto. Controlla la connessione e <a href="" style="color:#9A4A2E;font-weight:700;">ricarica la pagina</a>.'; txt.style.maxWidth = '280px'; txt.style.textAlign = 'center'; txt.style.lineHeight = '1.5'; }
+      }
+    }, 500);
+  })();
+</script>
+</body>
+</html>

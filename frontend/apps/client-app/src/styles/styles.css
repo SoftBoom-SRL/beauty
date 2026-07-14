@@ -1,0 +1,204 @@
+/* ============================================================
+   yourang — gestionale beauty & hair
+   Visual system: warm editorial luxe, calm and precise.
+   Espresso ink · porcelain paper · clay accent.
+   ============================================================ */
+
+:root {
+  /* ---- Neutrals (warm) ---- */
+  --ink:        #211C18;   /* espresso near-black, primary text */
+  --ink-2:      #4A4239;   /* strong secondary */
+  --muted:      #756B5F;   /* secondary text */
+  --muted-2:    #A89E90;   /* tertiary / captions */
+  --faint:      #C9BFB2;   /* disabled / placeholder */
+  --paper:      #F7F3EE;   /* app background */
+  --paper-2:    #F1EAE1;   /* alt background panel */
+  --surface:    #FFFFFF;   /* cards */
+  --surface-2:  #FBF8F4;   /* nested surface */
+  --hair:       rgba(33,28,24,0.09);   /* hairline */
+  --hair-2:     rgba(33,28,24,0.05);
+  --line-strong:rgba(33,28,24,0.16);
+
+  /* ---- yourang brand accent — clay ---- */
+  --clay:       #C2603F;
+  --clay-ink:   #9A4A2E;
+  --clay-tint:  #F4E4DB;
+  --clay-tint2: #EFD7CA;
+
+  /* ---- Status ---- */
+  --ok:         #5F7E63;   /* sage — check-in / versato */
+  --ok-tint:    #E4EBE2;
+  --warn:       #B5862F;   /* honey — in arrivo / sottoscorta */
+  --warn-tint:  #F3E8D0;
+  --danger:     #B5544B;   /* muted clay-red — no-show / annulla */
+  --danger-tint:#F2DDD9;
+  --info:       #5E748C;
+  --info-tint:  #E1E7ED;
+
+  /* ---- Operatrici colour coding ---- */
+  --op-sole:   #C2603F;
+  --op-mara:   #5F7E63;
+  --op-lina:   #8A5A6E;
+  --op-giulia: #5E748C;
+  --op-asia:   #B5862F;
+  --op-noor:   #4F8079;
+
+  /* ---- Client white-label (themeable) — defaults to The Parlour ---- */
+  --brand:      #7C4A57;
+  --brand-ink:  #5E3441;
+  --brand-tint: #EFE3E6;
+  --brand-on:   #FFFFFF;
+
+  /* ---- Type ---- (matched to the desktop dashboard: SF Pro via Apple system stack) */
+  --sans: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --serif: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+
+  /* ---- Radii ---- */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-xl: 28px;
+  --r-pill: 999px;
+
+  /* ---- Shadow (warm, low) ---- */
+  --sh-sm:  0 1px 2px rgba(33,28,24,0.06);
+  --sh-card:0 1px 2px rgba(33,28,24,0.04), 0 10px 26px rgba(33,28,24,0.07);
+  --sh-pop: 0 2px 6px rgba(33,28,24,0.08), 0 22px 50px rgba(33,28,24,0.14);
+  --sh-sheet:0 -10px 44px rgba(33,28,24,0.16);
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-emph: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* safe areas inside the iOS frame */
+  --safe-top: 64px;
+  --safe-bottom: 22px;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: #E7E0D7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, textarea, select { font-family: inherit; }
+
+/* ---------- Type utilities ---------- */
+.t-serif { font-family: var(--serif); }
+.t-display {
+  font-family: var(--serif); font-weight: 400; font-size: 30px;
+  line-height: 1.08; letter-spacing: -0.01em; color: var(--ink);
+}
+.t-title {
+  font-family: var(--serif); font-weight: 500; font-size: 23px;
+  line-height: 1.12; letter-spacing: -0.005em; color: var(--ink);
+}
+.t-h3 { font-weight: 600; font-size: 17px; line-height: 1.25; letter-spacing: -0.01em; color: var(--ink); }
+.t-body { font-weight: 400; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+.t-ui { font-weight: 500; font-size: 14px; line-height: 1.3; color: var(--ink); }
+.t-sm { font-weight: 500; font-size: 13px; line-height: 1.35; color: var(--muted); }
+.t-meta { font-weight: 600; font-size: 11px; line-height: 1.2; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted-2); }
+.t-num { font-family: var(--serif); font-weight: 400; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tabnum { font-variant-numeric: tabular-nums; }
+
+/* ---------- App scroll area ---------- */
+.scroll { overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.scroll::-webkit-scrollbar { width: 0; height: 0; }
+
+/* ---------- Press feedback ---------- */
+.press { transition: transform 120ms var(--ease), opacity 120ms var(--ease); }
+.press:active { transform: scale(0.97); opacity: 0.9; }
+
+/* ---------- Cards ---------- */
+.card {
+  background: var(--surface); border-radius: var(--r-md);
+  box-shadow: var(--sh-card);
+}
+
+/* ---------- Pills / chips ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 13px; border-radius: var(--r-pill);
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+  background: var(--surface); color: var(--ink-2);
+  border: 1px solid var(--hair); transition: all 160ms var(--ease);
+}
+.chip--active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 50px; padding: 0 22px; border-radius: var(--r-pill);
+  font-weight: 600; font-size: 15px; letter-spacing: 0.01em;
+  transition: all 160ms var(--ease); white-space: nowrap;
+}
+.btn--primary { background: var(--ink); color: #fff; }
+.btn--primary:active { background: #000; }
+.btn--clay { background: var(--clay); color: #fff; }
+.btn--clay:active { background: var(--clay-ink); }
+.btn--ghost { background: transparent; color: var(--ink); border: 1px solid var(--line-strong); }
+.btn--ghost:active { background: var(--paper-2); }
+.btn--soft { background: var(--paper-2); color: var(--ink); }
+.btn--block { width: 100%; }
+.btn--brand { background: var(--brand); color: var(--brand-on); }
+.btn--brand:active { background: var(--brand-ink); }
+
+/* ---------- Skeleton ---------- */
+@keyframes shimmer { 100% { background-position: -200% 0; } }
+.skel {
+  background: linear-gradient(90deg, var(--paper-2) 25%, #efe8df 37%, var(--paper-2) 63%);
+  background-size: 200% 100%; animation: shimmer 1.3s linear infinite;
+  border-radius: 8px;
+}
+
+/* ---------- Animations ---------- */
+@keyframes slideUp { from { transform: translateY(16px); } to { transform: translateY(0); } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0.2; } to { opacity: 1; } }
+@keyframes popIn { from { transform: scale(0.95); } to { transform: scale(1); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes dotpulse { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+@keyframes growW { from { width: 0; } }
+
+.fade-in { animation: fadeIn 280ms var(--ease) both; }
+.slide-up { animation: slideUp 320ms var(--ease) both; }
+.pop-in { animation: popIn 240ms var(--ease-emph) both; }
+
+/* stagger helper */
+.stagger > * { animation: slideUp 360ms var(--ease) both; }
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 45ms; }
+.stagger > *:nth-child(3) { animation-delay: 90ms; }
+.stagger > *:nth-child(4) { animation-delay: 135ms; }
+.stagger > *:nth-child(5) { animation-delay: 180ms; }
+.stagger > *:nth-child(6) { animation-delay: 225ms; }
+.stagger > *:nth-child(7) { animation-delay: 270ms; }
+.stagger > *:nth-child(8) { animation-delay: 315ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, .stagger > * { animation: none !important; }
+}
+
+/* typing dots */
+.tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); display: inline-block; animation: dotpulse 1.2s infinite; }
+.tdot:nth-child(2){ animation-delay: 0.15s; }
+.tdot:nth-child(3){ animation-delay: 0.3s; }
+
+/* toggle switch */
+.swt { width: 46px; height: 28px; border-radius: 999px; background: var(--faint); position: relative; transition: background 200ms var(--ease); flex-shrink: 0; }
+.swt--on { background: var(--ok); }
+.swt::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: transform 200ms var(--ease); }
+.swt--on::after { transform: translateX(18px); }
+
+/* divider */
+.hr { height: 1px; background: var(--hair); border: 0; margin: 0; }
+
+/* mini bar chart bars use growW */

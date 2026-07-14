@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>yourang — Manuale dei flussi e del funzionamento</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", -apple-system, Helvetica, Arial, sans-serif; color: #1F1F21; line-height: 1.55; max-width: 900px; margin: 0 auto; padding: 48px 40px 80px; font-size: 14.5px; }
+  h1 { font-size: 30px; letter-spacing: -0.02em; margin: 0 0 4px; }
+  h2 { font-size: 21px; margin: 40px 0 10px; padding-bottom: 7px; border-bottom: 2px solid #6366F1; color: #4F46E5; }
+  h3 { font-size: 16.5px; margin: 22px 0 6px; color: #1F1F21; }
+  h4 { font-size: 14.5px; margin: 16px 0 4px; color: #45444A; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0 8px 4px; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code { background: #ECEAEE; padding: 1px 6px; border-radius: 4px; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; color: #4F46E5; }
+  .lead { color: #45444A; font-size: 15.5px; }
+  .tag { display: inline-block; background: #EEF0FF; color: #4F46E5; font-weight: 700; font-size: 11.5px; padding: 2px 9px; border-radius: 99px; letter-spacing: 0.02em; }
+  .box { background: #F4F2F4; border: 1px solid #D8D6DC; border-radius: 10px; padding: 14px 18px; margin: 12px 0; }
+  .flow { background: #EEF0FF; border-left: 4px solid #6366F1; border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .flow b { color: #4F46E5; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid #D8D6DC; padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: #F4F2F4; font-weight: 700; }
+  .muted { color: #6F6E74; font-size: 13px; }
+  .cover { border-bottom: 3px solid #6366F1; padding-bottom: 18px; margin-bottom: 8px; }
+  .cover .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #6366F1; margin-left: 4px; vertical-align: middle; }
+  .toc a { color: #4F46E5; text-decoration: none; }
+  @media print { body { padding: 0; } h2 { page-break-after: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>yourang<span class="dot"></span> — Manuale dei flussi</h1>
+  <p class="lead">Libretto di istruzioni del funzionamento della <b>dashboard gestionale</b>, della <b>web app cliente</b> e del loro dialogo con il motore <b>Yourang</b>.</p>
+  <p class="muted">Salone di riferimento: The Parlour (Firenze). Documento tecnico-funzionale · versione allineata all'ultima build.</p>
+</div>
+
+<h2 id="toc">Indice</h2>
+<ol class="toc">
+  <li><a href="#arch">Architettura: le tre superfici</a></li>
+  <li><a href="#principio">Principio di comunicazione dashboard ↔ Yourang ↔ app cliente</a></li>
+  <li><a href="#dash">La dashboard gestionale — sezioni e funzioni</a></li>
+  <li><a href="#app">La web app cliente (yourang) — sezioni e funzioni</a></li>
+  <li><a href="#flussi">I flussi che collegano dashboard e app</a></li>
+  <li><a href="#ruoli">Ruoli, permessi e registro attività</a></li>
+  <li><a href="#branding">Branding white-label e multi-sede</a></li>
+  <li><a href="#glossario">Glossario dei termini</a></li>
+</ol>
+
+<h2 id="arch">1 · Architettura: le tre superfici</h2>
+<p>Il sistema vive su <b>tre superfici</b> distinte che condividono gli stessi dati:</p>
+<table>
+  <tr><th>Superficie</th><th>Chi la usa</th><th>Scopo</th></tr>
+  <tr><td><b>Dashboard gestionale</b> (desktop)</td><td>Titolare e staff del salone</td><td>Gestione completa: agenda, cassa, clienti, magazzino, marketing, staff, analisi.</td></tr>
+  <tr><td><b>Web app cliente</b> (yourang, mobile)</td><td>La cliente finale</td><td>Prenotare, spostare/annullare, lista d'attesa, portafoglio (gift card, coupon, fedeltà), pacchetti, profilo.</td></tr>
+  <tr><td><b>Yourang</b> (motore)</td><td>Sistema, in automatico</td><td>Esecuzione tecnica: invio messaggi WhatsApp, trigger delle automazioni, dinamiche interne. È il "canale" che veicola le comunicazioni.</td></tr>
+</table>
+<p class="muted">Regola cardine: la dashboard <b>configura</b> le regole; Yourang <b>esegue</b> (canale, invio, tempi); l'app cliente <b>presenta</b> alla cliente ciò che la riguarda e ne raccoglie le azioni.</p>
+
+<h2 id="principio">2 · Principio di comunicazione</h2>
+<div class="flow">
+  <p><b>Dashboard → Yourang → App cliente.</b> Sulla dashboard si imposta <i>cosa</i> innesca un'azione, <i>quando</i> e con <i>quali condizioni</i>. L'evento parte da un'azione interna (es. nuovo appuntamento) o da un webhook esterno. Yourang esegue l'invio sul canale attivo (WhatsApp). L'app cliente mostra il risultato (conferma, promemoria, coupon, ecc.).</p>
+</div>
+<ul>
+  <li><b>Canale attivo:</b> WhatsApp. Messaggi e dinamiche di invio vivono su Yourang e sono solo <i>sincronizzati</i> e visibili in dashboard (anteprima in sola lettura + "Apri su Yourang").</li>
+  <li><b>Lingua:</b> ogni cliente ha una <b>lingua preferita</b> (IT/EN) impostata nella sua scheda; tutte le comunicazioni automatiche partono in quella lingua senza intervento manuale.</li>
+  <li><b>Origine trigger delle automazioni:</b> <code>Yourang</code> (evento interno) oppure <code>Webhook</code> (sistema esterno, con URL endpoint in sola lettura).</li>
+</ul>
+
+<h2 id="dash">3 · La dashboard gestionale</h2>
+
+<h3>3.1 Agenda</h3>
+<ul>
+  <li><b>Viste</b> Giorno / Settimana / Mese. In Giorno: colonne per operatrice. In Settimana: colonne per operatrice compresse, larghezza fissa con <b>scorrimento orizzontale</b> (si vedono ~3–4 giorni con sidebar chiuse), giorno corrente evidenziato in azzurrino, separatori viola. Navigazione con frecce e <b>date picker</b> rapido (salto mese/anno).</li>
+  <li><b>Slot da 15 minuti.</b> Cliccando uno slot libero si sceglie tra <b>Nuovo appuntamento</b> o <b>Pausa</b>. Cliccando un punto della colonna l'orario di inizio si aggancia allo slot più vicino e l'operatrice è quella della colonna.</li>
+  <li><b>Blocco appuntamento:</b> mostra sempre nome e cognome cliente + orario; colore per <b>categoria di servizio</b>; icona quando la <b>caparra è stata incassata</b>. Hover: tooltip con cliente, servizio, orario, telefono, note. Hover sull'operatrice: nome e cognome.</li>
+  <li><b>Pausa:</b> blocco dedicato, trascinabile e ridimensionabile, non prenotabile; durata e slot personalizzabili.</li>
+  <li><b>Popup appuntamento</b> (ciclo di vita: Confermato → Check-in → In corso → Check-out → Chiuso):
+    <ul>
+      <li>Prima riga con dati cliente + "Apri scheda cliente" + tasto <b>Yourang</b> (contatto).</li>
+      <li>Colonna sinistra: operatrice in evidenza (avatar/colore), caparra, banner <b>conferma prenotazione</b> WhatsApp, anteprima <b>scheda tecnica</b>.</li>
+      <li>Azioni in sequenza: <b>Check-in</b> (arrivo) → <b>Check-out · incasso e vendita</b> (un unico passaggio). Secondarie: Note, Sposta, Modifica trattamento. Distruttive (No-show, Cancella) declassate.</li>
+      <li><b>Sposta</b> possibile fino a 48h prima; <b>Cancella</b>/<b>No-show</b> chiedono una motivazione (opzioni rapide + nota) e, per cancellazione tardiva/no-show, mostrano l'addebito dell'intero importo (carta salvata su Stripe) prima della conferma.</li>
+      <li><b>Stima margine</b> (dato gestionale interno, riga di sintesi espandibile): costo fornitori, costo prodotti (uso vs vendita), costo dipendente, totale costi vs incasso, margine € e %.</li>
+    </ul>
+  </li>
+  <li><b>Pannello destro:</b> box <b>Vendite totali di oggi</b> (checkout servizi+prodotti + vendite del Punto Vendita) — cliccabile, porta al <b>Registro attività</b> filtrato su oggi; <b>Opportunità di oggi</b>; <b>Lista d'attesa</b>. La sidebar destra e quella sinistra sono collassabili.</li>
+</ul>
+
+<h3>3.2 Check-out, incasso e vendita (un unico step)</h3>
+<ul>
+  <li>Al check-out si registra l'incasso <b>e</b> la vendita nello stesso passaggio.</li>
+  <li>Box organizzata <b>per operatrice</b>: ogni operatrice che ha servito la cliente ha il suo blocco con servizi e prodotti venduti; ogni voce può essere <b>omaggiata</b> o <b>scontata</b> (% sul prodotto). Ogni blocco mostra il subtotale accreditato.</li>
+  <li>Pagamento unico condiviso: Contanti / Carta / Altro, oppure <b>diviso</b> (una parte contanti, una carta) con verifica che la somma corrisponda al totale.</li>
+  <li>La <b>caparra prepagata</b> è mostrata come detrazione: si incassa il <b>saldo residuo</b>, non il totale pieno.</li>
+  <li>Conferma con stato di successo sul pulsante (spunta ~1,4s) per evitare doppi tocchi.</li>
+</ul>
+
+<h3>3.3 Punto Vendita (POS)</h3>
+<ul>
+  <li>Vendita rapida da banco <b>senza appuntamento</b> (prodotti retail, gift card, vendite occasionali).</li>
+  <li>Sotto-tab: <b>Prodotti</b>, <b>Gift card</b>, <b>Storico</b>.</li>
+  <li>Carrello con: cliente facoltativo (ricerca o "da banco", anche scelta dall'elenco), operatrice a cui accreditare la vendita, possibilità di <b>omaggiare</b> il prodotto (scala comunque dal magazzino), metodo di pagamento, totale (mostra "€0", mai "Gratis").</li>
+  <li><b>Storico</b>: KPI (incasso, n° vendite, articoli), ricerca e filtri, dettaglio per vendita.</li>
+</ul>
+
+<h3>3.4 Clienti</h3>
+<ul>
+  <li>Card di stato in alto <b>dinamiche</b>: "Attivi" sempre come prima, poi una card per ogni <b>categoria/etichetta</b> del catalogo clienti (Local, Expat, Study abroad, Tourist, VIP, Standard). Larghezza fissa con scorrimento orizzontale.</li>
+  <li>Filtri raggruppati: <b>Categoria</b> · <b>Affidabilità</b>.</li>
+  <li>Import <b>massivo</b> clienti da CSV/incolla (Nome, Email, Telefono): i clienti esistenti vengono aggiornati, i nuovi creati.</li>
+  <li><b>Scheda cliente:</b> etichette/tag affiancati; <b>lingua preferita</b> (guida le comunicazioni WhatsApp); affidabilità; pulsanti contatto (WhatsApp, chiama, email bianchi; Yourang viola); consensi (privacy, marketing, <b>autorizzazione addebito carta</b>).
+    <ul>
+      <li><b>Note generali</b>: testo libero con toggle Privata / Visibile all'AI.</li>
+      <li><b>Scheda tecnica</b> (tab dedicata): registro strutturato per trattamento, campi generali validi per ogni categoria beauty (trattamento, zona, prodotti, parametri, esito, durata/tenuta, consigli, protocollo, prossimo step, foto). Una scheda per visita, con timestamp, in sola lettura una volta salvata; accessibile anche dal popup agenda.</li>
+    </ul>
+  </li>
+</ul>
+
+<h3>3.5 Servizi</h3>
+<ul>
+  <li>Sotto-tab <b>Servizi</b> e <b>Pacchetti</b>.</li>
+  <li>Il <b>tempo del servizio dipende solo dal servizio</b>, non dall'operatrice (nessun doppio tempo per operatrice).</li>
+  <li>Categorie con colori pastello (Unghie, Colore & capelli, Viso & cura, Extra) — riordinabili via drag & drop; l'ordine si riflette nelle card della pagina Clienti.</li>
+  <li>Pacchetti: costruttore con chip dei servizi inclusi + ricerca per aggiungerne altri.</li>
+</ul>
+
+<h3>3.6 Magazzino</h3>
+<ul>
+  <li>Sotto-tab: <b>Prodotti</b>, <b>Ordini</b>, <b>Fornitori</b>, <b>Storico</b>.</li>
+  <li><b>Prodotti</b> raggruppati per categoria, con indicatore stato scorte a tre colori (verde ok, arancione vicino soglia, rosso sotto soglia/esaurito); ordinamento "sotto soglia" in cima. Filtri: Categoria · Fornitore · Brand · Tipologia d'uso · Stato scorte.</li>
+  <li><b>Scheda prodotto</b> a sezioni: Anagrafica (SKU, Brand, Categoria, <b>Tipologia d'uso</b>: Solo uso interno / Solo vendita / Misto), Confezione (unità + valore quantità), Fornitore (obbligatorio), Prezzi e IVA (acquisto, sconto, vendita, aliquota), Scorte (soglia minima, quantità di riordino), e <b>Registro movimenti</b> automatico.</li>
+  <li><b>Integrità movimenti:</b> ogni variazione genera un movimento con causale. Lo stepper − apre lo <b>Scarico</b>, il + apre il <b>Carico</b>; nessuna modifica silenziosa della giacenza.</li>
+  <li><b>Carico merce</b> manuale (seleziona prodotti esistenti + quantità) o via <b>CSV</b> (aggiunge, non sovrascrive; assegna il fornitore del carico); fattura allegabile.</li>
+  <li><b>Ordini</b>: bozze auto-generate dai prodotti sotto soglia, raggruppate per fornitore; quantità da ordinare editabile; invio con metodo preferito (Email/WhatsApp/PDF) o <b>scarico PDF</b>. Alla consegna: apri l'ordine, inserisci le quantità ricevute (anche via CSV), il magazzino si aggiorna e le <b>discrepanze</b> ordinato/ricevuto sono segnalate.</li>
+  <li><b>Fornitori</b>: anagrafica con email, telefono, metodo d'ordine, indirizzo, P.IVA, Codice SDI/PEC, note. Modificando un contatto qui, l'aggiornamento si <b>propaga a tutti i prodotti</b> di quel fornitore.</li>
+</ul>
+
+<h3>3.7 Coupon &amp; Fedeltà · Gift card</h3>
+<ul>
+  <li>Due famiglie distinte in due voci di menu: <b>Coupon &amp; Fedeltà</b> (sconti, nessun pagamento anticipato) e <b>Gift card</b> (denaro prepagato).</li>
+  <li><b>Coupon</b>: sconto % o importo su acquisto futuro. Origine: <code>Manuale</code>, <code>Automatico (evento)</code> o <code>Fedeltà (riscatto punti)</code> — badge origine visibile.</li>
+  <li><b>Programmi fedeltà</b> — generici per coprire ogni esigenza beauty: tipi <b>A punti / A timbri / A livelli / Membership</b>; accumulo per € speso / visita / servizio; premio (Buono €, Sconto %, Servizio omaggio, Prodotto omaggio, Gift card); regole generali (iscrizione auto/su richiesta/a pagamento, scadenza punti, punti bonus: compleanno, referral, pre-prenotazione, recensione, giorni doppi). Al raggiungimento della soglia il premio <b>genera un coupon</b> con origine "Fedeltà". Presentazione visiva: colore dalla palette stile Google Docs + esadecimale (niente icone).</li>
+  <li><b>Gift card</b> (denaro incassato subito): valore e codice/QR, acquirente e destinatario, stato pagamento (pagata con data e metodo / da pagare), consegna (programmata o a mano), scadenza, stato (attiva/riscattata/scaduta) con saldo residuo. Fascia di monitoraggio: venduto, riscattato, da riscattare.</li>
+</ul>
+
+<h3>3.8 Comunicazioni</h3>
+<ul>
+  <li>Canale editoriale <b>senza sconto</b>, separato dalle promozioni (coerente con un posizionamento premium).</li>
+  <li>Composizione messaggio: titolo, testo, immagine di copertina, pulsante azione <b>personalizzabile</b> (o assente). Pubblico per etichetta o per nome. Pianificazione: bozza / programmata (data-ora) / invia subito. Anteprima WhatsApp dal vivo; invio nella lingua preferita di ogni cliente.</li>
+</ul>
+
+<h3>3.9 Automazioni</h3>
+<p>Ogni automazione è una frase <b>Evento + Tempo + Filtri</b>:</p>
+<ul>
+  <li><b>Evento</b> (cosa la fa partire): es. Nuovo cliente iscritto, Prossimo appuntamento, Visita completata, Compleanno, Cliente inattivo.</li>
+  <li><b>Tempo/Quando</b>: offset relativo all'evento (Prima/Dopo + numero + minuti/ore/giorni) e "a che ora" (subito o orario fisso).</li>
+  <li><b>Filtri (SE)</b>: condizioni combinabili con E/O (es. SE etichetta = VIP, SE affidabilità &lt; 60, SE speso &gt; €100, SE <b>margine stimato</b> &lt; soglia, SE <b>costo trattamento</b> …). Filtri rapidi preimpostati.</li>
+  <li><b>Operatività · Yourang</b>: origine trigger (Yourang o Webhook con URL), canale attivo (WhatsApp) e anteprima messaggio in sola lettura ("Apri su Yourang").</li>
+</ul>
+
+<h3>3.10 Analisi dati (Insight)</h3>
+<ul>
+  <li>Riservata al <b>titolare</b> (ruoli e permessi).</li>
+  <li>Selettore periodo Mese / Trimestre / Anno.</li>
+  <li>KPI configurabili ("Personalizza") — set fondamentale di default: <b>Tasso di ritorno</b> (retention), <b>Rebooking rate</b>, <b>Scontrino medio</b>, <b>Occupazione</b>; più Nuovi vs di ritorno, vendita retail, frequenza media, no-show/cancellazioni, divisione clienti per categoria.</li>
+  <li>Fascia volume e composizione: andamento ricavi, per categoria, occupazione per giorno.</li>
+  <li><b>Chiedi a Youty</b>: assistente che interroga i dati in linguaggio naturale (suggerimenti mirati sui dati reali e azioni collegate).</li>
+</ul>
+
+<h3>3.11 Impostazioni → Ottimizzazione agenda / Riempimento intelligente</h3>
+<ul>
+  <li><b>Riempimento del calendario:</b> Libero / Massimo incasso (regola lo scoring degli slot proposti online).</li>
+  <li><b>Se si libera un posto:</b> Avvisa / Esegui (livello di autonomia della cascata di recupero: lista d'attesa → clienti in scadenza di ciclo → offerta last-minute).</li>
+  <li><b>Sconti last-minute:</b> tetto Mai / 10 / 20 / 30% con budget mensile.</li>
+  <li><b>Clienti flessibili:</b> chiedi in prenotazione chi accetta di spostarsi (finestra ± editabile, es. 30 min); se spostata, la cliente riceve un coupon (sconto editabile, es. 10%).</li>
+  <li><b>Depositi:</b> motore di regole "SE etichetta/affidabilità → richiedi acconto (% o €)", riusando il costruttore di condizioni delle automazioni; sempre disattivabile/modificabile sul singolo appuntamento.</li>
+  <li>Card informative sulla filosofia (parametri appresi, fiducia progressiva, guardrail fissi).</li>
+</ul>
+
+<h3>3.12 Staff</h3>
+<ul>
+  <li>Card operatrice con stato di <b>oggi</b> a colpo d'occhio (In turno con orario / Giorno libero / Ferie / Festività), incasso del mese, clienti in gestione della giornata.</li>
+  <li>Scheda in 4 tab: <b>Anagrafica</b> (dati, colore operatrice dalla palette+esadecimale, servizi abilitati), <b>Turni e ferie</b> (pattern settimanale ricorrente su più settimane con date reali + pausa per giorno; calendario disponibilità continuo per programmare ferie/eccezioni con largo anticipo — confluisce nell'agenda e alimenta la pianificazione AI), <b>Performance</b> (metriche + grafico incassi), <b>Clienti e vendite</b> (clienti seguiti + storico vendite, con ricerca).</li>
+</ul>
+
+<h3>3.13 Profilo titolare (multi-sede)</h3>
+<p>Dall'icona profilo in alto a destra si apre una <b>pagina</b> con reportistica consolidata su tutte le sedi: fatturato totale, appuntamenti, occupazione media, clienti attivi; dettaglio per sede; performance staff su tutte le sedi. Selettore di sede in basso a sinistra nella dashboard.</p>
+
+<h2 id="app">4 · La web app cliente (yourang)</h2>
+<p class="lead">App mobile brandizzata (The Parlour), stesso linguaggio visivo della dashboard (accento indaco, font di sistema). Navbar in basso a 5 voci: <b>Home · Prenotazioni · + Prenota (centrale) · Portafoglio · Profilo</b>.</p>
+<ul>
+  <li><b>Home:</b> cerchio logo (caricato dalla dashboard) sopra il nome salone; card <b>prossimo appuntamento</b> con stato Confermato + deposito, tempo relativo, dettagli, azione secondaria "Sposta", azioni rapide (aggiungi al calendario, indicazioni), "Annulla" come link con nota policy deposito; CTA primaria unica "+ Prenota"; stato vuoto se non ci sono appuntamenti.</li>
+  <li><b>Prenota (3 passi):</b>
+    <ol>
+      <li><b>Servizio</b> — selettore <b>Servizi singoli</b> (selezione multipla con pulsante Continua che somma durata e prezzo) oppure <b>Pacchetti</b> (presentati, prenotabili per telefono).</li>
+      <li><b>Operatrice</b> — sempre "Qualsiasi" o una specifica; con più servizi, scelta <b>per singolo servizio</b> (o "qualsiasi"), con idoneità calcolata per servizio.</li>
+      <li><b>Giorno e ora</b> — solo slot realmente liberi (agenda-aware); si può anche prenotare per settimane/mesi successivi.</li>
+    </ol>
+    Riepilogo con elenco servizi, operatrice per servizio, totale e deposito.
+  </li>
+  <li><b>Sposta / Annulla:</b> self-service con soli slot liberi; annullamento con policy deposito (rimborsabile entro 24h).</li>
+  <li><b>Lista d'attesa:</b> iscrizione con servizio, operatrice (qualsiasi/specifica) e preferenza oraria (Mattina/Pomeriggio/Weekend/Qualsiasi o <b>Orario preciso</b> con selezione dei <b>giorni della settimana</b> + orario, es. Sabato alle 10). Richieste attive gestibili.</li>
+  <li><b>Portafoglio</b> (sezione unica): <b>Gift card</b> (saldo prepagato totale + singole carte con saldo/codice/scadenza, acquisto/regalo), <b>Coupon</b> (sconti/omaggi una tantum), <b>Programmi fedeltà</b> (avanzamento verso il premio). Le voci compaiono solo se la cliente le possiede.</li>
+  <li><b>Profilo:</b> card identità, dati (telefono, email, punti fedeltà), <b>Lista d'attesa</b> in evidenza, preferenze (lingua IT/EN, promemoria WhatsApp), esci.</li>
+</ul>
+
+<h2 id="flussi">5 · I flussi che collegano dashboard e app</h2>
+
+<div class="flow"><b>Flusso 1 — Prenotazione online.</b> La cliente prenota in app (3 passi, solo slot liberi) → l'appuntamento compare in <b>Agenda</b> nella colonna dell'operatrice → Yourang invia la <b>conferma</b> WhatsApp nella lingua preferita → in dashboard è possibile inviare una conferma puntuale dal popup.</div>
+
+<div class="flow"><b>Flusso 2 — Check-in → Check-out.</b> All'arrivo lo staff registra il <b>Check-in</b> (blocca il sollecito di ritardo). A fine trattamento il <b>Check-out</b> apre incasso + vendita (per operatrice, con omaggi/sconti), detrae la caparra e incassa il saldo (contanti/carta/misto). Al check-out si genera la <b>scheda tecnica</b>.</div>
+
+<div class="flow"><b>Flusso 3 — Deposito / caparra.</b> Le regole deposito (per etichetta/affidabilità) sono in Impostazioni. Alla prenotazione la cliente versa il deposito (mostrato in app come "versato"); in agenda il blocco riporta l'icona quando la caparra è <b>incassata</b>; al checkout è detratta dal totale.</div>
+
+<div class="flow"><b>Flusso 4 — No-show e ritardo.</b> A +10 min senza check-in, Yourang invia un messaggio automatico ("Sei in arrivo?"). Se la cliente non si presenta, si marca <b>No-show</b> (con conferma perché addebita l'intero importo sulla carta salvata) e lo <b>slot si libera</b>.</div>
+
+<div class="flow"><b>Flusso 5 — Recupero slot &amp; lista d'attesa.</b> Quando un posto si libera (cancellazione/spostamento), il sistema attiva la cascata: le clienti in <b>lista d'attesa</b> (con priorità VIP) vengono contattate su WhatsApp con proposta dell'orario; il front desk può proporre/assegnare manualmente. La cliente si iscrive alla lista dall'app (servizio, operatrice, fascia o orario preciso con giorni).</div>
+
+<div class="flow"><b>Flusso 6 — Fedeltà → Coupon.</b> I punti/timbri accumulati (regole in dashboard) al raggiungimento della soglia <b>generano un coupon</b> con origine "Fedeltà", che la cliente vede nel <b>Portafoglio</b> dell'app e che lo staff vede nel tab Coupon.</div>
+
+<div class="flow"><b>Flusso 7 — Gift card.</b> Venduta in dashboard (POS o sezione Gift card) o acquistata/regalata dall'app: denaro incassato subito, monitorato in dashboard (venduto/riscattato/da riscattare); il saldo residuo è visibile alla cliente nel Portafoglio e spendibile in salone.</div>
+
+<div class="flow"><b>Flusso 8 — Comunicazioni &amp; automazioni.</b> Le campagne editoriali (Comunicazioni) e le automazioni (Evento+Tempo+Filtri) partono dalla dashboard, Yourang le esegue su WhatsApp nella lingua della cliente. Le automazioni possono essere condizionate anche da margine/costo trattamento.</div>
+
+<div class="flow"><b>Flusso 9 — Magazzino ↔ vendite.</b> I prodotti con natura "Vendita" o "Misto" possono essere venduti al checkout / POS e scaricano la giacenza; ogni movimento (scarico uso, vendita, rettifica, carico, trasferimento) è tracciato nello Storico con causale. Gli ordini fornitori nascono dai prodotti sotto soglia.</div>
+
+<div class="flow"><b>Flusso 10 — Branding white-label.</b> In Impostazioni → Brand &amp; app cliente si carica il <b>logo</b> e si sceglie il <b>colore</b> (palette stile Google Docs + esadecimale): logo e colore si applicano alla superficie dell'app cliente (cerchio logo in home, accento) e ai messaggi.</div>
+
+<h2 id="ruoli">6 · Ruoli, permessi e registro attività</h2>
+<ul>
+  <li><b>Account &amp; team</b> (Impostazioni): membri con ruolo, invito via email, gestione ruoli.</li>
+  <li><b>Ruoli e permessi:</b> Titolare (accesso totale), Manager, Front desk, Operatrice; permessi per ambito (Agenda, Schede cliente, Vendite &amp; checkout, Magazzino &amp; rettifiche, Listino &amp; prezzi, Coupon/fedeltà/marketing, Team &amp; permessi, Registro attività, Analisi dati). Creazione di nuovi ruoli.</li>
+  <li><b>Registro attività</b> (pagina dedicata, solo titolare): ogni evento (creazione/modifica/cancellazione/checkout appuntamento, rettifica magazzino, eliminazione scheda cliente, modifica prezzi) con <b>tipo, sintesi, autore e data/ora</b>; ricerca, filtri per tipo e per <b>periodo</b> (oggi / 7g / 30g / anno / personalizzato). Accessibile anche dal box vendite dell'agenda, filtrato su oggi.</li>
+</ul>
+
+<h2 id="branding">7 · Branding white-label e multi-sede</h2>
+<ul>
+  <li><b>Colori:</b> selezione uniforme in tutta la dashboard (categorie prodotti/servizi/clienti, colore operatrice, brand cliente, tessera fedeltà) con palette a griglia stile Google Docs + campo esadecimale. Hover viola coerente (nessuna ombra arancione).</li>
+  <li><b>Notifiche:</b> ogni salvataggio/modifica mostra una notifica in basso a destra.</li>
+  <li><b>Multi-sede:</b> selettore di sede in dashboard; profilo titolare con vista consolidata su tutte le location.</li>
+</ul>
+
+<h2 id="glossario">8 · Glossario</h2>
+<table>
+  <tr><th>Termine</th><th>Significato</th></tr>
+  <tr><td>Yourang</td><td>Motore che esegue le comunicazioni e le dinamiche interne (canale WhatsApp).</td></tr>
+  <tr><td>Trigger / Evento</td><td>Ciò che fa partire un'automazione (interno o webhook).</td></tr>
+  <tr><td>Deposito / Caparra</td><td>Acconto richiesto alla prenotazione secondo le regole deposito.</td></tr>
+  <tr><td>No-show</td><td>Mancata presentazione; può addebitare l'intero importo e libera lo slot.</td></tr>
+  <tr><td>Rebooking</td><td>% di clienti che escono con il prossimo appuntamento già fissato.</td></tr>
+  <tr><td>Retention / Tasso di ritorno</td><td>Nuovi clienti tornati entro 90 giorni + clienti abituali.</td></tr>
+  <tr><td>Natura prodotto</td><td>Solo uso interno / Solo vendita / Misto — determina se compare al POS e come si scarica.</td></tr>
+  <tr><td>Scheda tecnica</td><td>Registro strutturato per trattamento, per visita, in sola lettura una volta salvato.</td></tr>
+</table>
+
+<p class="muted" style="margin-top:40px; border-top:1px solid #D8D6DC; padding-top:14px;">Documento generato come libretto dei flussi di yourang. Le anteprime di messaggi e canali sono sincronizzate da Yourang e mostrate in dashboard in sola lettura.</p>
+
+</body>
+</html>

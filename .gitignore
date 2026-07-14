@@ -1,0 +1,31 @@
+# ─── OS / editor ───────────────────────────────────────────
+.DS_Store
+*.thumbnail
+.thumbnail
+
+# ─── Segreti / ambiente ────────────────────────────────────
+.env
+**/.env
+# (.env.example resta versionato)
+
+# ─── Python / Django ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.sqlite3
+.venv/
+**/.venv/
+backend/staticfiles/
+backend/media/
+backend/scripts/*.log
+
+# ─── Node / Vite ───────────────────────────────────────────
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+dist-check*/
+*.local
+
+# ─── Tooling locale ────────────────────────────────────────
+.claude/settings.local.json
+.vercel/

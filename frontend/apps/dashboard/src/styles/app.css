@@ -1,0 +1,28 @@
+/* app.css — dashboard-specific adjustments on top of the copied prototype CSS. */
+
+/* the prototype set these on the boot HTML; keep them here */
+html, body { height: 100%; }
+#root { height: 100vh; }
+
+/* login screen (pre-shell, still themed by .dk-root tokens) */
+.dk-login {
+  margin: auto;
+  width: 380px;
+  max-width: calc(100vw - 48px);
+}
+.dk-login .dk-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.dk-login label { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); }
+.dk-input {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid var(--hair); border-radius: 10px;
+  padding: 11px 13px; font-size: 14.5px; font-family: var(--sans);
+  background: var(--surface); outline: none;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+.dk-input:focus { border-color: var(--line-strong); box-shadow: 0 0 0 4px var(--hair-2); }
+.dk-login-err {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--danger-tint); color: var(--danger);
+  border-radius: 10px; padding: 10px 12px;
+  font-size: 13px; font-weight: 600; margin-bottom: 14px;
+}
