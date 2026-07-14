@@ -18,7 +18,7 @@ function dateLabel(iso, lang) {
 }
 
 export default function GiftSub() {
-  const { t, lang, hasScope, fireToast } = useDash();
+  const { t, lang, hasScope, fireToast, services } = useDash();
   const canWrite = hasScope('marketing');
 
   const [q, setQ] = useState('');
@@ -143,6 +143,11 @@ export default function GiftSub() {
                       {used > 0 && g.status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{fmtEur(balance, lang)}</strong></span>}
                     </div>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
+                    {g.gift_service_name && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '2px 9px', borderRadius: 99, marginTop: 5, marginLeft: 6 }}>
+                        <Icon name="gift" size={12} color="var(--clay-ink)" />{t('Trattamento', 'Treatment')}: {g.gift_service_name}
+                      </span>
+                    )}
                     <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, color: 'var(--ink-2)', flexWrap: 'wrap' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                         <Icon name="user" size={13} color="var(--muted-2)" />
@@ -211,7 +216,7 @@ export default function GiftSub() {
       )}
 
       {edit && (
-        <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} />
+        <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} services={services} />
       )}
     </React.Fragment>
   );

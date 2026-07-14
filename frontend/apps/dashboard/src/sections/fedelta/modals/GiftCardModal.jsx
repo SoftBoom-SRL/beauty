@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, toDateStr } from '@youty/shared';
+import { api, ApiError, Icon, toDateStr, fmtEur } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
@@ -18,9 +18,18 @@ function monthsFromNowIso(months) {
  * (value, buyer_client_id?, recipient_client_id?, recipient_name, paid+paid_method,
  * delivery_date?, expires_at?). The code is generated server-side (prototype showed a locally
  * generated code — dropped). Expiry presets map to a concrete expires_at datetime. */
-export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast }) {
+export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [] }) {
   const [saving, setSaving] = useState(false);
+  const [type, setType] = useState('amount'); // amount | service (trattamento)
   const [value, setValue] = useState(50);
+  const [service, setService] = useState(null); // servizio scelto dal catalogo (gift card a trattamento)
+  const [svcQ, setSvcQ] = useState('');
+  const [svcOpen, setSvcOpen] = useState(false);
+  const svcName = (s) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+  const activeServices = (services || []).filter((s) => s.active !== false);
+  const svcResults = svcQ.trim()
+    ? activeServices.filter((s) => svcName(s).toLowerCase().includes(svcQ.trim().toLowerCase()))
+    : activeServices.slice(0, 8);
   const [buyer, setBuyer] = useState(null);          // {id, full_name} | null
   const [recipient, setRecipient] = useState(null);  // {id, full_name} | null
   const [recipientName, setRecipientName] = useState('');
@@ -30,14 +39,15 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast }) 
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
-  const canSave = value > 0 && (recipient || recipientName.trim());
+  const canSave = (type === 'service' ? !!service : value > 0) && (recipient || recipientName.trim());
 
   const save = async () => {
     if (!canSave || saving) return;
     setSaving(true);
     try {
       const payload = {
-        value: Number(value).toFixed(2),
+        value: (type === 'service' ? Number(service.price) : Number(value)).toFixed(2),
+        ...(type === 'service' ? { gift_service_id: service.id } : {}),
         buyer_client_id: buyer ? buyer.id : null,
         recipient_client_id: recipient ? recipient.id : null,
         recipient_name: recipient ? recipient.full_name : recipientName.trim(),
@@ -62,17 +72,61 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast }) 
         <button className="dk-btn dk-btn--clay" disabled={!canSave || saving} onClick={save}><Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}</button>
       </React.Fragment>}>
 
-      <div className="t-meta" style={{ marginBottom: 8 }}>{t('Valore', 'Value')}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)' }}>
-          <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-          <input type="number" value={value} onChange={(e) => setValue(Math.max(0, Number(e.target.value) || 0))} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
-        </div>
-        {[25, 50, 75, 100].map((v) => (
-          <button key={v} onClick={() => setValue(v)} style={{ ...pillBtn(value === v), fontWeight: 700, padding: '8px 13px' }}>€{v}</button>
-        ))}
-        <span className="t-sm" style={{ marginLeft: 'auto', color: 'var(--muted-2)' }}>{t('Codice generato al salvataggio', 'Code generated on save')}</span>
+      {/* tipo: importo monetario oppure trattamento (servizio dal catalogo esistente) */}
+      <div className="t-meta" style={{ marginBottom: 8 }}>{t('Tipo di gift card', 'Gift card type')}</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        <button style={segBtn(type === 'amount')} onClick={() => setType('amount')}>{t('Importo', 'Amount')}</button>
+        <button style={segBtn(type === 'service')} onClick={() => setType('service')}>{t('Trattamento', 'Treatment')}</button>
       </div>
+
+      {type === 'amount' ? (
+        <React.Fragment>
+          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Valore', 'Value')}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)' }}>
+              <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
+              <input type="number" value={value} onChange={(e) => setValue(Math.max(0, Number(e.target.value) || 0))} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
+            </div>
+            {[25, 50, 75, 100].map((v) => (
+              <button key={v} onClick={() => setValue(v)} style={{ ...pillBtn(value === v), fontWeight: 700, padding: '8px 13px' }}>€{v}</button>
+            ))}
+            <span className="t-sm" style={{ marginLeft: 'auto', color: 'var(--muted-2)' }}>{t('Codice generato al salvataggio', 'Code generated on save')}</span>
+          </div>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Trattamento in regalo', 'Gifted treatment')}</div>
+          {service ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--hair)', borderRadius: 10, padding: '10px 12px', background: 'var(--surface)', marginBottom: 16 }}>
+              <Icon name="gift" size={16} color="var(--clay-ink)" />
+              <span style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{svcName(service)}</span>
+              <span className="t-num" style={{ fontWeight: 700 }}>{fmtEur(Number(service.price), lang)}</span>
+              <button onClick={() => setService(null)} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} color="var(--muted-2)" /></button>
+            </div>
+          ) : (
+            <div style={{ position: 'relative', marginBottom: 16 }}>
+              <div className="dk-search" style={{ width: '100%' }}>
+                <Icon name="search" size={16} color="var(--muted-2)" />
+                <input value={svcQ} onChange={(e) => { setSvcQ(e.target.value); setSvcOpen(true); }} onFocus={() => setSvcOpen(true)} placeholder={t('Cerca un servizio dal catalogo…', 'Search a service from the catalogue…')} />
+              </div>
+              {svcOpen && (
+                <React.Fragment>
+                  <div onClick={() => setSvcOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+                  <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, padding: 6, zIndex: 61, maxHeight: 260, overflowY: 'auto', boxShadow: 'var(--sh-pop)' }}>
+                    {svcResults.length ? svcResults.map((s) => (
+                      <button key={s.id} className="dk-row" onClick={() => { setService(s); setSvcOpen(false); setSvcQ(''); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px', borderRadius: 9, textAlign: 'left' }}>
+                        <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{svcName(s)}</span>
+                        <span className="t-num" style={{ fontSize: 13, color: 'var(--muted)' }}>{fmtEur(Number(s.price), lang)}</span>
+                      </button>
+                    )) : <div className="t-sm" style={{ padding: 10, color: 'var(--muted)' }}>{t('Nessun servizio', 'No services')}</div>}
+                  </div>
+                </React.Fragment>
+              )}
+              <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>{t('Il valore della card sarà il prezzo del servizio scelto.', 'The card value will be the chosen service price.')}</div>
+            </div>
+          )}
+        </React.Fragment>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
         <div>

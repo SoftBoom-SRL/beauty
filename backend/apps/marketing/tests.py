@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from decimal import Decimal
 
@@ -6,6 +7,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent, Salon
+from common.auth import create_staff_tokens
 
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .services import (
@@ -67,6 +69,69 @@ class GiftCardTests(TestCase):
         self.assertEqual(caught.exception.status_code, 422)
         card.refresh_from_db()
         self.assertEqual(card.status, GiftCard.Status.EXPIRED)
+
+
+class GiftCardServiceApiTests(TestCase):
+    """POST /gift-cards con gift_service_id: valore = prezzo del servizio."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from apps.catalog.models import Service, ServiceCategory
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        tokens = create_staff_tokens(user, self.salon)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Viso")
+        self.service = Service.objects.create(
+            salon=self.salon,
+            category=category,
+            name_it="Trattamento viso",
+            duration_min=60,
+            price=Decimal("75.00"),
+        )
+
+    def _post(self, payload):
+        return self.client.post(
+            "/api/marketing/gift-cards",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_create_treatment_gift_card_uses_service_price(self):
+        # `value` volutamente diverso dal prezzo: dev'essere ignorato.
+        resp = self._post({"value": "10", "gift_service_id": self.service.id})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(Decimal(body["initial_value"]), Decimal("75.00"))
+        self.assertEqual(Decimal(body["balance"]), Decimal("75.00"))
+        self.assertEqual(body["gift_service_id"], self.service.id)
+        self.assertEqual(body["gift_service_name"], "Trattamento viso")
+
+        card = GiftCard.objects.get(id=body["id"])
+        self.assertEqual(card.gift_service_id, self.service.id)
+        self.assertEqual(card.initial_value, Decimal("75.00"))
+        self.assertEqual(card.balance, Decimal("75.00"))
+
+    def test_monetary_gift_card_unaffected(self):
+        resp = self._post({"value": "50"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(Decimal(body["initial_value"]), Decimal("50"))
+        self.assertEqual(Decimal(body["balance"]), Decimal("50"))
+        self.assertIsNone(body["gift_service_id"])
+        self.assertIsNone(body["gift_service_name"])
+
+        card = GiftCard.objects.get(id=body["id"])
+        self.assertIsNone(card.gift_service_id)
+
+    def test_unknown_service_id_404(self):
+        resp = self._post({"value": "75", "gift_service_id": 999999})
+        self.assertEqual(resp.status_code, 404, resp.content)
 
 
 class LoyaltyTests(TestCase):

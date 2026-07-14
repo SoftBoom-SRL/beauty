@@ -34,6 +34,7 @@ class ServiceOut(Schema):
     name_it: str
     name_en: str
     duration_min: int
+    soak_min: int = 0
     price: Decimal
     product_cost: Decimal
     supplier_cost: Decimal
@@ -46,6 +47,7 @@ class ServiceIn(Schema):
     name_it: str
     name_en: str = ""
     duration_min: int
+    soak_min: int = 0
     price: Decimal
     product_cost: Decimal = Decimal("0")
     supplier_cost: Decimal = Decimal("0")

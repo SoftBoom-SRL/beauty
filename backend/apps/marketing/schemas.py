@@ -47,6 +47,7 @@ class CouponRedeemIn(Schema):
 
 class GiftCardIn(Schema):
     value: Decimal
+    gift_service_id: Optional[int] = None
     buyer_client_id: Optional[int] = None
     recipient_client_id: Optional[int] = None
     recipient_name: str = ""
@@ -61,6 +62,8 @@ class GiftCardOut(Schema):
     code: str
     initial_value: Decimal
     balance: Decimal
+    gift_service_id: Optional[int] = None
+    gift_service_name: Optional[str] = None
     buyer_client_id: Optional[int] = None
     buyer_name: Optional[str] = None
     recipient_client_id: Optional[int] = None
@@ -76,6 +79,10 @@ class GiftCardOut(Schema):
     @staticmethod
     def resolve_buyer_name(obj):
         return obj.buyer_client.full_name if obj.buyer_client else None
+
+    @staticmethod
+    def resolve_gift_service_name(obj):
+        return obj.gift_service.name_it if obj.gift_service else None
 
 
 class GiftCardKpiOut(Schema):

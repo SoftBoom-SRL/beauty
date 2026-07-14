@@ -7,8 +7,9 @@ import { useDash } from '../../ctx.jsx';
 import { DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin } from './lib.js';
 
 export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onNewAppt }) {
-  const { t, lang, showRevenue, fireToast, openModal, hasScope } = useDash();
+  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings } = useDash();
   const canWrite = hasScope('agenda');
+  const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
   const [days, setDays] = useState(null); // null = loading
   const [opTip, setOpTip] = useState(null); // { name, x, y }
@@ -84,8 +85,8 @@ export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onN
     const d = drag.current;
     if (!d || !canWrite) return;
     const dy = e.clientY - d.startY;
-    let ns = Math.round((d.orig + dy / PXM) / 15) * 15;
-    ns = Math.max(DK_START, Math.min(DK_END - 15, ns));
+    let ns = Math.round((d.orig + dy / PXM) / step) * step;
+    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
     const { dayIdx, opId } = targetFromX(e.clientX);
     d.ns = ns;
     d.dayIdx = dayIdx == null ? d.origDayIdx : dayIdx;
@@ -141,7 +142,7 @@ export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onN
     if (justDragged.current || !canWrite) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const raw = DK_START + (e.clientY - rect.top) / PXM;
-    const minutes = Math.max(DK_START, Math.min(DK_END - 15, Math.round(raw / 15) * 15));
+    const minutes = Math.max(DK_START, Math.min(DK_END - step, Math.round(raw / step) * step));
     onNewAppt && onNewAppt({ operatorId: opId, start: isoAtMin(date, minutes), date });
   }
 

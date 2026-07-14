@@ -37,6 +37,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "brand_color": s.brand_color,
         "agenda_fill": s.agenda_fill,
         "slot_recovery": s.slot_recovery,
+        "slot_interval_min": s.slot_interval_min,
         "lastminute_discount_cap": s.lastminute_discount_cap,
         "lastminute_monthly_budget": s.lastminute_monthly_budget,
         "flexible_enabled": s.flexible_enabled,
@@ -67,7 +68,10 @@ def update_settings(request, data: SettingsIn):
     ctx = request.auth
     require_owner(ctx)
     s = _settings(ctx.salon)
-    for name, value in data.dict(exclude_unset=True).items():
+    payload = data.dict(exclude_unset=True)
+    if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
+        raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
+    for name, value in payload.items():
         setattr(s, name, value)
     s.save()
     log_activity(ctx.salon, "settings.updated", "Impostazioni aggiornate", actor=ctx.user)

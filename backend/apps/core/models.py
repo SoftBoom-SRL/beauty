@@ -46,6 +46,11 @@ class SalonSettings(TimeStampedModel):
         NOTIFY = "notify", "Avvisa"
         EXECUTE = "execute", "Esegui"
 
+    class SlotInterval(models.IntegerChoices):
+        MIN_15 = 15, "15 minuti"
+        MIN_20 = 20, "20 minuti"
+        MIN_30 = 30, "30 minuti"
+
     salon = models.OneToOneField(Salon, on_delete=models.CASCADE, related_name="settings")
     logo = models.ImageField(upload_to="branding/", blank=True, null=True)
     brand_color = models.CharField(max_length=7, default="#6366F1")
@@ -54,6 +59,10 @@ class SalonSettings(TimeStampedModel):
     )
     slot_recovery = models.CharField(
         max_length=20, choices=SlotRecovery.choices, default=SlotRecovery.NOTIFY
+    )
+    # Granularità delle fasce orarie: griglia agenda interna + base disponibilità booking.
+    slot_interval_min = models.PositiveSmallIntegerField(
+        choices=SlotInterval.choices, default=SlotInterval.MIN_15
     )
     lastminute_discount_cap = models.PositiveSmallIntegerField(default=0)  # 0/10/20/30 %
     lastminute_monthly_budget = models.DecimalField(max_digits=10, decimal_places=2, default=0)

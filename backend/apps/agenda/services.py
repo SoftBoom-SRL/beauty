@@ -58,18 +58,33 @@ def _within_windows(windows, start: int, end: int) -> bool:
     return any(w_start <= start and end <= w_end for w_start, w_end in windows)
 
 
-def _is_free(windows, busy, start: int, end: int) -> bool:
-    return _within_windows(windows, start, end) and not _overlaps(busy, start, end)
+def _is_free(windows, busy, start: int, end: int, allow_soak: bool = False) -> bool:
+    """Vero se [start, end) sta dentro una finestra di turno e non collide con
+    alcun intervallo BLOCCANTE dell'operatrice.
+
+    `busy` è una lista di tuple (start_min, end_min, hard):
+    - hard=True  -> lavoro attivo o pausa: blocca SEMPRE (conflitto reale);
+    - hard=False -> posa (soak): blocca solo se allow_soak è False.
+
+    Con allow_soak=True gli intervalli di posa NON bloccano: una sovrapposizione
+    manuale sulla posa altrui è ammessa (decisione dello staff), mai automatica.
+    """
+    if not _within_windows(windows, start, end):
+        return False
+    blocking = [(s, e) for s, e, hard in busy if hard or not allow_soak]
+    return not _overlaps(blocking, start, end)
 
 
 def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) -> dict:
-    """Intervalli occupati per operatrice: {operator_id: [(start_min, end_min), ...]}.
+    """Intervalli occupati per operatrice: {op_id: [(start_min, end_min, hard), ...]}.
 
-    Considera gli appuntamenti attivi (status non cancelled/no_show) — ogni
-    AppointmentService occupa la propria operatrice per la propria finestra
-    sequenziale — e le pause manuali.
+    Due livelli per ogni AppointmentService concatenato da `start`:
+    - ATTIVO  (offset .. offset+duration_min)          -> hard=True  (blocca sempre)
+    - POSA    (fine attivo .. +soak_min), se soak_min>0 -> hard=False (soft)
+    Le pause manuali sono sempre hard. Considera solo gli appuntamenti attivi
+    (status non cancelled/no_show).
     """
-    busy: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    busy: dict[int, list[tuple[int, int, bool]]] = defaultdict(list)
 
     appointments = (
         Appointment.objects.filter(salon=salon, start__date=day)
@@ -81,12 +96,17 @@ def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) ->
     for appointment in appointments:
         offset = _minutes_local(appointment.start)
         for item in appointment.items.all():  # già ordinati per (order, id)
-            busy[item.operator_id].append((offset, offset + item.duration_min))
-            offset += item.duration_min
+            active_end = offset + item.duration_min
+            busy[item.operator_id].append((offset, active_end, True))
+            if item.soak_min:
+                busy[item.operator_id].append(
+                    (active_end, active_end + item.soak_min, False)
+                )
+            offset = active_end + item.soak_min
 
     for pause in Pause.objects.filter(salon=salon, start__date=day):
         start = _minutes_local(pause.start)
-        busy[pause.operator_id].append((start, start + pause.duration_min))
+        busy[pause.operator_id].append((start, start + pause.duration_min, True))
 
     return busy
 
@@ -111,7 +131,8 @@ def get_free_slots(salon, date: dt.date, items: list[dict], location=None) -> li
 
     items = [{"service_id": int, "operator_id": int | None}]  (None = qualsiasi idonea)
 
-    Griglia da settings.AGENDA_SLOT_STEP_MIN. Un orario t è valido se i servizi
+    Griglia dall'intervallo fasce orarie del salone (SalonSettings.slot_interval_min,
+    default settings.AGENDA_SLOT_STEP_MIN). Un orario t è valido se i servizi
     si concatenano in sequenza da t e per ciascuno esiste un'operatrice idonea
     (in `service.operators`) libera per l'intera finestra: dentro le proprie
     shift_windows, senza sovrapposizioni con appuntamenti attivi né pause.
@@ -126,7 +147,8 @@ def get_free_slots(salon, date: dt.date, items: list[dict], location=None) -> li
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
 
-    step = settings.AGENDA_SLOT_STEP_MIN
+    salon_settings = getattr(salon, "settings", None)
+    step = getattr(salon_settings, "slot_interval_min", None) or settings.AGENDA_SLOT_STEP_MIN
     operators = list(_operators_qs(salon, location))
     operator_by_id = {op.id: op for op in operators}
 
@@ -167,11 +189,17 @@ def get_free_slots(salon, date: dt.date, items: list[dict], location=None) -> li
         feasible = True
         for service, candidates in plan:
             end = cursor + service.duration_min
+            # disponibilità automatica: la posa altrui conta come occupata
+            # (allow_soak=False), quindi uno slot non viene MAI offerto se
+            # cadrebbe nella finestra di posa di un altro appuntamento.
             chosen = next(
                 (
                     op
                     for op in candidates
-                    if _is_free(windows.get(op.id, []), busy.get(op.id, ()), cursor, end)
+                    if _is_free(
+                        windows.get(op.id, []), busy.get(op.id, ()), cursor, end,
+                        allow_soak=False,
+                    )
                 ),
                 None,
             )
@@ -179,7 +207,8 @@ def get_free_slots(salon, date: dt.date, items: list[dict], location=None) -> li
                 feasible = False
                 break
             assignment.append({"service_id": service.id, "operator_id": chosen.id})
-            cursor = end
+            # il prossimo servizio parte dopo lavoro attivo + posa di questo
+            cursor = end + (service.soak_min or 0)
         if not feasible:
             continue
         start_dt = _slot_datetime(date, tick)
@@ -239,7 +268,10 @@ def resolve_items(
     """Risolve e valida la sequenza richiesta a partire da `start`.
 
     Per ogni item individua il servizio e l'operatrice (quella indicata, se
-    idonea e libera, altrimenti la prima idonea libera). Solleva:
+    idonea e libera, altrimenti la prima idonea libera). La libertà è verificata
+    sulla sola finestra ATTIVA del servizio; la catena avanza di attivo + posa.
+    Con operatrice indicata a mano è ammessa la sovrapposizione alla posa altrui
+    (allow_soak=True); in auto-assegnazione mai (allow_soak=False). Solleva:
     - 404 servizio inesistente, 400 operatrice non idonea,
     - 409 "Orario non più disponibile" se lo slot non è libero.
 
@@ -271,14 +303,21 @@ def resolve_items(
         if service is None:
             raise HttpError(404, "Servizio non trovato")
         eligible_ids = set(service.operators.values_list("id", flat=True))
-        end = cursor + service.duration_min
+        active = service.duration_min
+        end = cursor + active
         requested = raw.get("operator_id")
+        # operatrice scelta a mano -> può sovrapporsi alla posa altrui;
+        # assegnazione automatica (requested is None) -> mai nella posa altrui.
+        allow_soak = requested is not None
         chosen = None
         if requested:
             operator = operator_by_id.get(requested)
             if operator is None or operator.id not in eligible_ids:
                 raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
-            if _is_free(_windows(operator), busy.get(operator.id, ()), cursor, end):
+            if _is_free(
+                _windows(operator), busy.get(operator.id, ()), cursor, end,
+                allow_soak=allow_soak,
+            ):
                 chosen = operator
         else:
             chosen = next(
@@ -286,14 +325,17 @@ def resolve_items(
                     op
                     for op in operators
                     if op.id in eligible_ids
-                    and _is_free(_windows(op), busy.get(op.id, ()), cursor, end)
+                    and _is_free(
+                        _windows(op), busy.get(op.id, ()), cursor, end,
+                        allow_soak=False,
+                    )
                 ),
                 None,
             )
         if chosen is None:
             raise HttpError(409, "Orario non più disponibile")
         resolved.append((service, chosen))
-        cursor = end
+        cursor = end + (service.soak_min or 0)
     return resolved
 
 
@@ -342,21 +384,27 @@ def resolve_items_edit(
         if service is None:
             raise HttpError(404, "Servizio non trovato")
         raw_duration = raw.get("duration_min")
-        # durata effettiva: override solo se int positivo, altrimenti listino
+        # durata ATTIVA effettiva: override solo se int positivo, altrimenti listino
         duration_min = (
             raw_duration
             if isinstance(raw_duration, int) and not isinstance(raw_duration, bool) and raw_duration > 0
             else service.duration_min
         )
+        # la posa arriva sempre dal listino (non sovrascrivibile per-item)
+        soak = service.soak_min or 0
         eligible_ids = set(service.operators.values_list("id", flat=True))
         end = cursor + duration_min
         requested = raw.get("operator_id")
+        allow_soak = requested is not None
         chosen = None
         if requested:
             operator = operator_by_id.get(requested)
             if operator is None or operator.id not in eligible_ids:
                 raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
-            if _is_free(_windows(operator), busy.get(operator.id, ()), cursor, end):
+            if _is_free(
+                _windows(operator), busy.get(operator.id, ()), cursor, end,
+                allow_soak=allow_soak,
+            ):
                 chosen = operator
         else:
             chosen = next(
@@ -364,14 +412,17 @@ def resolve_items_edit(
                     op
                     for op in operators
                     if op.id in eligible_ids
-                    and _is_free(_windows(op), busy.get(op.id, ()), cursor, end)
+                    and _is_free(
+                        _windows(op), busy.get(op.id, ()), cursor, end,
+                        allow_soak=False,
+                    )
                 ),
                 None,
             )
         if chosen is None:
             raise HttpError(409, "Orario non più disponibile")
         resolved.append((service, chosen, duration_min))
-        cursor = end
+        cursor = end + soak
     return resolved
 
 
@@ -382,10 +433,13 @@ def _validate_segments(
     *,
     exclude_appointment_id: int | None = None,
 ) -> None:
-    """Valida una sequenza già assegnata: segments = [(duration_min, operator)].
+    """Valida una sequenza già assegnata: segments = [(active_min, soak_min, operator)].
 
-    Usata per lo spostamento (le durate sono gli snapshot degli item).
-    Solleva 409 se un segmento non è dentro turno o si sovrappone.
+    Usata per lo spostamento (durate = snapshot attivo/posa degli item). Essendo
+    un'azione MANUALE dello staff, ogni finestra attiva è validata con
+    allow_soak=True: può sovrapporsi alla posa altrui, mai al lavoro attivo/pausa.
+    Solleva 409 se un segmento non è dentro turno o collide con un intervallo
+    bloccante. La catena avanza di attivo + posa.
     """
     from apps.staff.services import shift_windows  # lazy
 
@@ -394,13 +448,16 @@ def _validate_segments(
     cursor = local.hour * 60 + local.minute
     busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
     windows_cache: dict[int, list] = {}
-    for duration_min, operator in segments:
-        end = cursor + duration_min
+    for active_min, soak_min, operator in segments:
+        end = cursor + active_min
         if operator.id not in windows_cache:
             windows_cache[operator.id] = shift_windows(operator, day)
-        if not _is_free(windows_cache[operator.id], busy.get(operator.id, ()), cursor, end):
+        if not _is_free(
+            windows_cache[operator.id], busy.get(operator.id, ()), cursor, end,
+            allow_soak=True,
+        ):
             raise HttpError(409, "Orario non più disponibile")
-        cursor = end
+        cursor = end + (soak_min or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -440,28 +497,30 @@ def _event_payload(appointment: Appointment) -> dict:
 
 
 def snapshot_items(appointment: Appointment, resolved: list[tuple]) -> None:
-    """Crea gli AppointmentService con snapshot durata/prezzo dal listino."""
+    """Crea gli AppointmentService con snapshot durata/posa/prezzo dal listino."""
     for index, (service, operator) in enumerate(resolved):
         AppointmentService.objects.create(
             appointment=appointment,
             service=service,
             operator=operator,
             duration_min=service.duration_min,
+            soak_min=service.soak_min,
             price=service.price,
             order=index,
         )
 
 
 def snapshot_items_edit(appointment: Appointment, resolved: list[tuple]) -> None:
-    """Crea gli AppointmentService usando la durata EFFETTIVA (dalla tupla),
-    prezzo dal listino e order = indice. Le tuple arrivano da resolve_items_edit
-    come (service, operator, duration_min)."""
+    """Crea gli AppointmentService usando la durata ATTIVA EFFETTIVA (dalla tupla),
+    la posa dal listino, prezzo dal listino e order = indice. Le tuple arrivano
+    da resolve_items_edit come (service, operator, duration_min)."""
     for index, (service, operator, duration_min) in enumerate(resolved):
         AppointmentService.objects.create(
             appointment=appointment,
             service=service,
             operator=operator,
             duration_min=duration_min,
+            soak_min=service.soak_min,
             price=service.price,
             order=index,
         )
@@ -555,7 +614,10 @@ def move_appointment(
     _validate_segments(
         appointment.salon,
         new_start,
-        [(item.duration_min, op) for item, op in zip(items, target_operators)],
+        [
+            (item.duration_min, item.soak_min, op)
+            for item, op in zip(items, target_operators)
+        ],
         exclude_appointment_id=appointment.id,
     )
 

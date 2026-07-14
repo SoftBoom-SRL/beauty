@@ -83,6 +83,7 @@ class ItemOut(Schema):
     operator_id: int
     operator_name: str
     duration_min: int
+    soak_min: int = 0
     price: Decimal
     order: int
 

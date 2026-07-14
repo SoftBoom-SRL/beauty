@@ -1,5 +1,8 @@
+import json
+
 from django.test import TestCase
 
+from common.auth import create_staff_tokens
 from common.conditions import evaluate
 
 from .models import Salon, SalonSettings
@@ -14,6 +17,7 @@ class CoreTests(TestCase):
         s = SalonSettings.objects.create(salon=self.salon)
         self.assertEqual(s.brand_color, "#6366F1")
         self.assertEqual(s.agenda_fill, "free")
+        self.assertEqual(s.slot_interval_min, 15)
 
     def test_log_and_emit(self):
         log = log_activity(self.salon, "test.event", "Prova")
@@ -37,4 +41,46 @@ class CoreTests(TestCase):
         self.assertTrue(evaluate(None, facts))
         self.assertFalse(
             evaluate({"rules": [{"field": "missing", "cmp": "eq", "value": 1}]}, facts)
+        )
+
+
+class SettingsApiTests(TestCase):
+    """PUT /api/core/settings: solo owner, con validazione dell'intervallo fasce."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user = User.objects.create_user(
+            email="sole@theparlour.it", password="theparlour"
+        )
+        role = Role.objects.create(salon=self.salon, name="Owner", scopes=["settings"])
+        Membership.objects.create(
+            user=self.user, salon=self.salon, role=role, is_owner=True
+        )
+        tokens = create_staff_tokens(self.user, self.salon)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+    def _put(self, payload):
+        return self.client.put(
+            "/api/core/settings",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_valid_slot_interval_persists(self):
+        resp = self._put({"slot_interval_min": 30})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["slot_interval_min"], 30)
+        self.assertEqual(
+            SalonSettings.objects.get(salon=self.salon).slot_interval_min, 30
+        )
+
+    def test_invalid_slot_interval_rejected(self):
+        resp = self._put({"slot_interval_min": 25})
+        self.assertEqual(resp.status_code, 400, resp.content)
+        # nulla salvato: resta il default 15
+        self.assertEqual(
+            SalonSettings.objects.get(salon=self.salon).slot_interval_min, 15
         )

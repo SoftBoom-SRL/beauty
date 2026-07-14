@@ -57,6 +57,7 @@ export default function BookingsOptimPage({ onBack }) {
   const isOwner = !!session?.is_owner;
   const s = settings || {};
 
+  const [slotInterval, setSlotInterval] = useState(s.slot_interval_min || 15);
   const [fill, setFill] = useState(s.agenda_fill || 'free');
   const [recovery, setRecovery] = useState(s.slot_recovery || 'notify');
   const [cap, setCap] = useState(s.lastminute_discount_cap || 0);
@@ -72,6 +73,7 @@ export default function BookingsOptimPage({ onBack }) {
     setSaving(true);
     try {
       await api.put('/api/core/settings', {
+        slot_interval_min: slotInterval,
         agenda_fill: fill,
         slot_recovery: recovery,
         lastminute_discount_cap: cap,
@@ -115,6 +117,14 @@ export default function BookingsOptimPage({ onBack }) {
       {ro && <div style={{ marginTop: 12 }}><LockNote t={t} msg={t('Solo il titolare può modificare queste impostazioni. Visualizzazione in sola lettura.', 'Only the owner can change these settings. Read-only view.')} /></div>}
 
       <div className="dk-card" style={{ padding: '4px 22px 22px', marginTop: 14 }}>
+        <AoCtrl t={t} icon="clock" title={t('Intervallo fasce orarie', 'Time-slot interval')} micro={t('La granularità con cui agenda e prenotazione online mostrano gli orari disponibili.', 'The granularity at which the agenda and online booking show available times.')}
+          how={<React.Fragment>
+            {t("È il passo della griglia oraria. Con 15 minuti gli orari proposti sono 09:00, 09:15, 09:30…; con 30 minuti diventano 09:00, 09:30, 10:00…", 'It is the step of the time grid. With 15 minutes the offered times are 09:00, 09:15, 09:30…; with 30 minutes they become 09:00, 09:30, 10:00…')}<br /><br />
+            {t('Lo stesso valore determina la granularità della griglia dell’agenda interna (giorno e settimana) e la base delle disponibilità mostrate nella prenotazione online lato cliente.', 'The same value drives the granularity of the internal agenda grid (day and week) and the base of the availability shown in client-side online booking.')}
+          </React.Fragment>}>
+          <DkSeg value={slotInterval} onChange={(v) => !ro && setSlotInterval(v)} options={[{ value: 15, label: t('15 minuti', '15 minutes') }, { value: 20, label: t('20 minuti', '20 minutes') }, { value: 30, label: t('30 minuti', '30 minutes') }]} />
+        </AoCtrl>
+
         <AoCtrl t={t} icon="grid" title={t('Riempimento del calendario', 'Calendar fill')} micro={t('Quanto il sistema ottimizza gli orari proposti in prenotazione online.', 'How much the system optimizes the times offered in online booking.')}
           how={<React.Fragment>
             <b>{t('Libero', 'Free')}</b> — {t("la cliente vede tutti gli orari disponibili nell'ordine in cui vengono trovati. Il sistema non interviene sulla lista: mostra tutto e la scelta è completamente sua.", 'the client sees every available time in the order they appear. The system does not intervene on the list: it shows everything and the choice is entirely hers.')}<br /><br />

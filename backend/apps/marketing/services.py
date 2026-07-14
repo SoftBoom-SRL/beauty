@@ -34,6 +34,7 @@ def create_gift_card(
     salon,
     value,
     *,
+    gift_service=None,
     buyer_client=None,
     recipient_name="",
     paid=False,
@@ -41,7 +42,10 @@ def create_gift_card(
     sold_by=None,
     sale=None,
 ):
-    """Crea una gift card (usata anche da sales per le righe gift_card vendute)."""
+    """Crea una gift card (usata anche da sales per le righe gift_card vendute).
+
+    Se `gift_service` è valorizzato la carta regala quel trattamento: il valore
+    passato deve già coincidere col prezzo del servizio (garantito dal chiamante)."""
     value = Decimal(value)
     if value <= 0:
         raise HttpError(422, "Valore della gift card non valido")
@@ -50,6 +54,7 @@ def create_gift_card(
         code=unique_code(GiftCard, salon, 12),
         initial_value=value,
         balance=value,
+        gift_service=gift_service,
         buyer_client=buyer_client,
         recipient_name=recipient_name,
         payment_status=GiftCard.PaymentStatus.PAID if paid else GiftCard.PaymentStatus.UNPAID,

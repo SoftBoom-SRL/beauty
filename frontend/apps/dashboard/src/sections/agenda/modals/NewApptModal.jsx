@@ -58,7 +58,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
   const setItemOp = (key, opId) => setItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
 
   const totalPrice = items.reduce((s, it) => s + Number(svcOf(it.service_id)?.price || 0), 0);
-  const totalDur = items.reduce((s, it) => s + (svcOf(it.service_id)?.duration_min || 0), 0);
+  const totalDur = items.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
 
   /* ---- availability ---- */
   const [slots, setSlots] = useState(null); // null = loading, [] = none
@@ -317,7 +317,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.15 }}>{lang === 'en' && s.name_en ? s.name_en : s.name_it}</div>
                         <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
-                          <Icon name="clock" size={12} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur(s.duration_min, lang)}
+                          <Icon name="clock" size={12} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur((s.duration_min || 0) + (s.soak_min || 0), lang)}{s.soak_min ? ' · ' + t('incl. posa', 'incl. soak') + ' ' + fmtDur(s.soak_min, lang) : ''}
                           {assigned && <span> · {t('assegnato a', 'assigned to')} <b style={{ color: 'var(--ink)' }}>{assigned}</b></span>}
                         </div>
                       </div>

@@ -79,7 +79,8 @@ class Appointment(TimeStampedModel):
 
     @property
     def total_duration_min(self) -> int:
-        return sum(item.duration_min for item in self.items.all())
+        # durata totale lato cliente = lavoro attivo + posa di ogni servizio
+        return sum(item.duration_min + item.soak_min for item in self.items.all())
 
     @property
     def end(self) -> dt.datetime:
@@ -102,7 +103,10 @@ class AppointmentService(models.Model):
     operator = models.ForeignKey(  # chi esegue QUESTO servizio
         "staff.Operator", on_delete=models.PROTECT, related_name="appointment_items"
     )
+    # snapshot dal listino: lavoro ATTIVO (operatrice impegnata)
     duration_min = models.PositiveIntegerField()
+    # snapshot dal listino: POSA/attesa dopo l'attivo (operatrice libera)
+    soak_min = models.PositiveIntegerField(default=0)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     order = models.PositiveSmallIntegerField(default=0)
 

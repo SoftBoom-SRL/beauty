@@ -195,9 +195,18 @@ def create_gift_card_staff(request, data: GiftCardIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
     buyer = _get_client(ctx, data.buyer_client_id) if data.buyer_client_id else None
+    # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio,
+    # ignora l'eventuale `value` inviato. gift_service_id None => carta monetaria.
+    gift_service = None
+    value = data.value
+    if data.gift_service_id:
+        Service = django_apps.get_model("catalog", "Service")  # lazy
+        gift_service = salon_get(Service, ctx, data.gift_service_id)
+        value = gift_service.price
     card = create_gift_card(
         ctx.salon,
-        data.value,
+        value,
+        gift_service=gift_service,
         buyer_client=buyer,
         recipient_name=data.recipient_name,
         paid=data.paid,

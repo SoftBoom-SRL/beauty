@@ -64,6 +64,11 @@ class GiftCard(models.Model):
     code = models.CharField(max_length=16)  # human_code(12), unique per salone
     initial_value = models.DecimalField(max_digits=10, decimal_places=2)
     balance = models.DecimalField(max_digits=10, decimal_places=2)
+    # Se valorizzato la carta regala un trattamento specifico (valore = prezzo servizio);
+    # null = carta monetaria ordinaria. Il saldo/riscatto resta invariato.
+    gift_service = models.ForeignKey(
+        "catalog.Service", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     buyer_client = models.ForeignKey(
         "clients.Client",
         on_delete=models.SET_NULL,

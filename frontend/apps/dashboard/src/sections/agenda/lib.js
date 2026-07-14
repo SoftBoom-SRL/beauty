@@ -42,9 +42,11 @@ export function itemBlocks(appt) {
   const items = [...(appt.items || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   let cursor = base;
   return items.map((item, i) => {
-    const dur = item.duration_min || 0;
+    const activeMin = item.duration_min || 0;   // fase attiva (operatrice al lavoro)
+    const soakMin = item.soak_min || 0;          // fase di posa (operatrice non impegnata)
+    const dur = activeMin + soakMin;             // durata totale per il cliente
     const block = {
-      item, appt, apptId: appt.id, startMin: cursor, dur,
+      item, appt, apptId: appt.id, startMin: cursor, dur, activeMin, soakMin,
       opId: item.operator_id, order: item.order ?? i, index: i,
       isFirst: i === 0, isLast: i === items.length - 1,
     };

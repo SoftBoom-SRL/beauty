@@ -25,6 +25,7 @@ class SettingsOut(Schema):
     brand_color: str
     agenda_fill: str
     slot_recovery: str
+    slot_interval_min: int
     lastminute_discount_cap: int
     lastminute_monthly_budget: Decimal
     flexible_enabled: bool
@@ -36,6 +37,7 @@ class SettingsIn(Schema):
     brand_color: Optional[str] = None
     agenda_fill: Optional[str] = None
     slot_recovery: Optional[str] = None
+    slot_interval_min: Optional[int] = None
     lastminute_discount_cap: Optional[int] = None
     lastminute_monthly_budget: Optional[Decimal] = None
     flexible_enabled: Optional[bool] = None

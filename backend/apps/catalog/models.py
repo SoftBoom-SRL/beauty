@@ -33,7 +33,11 @@ class Service(models.Model):
     )
     name_it = models.CharField(max_length=120)
     name_en = models.CharField(max_length=120, blank=True)
+    # minuti di lavoro ATTIVO dell'operatrice (l'operatrice è impegnata)
     duration_min = models.PositiveIntegerField()
+    # minuti di POSA/attesa dopo il lavoro attivo: il cliente è occupato ma
+    # l'operatrice NO (es. colore che sviluppa). 0 = servizio interamente attivo.
+    soak_min = models.PositiveIntegerField(default=0)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     # per stima margine (vedi agenda GET /appointments/{id}/margin)
     product_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)

@@ -10,7 +10,15 @@ from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
 from apps.staff.models import Operator
 
-from .services import kpis, occupancy_by_weekday, period_range, revenue_by_category, revenue_series
+from .services import (
+    custom_range,
+    kpis,
+    occupancy_by_weekday,
+    period_range,
+    resolve_range,
+    revenue_by_category,
+    revenue_series,
+)
 
 
 class PeriodRangeTests(TestCase):
@@ -45,6 +53,29 @@ class PeriodRangeTests(TestCase):
 
         with self.assertRaises(HttpError):
             period_range("week")
+
+
+class CustomRangeTests(TestCase):
+    def test_custom_range_end_is_exclusive_next_day(self):
+        start, end = custom_range(date(2026, 7, 7), date(2026, 7, 14))
+        self.assertEqual(start.date(), date(2026, 7, 7))
+        self.assertEqual(end.date(), date(2026, 7, 15))  # end esclusivo = data finale + 1 giorno
+
+    def test_custom_range_from_after_to_raises_400(self):
+        from ninja.errors import HttpError
+
+        with self.assertRaises(HttpError):
+            custom_range(date(2026, 7, 14), date(2026, 7, 7))
+
+    def test_resolve_range_uses_custom_when_both_dates_given(self):
+        start, end = resolve_range("month", None, date(2026, 3, 3), date(2026, 3, 5))
+        self.assertEqual(start.date(), date(2026, 3, 3))
+        self.assertEqual(end.date(), date(2026, 3, 6))
+
+    def test_resolve_range_falls_back_to_period(self):
+        start, end = resolve_range("month", date(2026, 7, 15), None, None)
+        self.assertEqual(start.date(), date(2026, 7, 1))
+        self.assertEqual(end.date(), date(2026, 8, 1))
 
 
 class KpisMinimalDatasetTests(TestCase):

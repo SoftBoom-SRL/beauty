@@ -23,33 +23,34 @@ def _parse_date(raw: str | None):
 
 
 @router.get("/kpis", auth=staff_auth, response=KpisOut)
-def get_kpis(request, period: str = "month", date: str | None = None):
+def get_kpis(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_owner(ctx)
-    return kpis(ctx.salon, period, _parse_date(date))
+    return kpis(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
 
 
 @router.get("/revenue-series", auth=staff_auth, response=list[RevenuePointOut])
 def get_revenue_series(
-    request, period: str = "month", granularity: str = "day", date: str | None = None
+    request, period: str = "month", granularity: str = "day", date: str | None = None,
+    date_from: str | None = None, date_to: str | None = None,
 ):
     ctx = request.auth
     require_owner(ctx)
-    return revenue_series(ctx.salon, period, granularity, _parse_date(date))
+    return revenue_series(ctx.salon, period, granularity, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
 
 
 @router.get("/revenue-by-category", auth=staff_auth, response=list[CategoryRevenueOut])
-def get_revenue_by_category(request, period: str = "month", date: str | None = None):
+def get_revenue_by_category(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_owner(ctx)
-    return revenue_by_category(ctx.salon, period, _parse_date(date))
+    return revenue_by_category(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
 
 
 @router.get("/occupancy-by-weekday", auth=staff_auth, response=list[WeekdayOccupancyOut])
-def get_occupancy_by_weekday(request, period: str = "month", date: str | None = None):
+def get_occupancy_by_weekday(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_owner(ctx)
-    return occupancy_by_weekday(ctx.salon, period, _parse_date(date))
+    return occupancy_by_weekday(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
 
 
 @router.post("/ask", auth=staff_auth)

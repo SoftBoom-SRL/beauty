@@ -20,6 +20,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     name_en: service?.name_en || '',
     category_id: service?.category_id || categories[0]?.id || null,
     duration_min: service?.duration_min || 45,
+    soak_min: service?.soak_min ?? 0,
     price: service?.price != null ? String(service.price) : '40',
     product_cost: service?.product_cost != null ? String(service.product_cost) : '0',
     supplier_cost: service?.supplier_cost != null ? String(service.supplier_cost) : '0',
@@ -56,6 +57,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
           name_it: draft.name_it.trim(),
           name_en: draft.name_en.trim(),
           duration_min: Math.max(5, parseInt(draft.duration_min, 10) || 45),
+          soak_min: Math.max(0, parseInt(draft.soak_min, 10) || 0),
           price: Number(draft.price || 0).toFixed(2),
           product_cost: Number(draft.product_cost || 0).toFixed(2),
           supplier_cost: Number(draft.supplier_cost || 0).toFixed(2),
@@ -163,8 +165,18 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
       <FRow label={t('Prezzo', 'Price')}>
         <PriceBox value={draft.price} onChange={(v) => set({ price: v })} />
       </FRow>
-      <FRow label={t('Durata', 'Duration')} hint={t('In minuti', 'In minutes')}>
+      <FRow label={t('Tempo attivo', 'Active time')} hint={t("Minuti in cui l'operatrice lavora sul cliente", 'Minutes the stylist actively works on the client')}>
         <DurationInput value={draft.duration_min} onChange={(v) => set({ duration_min: v })} />
+      </FRow>
+      <FRow label={t('Tempo di posa', 'Soak time')} hint={t('Posa/attesa finale, opzionale (0 = nessuna)', 'Final soak/wait, optional (0 = none)')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <DurationInput value={draft.soak_min} onChange={(v) => set({ soak_min: v })} min={0} />
+          {(parseInt(draft.soak_min, 10) || 0) > 0 && (
+            <span className="t-sm" style={{ color: 'var(--muted)' }}>
+              {t('Totale per il cliente', 'Total for the client')}: <strong style={{ color: 'var(--ink)' }}>{(parseInt(draft.duration_min, 10) || 0) + (parseInt(draft.soak_min, 10) || 0)} min</strong>
+            </span>
+          )}
+        </div>
       </FRow>
       <FRow label={t('Costo prodotti', 'Product cost')} hint={t('Materiali consumati per seduta', 'Materials used per session')}>
         <PriceBox value={draft.product_cost} onChange={(v) => set({ product_cost: v })} width={96} />

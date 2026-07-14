@@ -85,6 +85,7 @@ def _item_out(item) -> dict:
         "operator_id": item.operator_id,
         "operator_name": _operator_name(item.operator),
         "duration_min": item.duration_min,
+        "soak_min": item.soak_min,
         "price": item.price,
         "order": item.order,
     }

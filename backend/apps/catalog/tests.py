@@ -140,6 +140,66 @@ class ServicePriceChangeLogTests(CatalogTestCase):
         self.assertFalse(ActivityLog.objects.filter(type="service.price_changed").exists())
 
 
+class ServiceSoakMinTests(CatalogTestCase):
+    """Il tempo di posa (soak_min) fa round-trip su create/update del servizio."""
+
+    def setUp(self):
+        super().setUp()
+        self.cat = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
+
+    def test_create_service_persists_soak_min(self):
+        service = create_service(
+            self.request,
+            ServiceIn(
+                category_id=self.cat.id,
+                name_it="Colore",
+                duration_min=30,
+                soak_min=45,
+                price=Decimal("60.00"),
+            ),
+        )
+        service.refresh_from_db()
+        self.assertEqual(service.duration_min, 30)
+        self.assertEqual(service.soak_min, 45)
+
+    def test_create_service_soak_min_defaults_to_zero(self):
+        service = create_service(
+            self.request,
+            ServiceIn(
+                category_id=self.cat.id,
+                name_it="Piega",
+                duration_min=40,
+                price=Decimal("25.00"),
+            ),
+        )
+        self.assertEqual(service.soak_min, 0)
+
+    def test_update_service_persists_soak_min(self):
+        service = create_service(
+            self.request,
+            ServiceIn(
+                category_id=self.cat.id,
+                name_it="Colore",
+                duration_min=30,
+                soak_min=45,
+                price=Decimal("60.00"),
+            ),
+        )
+        update_service(
+            self.request,
+            service.id,
+            ServiceIn(
+                category_id=self.cat.id,
+                name_it="Colore",
+                duration_min=30,
+                soak_min=20,
+                price=Decimal("60.00"),
+            ),
+        )
+        service.refresh_from_db()
+        self.assertEqual(service.soak_min, 20)
+
+
 class PublicEndpointsTests(CatalogTestCase):
     def test_public_services_groups_by_category_and_hides_inactive(self):
         cat_a = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie", order=1)

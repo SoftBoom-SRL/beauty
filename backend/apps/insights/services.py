@@ -73,6 +73,24 @@ def period_range(period: str, date: date_cls | None = None) -> tuple[datetime, d
     return start, end
 
 
+def custom_range(date_from: date_cls, date_to: date_cls) -> tuple[datetime, datetime]:
+    """Intervallo esplicito [start, end) da due date INCLUSE (end = date_to + 1 giorno)."""
+    if date_from > date_to:
+        raise HttpError(400, "Intervallo non valido: la data iniziale è successiva a quella finale")
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(date_from, time.min), tz)
+    end = timezone.make_aware(datetime.combine(date_to + timedelta(days=1), time.min), tz)
+    return start, end
+
+
+def resolve_range(period, date, date_from, date_to) -> tuple[datetime, datetime]:
+    """Range personalizzato se `date_from` e `date_to` sono entrambi forniti,
+    altrimenti il periodo standard month/quarter/year."""
+    if date_from and date_to:
+        return custom_range(date_from, date_to)
+    return period_range(period, date)
+
+
 def _dates_in_range(start: datetime, end: datetime) -> list[date_cls]:
     """Elenco dei giorni [start.date(), end.date())."""
     d, end_d = start.date(), end.date()
@@ -152,8 +170,8 @@ def _occupancy_for_days(
     return _safe_pct(booked, available)
 
 
-def occupancy_by_weekday(salon, period: str, date: date_cls | None = None) -> list[dict]:
-    start, end = period_range(period, date)
+def occupancy_by_weekday(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> list[dict]:
+    start, end = resolve_range(period, date, date_from, date_to)
     days = _dates_in_range(start, end)
     booked_by_day = _daily_booked_minutes(salon, start, end, _OCCUPIED_STATUSES)
     shift_by_day = _daily_shift_minutes(salon, days)
@@ -188,11 +206,12 @@ def _buckets(days: list[date_cls], granularity: str) -> list[date_cls]:
 
 
 def revenue_series(
-    salon, period: str, granularity: str = "day", date: date_cls | None = None
+    salon, period: str, granularity: str = "day", date: date_cls | None = None,
+    date_from: date_cls | None = None, date_to: date_cls | None = None,
 ) -> list[dict]:
     if granularity not in GRANULARITIES:
         raise HttpError(400, "Granularità non valida: usa day, week o month")
-    start, end = period_range(period, date)
+    start, end = resolve_range(period, date, date_from, date_to)
     trunc = _TRUNC[granularity]
     rows = (
         Sale.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end)
@@ -205,9 +224,9 @@ def revenue_series(
     return [{"date": b, "revenue": by_bucket.get(b, ZERO)} for b in buckets]
 
 
-def revenue_by_category(salon, period: str, date: date_cls | None = None) -> list[dict]:
+def revenue_by_category(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> list[dict]:
     """Ricavi per categoria servizio nel periodo; le righe prodotto confluiscono in "Prodotti"."""
-    start, end = period_range(period, date)
+    start, end = resolve_range(period, date, date_from, date_to)
     service_rows = (
         SaleLine.objects.filter(
             sale__salon=salon,
@@ -243,8 +262,8 @@ def revenue_by_category(salon, period: str, date: date_cls | None = None) -> lis
 # ---------------------------------------------------------------------------
 
 
-def kpis(salon, period: str, date: date_cls | None = None) -> dict:
-    start, end = period_range(period, date)
+def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> dict:
+    start, end = resolve_range(period, date, date_from, date_to)
     today = timezone.localdate()
     days = _dates_in_range(start, end)
 

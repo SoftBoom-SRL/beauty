@@ -45,6 +45,11 @@ function OwnerLock({ t }) {
 /* ---------------- owner view ---------------- */
 function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
   const [period, setPeriod] = useState('month');
+  const [mode, setMode] = useState('period');   // 'period' | 'custom'
+  const [rFrom, setRFrom] = useState('');        // data iniziale intervallo (YYYY-MM-DD)
+  const [rTo, setRTo] = useState('');            // data finale intervallo
+  const [applied, setApplied] = useState(null);  // { from, to } dopo "Applica" → guida la fetch
+  const dateCss = { border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13, padding: '7px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink)' };
   const [loading, setLoading] = useState(true);
   const [kpis, setKpis] = useState(null);
   const [prevKpis, setPrevKpis] = useState(null);
@@ -63,18 +68,27 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
     });
   }, []);
 
-  const granularity = GRANULARITY[period];
+  // granularità dell'intervallo personalizzato in base all'ampiezza (giorni)
+  const customGranularity = (from, to) => {
+    const days = Math.round((new Date(to) - new Date(from)) / 86400000) + 1;
+    return days <= 45 ? 'day' : days <= 190 ? 'week' : 'month';
+  };
+  const isCustom = mode === 'custom' && !!applied;
+  const granularity = isCustom ? customGranularity(applied.from, applied.to) : GRANULARITY[period];
 
   useEffect(() => {
+    if (mode === 'custom' && !applied) return; // intervallo scelto ma non ancora confermato: attende "Applica"
     let alive = true;
     setLoading(true);
-    const params = { period };
+    const base = isCustom ? { date_from: applied.from, date_to: applied.to } : { period };
     Promise.all([
-      api.get('/api/insights/kpis', { params }),
-      api.get('/api/insights/kpis', { params: { period, date: prevPeriodAnchor(period) } }).catch(() => null),
-      api.get('/api/insights/revenue-series', { params: { period, granularity } }),
-      api.get('/api/insights/revenue-by-category', { params }),
-      api.get('/api/insights/occupancy-by-weekday', { params }),
+      api.get('/api/insights/kpis', { params: base }),
+      // confronto col periodo precedente solo per i periodi standard (per un intervallo libero non è definito)
+      isCustom ? Promise.resolve(null)
+        : api.get('/api/insights/kpis', { params: { period, date: prevPeriodAnchor(period) } }).catch(() => null),
+      api.get('/api/insights/revenue-series', { params: { ...base, granularity } }),
+      api.get('/api/insights/revenue-by-category', { params: base }),
+      api.get('/api/insights/occupancy-by-weekday', { params: base }),
     ]).then(([k, pk, rs, rc, ow]) => {
       if (!alive) return;
       setKpis(k); setPrevKpis(pk); setSeries(rs || []); setByCategory(rc || []); setWeekday(ow || []);
@@ -84,7 +98,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
       else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [period, granularity, fireToast, t]);
+  }, [period, mode, applied, granularity, isCustom, fireToast, t]);
 
   // fmtEur(0) says "Gratis" (price convention) — for KPI money we want "€0".
   const eur = useCallback((n) => {
@@ -108,11 +122,13 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
     ['year', t('Anno', 'Year')],
   ];
 
-  const trendTitle = {
-    month: t('Andamento · giorno per giorno', 'Trend · day by day'),
-    quarter: t('Andamento · per settimana', 'Trend · by week'),
-    year: t('Andamento · per mese', 'Trend · by month'),
-  }[period];
+  const trendTitle = isCustom
+    ? t('Andamento · intervallo scelto', 'Trend · selected range')
+    : {
+      month: t('Andamento · giorno per giorno', 'Trend · day by day'),
+      quarter: t('Andamento · per settimana', 'Trend · by week'),
+      year: t('Andamento · per mese', 'Trend · by month'),
+    }[period];
 
   return (
     <div className="dk-page" style={{ maxWidth: 1240 }}>
@@ -120,14 +136,36 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 12, padding: 4 }}>
           {periods.map(([k, l]) => {
-            const on = period === k;
+            const on = mode === 'period' && period === k;
             return (
-              <button key={k} onClick={() => setPeriod(k)} style={{ padding: '8px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: on ? 'var(--ink)' : 'transparent', color: on ? '#fff' : 'var(--ink)' }}>
+              <button key={k} onClick={() => { setMode('period'); setPeriod(k); }} style={{ padding: '8px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', background: on ? 'var(--ink)' : 'transparent', color: on ? '#fff' : 'var(--ink)' }}>
                 {l}
               </button>
             );
           })}
+          <button onClick={() => setMode('custom')} style={{ padding: '8px 16px', borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', background: mode === 'custom' ? 'var(--ink)' : 'transparent', color: mode === 'custom' ? '#fff' : 'var(--ink)' }}>
+            {t('Personalizzato', 'Custom')}
+          </button>
         </div>
+
+        {/* intervallo di date personalizzato — si aggiorna solo premendo "Applica" */}
+        {mode === 'custom' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="t-meta">{t('Dal', 'From')}</span>
+            <input type="date" value={rFrom} max={rTo || undefined} onChange={(e) => setRFrom(e.target.value)} style={dateCss} />
+            <span className="t-meta">{t('al', 'to')}</span>
+            <input type="date" value={rTo} min={rFrom || undefined} onChange={(e) => setRTo(e.target.value)} style={dateCss} />
+            <button className="dk-btn dk-btn--clay" style={{ height: 38 }}
+              disabled={!rFrom || !rTo || rFrom > rTo || (!!applied && applied.from === rFrom && applied.to === rTo)}
+              onClick={() => setApplied({ from: rFrom, to: rTo })}>
+              <Icon name="search" size={15} color="#fff" />{t('Applica', 'Apply')}
+            </button>
+            {!applied && <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('Scegli le date e premi Applica', 'Pick the dates and press Apply')}</span>}
+            {!!applied && (applied.from !== rFrom || applied.to !== rTo) && (
+              <span className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600 }}>{t('Premi Applica per aggiornare', 'Press Apply to refresh')}</span>
+            )}
+          </div>
+        )}
         <div style={{ flex: 1 }} />
       </div>
 

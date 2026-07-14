@@ -14,13 +14,14 @@ export default function DayGrid({
   onHover, onLeave, onOpenAppt, onSlotMenu,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
-  const { t, lang } = useDash();
+  const { t, lang, settings } = useDash();
+  const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
   const drag = useRef(null);
   const [, force] = useState(0);
   const scrollRef = useRef(null);
 
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
-  const quarters = []; for (let m = DK_START; m <= DK_END; m += 15) quarters.push(m);
+  const quarters = []; for (let m = DK_START; m <= DK_END; m += step) quarters.push(m);
   const gridH = (DK_END - DK_START) * PXM;
   const ops = rows.map((r) => r.operator);
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
@@ -55,7 +56,7 @@ export default function DayGrid({
     e.preventDefault(); e.stopPropagation();
     drag.current = {
       kind: 'item', mode: 'resize', apptId: block.apptId, itemId: block.item.id, block,
-      startY: e.clientY, orig: block.startMin, origDur: block.dur, ndur: block.dur, moved: false,
+      startY: e.clientY, orig: block.startMin, origDur: block.activeMin, ndur: block.activeMin, moved: false,
     };
   }
   function onPauseDown(e, pause) {
@@ -87,8 +88,8 @@ export default function DayGrid({
       return;
     }
     const dy = e.clientY - d.startY;
-    let ns = Math.round((d.orig + dy / PXM) / 15) * 15;
-    ns = Math.max(DK_START, Math.min(DK_END - 15, ns));
+    let ns = Math.round((d.orig + dy / PXM) / step) * step;
+    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
     const nop = colFromX(e.clientX) ?? d.origOp;
     d.ns = ns; d.nop = nop;
     d.moved = Math.abs(dy) > 4 || nop !== d.origOp;
@@ -123,18 +124,21 @@ export default function DayGrid({
   /* posizione: ghost del drag attivo > override ottimistico (pending) > valore server */
   const itemPos = (block) => {
     const d = drag.current;
+    const phases = { activeMin: block.activeMin, soakMin: block.soakMin };
     if (d && d.kind === 'item' && d.apptId === block.apptId && d.mode !== 'resize') {
       // sposta tutti i blocchi della stessa visita del delta trascinato
-      if (d.itemId === block.item.id) return { startMin: d.ns, opId: (block.appt.items || []).length > 1 ? block.opId : d.nop, dragging: true };
-      return { startMin: block.startMin + (d.ns - d.orig), opId: block.opId, dragging: true };
+      const startMin = d.itemId === block.item.id ? d.ns : block.startMin + (d.ns - d.orig);
+      const opId = d.itemId === block.item.id ? ((block.appt.items || []).length > 1 ? block.opId : d.nop) : block.opId;
+      return { startMin, opId, ...phases, dragging: true };
     }
     if (d && d.kind === 'item' && d.mode === 'resize' && d.itemId === block.item.id) {
-      return { startMin: block.startMin, opId: block.opId, dur: d.ndur, resizing: true };
+      // durante il resize cambia SOLO il tempo attivo; la posa resta
+      return { startMin: block.startMin, opId: block.opId, activeMin: d.ndur, soakMin: block.soakMin, resizing: true };
     }
     if (pending && pending.kind === 'appt' && pending.id === block.apptId) {
-      return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId: (block.appt.items || []).length > 1 ? block.opId : pending.opId };
+      return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId: (block.appt.items || []).length > 1 ? block.opId : pending.opId, ...phases };
     }
-    return { startMin: block.startMin, opId: block.opId };
+    return { startMin: block.startMin, opId: block.opId, ...phases };
   };
   const pausePos = (p) => {
     const d = drag.current;
@@ -230,7 +234,7 @@ export default function DayGrid({
                   if (drag.current && drag.current.moved) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const raw = DK_START + (e.clientY - rect.top) / PXM;
-                  const snapped = Math.max(DK_START, Math.min(DK_END - 30, Math.round(raw / 30) * 30));
+                  const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.round(raw / step) * step));
                   onSlotMenu(o.id, snapped, e.clientX, e.clientY);
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? 'copy' : 'default' }}
@@ -243,7 +247,7 @@ export default function DayGrid({
                   const pos = itemPos(b);
                   return (
                     <ItemBlock
-                      key={'i' + b.item.id} block={b} startMin={pos.startMin} dur={pos.dur ?? b.dur}
+                      key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
                       dragging={pos.dragging} t={t} lang={lang} canWrite={canWrite}
                       color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
                       onDown={(e) => onItemDown(e, b)}
@@ -294,13 +298,16 @@ function closedIntervals(windows) {
 }
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, dur, dragging, color, t, lang, canWrite, onDown, onResizeDown, onOpen, onHover, onLeave }) {
+function ItemBlock({ block, startMin, activeMin, soakMin, dragging, color, t, lang, canWrite, onDown, onResizeDown, onOpen, onHover, onLeave }) {
   const { item, appt, isFirst } = block;
-  const h = dur * PXM;
+  const active = activeMin ?? block.activeMin ?? 0;
+  const soak = soakMin ?? block.soakMin ?? 0;
+  const h = (active + soak) * PXM;
   const compact = h < 50;
   const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
+  const textZ = { position: 'relative', zIndex: 2 };
   return (
     <div
       onPointerDown={(e) => onDown(e)} onClick={onOpen}
@@ -314,19 +321,25 @@ function ItemBlock({ block, startMin, dur, dragging, color, t, lang, canWrite, o
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,
       }}
     >
+      {/* fase di posa: parte inferiore tratteggiata/più chiara — operatrice NON impegnata */}
+      {soak > 0 && (
+        <div title={t('Fase di posa', 'Soak phase')} style={{ position: 'absolute', left: 0, right: 0, top: active * PXM, bottom: 0, background: 'repeating-linear-gradient(135deg, rgba(255,255,255,0.62) 0 6px, rgba(255,255,255,0.14) 6px 12px)', borderTop: '1px dashed rgba(17,24,39,0.28)', borderRadius: '0 0 12px 12px', pointerEvents: 'none', display: 'grid', placeItems: 'center', zIndex: 1 }}>
+          {soak * PXM > 20 && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-2)', opacity: 0.7 }}>{t('POSA', 'SOAK')}</span>}
+        </div>
+      )}
       {isFirst && appt.deposit_status === 'paid' && (
         <div title={t('Caparra incassata', 'Deposit collected')} style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 7, background: 'var(--surface)', border: '1.5px solid var(--ok)', display: 'grid', placeItems: 'center', boxShadow: '0 1px 2px rgba(17,24,39,0.12)', zIndex: 3 }}>
           <Icon name="wallet" size={13} color="var(--ok)" stroke={2} />
         </div>
       )}
-      <div style={{ fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>{item.service_name}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 1, flexShrink: 0 }}>
+      <div style={{ ...textZ, fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>{item.service_name}</div>
+      <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 1, flexShrink: 0 }}>
         {showStatusDot && <span title={sm.label} style={{ width: 7, height: 7, borderRadius: 99, background: sm.color, flexShrink: 0 }} />}
         <span className="tabnum" style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>{timeLabel(startMin)}</span>
       </div>
-      {!compact && <div style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{appt.client?.full_name}</div>}
+      {!compact && <div style={{ ...textZ, color: 'var(--muted)', fontSize: 11, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{appt.client?.full_name}</div>}
       {canWrite && (
-        <div onPointerDown={onResizeDown} title={t('Trascina per cambiare durata', 'Drag to change duration')} style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 11, cursor: 'ns-resize', display: 'grid', placeItems: 'center', touchAction: 'none' }}>
+        <div onPointerDown={onResizeDown} title={t('Trascina per cambiare il tempo attivo', 'Drag to change the active time')} style={{ position: 'absolute', left: 0, right: 0, top: soak > 0 ? active * PXM - 6 : undefined, bottom: soak > 0 ? undefined : 0, height: 12, cursor: 'ns-resize', display: 'grid', placeItems: 'center', touchAction: 'none', zIndex: 3 }}>
           <div style={{ width: 24, height: 3, borderRadius: 99, background: 'rgba(17,24,39,0.18)' }} />
         </div>
       )}

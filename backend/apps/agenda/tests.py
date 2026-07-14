@@ -14,7 +14,7 @@ from django.test import TestCase
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from apps.core.models import DepositRule, OutboxEvent, Salon
+from apps.core.models import DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
 from .models import Appointment, AppointmentService, Pause
@@ -23,6 +23,7 @@ from .services import (
     compute_deposit,
     create_appointment,
     get_free_slots,
+    move_appointment,
 )
 
 
@@ -162,6 +163,205 @@ class GetFreeSlotsTests(AgendaTestBase):
         self.assertNotIn(_aware(self.day, 9).isoformat(), starts)
         self.assertNotIn(_aware(self.day, 9, 15).isoformat(), starts)
         self.assertIn(_aware(self.day, 9, 30).isoformat(), starts)
+
+
+class SlotIntervalTests(AgendaTestBase):
+    """L'intervallo fasce orarie del salone (SalonSettings.slot_interval_min)
+    guida il passo della disponibilità; senza riga impostazioni si usa il
+    default globale (AGENDA_SLOT_STEP_MIN = 15)."""
+
+    def test_default_step_is_15_without_settings(self):
+        # nessuna SalonSettings: passo di default 15'
+        mapping = {self.op1.id: [(9 * 60, 11 * 60)]}
+        with self._windows(mapping):
+            slots = get_free_slots(
+                self.salon, self.day, [{"service_id": self.svc30.id, "operator_id": None}]
+            )
+        starts = [s["start"] for s in slots]
+        self.assertIn(_aware(self.day, 9, 15).isoformat(), starts)
+
+    def test_step_30_offers_half_hour_grid(self):
+        SalonSettings.objects.create(salon=self.salon, slot_interval_min=30)
+        mapping = {self.op1.id: [(9 * 60, 11 * 60)]}
+        with self._windows(mapping):
+            slots = get_free_slots(
+                self.salon, self.day, [{"service_id": self.svc30.id, "operator_id": None}]
+            )
+        starts = [s["start"] for s in slots]
+        # passo 30': 9:00, 9:30, 10:00, 10:30 (l'ultimo finisce alle 11:00)
+        self.assertEqual(
+            starts,
+            [
+                _aware(self.day, 9).isoformat(),
+                _aware(self.day, 9, 30).isoformat(),
+                _aware(self.day, 10).isoformat(),
+                _aware(self.day, 10, 30).isoformat(),
+            ],
+        )
+        self.assertNotIn(_aware(self.day, 9, 15).isoformat(), starts)
+
+    def test_step_20_offers_twenty_minute_grid(self):
+        SalonSettings.objects.create(salon=self.salon, slot_interval_min=20)
+        mapping = {self.op1.id: [(9 * 60, 10 * 60)]}
+        with self._windows(mapping):
+            slots = get_free_slots(
+                self.salon, self.day, [{"service_id": self.svc30.id, "operator_id": None}]
+            )
+        starts = [s["start"] for s in slots]
+        # passo 20' entro 9:00-10:00 con servizio 30': 9:00 (→9:30), 9:20 (→9:50)
+        self.assertEqual(
+            starts,
+            [_aware(self.day, 9).isoformat(), _aware(self.day, 9, 20).isoformat()],
+        )
+
+
+class SoakTimeTests(AgendaTestBase):
+    """Semantica del tempo di posa (soak): attivo = hard-busy (blocca sempre),
+    posa = soft-busy (sovrapposizione manuale ammessa, mai automatica)."""
+
+    def setUp(self):
+        from apps.catalog.models import Service
+
+        category = self.svc60.category
+        # servizio con posa: 30' attivi + 45' di posa
+        self.svc_soak = Service.objects.create(
+            salon=self.salon,
+            category=category,
+            name_it="Colore",
+            duration_min=30,
+            soak_min=45,
+            price=Decimal("60.00"),
+        )
+        # servizio piano (nessuna posa), idoneo a op1 e op2
+        self.svc_plain = Service.objects.create(
+            salon=self.salon,
+            category=category,
+            name_it="Taglio",
+            duration_min=30,
+            soak_min=0,
+            price=Decimal("25.00"),
+        )
+        self.svc_soak.operators.add(self.op1, self.op2)
+        self.svc_plain.operators.add(self.op1, self.op2)
+        self.wide = {
+            self.op1.id: [(8 * 60, 20 * 60)],
+            self.op2.id: [(8 * 60, 20 * 60)],
+        }
+
+    def _soak_appt_for_op1(self):
+        """Appuntamento con posa per op1: attivo 10:00-10:30, posa 10:30-11:15."""
+        appt = Appointment.objects.create(
+            salon=self.salon,
+            client=self.client_obj,
+            operator=self.op1,
+            start=_aware(self.day, 10),
+        )
+        AppointmentService.objects.create(
+            appointment=appt,
+            service=self.svc_soak,
+            operator=self.op1,
+            duration_min=30,
+            soak_min=45,
+            price=Decimal("60.00"),
+        )
+        return appt
+
+    def test_booking_soak_service_spans_active_plus_soak(self):
+        from .api import _item_out
+
+        with self._windows(self.wide):
+            appt = create_appointment(
+                self.salon,
+                self.client_obj,
+                [{"service_id": self.svc_soak.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10),
+                via="dashboard",
+            )
+        item = appt.items.get()
+        self.assertEqual(item.duration_min, 30)  # attivo
+        self.assertEqual(item.soak_min, 45)       # posa
+        # total_duration_min = attivo + posa -> l'orario di fine è corretto
+        self.assertEqual(appt.total_duration_min, 75)
+        self.assertEqual(appt.end, _aware(self.day, 11, 15))
+        # ItemOut espone soak_min (duration_min resta l'ATTIVO)
+        out = _item_out(item)
+        self.assertEqual(out["duration_min"], 30)
+        self.assertEqual(out["soak_min"], 45)
+
+    def test_availability_never_offers_start_inside_soak(self):
+        # op1 impegnata: attivo 10:00-10:30, posa 10:30-11:15
+        self._soak_appt_for_op1()
+        with self._windows(self.wide):
+            slots = get_free_slots(
+                self.salon,
+                self.day,
+                [{"service_id": self.svc_plain.id, "operator_id": self.op1.id}],
+            )
+        starts = [s["start"] for s in slots]
+        # nessuno start che cadrebbe nella posa altrui (auto NON riempie la posa)
+        self.assertNotIn(_aware(self.day, 10, 30).isoformat(), starts)
+        self.assertNotIn(_aware(self.day, 10, 45).isoformat(), starts)
+        self.assertNotIn(_aware(self.day, 11).isoformat(), starts)
+        # a posa finita torna disponibile
+        self.assertIn(_aware(self.day, 11, 15).isoformat(), starts)
+
+    def test_manual_move_into_soak_window_succeeds(self):
+        self._soak_appt_for_op1()  # posa op1 10:30-11:15
+        with self._windows(self.wide):
+            appt_b = create_appointment(
+                self.salon,
+                self.client_obj,
+                [{"service_id": self.svc_plain.id, "operator_id": self.op1.id}],
+                _aware(self.day, 8),
+                via="dashboard",
+            )
+            # spostato a 10:45 -> attivo 10:45-11:15: cade SOLO nella posa di A
+            moved = move_appointment(appt_b, _aware(self.day, 10, 45))
+        self.assertEqual(moved.start, _aware(self.day, 10, 45))
+
+    def test_manual_move_into_active_window_conflicts(self):
+        self._soak_appt_for_op1()  # attivo op1 10:00-10:30
+        with self._windows(self.wide):
+            appt_b = create_appointment(
+                self.salon,
+                self.client_obj,
+                [{"service_id": self.svc_plain.id, "operator_id": self.op1.id}],
+                _aware(self.day, 8),
+                via="dashboard",
+            )
+            with self.assertRaises(HttpError) as caught:
+                # 10:15-10:45 si sovrappone all'ATTIVO 10:00-10:30 di A -> conflitto
+                move_appointment(appt_b, _aware(self.day, 10, 15))
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_auto_assign_avoids_operator_in_soak(self):
+        self._soak_appt_for_op1()  # op1 in posa 10:30-11:15
+        with self._windows(self.wide):
+            # auto (operator_id=None) a 10:45: op1 sarebbe nella posa -> sceglie op2
+            appt = create_appointment(
+                self.salon,
+                self.client_obj,
+                [{"service_id": self.svc_plain.id, "operator_id": None}],
+                _aware(self.day, 10, 45),
+                via="dashboard",
+            )
+        self.assertEqual(appt.operator_id, self.op2.id)
+        self.assertEqual(appt.items.get().operator_id, self.op2.id)
+
+    def test_auto_assign_no_alternative_raises_409(self):
+        # solo op1 idoneo: in auto durante la posa nessun candidato -> 409
+        self.svc_plain.operators.remove(self.op2)
+        self._soak_appt_for_op1()  # op1 in posa 10:30-11:15
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            with self.assertRaises(HttpError) as caught:
+                create_appointment(
+                    self.salon,
+                    self.client_obj,
+                    [{"service_id": self.svc_plain.id, "operator_id": None}],
+                    _aware(self.day, 10, 45),
+                    via="dashboard",
+                )
+        self.assertEqual(caught.exception.status_code, 409)
 
 
 class ComputeDepositTests(AgendaTestBase):
