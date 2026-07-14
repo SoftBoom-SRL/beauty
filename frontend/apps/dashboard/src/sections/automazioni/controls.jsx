@@ -4,7 +4,7 @@
 // rules). A future refactor should unify them in dashboard ui/ — kept local per
 // section-ownership rules.
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon } from '@youty/shared';
+import { Icon, NumInput } from '@youty/shared';
 
 /* ---- small generic dropdown (field / operator pickers) — prototype port ---- */
 export function DkDrop({ value, onChange, options, narrow }) {
@@ -47,7 +47,7 @@ export function DkStepper({ value, onChange }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--hair)', borderRadius: 10, background: 'var(--surface)', overflow: 'hidden' }}>
       <button style={btn} onClick={dec} aria-label="−"><span style={{ fontSize: 19, fontWeight: 600, lineHeight: 1 }}>−</span></button>
-      <input type="number" value={value} onChange={(e) => onChange(Math.max(0, parseInt(e.target.value, 10) || 0))} style={{ width: 44, textAlign: 'center', border: 'none', borderLeft: '1px solid var(--hair)', borderRight: '1px solid var(--hair)', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, height: 40, fontVariantNumeric: 'tabular-nums' }} />
+      <NumInput integer min={0} value={value} onChange={onChange} style={{ width: 44, textAlign: 'center', border: 'none', borderLeft: '1px solid var(--hair)', borderRight: '1px solid var(--hair)', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, height: 40, fontVariantNumeric: 'tabular-nums' }} />
       <button style={btn} onClick={inc} aria-label="+"><span style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}>+</span></button>
     </div>
   );

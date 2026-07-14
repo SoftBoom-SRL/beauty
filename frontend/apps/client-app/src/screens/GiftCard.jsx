@@ -2,7 +2,7 @@
 // form (POST /api/marketing/client/gift-cards — unpaid, si paga in salone;
 // Stripe checkout arriverà in fase 2).
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur } from '@youty/shared';
+import { Icon, ProgressBar, api, fmtEur, NumInput } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
@@ -145,8 +145,8 @@ export default function GiftCard() {
                     );
                   })}
                 </div>
-                <input className="ca-input" type="number" inputMode="decimal" min={5} max={1000} placeholder={t('Altro importo (€)', 'Other amount (€)')}
-                  value={custom} onChange={(e) => setCustom(e.target.value)} style={{ marginBottom: 14 }} />
+                <NumInput className="ca-input" max={1000} placeholder={t('Altro importo (€)', 'Other amount (€)')}
+                  value={custom} emptyValue="" onChange={setCustom} style={{ marginBottom: 14 }} />
                 {/* recipient */}
                 <div className="t-meta" style={{ marginBottom: 10 }}>{t('Per chi è?', 'Who is it for?')}</div>
                 <input className="ca-input" placeholder={t('Nome della destinataria (facoltativo)', 'Recipient name (optional)')}

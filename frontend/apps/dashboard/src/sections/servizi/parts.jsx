@@ -1,6 +1,6 @@
 // parts.jsx — small building blocks shared across Servizi/Pacchetti cards & modals.
 import React from 'react';
-import { Icon, Avatar } from '@youty/shared';
+import { Icon, Avatar, NumInput } from '@youty/shared';
 
 export function CategoryDot({ color, size = 10 }) {
   return (
@@ -31,9 +31,9 @@ export function PriceBox({ value, onChange, width = 110 }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)', width }}>
       <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>€</span>
-      <input
-        type="number" min={0} step="0.5" value={value}
-        onChange={(e) => onChange(e.target.value)}
+      <NumInput
+        min={0} value={value}
+        onChange={onChange}
         style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }}
       />
     </div>
@@ -45,10 +45,8 @@ export function PriceBox({ value, onChange, width = 110 }) {
 export function DurationInput({ value, onChange, min = 5 }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)', width: 120 }}>
-      <input
-        type="text" inputMode="numeric" value={value}
-        onChange={(e) => { const n = e.target.value.replace(/[^0-9]/g, ''); onChange(n === '' ? '' : parseInt(n, 10)); }}
-        onBlur={() => { const n = parseInt(value, 10); onChange(Number.isFinite(n) && n >= min ? n : min); }}
+      <NumInput
+        integer min={min} value={value} onChange={onChange}
         style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }}
       />
       <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>min</span>

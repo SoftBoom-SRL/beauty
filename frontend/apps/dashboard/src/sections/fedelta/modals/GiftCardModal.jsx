@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, toDateStr, fmtEur } from '@youty/shared';
+import { api, ApiError, Icon, toDateStr, fmtEur, NumInput } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
@@ -85,7 +85,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)' }}>
               <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-              <input type="number" value={value} onChange={(e) => setValue(Math.max(0, Number(e.target.value) || 0))} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
+              <NumInput min={0} value={value} onChange={setValue} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
             </div>
             {[25, 50, 75, 100].map((v) => (
               <button key={v} onClick={() => setValue(v)} style={{ ...pillBtn(value === v), fontWeight: 700, padding: '8px 13px' }}>€{v}</button>

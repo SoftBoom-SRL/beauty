@@ -1,6 +1,6 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, timeLabel, toDateStr, todayStr, parseISO } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
@@ -395,7 +395,7 @@ export default function AgendaSection() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '0 2px' }}>
                   <span className="t-sm" style={{ color: 'var(--muted)', flex: 1 }}>{t('Personalizzata', 'Custom')}</span>
-                  <input type="number" min={5} step={5} value={slotMenu.dur || 60} onChange={(e) => setSlotMenu((m) => ({ ...m, dur: Math.max(5, parseInt(e.target.value) || 5) }))} style={{ width: 64, textAlign: 'right', border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono, monospace)', outline: 'none' }} />
+                  <NumInput integer min={5} value={slotMenu.dur || 60} onChange={(dur) => setSlotMenu((m) => ({ ...m, dur }))} style={{ width: 64, textAlign: 'right', border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono, monospace)', outline: 'none' }} />
                   <span className="t-sm" style={{ color: 'var(--muted-2)' }}>min</span>
                 </div>
                 <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 10, padding: '0 2px' }}>{timeLabel(slotMenu.startMin)}–{timeLabel(slotMenu.startMin + (slotMenu.dur || 60))}</div>

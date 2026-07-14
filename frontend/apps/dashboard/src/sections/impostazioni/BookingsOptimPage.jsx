@@ -5,7 +5,7 @@
 // Dropped (no API field): deposit-mode selector (covered by DepositRules below)
 // and the free-text "Le tue regole" builder (phase 2).
 import React, { useState } from 'react';
-import { api, Icon, Toggle } from '@youty/shared';
+import { api, Icon, Toggle, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { useDash } from '../../ctx.jsx';
 import DepositRules from './DepositRules.jsx';
@@ -23,7 +23,7 @@ const AoPills = ({ value, onChange, options, disabled }) => (
 
 const AoStepper = ({ value, onChange, min = 0, max = 999, step = 5, suffix, disabled }) => (
   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 5px 0 10px', height: 40, background: 'var(--surface)', opacity: disabled ? 0.55 : 1 }}>
-    <input type="number" value={value} disabled={disabled} onChange={(e) => onChange(Math.max(min, Math.min(max, parseInt(e.target.value, 10) || 0)))} style={{ width: 46, border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }} />
+    <NumInput integer min={min} max={max} value={value} disabled={disabled} onChange={onChange} style={{ width: 46, border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }} />
     {suffix && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700, marginRight: 2 }}>{suffix}</span>}
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <button disabled={disabled} onClick={() => onChange(Math.min(max, value + step))} style={{ border: 'none', background: 'transparent', cursor: disabled ? 'default' : 'pointer', padding: '1px 4px', lineHeight: 1, color: 'var(--muted)' }}><Icon name="chevD" size={12} color="var(--muted)" style={{ transform: 'rotate(180deg)' }} /></button>
@@ -197,7 +197,7 @@ export default function BookingsOptimPage({ onBack }) {
               </div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 40, background: 'var(--surface)', opacity: ro ? 0.55 : 1 }}>
                 <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-                <input type="number" value={budget} disabled={ro} onChange={(e) => setBudget(Math.max(0, parseInt(e.target.value, 10) || 0))} style={{ width: 56, border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
+                <NumInput integer min={0} value={budget} disabled={ro} onChange={setBudget} style={{ width: 56, border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
               </div>
             </div>
           )}

@@ -2,7 +2,7 @@
 // Port of DkDepositRules / DkDepositRuleCard with the API conditions model:
 // { op: 'and'|'or', rules: [{ field, cmp, value }] } + amount_type pct|fixed.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Toggle } from '@youty/shared';
+import { api, Icon, Toggle, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { useDash } from '../../ctx.jsx';
 import { DkCondRow, depositFields, ruleSentence, inputCss, toastErr, LockNote } from './lib.jsx';
@@ -204,7 +204,7 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
             <DkSeg value={draft.amount_type} onChange={(v) => upd({ amount_type: v })} options={[{ value: 'pct', label: t('% del totale', '% of total') }, { value: 'fixed', label: t('Importo fisso', 'Fixed amount') }]} />
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 9, padding: '0 10px', height: 36, background: 'var(--surface)' }}>
               {draft.amount_type === 'fixed' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
-              <input type="number" value={draft.amount} min={0} onChange={(e) => upd({ amount: Math.max(0, draft.amount_type === 'pct' ? Math.min(100, parseInt(e.target.value, 10) || 0) : (parseFloat(e.target.value) || 0)) })} style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
+              <NumInput value={draft.amount} min={0} integer={draft.amount_type === 'pct'} max={draft.amount_type === 'pct' ? 100 : undefined} onChange={(amount) => upd({ amount })} style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
               {draft.amount_type === 'pct' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>}
             </div>
           </div>
@@ -213,7 +213,7 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
           <div className="t-meta" style={{ margin: '16px 0 8px' }}>{t('Priorità', 'Priority')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 9, padding: '0 10px', height: 36, background: 'var(--surface)' }}>
-              <input type="number" value={draft.priority} min={0} onChange={(e) => upd({ priority: Math.max(0, parseInt(e.target.value, 10) || 0) })} style={{ width: 44, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
+              <NumInput integer min={0} value={draft.priority} onChange={(priority) => upd({ priority })} style={{ width: 44, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
             </div>
             <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('0 = valutata per prima', '0 = evaluated first')}</span>
           </div>

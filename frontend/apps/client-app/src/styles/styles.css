@@ -201,4 +201,10 @@ input, textarea, select { font-family: inherit; }
 /* divider */
 .hr { height: 1px; background: var(--hair); border: 0; margin: 0; }
 
+/* niente freccette su/giù native sui campi numerici (fallback universale;
+   i campi passano comunque per <NumInput> in type=text) */
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
 /* mini bar chart bars use growW */

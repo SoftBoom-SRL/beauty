@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, fmtEur, Icon } from '@youty/shared';
+import { api, ApiError, fmtEur, Icon, NumInput } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, numCss, segBtn } from '../formStyles.js';
@@ -100,7 +100,7 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
           <div className="t-meta" style={{ marginBottom: 8 }}>{draft.kind === 'percent' ? t('Percentuale', 'Percentage') : t('Importo', 'Amount')}</div>
           <div style={numCss}>
             {draft.kind === 'amount' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
-            <input type="number" disabled={locked} value={draft.value} onChange={(e) => set({ value: Math.max(0, Number(e.target.value) || 0) })} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
+            <NumInput disabled={locked} min={0} integer={draft.kind === 'percent'} max={draft.kind === 'percent' ? 100 : undefined} value={draft.value} onChange={(value) => set({ value })} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
             {draft.kind === 'percent' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>}
           </div>
         </div>

@@ -3,7 +3,7 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import {
@@ -218,7 +218,7 @@ export default function StaffPage({ id, onBack }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <label style={{ display: 'block' }}>
                   <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Costo orario €', 'Hourly cost €')}</div>
-                  <input type="number" min="0" step="0.5" value={form.hourly_cost} disabled={!canTeam} onChange={(e) => setForm((f) => ({ ...f, hourly_cost: e.target.value }))} style={inputCss} />
+                  <NumInput min={0} value={form.hourly_cost} disabled={!canTeam} onChange={(hourly_cost) => setForm((f) => ({ ...f, hourly_cost }))} style={inputCss} />
                 </label>
                 <div>
                   <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Iniziali', 'Initials')}</div>

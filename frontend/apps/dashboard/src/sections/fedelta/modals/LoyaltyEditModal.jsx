@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, Toggle } from '@youty/shared';
+import { api, ApiError, Icon, Toggle, NumInput } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
 import { LOYALTY_TYPES, EARN_METRICS, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward } from '../meta.js';
@@ -122,7 +122,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
           <div>
             <div className="t-meta" style={{ marginBottom: 6 }}>{t('Punti per €1', 'Points per €1')}</div>
             <div style={numCss}>
-              <input type="number" value={draft.earn_ratio} onChange={(e) => set({ earn_ratio: Math.max(0, Number(e.target.value) || 0) })}
+              <NumInput min={0} value={draft.earn_ratio} onChange={(earn_ratio) => set({ earn_ratio })}
                 style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 60 }} />
               <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>pt/€</span>
             </div>
@@ -135,7 +135,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
                 : isPts ? t('Punti per il premio', 'Points for reward') : t('Timbri per il premio', 'Stamps for reward')}
           </div>
           <div style={numCss}>
-            <input type="number" value={draft.threshold} onChange={(e) => set({ threshold: Math.max(1, Math.round(Number(e.target.value) || 1)) })}
+            <NumInput integer min={1} value={draft.threshold} onChange={(threshold) => set({ threshold })}
               style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 70 }} />
             <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>{unit}</span>
           </div>
@@ -158,7 +158,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={numCss}>
               {draft.reward_type !== 'discount_pct' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
-              <input type="number" value={draft.reward_value} onChange={(e) => set({ reward_value: Math.max(0, Number(e.target.value) || 0) })}
+              <NumInput min={0} max={draft.reward_type === 'discount_pct' ? 100 : undefined} value={draft.reward_value} onChange={(reward_value) => set({ reward_value })}
                 style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: 64 }} />
               {draft.reward_type === 'discount_pct' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>}
             </div>

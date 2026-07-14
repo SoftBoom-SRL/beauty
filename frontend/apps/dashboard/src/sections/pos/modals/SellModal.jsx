@@ -6,7 +6,7 @@
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, Avatar, Icon } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
@@ -224,8 +224,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 9, padding: '7px 9px', background: 'var(--surface)', width: 84, boxSizing: 'border-box' }}>
         <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-        <input autoFocus type="number" min={1} value={giftForm.amt}
-          onChange={(e) => setGiftForm((g) => ({ ...g, amt: e.target.value }))}
+        <NumInput autoFocus min={1} value={giftForm.amt}
+          onChange={(amt) => setGiftForm((g) => ({ ...g, amt }))}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13.5, width: '100%' }} />
       </div>
       <input value={giftForm.name} onChange={(e) => setGiftForm((g) => ({ ...g, name: e.target.value }))}
@@ -282,8 +282,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
                       </span>
                       {l.line_type === 'product' && !l.is_gift && (
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid var(--hair)', borderRadius: 8, padding: '3px 6px', height: 26, boxSizing: 'border-box', background: 'var(--surface)', flexShrink: 0 }} title={t('Sconto prodotto', 'Product discount')}>
-                          <input type="number" min={0} max={100} value={l.discount_pct || 0}
-                            onChange={(e) => patchLine(l.key, { discount_pct: Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)) })}
+                          <NumInput integer min={0} max={100} value={l.discount_pct}
+                            onChange={(discount_pct) => patchLine(l.key, { discount_pct })}
                             style={{ width: 24, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
                           <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>
                         </div>

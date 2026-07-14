@@ -2,7 +2,7 @@
 // plus operator assignment, which lives on the OPERATOR side:
 // toggling a stylist = PUT /api/staff/{operator_id} with updated service_ids.
 import React, { useState, useEffect } from 'react';
-import { Icon, Avatar, Toggle, fmtEur } from '@youty/shared';
+import { Icon, Avatar, Toggle, fmtEur, NumInput } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { FRow, PriceBox, DurationInput, CategoryDot } from './parts.jsx';
 
@@ -186,7 +186,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
       </FRow>
       <FRow label={t('Ordine', 'Order')} hint={t('Posizione nella lista', 'Position in the list')}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: 'var(--surface)', width: 92 }}>
-          <input type="number" min={0} value={draft.order} onChange={(e) => set({ order: Math.max(0, parseInt(e.target.value, 10) || 0) })} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }} />
+          <NumInput integer min={0} value={draft.order} onChange={(order) => set({ order })} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }} />
         </div>
       </FRow>
 

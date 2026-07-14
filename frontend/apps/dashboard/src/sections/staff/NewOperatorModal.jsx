@@ -1,7 +1,7 @@
 // NewOperatorModal — create operator form (POST /api/staff/). Rendered locally
 // by the staff section (not in the shell modal registry).
 import React, { useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, ApiError, Icon, NumInput } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { GD_PALETTE, inputCss, svcLabel } from './lib.js';
@@ -69,7 +69,7 @@ export default function NewOperatorModal({ onClose, onCreated }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12 }}>
           {field(t('Ruolo', 'Role'), <input value={form.role_title} onChange={(e) => set({ role_title: e.target.value })} placeholder={t('es. Hair stylist', 'e.g. Hair stylist')} style={inputCss} />)}
-          {field(t('Costo orario €', 'Hourly cost €'), <input type="number" min="0" step="0.5" value={form.hourly_cost} onChange={(e) => set({ hourly_cost: e.target.value })} style={inputCss} />)}
+          {field(t('Costo orario €', 'Hourly cost €'), <NumInput min={0} value={form.hourly_cost} onChange={(hourly_cost) => set({ hourly_cost })} style={inputCss} />)}
         </div>
 
         <div>

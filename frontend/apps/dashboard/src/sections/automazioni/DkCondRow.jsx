@@ -4,7 +4,7 @@
 // NOTE for the integrator: this is a LOCAL copy of the prototype DkCondRow (the
 // impostazioni section keeps its own for deposit rules) — unify in a future refactor.
 import React from 'react';
-import { Icon } from '@youty/shared';
+import { Icon, NumInput } from '@youty/shared';
 import { DkDrop } from './controls.jsx';
 import { fieldKind, catLabel } from './catalog.js';
 
@@ -72,10 +72,11 @@ export default function DkCondRow({ c, onChange, onRemove, t, lang, fields, oper
           />
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 9, padding: '0 10px', height: 36, background: 'var(--surface)' }}>
             {kind === 'money' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
-            <input
-              type="number"
+            <NumInput
+              integer={kind !== 'money'}
+              min={0}
               value={c.value}
-              onChange={(e) => onChange({ value: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+              onChange={(value) => onChange({ value })}
               style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}
             />
           </div>

@@ -1,6 +1,6 @@
 // bits.jsx — small UI pieces shared by the Magazzino sub-tabs (ported from the prototype).
 import React, { useEffect, useState } from 'react';
-import { Icon } from '@youty/shared';
+import { Icon, NumInput } from '@youty/shared';
 
 /** debounce a changing value (used for the server-side q filter) */
 export function useDebounced(value, ms = 300) {
@@ -39,7 +39,7 @@ export function SearchToolbar({ q, setQ, placeholder, onAdd, addLabel, extra }) 
 export function NumBox({ value, onChange, suffix, width = 92, disabled }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: disabled ? 'var(--surface-2)' : 'var(--surface)', width }}>
-      <input type="number" value={value} disabled={disabled} onChange={(e) => onChange(Math.max(0, parseInt(e.target.value, 10) || 0))} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }} />
+      <NumInput integer min={0} value={value} disabled={disabled} onChange={onChange} style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }} />
       {suffix && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>{suffix}</span>}
     </div>
   );
@@ -47,18 +47,10 @@ export function NumBox({ value, onChange, suffix, width = 92, disabled }) {
 
 /** decimal money/percent box — buffers the raw string so "12." keeps typing */
 export function MoneyBox({ value, onChange, suffix = '€', width = '100%', disabled }) {
-  const [raw, setRaw] = useState(value == null ? '' : String(value));
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 12px', height: 42, background: disabled ? 'var(--surface-2)' : 'var(--surface)', width }}>
-      <input
-        inputMode="decimal" value={raw} disabled={disabled}
-        onChange={(e) => {
-          const v = e.target.value.replace(',', '.');
-          if (!/^\d*\.?\d{0,2}$/.test(v)) return;
-          setRaw(v);
-          const n = parseFloat(v);
-          onChange(Number.isFinite(n) ? n : 0);
-        }}
+      <NumInput
+        min={0} value={value} disabled={disabled} onChange={onChange}
         style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 15, fontWeight: 600, width: '100%' }}
       />
       {suffix && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>{suffix}</span>}

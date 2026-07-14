@@ -1,7 +1,7 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, Avatar, Icon } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
@@ -225,7 +225,7 @@ export default function CartTab({ onGoHistory }) {
           </div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 10, padding: '8px 10px', background: 'var(--surface)', width: 86, boxSizing: 'border-box' }}>
             <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-            <input type="number" min={1} value={giftAmt} onChange={(e) => setGiftAmt(e.target.value)}
+            <NumInput min={1} value={giftAmt} onChange={setGiftAmt}
               style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, width: '100%' }} />
           </div>
           <input value={giftName} onChange={(e) => setGiftName(e.target.value)} placeholder={t('Destinatario (facolt.)', 'Recipient (optional)')}
@@ -291,8 +291,8 @@ export default function CartTab({ onGoHistory }) {
                     </div>
                     {l.line_type === 'product' && !l.is_gift && (
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid ' + (l.disc > 0 ? 'var(--clay)' : 'var(--hair)'), borderRadius: 7, padding: '2px 5px', background: 'var(--surface)', flexShrink: 0 }} title={t('Sconto riga', 'Line discount')}>
-                        <input type="number" min={0} max={100} value={l.disc || 0}
-                          onChange={(e) => patchLine(l.key, { disc: Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)) })}
+                        <NumInput integer min={0} max={100} value={l.disc}
+                          onChange={(disc) => patchLine(l.key, { disc })}
                           style={{ width: 24, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
                         <span style={{ color: 'var(--muted-2)', fontWeight: 700, fontSize: 11 }}>%</span>
                       </div>
@@ -346,8 +346,8 @@ export default function CartTab({ onGoHistory }) {
               );
             })}
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid ' + (globalDisc && ![10, 15, 20].includes(globalDisc) ? 'var(--clay)' : 'var(--hair)'), borderRadius: 9, padding: '0 9px', height: 36, background: 'var(--surface)' }}>
-              <input type="number" min={0} max={100} value={globalDisc || 0}
-                onChange={(e) => setGlobalDisc(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+              <NumInput integer min={0} max={100} value={globalDisc}
+                onChange={setGlobalDisc}
                 style={{ width: 34, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 13.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
               <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>
             </div>

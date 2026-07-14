@@ -4,7 +4,7 @@
 // Line prices/VAT are not stored on order lines — they are enriched client-side from
 // the products snapshot (purchase price net of supplier discount).
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, fmtEur, Icon } from '@youty/shared';
+import { api, EmptyState, fmtEur, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, errMsg, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, unitCost } from './lib.js';
 import { Pager, SkelRows, inputCss } from './bits.jsx';
@@ -309,7 +309,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
                   {l.sku && <div className="t-sm" style={{ color: 'var(--muted-2)' }}>{l.sku}</div>}
                 </div>
                 <div className="t-num" style={{ textAlign: 'right', fontSize: 13.5, color: 'var(--muted)' }}>{fmtQty(l.qty_ordered, lang)}</div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}><input type="number" value={rq} min={0} onChange={(e) => setRecvQty(l.id, e.target.value)} style={{ ...inputCss, width: 66, textAlign: 'right', fontWeight: 700, fontFamily: 'var(--mono, monospace)', borderColor: 'var(--clay)' }} /></div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}><NumInput integer min={0} value={rq} onChange={(v) => setRecvQty(l.id, v)} style={{ ...inputCss, width: 66, textAlign: 'right', fontWeight: 700, fontFamily: 'var(--mono, monospace)', borderColor: 'var(--clay)' }} /></div>
                 <div>{diff === 0
                   ? <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ok)', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Completo', 'Complete')}</span>
                   : <span style={{ fontSize: 11.5, fontWeight: 700, color: STOCK_META.low.color, background: STOCK_META.low.tint, padding: '2px 9px', borderRadius: 99, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="alert" size={12} color={STOCK_META.low.color} />{diff > 0 ? '+' : ''}{diff} {diff > 0 ? t('in più', 'over') : t('mancanti', 'short')}</span>}
@@ -360,8 +360,8 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
                 </div>
                 <div className="t-num" style={{ textAlign: 'right', fontSize: 13, color: l.lowItem ? STOCK_META.low.color : 'var(--muted)', fontWeight: l.lowItem ? 700 : 500 }}>{l.stock != null ? `${fmtQty(l.stock, lang)}/${fmtQty(l.min, lang)}` : '—'}</div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <input type="number" value={l.qty} min={0} disabled={!isDraft || !canWrite}
-                    onChange={(e) => setQtyDraft((d) => ({ ...d, [l.id]: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                  <NumInput integer min={0} value={l.qty} disabled={!isDraft || !canWrite}
+                    onChange={(v) => setQtyDraft((d) => ({ ...d, [l.id]: v }))}
                     style={{ ...inputCss, width: 62, textAlign: 'right', fontWeight: 700, fontFamily: 'var(--mono, monospace)', borderColor: isDraft ? 'var(--clay)' : 'var(--hair)', background: isDraft && canWrite ? 'var(--surface)' : 'var(--surface-2)' }} />
                 </div>
                 <div className="t-num" style={{ textAlign: 'right', fontSize: 13 }}>{fmtEur(l.cost, lang)}</div>

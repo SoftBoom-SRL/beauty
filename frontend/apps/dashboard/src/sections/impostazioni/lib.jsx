@@ -3,7 +3,7 @@
 // (desktop-automazioni.jsx). The automazioni section keeps its own copy: flag for
 // a future shared extraction.
 import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, Icon } from '@youty/shared';
+import { ApiError, Icon, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 
 /* ---------------- Google-Docs-like palette (GD_PALETTE port) ---------------- */
@@ -149,7 +149,7 @@ export function DkCondRow({ rule, onChange, onRemove, t, lang, fields }) {
           <DkDrop value={rule.cmp} onChange={(v) => onChange({ cmp: v })} options={CMP_NUM.map(([k, s]) => ({ value: k, label: s }))} narrow />
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 9, padding: '0 10px', height: 36, background: 'var(--surface)' }}>
             {f.type === 'money' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
-            <input type="number" value={rule.value} onChange={(e) => onChange({ value: Math.max(0, parseInt(e.target.value, 10) || 0) })} style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
+            <NumInput integer min={0} value={rule.value} onChange={(value) => onChange({ value })} style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />
             {unitTxt && f.type !== 'money' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>{unitTxt}</span>}
           </div>
         </React.Fragment>
