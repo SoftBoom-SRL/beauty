@@ -728,3 +728,29 @@ class AppointmentEditApiTests(AgendaTestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertIn("margin", resp.json())
+
+
+class PublicAvailabilityApiTests(AgendaTestBase):
+    """GET /api/agenda/public/availability: disponibilità pubblica, senza auth."""
+
+    def setUp(self):
+        self.service = self.svc60
+        self.date_str = self.day.isoformat()
+
+    def test_public_availability_no_auth(self):
+        # nessun header di auth
+        items = json.dumps([{"service_id": self.service.id}])
+        resp = self.client.get(
+            f"/api/agenda/public/availability?salon={self.salon.slug}"
+            f"&date={self.date_str}&items={items}"
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertIsInstance(resp.json(), list)
+
+    def test_public_availability_unknown_salon_404(self):
+        items = json.dumps([{"service_id": self.service.id}])
+        resp = self.client.get(
+            f"/api/agenda/public/availability?salon=inesistente"
+            f"&date={self.date_str}&items={items}"
+        )
+        self.assertEqual(resp.status_code, 404, resp.content)
