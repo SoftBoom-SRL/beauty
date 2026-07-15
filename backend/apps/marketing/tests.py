@@ -228,6 +228,75 @@ class CouponTests(TestCase):
         self.assertEqual(caught.exception.status_code, 422)
 
 
+class ClientIdFilterApiTests(TestCase):
+    """GET /coupons e /gift-cards: filtro opzionale client_id (staff, per singolo cliente)."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        tokens = create_staff_tokens(user, self.salon)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+        self.sofia = _make_client(self.salon, first_name="Sofia", phone="+393331110001")
+        self.giulia = _make_client(self.salon, first_name="Giulia", phone="+393331110002")
+
+    def test_list_coupons_filters_by_client_id(self):
+        mine = Coupon.objects.create(
+            salon=self.salon,
+            client=self.sofia,
+            code="MINE0001",
+            kind=Coupon.Kind.AMOUNT,
+            value=Decimal("10"),
+        )
+        Coupon.objects.create(
+            salon=self.salon,
+            client=self.giulia,
+            code="OTHR0001",
+            kind=Coupon.Kind.AMOUNT,
+            value=Decimal("5"),
+        )
+        Coupon.objects.create(
+            salon=self.salon,
+            code="NOCLI001",
+            kind=Coupon.Kind.PERCENT,
+            value=Decimal("15"),
+        )
+
+        resp = self.client.get("/api/marketing/coupons", **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["count"], 3)  # invariato senza il filtro
+
+        resp = self.client.get(
+            f"/api/marketing/coupons?client_id={self.sofia.id}", **self.auth
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["items"][0]["id"], mine.id)
+
+    def test_list_gift_cards_filters_by_buyer_or_recipient(self):
+        bought = create_gift_card(self.salon, Decimal("50"), buyer_client=self.sofia)
+        received = create_gift_card(self.salon, Decimal("30"))
+        received.recipient_client = self.sofia
+        received.save(update_fields=["recipient_client"])
+        create_gift_card(self.salon, Decimal("20"), buyer_client=self.giulia)
+
+        resp = self.client.get("/api/marketing/gift-cards", **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(len(resp.json()["items"]), 3)  # invariato senza il filtro
+
+        resp = self.client.get(
+            f"/api/marketing/gift-cards?client_id={self.sofia.id}", **self.auth
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        ids = {item["id"] for item in resp.json()["items"]}
+        self.assertEqual(ids, {bought.id, received.id})
+
+
 class CommunicationTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Optional
 
 from django.apps import apps as django_apps
 from django.db.models import DecimalField, F, Q, Sum, Value
@@ -49,7 +50,13 @@ def _get_client(ctx, client_id):
 
 @router.get("/coupons", auth=staff_auth, response=list[CouponOut])
 @paginate(LimitOffsetPagination)
-def list_coupons(request, origin: str = "", status: str = "", q: str = ""):
+def list_coupons(
+    request,
+    origin: str = "",
+    status: str = "",
+    q: str = "",
+    client_id: Optional[int] = None,
+):
     qs = Coupon.objects.filter(salon=request.auth.salon).select_related("client")
     if origin:
         qs = qs.filter(origin=origin)
@@ -61,6 +68,8 @@ def list_coupons(request, origin: str = "", status: str = "", q: str = ""):
             | Q(client__first_name__icontains=q)
             | Q(client__last_name__icontains=q)
         )
+    if client_id:
+        qs = qs.filter(client_id=client_id)
     return qs
 
 
@@ -161,7 +170,13 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
 
 
 @router.get("/gift-cards", auth=staff_auth, response=GiftCardListOut)
-def list_gift_cards(request, status: str = "", payment_status: str = "", q: str = ""):
+def list_gift_cards(
+    request,
+    status: str = "",
+    payment_status: str = "",
+    q: str = "",
+    client_id: Optional[int] = None,
+):
     qs = GiftCard.objects.filter(salon=request.auth.salon).select_related("buyer_client")
     if status:
         qs = qs.filter(status=status)
@@ -174,6 +189,9 @@ def list_gift_cards(request, status: str = "", payment_status: str = "", q: str 
             | Q(buyer_client__first_name__icontains=q)
             | Q(buyer_client__last_name__icontains=q)
         )
+    if client_id:
+        # il cliente può comparire come acquirente e/o destinatario della carta
+        qs = qs.filter(Q(buyer_client_id=client_id) | Q(recipient_client_id=client_id))
     kpi = qs.aggregate(
         sold_total=Coalesce(Sum("initial_value"), _ZERO),
         redeemed_total=Coalesce(

@@ -197,6 +197,7 @@ def list_sales(
     date_from: str = "",
     date_to: str = "",
     q: str = "",
+    client_id: Optional[int] = None,
     operator_id: Optional[int] = None,
     limit: int = 50,
     offset: int = 0,
@@ -215,6 +216,8 @@ def list_sales(
         qs = qs.filter(
             Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
         )
+    if client_id:
+        qs = qs.filter(client_id=client_id)
     if operator_id:
         qs = qs.filter(lines__operator_id=operator_id)
 
