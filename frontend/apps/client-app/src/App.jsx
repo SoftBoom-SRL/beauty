@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { LangProvider, Toast } from '@youty/shared';
 import { AppProvider, useApp } from './ctx.jsx';
 import { brandVars } from './theme.js';
@@ -18,7 +18,7 @@ export default function App() {
 }
 
 function Root() {
-  const { t, brand, brandError, reloadBrand, session, view, toastProps } = useApp();
+  const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView } = useApp();
 
   /* branding boot gate */
   if (!brand) {
@@ -44,17 +44,9 @@ function Root() {
 
   const vars = brandVars(brand);
 
-  /* not logged in → OTP auth flow */
-  if (!session) {
-    return (
-      <div className="app-viewport">
-        <div className="app-frame" style={vars}>
-          <AuthFlow />
-          <Toast {...toastProps} />
-        </div>
-      </div>
-    );
-  }
+  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'sposta', 'annulla', 'giftcard'];
+  const gated = !session && PERSONAL_VIEWS.includes(view);
+  useEffect(() => { if (gated) { openAuth(); setView('home'); } }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const Screen = SCREENS[view] || SCREENS.home;
   const showNav = NAV_VIEWS.includes(view);
@@ -69,6 +61,11 @@ function Root() {
         </div>
         {showNav && <Utility />}
         {showNav && <NavBar />}
+        {authOpen && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 200, background: 'var(--paper-0)' }}>
+            <AuthFlow onClose={closeAuth} />
+          </div>
+        )}
         <Toast {...toastProps} />
       </div>
     </div>

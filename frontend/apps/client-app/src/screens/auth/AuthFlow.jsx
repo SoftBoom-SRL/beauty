@@ -5,7 +5,7 @@ import { ApiError, Icon, clientAuth } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../../ctx.jsx';
 import { headFont } from '../../theme.js';
 
-export default function AuthFlow() {
+export default function AuthFlow({ onClose }) {
   const { t, lang, setLang, brand } = useApp();
   const [step, setStep] = useState('phone'); // phone | register | otp
   const [phone, setPhone] = useState('');
@@ -69,8 +69,14 @@ export default function AuthFlow() {
 
   return (
     <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
-      {/* lang toggle */}
-      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', right: 14, zIndex: 30 }}>
+      {/* lang toggle + chiusura overlay */}
+      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', right: 14, zIndex: 30, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {onClose && (
+          <button className="press" onClick={onClose} aria-label="Chiudi"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 99, background: 'rgba(255,255,255,0.92)', border: 'none', cursor: 'pointer', marginRight: 8, boxShadow: 'var(--sh-sm)' }}>
+            <Icon name="x" size={16} />
+          </button>
+        )}
         <button className="press" onClick={() => setLang(lang === 'it' ? 'en' : 'it')} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 12, fontWeight: 700, color: 'var(--ink)', boxShadow: 'var(--sh-sm)', border: 'none', cursor: 'pointer' }}>
           <Icon name="globe" size={14} />{lang.toUpperCase()}
         </button>
