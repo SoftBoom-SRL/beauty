@@ -20,7 +20,7 @@ export default function App() {
 function Root() {
   const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView } = useApp();
 
-  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'sposta', 'annulla', 'giftcard'];
+  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'waitlist-new', 'sposta', 'annulla', 'giftcard'];
   const gated = !session && PERSONAL_VIEWS.includes(view);
   useEffect(() => { if (gated) { openAuth(); setView('home'); } }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
 
