@@ -5,13 +5,14 @@ richiedono che tutte le app di dominio siano presenti (post-integrazione).
 """
 
 import json
+from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.core.models import OutboxEvent, Salon
 
 from .models import ClientOTP, Membership, Role, User
-from .services import ensure_default_roles
+from .services import _send_otp_sms, ensure_default_roles, issue_otp
 
 
 def post_json(client, url, data, **extra):
@@ -211,3 +212,57 @@ class ClientOTPFlowTests(TestCase):
             self.assertEqual(response.status_code, 200)
         response = post_json(self.client, "/api/auth/client/request-otp", payload)
         self.assertEqual(response.status_code, 429)
+
+
+class OtpSmsDeliveryTests(TestCase):
+    """Consegna OTP via SMS (Infobip) con fallback sicuro se non configurato."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _client(self, phone="+393330000001", lang="it"):
+        from apps.clients.models import Client
+
+        return Client.objects.create(
+            salon=self.salon, first_name="Test", last_name="Utente", phone=phone, lang=lang
+        )
+
+    def test_send_sms_senza_credenziali_ritorna_false(self):
+        # default settings: nessuna credenziale Infobip → nessun invio
+        self.assertFalse(_send_otp_sms("+393330000001", "123456", "it"))
+
+    def test_issue_otp_crea_codice_anche_senza_infobip(self):
+        otp = issue_otp(self._client())
+        self.assertEqual(len(otp.code), 6)
+        self.assertTrue(otp.code.isdigit())
+
+    def test_issue_otp_invoca_il_sender_sms(self):
+        c = self._client(phone="+393330000002")
+        with mock.patch(
+            "apps.accounts.services._send_otp_sms", return_value=True
+        ) as m:
+            otp = issue_otp(c)
+        m.assert_called_once_with(c.phone, otp.code, c.lang)
+
+    @override_settings(
+        INFOBIP_BASE_URL="xxxxx.api.infobip.com",
+        INFOBIP_API_KEY="key_test",
+        INFOBIP_SMS_FROM="Parlour",
+    )
+    def test_send_sms_usa_infobip_quando_configurato(self):
+        fake_resp = mock.MagicMock()
+        fake_resp.status = 200
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = fake_resp
+        with mock.patch("urllib.request.urlopen", return_value=cm) as m:
+            ok = _send_otp_sms("+393330000003", "654321", "it")
+        self.assertTrue(ok)
+        m.assert_called_once()
+        req = m.call_args.args[0]
+        self.assertTrue(req.full_url.endswith("/sms/2/text/advanced"))
+        self.assertTrue(req.full_url.startswith("https://xxxxx.api.infobip.com"))
+        self.assertEqual(req.get_header("Authorization"), "App key_test")
+        body = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(body["messages"][0]["destinations"][0]["to"], "+393330000003")
+        self.assertEqual(body["messages"][0]["from"], "Parlour")
+        self.assertIn("654321", body["messages"][0]["text"])

@@ -4,8 +4,11 @@ L'invio effettivo dell'OTP via WhatsApp è delegato a Yourang: qui viene solo
 accodato l'evento `client.otp` in core.OutboxEvent (in DEBUG il codice è loggato).
 """
 
+import json
 import logging
 import secrets
+import urllib.error
+import urllib.request
 
 from django.conf import settings
 from django.utils import timezone
@@ -39,9 +42,51 @@ def ensure_default_roles(salon) -> list[Role]:
     return roles
 
 
-def issue_otp(client) -> ClientOTP:
-    """Genera un OTP a 6 cifre per il cliente e lo accoda a Yourang per la consegna.
+def _send_otp_sms(phone: str, code: str, lang: str = "it") -> bool:
+    """Invia il codice OTP via SMS con Infobip. Ritorna True se inviato.
 
+    Se le credenziali Infobip (base URL / API key / mittente) non sono tutte
+    configurate, non invia nulla e ritorna False → fallback: il codice resta nel
+    log (DEBUG) e nell'outbox `client.otp`. Un errore d'invio non fa fallire l'OTP.
+    """
+    base = settings.INFOBIP_BASE_URL
+    key = settings.INFOBIP_API_KEY
+    sender = settings.INFOBIP_SMS_FROM
+    if not (base and key and sender):
+        return False
+    text = (
+        f"Your access code is {code}"
+        if lang == "en"
+        else f"Il tuo codice di accesso è {code}"
+    )
+    root = base if base.startswith("http") else f"https://{base}"
+    url = root.rstrip("/") + "/sms/2/text/advanced"
+    payload = json.dumps(
+        {"messages": [{"destinations": [{"to": phone}], "from": sender, "text": text}]}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"App {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except Exception:  # non far fallire l'OTP se l'SMS non parte
+        logger.exception("Invio OTP via Infobip fallito per %s", phone)
+        return False
+
+
+def issue_otp(client) -> ClientOTP:
+    """Genera un OTP a 6 cifre e lo invia via SMS (Infobip); resta accodato a
+    Yourang nell'outbox `client.otp`.
+
+    Se Infobip non è configurato, l'SMS non parte (in DEBUG il codice è nel log).
     Max 3 OTP validi contemporanei per cliente → HttpError 429.
     """
     active = ClientOTP.objects.filter(
@@ -61,8 +106,9 @@ def issue_otp(client) -> ClientOTP:
             "lang": client.lang,
         },
     )
+    sent = _send_otp_sms(client.phone, otp.code, client.lang)
     if settings.DEBUG:
-        logger.info("OTP per %s: %s", client.phone, otp.code)
+        logger.info("OTP per %s: %s (sms=%s)", client.phone, otp.code, sent)
     return otp
 
 

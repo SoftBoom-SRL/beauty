@@ -117,6 +117,13 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 YOURANG_API_URL = os.getenv("YOURANG_API_URL", "")
 YOURANG_API_KEY = os.getenv("YOURANG_API_KEY", "")
 
+# Infobip SMS — consegna del codice OTP via SMS. Se una delle tre variabili manca,
+# l'invio è disattivato e l'OTP resta solo nel log (DEBUG) / outbox (fallback sicuro).
+# INFOBIP_BASE_URL è l'host dedicato dell'account (es. "xxxxx.api.infobip.com").
+INFOBIP_BASE_URL = os.getenv("INFOBIP_BASE_URL", "")
+INFOBIP_API_KEY = os.getenv("INFOBIP_API_KEY", "")
+INFOBIP_SMS_FROM = os.getenv("INFOBIP_SMS_FROM", "")
+
 # Policy prenotazioni lato cliente (ore minime prima dell'appuntamento)
 CLIENT_MOVE_CANCEL_MIN_HOURS = int(os.getenv("CLIENT_MOVE_CANCEL_MIN_HOURS", "24"))
 AGENDA_SLOT_STEP_MIN = 15
