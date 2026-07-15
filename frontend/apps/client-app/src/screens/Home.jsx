@@ -45,19 +45,12 @@ function SalonFooter({ brand, t }) {
 }
 
 export default function Home() {
-  const { session, openAuth, setView, brand, t } = useApp();
+  const { session, setView, brand, t } = useApp();
 
   /* ---- HOME ANONIMA ---- */
   if (!session) {
     return (
       <div style={{ paddingBottom: 40, position: 'relative' }}>
-        {/* accesso in alto a destra */}
-        <div style={{ position: 'absolute', top: 'calc(var(--safe-top) + 8px)', right: 16, zIndex: 30 }}>
-          <button className="press" onClick={() => openAuth()}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
-            <Icon name="user" size={15} color="var(--brand-ink)" />{t('Accedi', 'Sign in')}
-          </button>
-        </div>
         <Cover brand={brand} t={t} />
         <div style={{ padding: '20px 22px 0' }} className="stagger">
           <div style={{ fontFamily: headFont(brand), fontSize: 24, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.15, marginBottom: 8 }}>
@@ -93,13 +86,6 @@ function HomeLogged() {
 
   return (
     <div style={{ paddingBottom: 40, position: 'relative' }}>
-      {/* accesso al profilo in alto a destra */}
-      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) + 8px)', right: 16, zIndex: 30 }}>
-        <button className="press" onClick={() => setView('profilo')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
-          <Icon name="user" size={15} color="var(--brand-ink)" />{client?.first_name || t('Profilo', 'Profile')}
-        </button>
-      </div>
       <Cover brand={brand} t={t} />
       <div style={{ padding: '20px 22px 0' }} className="stagger">
 
