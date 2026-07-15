@@ -68,6 +68,17 @@ class OperatorDetailOut(OperatorOut):
     shifts: list[WeeklyShiftOut]
 
 
+class PublicOperatorOut(Schema):
+    """Riga pubblica per la scelta dello stilista in prenotazione (no auth)."""
+
+    id: int
+    first_name: str
+    last_name: str
+    initials: str
+    color: str
+    service_ids: list[int] = []
+
+
 # ---- Turni -----------------------------------------------------------------
 
 

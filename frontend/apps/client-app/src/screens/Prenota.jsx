@@ -1,15 +1,14 @@
 // Prenota.jsx — booking wizard (core flow), ported from prototype ClientBooking.
 // Steps: -1 choice (single/pacchetti) → 0 service picker (public catalog)
-//        → 1 day+time (GET /api/agenda/client/availability) → 2 review
+//        → 1 day+time (GET /api/agenda/client/availability) + stylist picker
+//        (GET /api/staff/public/operators) → 2 review
 //        → POST /api/agenda/client/appointments → success (deposit messaging).
-// NOTE: the prototype's stylist-choice step is skipped — no public/client
-// endpoint exists to list operators (API gap, see report). Bookings go "any".
 import React from 'react';
 import { ApiError, Icon, api, clientAuth, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, DetailRow, StickyCta, usePublicServices, svcLangName, catIcon,
+  ClientSubHead, DetailRow, StickyCta, usePublicServices, usePublicOperators, svcLangName, catIcon,
   nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
 
@@ -31,9 +30,11 @@ function StepBar({ i, t }) {
 export default function Prenota() {
   const { t, lang, brand, session, setView, fireToast } = useApp();
   const { cats, error: catError } = usePublicServices(SALON_SLUG);
+  const { operators } = usePublicOperators(SALON_SLUG);
   const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 3 dati · 4 otp · 9 success
   const [serviceIds, setServiceIds] = React.useState([]);
   const [dayIdx, setDayIdx] = React.useState(0);
+  const [operatorId, setOperatorId] = React.useState(null); // null = "prima disponibile"
   const [slot, setSlot] = React.useState(null);         // SlotOut {start, assignment}
   const [slots, setSlots] = React.useState(null);       // null = loading
   const [booking, setBooking] = React.useState(false);
@@ -54,7 +55,16 @@ export default function Prenota() {
   const dur = svcs.reduce((sum, sv) => sum + (sv.duration_min || 0), 0);
   const price = svcs.reduce((sum, sv) => sum + Number(sv.price || 0), 0);
   const toggleSvc = (id) => setServiceIds((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
-  const items = serviceIds.map((id) => ({ service_id: id }));
+  const items = serviceIds.map((id) => ({ service_id: id, operator_id: operatorId }));
+
+  /* ---- stylist picker (step 1): only operators eligible for the chosen services ---- */
+  const eligibleOperators = React.useMemo(() => {
+    if (!operators || !serviceIds.length) return [];
+    const doAll = operators.filter((op) => serviceIds.every((id) => op.service_ids.includes(id)));
+    if (doAll.length) return doAll;
+    return operators.filter((op) => op.service_ids.includes(serviceIds[0]));
+  }, [operators, serviceIds]);
+  const selectedOperator = eligibleOperators.find((op) => op.id === operatorId) || null;
 
   /* ---- availability fetch (step 1) ---- */
   const loadSlots = React.useCallback(async (dIdx) => {
@@ -297,7 +307,7 @@ export default function Prenota() {
         <div style={{ flex: 1 }} />
         <StickyCta>
           <button className="btn btn--brand btn--block press" disabled={!serviceIds.length} style={{ opacity: serviceIds.length ? 1 : 0.4 }}
-            onClick={() => { setSlot(null); setDayIdx(0); setStep(1); }}>
+            onClick={() => { setSlot(null); setDayIdx(0); setOperatorId(null); setStep(1); }}>
             {serviceIds.length > 1
               ? t(`Continua · ${serviceIds.length} servizi · ${fmtEur(price, lang)}`, `Continue · ${serviceIds.length} services · ${fmtEur(price, lang)}`)
               : t('Continua', 'Continue')}
@@ -331,6 +341,31 @@ export default function Prenota() {
         <StepBar i={1} t={t} />
         <div style={{ padding: '0 22px' }}>
           <SummaryChip />
+          {/* stylist picker — "prima disponibile" + operatrici idonee ai servizi scelti */}
+          {eligibleOperators.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div className="t-meta" style={{ marginBottom: 10 }}>{t('Operatrice', 'Stylist')}</div>
+              <div className="scroll" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 6, marginInline: -2, paddingInline: 2 }}>
+                <button className="press" onClick={() => setOperatorId(null)}
+                  style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', borderRadius: 99, border: '1.5px solid ' + (operatorId === null ? 'var(--brand)' : 'var(--hair)'), background: operatorId === null ? 'var(--brand)' : 'var(--paper-0)', color: operatorId === null ? 'var(--brand-on)' : 'var(--ink)' }}>
+                  <Icon name="sparkle" size={15} color={operatorId === null ? 'var(--brand-on)' : 'var(--brand-ink)'} />
+                  <span style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{t('Prima disponibile', 'First available')}</span>
+                </button>
+                {eligibleOperators.map((op) => {
+                  const on = operatorId === op.id;
+                  return (
+                    <button key={op.id} className="press" onClick={() => setOperatorId(op.id)}
+                      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px 7px 7px', borderRadius: 99, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)' }}>
+                      <div style={{ width: 24, height: 24, borderRadius: 99, background: op.color, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#2a2a2a' }}>{op.initials}</span>
+                      </div>
+                      <span style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{op.first_name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {/* day strip — next 14 days */}
           <div className="scroll" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 6, marginBottom: 20, marginInline: -2, paddingInline: 2 }}>
             {days.map((d, i) => {
@@ -472,7 +507,7 @@ export default function Prenota() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             <DetailRow icon="calendar" label={t('Quando', 'When')} value={slot ? fmtDayMed(slot.start, lang) + ' · ' + timeLabel(minutesOfDay(slot.start)) : '—'} />
             <DetailRow icon="clock" label={t('Durata', 'Duration')} value={fmtDur(dur, lang)} />
-            <DetailRow icon="user" label={t('Operatrice', 'Stylist')} value={t('Prima disponibile', 'First available')} />
+            <DetailRow icon="user" label={t('Operatrice', 'Stylist')} value={selectedOperator ? `${selectedOperator.first_name} ${selectedOperator.last_name}` : t('Prima disponibile', 'First available')} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--hair)' }}>
             <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>

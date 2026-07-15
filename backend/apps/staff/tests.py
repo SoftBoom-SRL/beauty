@@ -1,6 +1,8 @@
-"""Test essenziali: shift_windows (turno normale, con pausa, con assenza, cycle_weeks=2)."""
+"""Test essenziali: shift_windows (turno normale, con pausa, con assenza, cycle_weeks=2)
+e l'endpoint pubblico /public/operators (scelta stilista in prenotazione)."""
 
 import datetime as dt
+from decimal import Decimal
 
 from django.test import TestCase
 
@@ -68,3 +70,43 @@ class ShiftWindowsTests(TestCase):
         self.assertEqual(day_b.isocalendar()[1] % 2, 0)
         self.assertEqual(shift_windows(self.operator, day_a), [(600, 900)])
         self.assertEqual(shift_windows(self.operator, day_b), [(540, 1020)])
+
+
+class PublicOperatorsApiTests(TestCase):
+    """GET /api/staff/public/operators: elenco operatrici attive, senza auth."""
+
+    def setUp(self):
+        from apps.catalog.models import Service, ServiceCategory
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        self.service = Service.objects.create(
+            salon=self.salon,
+            category=category,
+            name_it="Manicure",
+            duration_min=30,
+            price=Decimal("20.00"),
+        )
+        self.op_active = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Rossi", color="#AACCEE"
+        )
+        self.op_active.services.add(self.service)
+        self.op_inactive = Operator.objects.create(
+            salon=self.salon, first_name="Marta", last_name="Verdi", active=False
+        )
+
+    def test_public_operators_no_auth(self):
+        resp = self.client.get(f"/api/staff/public/operators?salon={self.salon.slug}")
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        ids = [o["id"] for o in data]
+        self.assertIn(self.op_active.id, ids)
+        self.assertNotIn(self.op_inactive.id, ids)
+        active = next(o for o in data if o["id"] == self.op_active.id)
+        self.assertEqual(active["service_ids"], [self.service.id])
+        self.assertEqual(active["initials"], "GR")
+        self.assertEqual(active["color"], "#AACCEE")
+
+    def test_public_operators_unknown_salon_404(self):
+        resp = self.client.get("/api/staff/public/operators?salon=inesistente")
+        self.assertEqual(resp.status_code, 404, resp.content)
