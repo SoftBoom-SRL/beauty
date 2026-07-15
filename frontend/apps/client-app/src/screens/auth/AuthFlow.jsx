@@ -1,4 +1,4 @@
-// AuthFlow.jsx — client login: phone → OTP (via WhatsApp) → session.
+// AuthFlow.jsx — client login: phone → OTP (via SMS) → session.
 // Unknown number (404) → inline registration form → OTP.
 import React, { useState } from 'react';
 import { ApiError, Icon, clientAuth } from '@youty/shared';
@@ -107,7 +107,7 @@ export default function AuthFlow({ onClose }) {
           <React.Fragment>
             <div className="t-h3">{t('Accedi con il tuo numero', 'Sign in with your number')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Ti invieremo un codice di accesso su WhatsApp.', 'We will send you an access code on WhatsApp.')}
+              {t('Ti invieremo un codice di accesso via SMS.', 'We will send you an access code by SMS.')}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
@@ -151,7 +151,7 @@ export default function AuthFlow({ onClose }) {
           <React.Fragment>
             <div className="t-h3">{t('Inserisci il codice', 'Enter the code')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Ti abbiamo inviato un codice a 6 cifre su WhatsApp al numero ', 'We sent a 6-digit code on WhatsApp to ')}<b>{phone}</b>.
+              {t('Ti abbiamo inviato un codice a 6 cifre via SMS al numero ', 'We sent a 6-digit code by SMS to ')}<b>{phone}</b>.
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="······"

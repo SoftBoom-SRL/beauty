@@ -396,7 +396,7 @@ export default function Prenota() {
         {head(t('I tuoi dati', 'Your details'))}
         <div style={{ padding: '4px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="t-sm" style={{ color: 'var(--muted)' }}>
-            {t('Ti inviamo un codice via WhatsApp per confermare la prenotazione.', 'We send a WhatsApp code to confirm your booking.')}
+            {t('Ti inviamo un codice via SMS per confermare la prenotazione.', 'We send an SMS code to confirm your booking.')}
           </div>
           <input className="ca-input" placeholder={t('Nome', 'First name')} autoComplete="given-name"
             value={ident.first_name} onChange={(e) => setIdent((v) => ({ ...v, first_name: e.target.value }))} />
