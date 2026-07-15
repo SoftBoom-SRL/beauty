@@ -7,14 +7,19 @@ import { useApp } from './ctx.jsx';
 export const NAV_VIEWS = ['home', 'prenotazioni', 'wallet', 'profilo', 'waitlist', 'pacchetti', 'giftcard'];
 
 export default function NavBar() {
-  const { t, view, setView } = useApp();
-  const items = [
+  const { t, view, setView, session } = useApp();
+  const full = [
     { key: 'home', icon: 'home', label: t('Home', 'Home') },
     { key: 'prenotazioni', icon: 'calendar', label: t('Prenotazioni', 'Bookings') },
     { key: 'prenota', icon: 'plus', label: t('Prenota', 'Book'), center: true },
     { key: 'wallet', icon: 'wallet', label: t('Portafoglio', 'Wallet') },
     { key: 'profilo', icon: 'user', label: t('Profilo', 'Profile') },
   ];
+  const slim = [
+    { key: 'home', icon: 'home', label: t('Home', 'Home') },
+    { key: 'prenota', icon: 'plus', label: t('Prenota', 'Book'), center: true },
+  ];
+  const items = session ? full : slim;
   return (
     <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 60, paddingBottom: 'var(--safe-bottom)', background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(16px)', borderTop: '1px solid var(--hair)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', padding: '8px 8px 6px' }}>
