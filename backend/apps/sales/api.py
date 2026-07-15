@@ -54,6 +54,7 @@ def _line_out(line: SaleLine) -> dict:
         "operator_name": _operator_name(line.operator),
         "service_id": line.service_id,
         "product_id": line.product_id,
+        "product_name": line.product.name if line.product_id else "",
         "gift_card_code": line.gift_card.code if line.gift_card_id else None,
         "qty": line.qty,
         "unit_price": line.unit_price,
@@ -89,7 +90,7 @@ def _sale_out(sale: Sale) -> dict:
 def _sale_detail(sale: Sale) -> dict:
     return {
         **_sale_out(sale),
-        "lines": [_line_out(l) for l in sale.lines.select_related("operator", "gift_card")],
+        "lines": [_line_out(l) for l in sale.lines.select_related("operator", "gift_card", "product")],
         "payments": [_payment_out(p) for p in sale.payments.select_related("gift_card")],
     }
 
@@ -226,7 +227,7 @@ def list_sales(
     return {
         "count": agg["count"] or 0,
         "kpi": {
-            "revenue": agg["revenue"] or Decimal("0.00"),
+            "revenue": (agg["revenue"] or Decimal("0.00")).quantize(Decimal("0.01")),
             "count": agg["count"] or 0,
             "items_count": items_count,
         },
