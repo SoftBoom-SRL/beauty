@@ -34,6 +34,7 @@ class SettingsOut(Schema):
 
 
 class SettingsIn(Schema):
+    default_lang: Optional[str] = None
     brand_color: Optional[str] = None
     agenda_fill: Optional[str] = None
     slot_recovery: Optional[str] = None
