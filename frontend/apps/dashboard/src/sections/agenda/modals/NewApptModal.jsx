@@ -13,6 +13,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
 
   /* ---- client picker ---- */
   const [q, setQ] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false); // tendina visibile solo al focus
   const [clients, setClients] = useState(null); // search results
   const [client, setClient] = useState(pf.clientId ? { id: pf.clientId, full_name: pf.clientName || '…' } : null);
   useEffect(() => {
@@ -56,6 +57,11 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
   };
   const removeItem = (key) => setItems((l) => l.filter((x) => x.key !== key));
   const setItemOp = (key, opId) => setItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
+  const isServiceSelected = (serviceId) => items.some((x) => x.service_id === serviceId);
+  const toggleService = (serviceId) => {
+    if (isServiceSelected(serviceId)) setItems((l) => l.filter((x) => x.service_id !== serviceId));
+    else addItem(serviceId);
+  };
 
   const totalPrice = items.reduce((s, it) => s + Number(svcOf(it.service_id)?.price || 0), 0);
   const totalDur = items.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
@@ -75,11 +81,12 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
         setSlots(res);
         setSelStart((prev) => {
           if (prev && res.some((s) => s.start === prev)) return prev;
-          if (pf.start && date === pf.start.slice(0, 10)) {
+          if (pf.start && date === pf.start.slice(0, 10) && res.length) {
             const want = minutesOfDay(pf.start);
-            const hit = res.find((s) => minutesOfDay(s.start) === want);
-            if (hit) return hit.start;
-            setShowAllTimes(true);
+            // prende SEMPRE l'orario cliccato, arrotondando allo slot disponibile più vicino
+            return res.reduce((best, s) =>
+              Math.abs(minutesOfDay(s.start) - want) < Math.abs(minutesOfDay(best.start) - want) ? s : best
+            ).start;
           }
           return null;
         });
@@ -170,7 +177,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
         <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose}><Icon name="x" size={18} /></button>
       </div>
       <div className="dk-modalbody" style={{ flex: 1, minHeight: 0 }}>{children}</div>
-      {foot && <div style={{ padding: '16px 24px', borderTop: '1px solid var(--hair)', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'flex-end', background: 'var(--surface-2)' }}>{foot}</div>}
+      {foot && <div style={{ padding: '16px 24px', borderTop: '1px solid var(--hair)', display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'flex-end', background: 'var(--surface-2)' }}>{foot}</div>}
     </div>
   );
 
@@ -226,9 +233,9 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
 
   const formFoot = (
     <React.Fragment>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 14, color: 'var(--muted)' }}>
-        {items.length > 0 && <span className="t-sm" style={{ fontWeight: 600 }}><Icon name="clock" size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />{fmtDur(totalDur, lang)}</span>}
-        {selStart && <span className="t-sm" style={{ fontWeight: 600, color: 'var(--clay-ink)' }}><Icon name="calendar" size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />{timeLabel(minutesOfDay(selStart))}</span>}
+      <div style={{ flex: asDrawer ? '1 1 100%' : 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 14, color: 'var(--muted)' }}>
+        {items.length > 0 && <span className="t-sm" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}><Icon name="clock" size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />{fmtDur(totalDur, lang)}</span>}
+        {selStart && <span className="t-sm" style={{ fontWeight: 600, color: 'var(--clay-ink)', whiteSpace: 'nowrap' }}><Icon name="calendar" size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />{timeLabel(minutesOfDay(selStart))}</span>}
       </div>
       <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
       <button className="dk-btn dk-btn--clay" disabled={!canWrite || !client || !items.length || !selStart || saving} onClick={create}>
@@ -239,14 +246,29 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
 
   const formTitle = t('Nuova prenotazione', 'New booking');
   const formSub = t('Scegli cliente, servizi e uno degli orari disponibili', 'Pick the client, the services and one of the available times');
+  const dateBox = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: asDrawer ? 18 : 22, padding: '11px 14px', borderRadius: 12, border: '1px solid var(--hair)', background: 'var(--surface)' }}>
+      <Icon name="calendar" size={17} color="var(--clay-ink)" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Data', 'Date')}</div>
+        <div style={{ fontWeight: 700, fontSize: 13.5, textTransform: 'capitalize' }}>{dateLabel}</div>
+      </div>
+      <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
+    </div>
+  );
   const formBody = (
-    <div style={{ display: 'grid', gridTemplateColumns: asDrawer ? '1fr' : '236px 1fr', gap: asDrawer ? 18 : 22 }}>
+    <div>
+      {/* la data va sopra al cliente */}
+      {dateBox}
+      <div style={{ display: 'grid', gridTemplateColumns: asDrawer ? '1fr' : '236px 1fr', gap: asDrawer ? 18 : 22 }}>
         {/* client */}
         <div>
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Cliente', 'Client')}</div>
           <div className="dk-search" style={{ width: '100%', marginBottom: 8 }}>
             <Icon name="search" size={17} color="var(--muted-2)" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Cerca…', 'Search…')} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Cerca…', 'Search…')}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setTimeout(() => setSearchFocused(false), 150)} />
           </div>
           {client && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 10, background: 'var(--clay-tint)', marginBottom: 6 }}>
@@ -255,16 +277,19 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
               <button onClick={() => setClient(null)} style={{ cursor: 'pointer', border: 'none', background: 'transparent', display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} color="var(--muted-2)" /></button>
             </div>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {clients === null && [...Array(4)].map((_, i) => <div key={i} className="skel" style={{ height: 44, borderRadius: 10 }} />)}
-            {(clients || []).filter((c) => !client || c.id !== client.id).map((cl) => (
-              <button key={cl.id} className="dk-row" onClick={() => setClient(cl)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 10, background: 'transparent', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
-                <Avatar initials={initialsOf(cl.full_name)} size={32} />
-                <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cl.full_name}</span>
-              </button>
-            ))}
-            {clients && !clients.length && <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '8px 4px' }}>{t('Nessun cliente trovato', 'No client found')}</div>}
-          </div>
+          {/* la tendina compare solo al click/focus della barra; a riposo solo la ricerca */}
+          {searchFocused && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {clients === null && [...Array(4)].map((_, i) => <div key={i} className="skel" style={{ height: 44, borderRadius: 10 }} />)}
+              {(clients || []).filter((c) => !client || c.id !== client.id).map((cl) => (
+                <button key={cl.id} className="dk-row" onClick={() => { setClient(cl); setQ(''); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 8px', borderRadius: 10, background: 'transparent', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
+                  <Avatar initials={initialsOf(cl.full_name)} size={32} />
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cl.full_name}</span>
+                </button>
+              ))}
+              {clients && !clients.length && <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '8px 4px' }}>{t('Nessun cliente trovato', 'No client found')}</div>}
+            </div>
+          )}
           {client?.deposit_always && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12, padding: '10px 12px', background: 'var(--warn-tint)', borderRadius: 10 }}>
               <Icon name="coupon" size={15} color="var(--warn)" />
@@ -275,26 +300,19 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
 
         {/* booking builder */}
         <div>
-          {/* date */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '11px 14px', borderRadius: 12, border: '1px solid var(--hair)', background: 'var(--surface)' }}>
-            <Icon name="calendar" size={17} color="var(--clay-ink)" />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Data', 'Date')}</div>
-              <div style={{ fontWeight: 700, fontSize: 13.5, textTransform: 'capitalize' }}>{dateLabel}</div>
-            </div>
-            <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
-          </div>
-
           {/* services catalogue */}
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Aggiungi i servizi richiesti', 'Add the requested services')}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 16 }}>
-            {activeServices.map((s) => (
-              <button key={s.id} onClick={() => addItem(s.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--hair)', background: 'var(--surface)', color: 'var(--ink-2)' }}>
-                <span style={{ width: 7, height: 7, borderRadius: 99, background: catColor(s.category_id) }} />
-                {lang === 'en' && s.name_en ? s.name_en : s.name_it}
-                <Icon name="plus" size={13} color="var(--muted-2)" />
-              </button>
-            ))}
+            {activeServices.map((s) => {
+              const on = isServiceSelected(s.id);
+              return (
+                <button key={s.id} onClick={() => toggleService(s.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: on ? 700 : 600, cursor: 'pointer', border: '1.5px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 99, background: catColor(s.category_id) }} />
+                  {lang === 'en' && s.name_en ? s.name_en : s.name_it}
+                  <Icon name={on ? 'check' : 'plus'} size={13} color={on ? 'var(--clay-ink)' : 'var(--muted-2)'} stroke={on ? 2.6 : undefined} />
+                </button>
+              );
+            })}
           </div>
 
           {/* item lines */}
@@ -400,6 +418,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
           </div>
         </div>
       </div>
+    </div>
   );
 
   if (asDrawer) {
