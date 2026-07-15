@@ -69,6 +69,13 @@ export default function AuthFlow({ onClose }) {
 
   return (
     <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
+      {/* torna indietro (chiude l'overlay e riporta alla schermata precedente) */}
+      {onClose && (
+        <button className="press" onClick={onClose} aria-label={t('Indietro', 'Back')}
+          style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', left: 14, zIndex: 30, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 13px 7px 9px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', color: 'var(--ink)', fontSize: 12.5, fontWeight: 700, border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
+          <Icon name="chevL" size={16} />{t('Indietro', 'Back')}
+        </button>
+      )}
       {/* lang toggle + chiusura overlay */}
       <div style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', right: 14, zIndex: 30, display: 'flex', alignItems: 'center', gap: 8 }}>
         {onClose && (
