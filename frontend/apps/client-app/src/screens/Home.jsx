@@ -45,6 +45,42 @@ function SalonFooter({ brand, t }) {
 }
 
 export default function Home() {
+  const { session, openAuth, setView, brand, t } = useApp();
+
+  /* ---- HOME ANONIMA ---- */
+  if (!session) {
+    return (
+      <div style={{ paddingBottom: 40, position: 'relative' }}>
+        {/* accesso in alto a destra */}
+        <div style={{ position: 'absolute', top: 'calc(var(--safe-top) + 8px)', right: 16, zIndex: 30 }}>
+          <button className="press" onClick={() => openAuth()}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
+            <Icon name="user" size={15} color="var(--brand-ink)" />{t('Accedi', 'Sign in')}
+          </button>
+        </div>
+        <Cover brand={brand} t={t} />
+        <div style={{ padding: '20px 22px 0' }} className="stagger">
+          <div style={{ fontFamily: headFont(brand), fontSize: 24, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.15, marginBottom: 8 }}>
+            {t('Prenota il tuo appuntamento', 'Book your appointment')}
+          </div>
+          <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 18, maxWidth: 300 }}>
+            {t(`Scegli il servizio e l'orario da ${brand.name}. Ti bastano un minuto e il tuo numero.`,
+               `Pick a service and time at ${brand.name}. It only takes a minute and your phone number.`)}
+          </div>
+          <button className="btn btn--brand btn--block press" style={{ marginBottom: 18, height: 54 }} onClick={() => setView('prenota')}>
+            <Icon name="plus" size={18} color="var(--brand-on)" />{t('Prenota ora', 'Book now')}
+          </button>
+          <SalonFooter brand={brand} t={t} />
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- HOME LOGGATA (comportamento attuale) ---- */
+  return <HomeLogged />;
+}
+
+function HomeLogged() {
   const { t, lang, brand, client, setView, fireToast } = useApp();
   const { data, error } = useClientAppointments();
   React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -57,6 +93,13 @@ export default function Home() {
 
   return (
     <div style={{ paddingBottom: 40, position: 'relative' }}>
+      {/* accesso al profilo in alto a destra */}
+      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) + 8px)', right: 16, zIndex: 30 }}>
+        <button className="press" onClick={() => setView('profilo')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
+          <Icon name="user" size={15} color="var(--brand-ink)" />{client?.first_name || t('Profilo', 'Profile')}
+        </button>
+      </div>
       <Cover brand={brand} t={t} />
       <div style={{ padding: '20px 22px 0' }} className="stagger">
 
