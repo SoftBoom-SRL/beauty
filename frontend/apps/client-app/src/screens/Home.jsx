@@ -34,11 +34,19 @@ function SalonFooter({ brand, t }) {
     <div style={{ marginTop: 22, paddingTop: 22, borderTop: '1px solid var(--hair)', textAlign: 'center' }}>
       <div style={{ fontFamily: headFont(brand), fontSize: 20, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{brand.name}</div>
       <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>{t('Prenotazioni online e promemoria WhatsApp', 'Online booking and WhatsApp reminders')}</div>
+      {brand.address && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{brand.address}</div>}
+      {brand.openingHours && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4, whiteSpace: 'pre-line' }}>{brand.openingHours}</div>}
       <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 12 }}>
         <a href={mapsUrl(brand)} target="_blank" rel="noopener noreferrer" title={t('Indicazioni', 'Directions')}
           style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
           <Icon name="mapPin" size={18} color="var(--brand-ink)" />
         </a>
+        {brand.phone && (
+          <a href={`tel:${brand.phone}`} title={t('Chiama', 'Call')}
+            style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
+            <Icon name="phone" size={18} color="var(--brand-ink)" />
+          </a>
+        )}
       </div>
     </div>
   );

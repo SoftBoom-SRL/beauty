@@ -35,6 +35,7 @@ def _settings_out(s: SalonSettings) -> dict:
     return {
         "logo_url": s.logo.url if s.logo else None,
         "brand_color": s.brand_color,
+        "opening_hours": s.opening_hours,
         "agenda_fill": s.agenda_fill,
         "slot_recovery": s.slot_recovery,
         "slot_interval_min": s.slot_interval_min,
@@ -216,10 +217,14 @@ def public_branding(request, salon: str):
     except Salon.DoesNotExist:
         raise HttpError(404, "Salone non trovato")
     st = _settings(s)
+    location = s.locations.filter(is_default=True).first() or s.locations.first()
     return {
         "name": s.name,
         "slug": s.slug,
         "default_lang": s.default_lang,
         "logo_url": st.logo.url if st.logo else None,
         "brand_color": st.brand_color,
+        "address": location.address if location else "",
+        "phone": location.phone if location else "",
+        "opening_hours": st.opening_hours,
     }

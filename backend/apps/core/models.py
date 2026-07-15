@@ -54,6 +54,7 @@ class SalonSettings(TimeStampedModel):
     salon = models.OneToOneField(Salon, on_delete=models.CASCADE, related_name="settings")
     logo = models.ImageField(upload_to="branding/", blank=True, null=True)
     brand_color = models.CharField(max_length=7, default="#6366F1")
+    opening_hours = models.TextField(blank=True, default="")
     agenda_fill = models.CharField(
         max_length=20, choices=AgendaFill.choices, default=AgendaFill.FREE
     )

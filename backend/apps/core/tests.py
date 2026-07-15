@@ -9,7 +9,7 @@ from django.test import TestCase, override_settings
 from common.auth import create_staff_tokens
 from common.conditions import evaluate
 
-from .models import Salon, SalonSettings
+from .models import Location, Salon, SalonSettings
 from .services import emit_event, log_activity
 
 
@@ -101,6 +101,62 @@ class SettingsApiTests(TestCase):
         self.assertEqual(resp.status_code, 400, resp.content)
         self.salon.refresh_from_db()
         self.assertEqual(self.salon.default_lang, "it")
+
+    def test_opening_hours_persists(self):
+        resp = self._put({"opening_hours": "Lun-Ven 9-19\nSab 9-13"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["opening_hours"], "Lun-Ven 9-19\nSab 9-13")
+        self.assertEqual(
+            SalonSettings.objects.get(salon=self.salon).opening_hours,
+            "Lun-Ven 9-19\nSab 9-13",
+        )
+
+
+class PublicBrandingApiTests(TestCase):
+    """GET /api/core/public/branding: address/phone dalla location default + opening_hours."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def test_exposes_address_phone_from_default_location(self):
+        Location.objects.create(
+            salon=self.salon, name="Sede secondaria", address="Via Roma 1", phone="011111111"
+        )
+        Location.objects.create(
+            salon=self.salon,
+            name="Sede principale",
+            address="Via Milano 2",
+            phone="022222222",
+            is_default=True,
+        )
+        s = SalonSettings.objects.create(salon=self.salon, opening_hours="Lun-Ven 9-19")
+
+        resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        self.assertEqual(data["address"], "Via Milano 2")
+        self.assertEqual(data["phone"], "022222222")
+        self.assertEqual(data["opening_hours"], "Lun-Ven 9-19")
+        self.assertEqual(s.opening_hours, "Lun-Ven 9-19")
+
+    def test_falls_back_to_first_location_when_no_default(self):
+        Location.objects.create(
+            salon=self.salon, name="Unica sede", address="Via Torino 3", phone="033333333"
+        )
+
+        resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        self.assertEqual(data["address"], "Via Torino 3")
+        self.assertEqual(data["phone"], "033333333")
+
+    def test_empty_strings_when_no_location(self):
+        resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        self.assertEqual(data["address"], "")
+        self.assertEqual(data["phone"], "")
+        self.assertEqual(data["opening_hours"], "")
 
 
 class LogoApiTests(TestCase):

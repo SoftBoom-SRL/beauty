@@ -26,6 +26,9 @@ export function AppProvider({ children }) {
         name: b.name,
         slug: b.slug,
         logoUrl: b.logo_url ? mediaUrl(b.logo_url) : null,
+        address: b.address || '',
+        phone: b.phone || '',
+        openingHours: b.opening_hours || '',
       }));
     } catch (err) {
       setBrandError(err?.message || 'Errore');

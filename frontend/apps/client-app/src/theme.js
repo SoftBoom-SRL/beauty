@@ -22,7 +22,7 @@ export function onColor(hex) {
 }
 
 /** Build a brand object from a base color (from /api/core/public/branding). */
-export function makeBrand({ color, name, slug, logoUrl, type = 'serif' }) {
+export function makeBrand({ color, name, slug, logoUrl, address = '', phone = '', openingHours = '', type = 'serif' }) {
   return {
     color,
     ink: darken(color),
@@ -31,6 +31,9 @@ export function makeBrand({ color, name, slug, logoUrl, type = 'serif' }) {
     name,
     slug,
     logo: logoUrl || null,
+    address,
+    phone,
+    openingHours,
     type, // 'serif' | 'grotesk' — heading typography flavour
   };
 }
