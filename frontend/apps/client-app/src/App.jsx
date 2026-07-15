@@ -20,6 +20,10 @@ export default function App() {
 function Root() {
   const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView } = useApp();
 
+  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'sposta', 'annulla', 'giftcard'];
+  const gated = !session && PERSONAL_VIEWS.includes(view);
+  useEffect(() => { if (gated) { openAuth(); setView('home'); } }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* branding boot gate */
   if (!brand) {
     return (
@@ -44,10 +48,6 @@ function Root() {
 
   const vars = brandVars(brand);
 
-  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'sposta', 'annulla', 'giftcard'];
-  const gated = !session && PERSONAL_VIEWS.includes(view);
-  useEffect(() => { if (gated) { openAuth(); setView('home'); } }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const Screen = SCREENS[view] || SCREENS.home;
   const showNav = NAV_VIEWS.includes(view);
 
@@ -62,7 +62,7 @@ function Root() {
         {showNav && <Utility />}
         {showNav && <NavBar />}
         {authOpen && (
-          <div style={{ position: 'absolute', inset: 0, zIndex: 200, background: 'var(--paper-0)' }}>
+          <div style={{ position: 'absolute', inset: 0, zIndex: 200, background: 'var(--paper-0)', display: 'flex', flexDirection: 'column' }}>
             <AuthFlow onClose={closeAuth} />
           </div>
         )}
