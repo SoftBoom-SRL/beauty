@@ -5,7 +5,7 @@
 // NOTE: the prototype's stylist-choice step is skipped — no public/client
 // endpoint exists to list operators (API gap, see report). Bookings go "any".
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, api, clientAuth, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
@@ -29,15 +29,18 @@ function StepBar({ i, t }) {
 }
 
 export default function Prenota() {
-  const { t, lang, brand, setView, fireToast } = useApp();
+  const { t, lang, brand, session, openAuth, setView, fireToast } = useApp();
   const { cats, error: catError } = usePublicServices(SALON_SLUG);
-  const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 9 success
+  const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 3 dati · 4 otp · 9 success
   const [serviceIds, setServiceIds] = React.useState([]);
   const [dayIdx, setDayIdx] = React.useState(0);
   const [slot, setSlot] = React.useState(null);         // SlotOut {start, assignment}
   const [slots, setSlots] = React.useState(null);       // null = loading
   const [booking, setBooking] = React.useState(false);
   const [booked, setBooked] = React.useState(null);     // AppointmentOut on success
+  const [ident, setIdent] = React.useState({ first_name: '', last_name: '', phone: '' });
+  const [otp, setOtp] = React.useState('');
+  const [otpErr, setOtpErr] = React.useState(null);
   const days = React.useMemo(() => nextDays(14), []);
 
   React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -58,8 +61,9 @@ export default function Prenota() {
     setSlots(null);
     setSlot(null);
     try {
-      const list = await api.get('/api/agenda/client/availability', {
-        params: { date: toDateStr(days[dIdx]), items },
+      const list = await api.get('/api/agenda/public/availability', {
+        params: { salon: SALON_SLUG, date: toDateStr(days[dIdx]), items },
+        auth: false,
       });
       setSlots(list);
     } catch (err) {
@@ -88,6 +92,54 @@ export default function Prenota() {
     } finally {
       setBooking(false);
     }
+  };
+
+  /* invio OTP: numero noto → request-otp; sconosciuto (404) → register con nome/cognome */
+  const sendBookingOtp = async () => {
+    setOtpErr(null);
+    const phone = ident.phone.trim();
+    if (!ident.first_name.trim() || !ident.last_name.trim() || !phone) return;
+    setBooking(true);
+    try {
+      try {
+        await clientAuth.requestOtp(SALON_SLUG, phone);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          await clientAuth.register({
+            salon_slug: SALON_SLUG,
+            first_name: ident.first_name.trim(),
+            last_name: ident.last_name.trim(),
+            phone,
+            lang,
+          });
+        } else { throw err; }
+      }
+      setStep(4);
+    } catch (err) {
+      errToast(err, fireToast, t);
+    } finally { setBooking(false); }
+  };
+
+  /* verifica OTP → sessione → crea appuntamento */
+  const verifyAndBook = async () => {
+    setOtpErr(null);
+    if (otp.length !== 6 || booking) return;
+    setBooking(true);
+    try {
+      await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
+      const appt = await api.post('/api/agenda/client/appointments', { items, start: slot.start });
+      setBooked(appt);
+      setStep(9);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) {
+        setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
+      } else if (err instanceof ApiError && err.status === 409) {
+        fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
+        setStep(1); loadSlots(dayIdx);
+      } else {
+        errToast(err, fireToast, t);
+      }
+    } finally { setBooking(false); }
   };
 
   const head = (title) => (
@@ -328,6 +380,60 @@ export default function Prenota() {
     );
   }
 
+  /* ============ STEP 3: I tuoi dati (solo anonimo) ============ */
+  if (step === 3) {
+    const okData = ident.first_name.trim() && ident.last_name.trim() && ident.phone.trim();
+    return (
+      <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+        {head(t('I tuoi dati', 'Your details'))}
+        <div style={{ padding: '4px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="t-sm" style={{ color: 'var(--muted)' }}>
+            {t('Ti inviamo un codice via WhatsApp per confermare la prenotazione.', 'We send a WhatsApp code to confirm your booking.')}
+          </div>
+          <input className="ca-input" placeholder={t('Nome', 'First name')} autoComplete="given-name"
+            value={ident.first_name} onChange={(e) => setIdent((v) => ({ ...v, first_name: e.target.value }))} />
+          <input className="ca-input" placeholder={t('Cognome', 'Last name')} autoComplete="family-name"
+            value={ident.last_name} onChange={(e) => setIdent((v) => ({ ...v, last_name: e.target.value }))} />
+          <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
+            value={ident.phone} onChange={(e) => setIdent((v) => ({ ...v, phone: e.target.value }))} />
+        </div>
+        <div style={{ flex: 1 }} />
+        <StickyCta>
+          <button className="btn btn--brand btn--block press" disabled={!okData || booking} style={{ opacity: okData && !booking ? 1 : 0.5 }} onClick={sendBookingOtp}>
+            {booking ? t('Invio…', 'Sending…') : t('Invia codice', 'Send code')}
+          </button>
+        </StickyCta>
+      </div>
+    );
+  }
+
+  /* ============ STEP 4: OTP (solo anonimo) ============ */
+  if (step === 4) {
+    return (
+      <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+        {head(t('Conferma il numero', 'Confirm your number'))}
+        <div style={{ padding: '4px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="t-sm" style={{ color: 'var(--muted)' }}>
+            {t('Inserisci il codice a 6 cifre inviato al ', 'Enter the 6-digit code sent to ')}<b>{ident.phone}</b>.
+          </div>
+          {otpErr && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{otpErr}</div>}
+          <input className="ca-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="······"
+            value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && otp.length === 6) verifyAndBook(); }} />
+          <button className="press" style={{ alignSelf: 'flex-start', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', background: 'none', border: 'none', cursor: 'pointer' }}
+            onClick={sendBookingOtp} disabled={booking}>{t('Reinvia codice', 'Resend code')}</button>
+        </div>
+        <div style={{ flex: 1 }} />
+        <StickyCta>
+          <button className="btn btn--brand btn--block press" disabled={otp.length !== 6 || booking} style={{ opacity: otp.length === 6 && !booking ? 1 : 0.5 }} onClick={verifyAndBook}>
+            <Icon name="check" size={18} color="var(--brand-on)" />
+            {booking ? t('Conferma…', 'Confirming…') : t('Conferma prenotazione', 'Confirm booking')}
+          </button>
+        </StickyCta>
+      </div>
+    );
+  }
+
   /* ============ STEP 2: review + confirm ============ */
   return (
     <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -372,7 +478,8 @@ export default function Prenota() {
       </div>
       <div style={{ flex: 1 }} />
       <StickyCta>
-        <button className="btn btn--brand btn--block press" disabled={booking} style={{ opacity: booking ? 0.6 : 1 }} onClick={confirm}>
+        <button className="btn btn--brand btn--block press" disabled={booking} style={{ opacity: booking ? 0.6 : 1 }}
+          onClick={() => (session ? confirm() : setStep(3))}>
           <Icon name="check" size={18} color="var(--brand-on)" />
           {booking ? t('Prenotazione…', 'Booking…') : t('Conferma prenotazione', 'Confirm booking')}
         </button>
