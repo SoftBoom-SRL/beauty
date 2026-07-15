@@ -29,7 +29,7 @@ function StepBar({ i, t }) {
 }
 
 export default function Prenota() {
-  const { t, lang, brand, session, openAuth, setView, fireToast } = useApp();
+  const { t, lang, brand, session, setView, fireToast } = useApp();
   const { cats, error: catError } = usePublicServices(SALON_SLUG);
   const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 3 dati · 4 otp · 9 success
   const [serviceIds, setServiceIds] = React.useState([]);
@@ -125,15 +125,23 @@ export default function Prenota() {
     setOtpErr(null);
     if (otp.length !== 6 || booking) return;
     setBooking(true);
+    // 1) verifica OTP → crea la sessione
     try {
       await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
+      else if (err instanceof ApiError && err.status === 429) setOtpErr(t('Troppi tentativi. Riprova tra qualche minuto.', 'Too many attempts. Try again in a few minutes.'));
+      else errToast(err, fireToast, t);
+      setBooking(false);
+      return;
+    }
+    // 2) sessione creata → crea l'appuntamento
+    try {
       const appt = await api.post('/api/agenda/client/appointments', { items, start: slot.start });
       setBooked(appt);
       setStep(9);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
-        setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
-      } else if (err instanceof ApiError && err.status === 409) {
+      if (err instanceof ApiError && err.status === 409) {
         fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
         setStep(1); loadSlots(dayIdx);
       } else {
