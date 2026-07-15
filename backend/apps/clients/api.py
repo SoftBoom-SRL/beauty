@@ -13,6 +13,7 @@ from ninja import Router
 from ninja.errors import HttpError
 from ninja.pagination import LimitOffsetPagination, paginate
 
+from apps.agenda.schemas import AppointmentOut
 from apps.core.services import log_activity
 from common.auth import staff_auth
 from common.permissions import require_scope
@@ -228,6 +229,31 @@ def import_clients(request, data: ImportIn):
         payload=result,
     )
     return result
+
+
+# ---- Storico appuntamenti (staff) -----------------------------------------------
+
+
+@router.get("/{int:client_id}/appointments", auth=staff_auth, response=list[AppointmentOut])
+def list_client_appointments(request, client_id: int):
+    """Storico appuntamenti del cliente (passati e futuri), ordinati cronologicamente.
+
+    Riusa la serializzazione di apps.agenda.api._appointment_out; import lazy
+    per evitare dipendenze a livello di modulo tra le due app di dominio.
+    """
+    ctx = request.auth
+    client = salon_get(Client, ctx, client_id)
+
+    from apps.agenda.api import _appointment_out  # lazy: riuso serializzazione esistente
+    from apps.agenda.models import Appointment  # lazy: evita import cross-app a livello modulo
+
+    appointments = (
+        Appointment.objects.filter(salon=ctx.salon, client=client)
+        .select_related("client", "operator")
+        .prefetch_related("items__service", "items__operator")
+        .order_by("start")
+    )
+    return [_appointment_out(a) for a in appointments]
 
 
 # ---- Note interne ---------------------------------------------------------------

@@ -14,7 +14,7 @@ from django.utils.dateparse import parse_date
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Location
+from apps.core.models import Location, Salon
 from apps.core.services import log_activity
 from common.auth import client_auth, staff_auth
 from common.permissions import require_scope
@@ -584,6 +584,16 @@ def client_appointments(request):
 def client_availability(request, date: str, items: str):
     ctx = request.auth
     return services.get_free_slots(ctx.salon, _parse_day(date), _parse_items_param(items))
+
+
+@router.get("/public/availability", response=list[SlotOut])
+def public_availability(request, salon: str, date: str, items: str):
+    """Disponibilità pubblica (no auth): solo orari liberi, salone per slug."""
+    try:
+        s = Salon.objects.get(slug=salon)
+    except Salon.DoesNotExist:
+        raise HttpError(404, "Salone non trovato")
+    return services.get_free_slots(s, _parse_day(date), _parse_items_param(items))
 
 
 @router.post("/client/appointments", auth=client_auth, response=AppointmentOut)

@@ -50,6 +50,7 @@ class SaleLineOut(Schema):
     operator_name: str = ""
     service_id: Optional[int] = None
     product_id: Optional[int] = None
+    product_name: str = ""
     gift_card_code: Optional[str] = None
     qty: int
     unit_price: Decimal

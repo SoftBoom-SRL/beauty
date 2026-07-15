@@ -7,7 +7,7 @@ from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Location
+from apps.core.models import Location, Salon
 from apps.core.services import log_activity
 from common.auth import staff_auth
 from common.permissions import require_scope
@@ -23,6 +23,7 @@ from .schemas import (
     OperatorOut,
     OperatorStatusOut,
     PerformanceOut,
+    PublicOperatorOut,
     ServedClientOut,
     ShiftsReplaceIn,
     WeeklyShiftOut,
@@ -67,6 +68,13 @@ def _resolve_user(ctx, user_id: Optional[int]):
 
 def _operators_qs(ctx):
     return Operator.objects.filter(salon=ctx.salon).prefetch_related("services")
+
+
+def _get_salon_by_slug(slug: str) -> Salon:
+    try:
+        return Salon.objects.get(slug=slug)
+    except Salon.DoesNotExist:
+        raise HttpError(404, "Salone non trovato")
 
 
 def _operator_out(op: Operator) -> dict:
@@ -328,3 +336,28 @@ def get_performance(request, operator_id: int, months: int = 6):
 def get_served_clients(request, operator_id: int, q: str = ""):
     operator = salon_get(Operator, request.auth, operator_id)
     return served_clients(operator, q=q)
+
+
+# ---- Endpoint pubblico (web app cliente, no auth) -------------------------------
+
+
+@router.get("/public/operators", response=list[PublicOperatorOut])
+def public_operators(request, salon: str):
+    """Operatrici attive del salone, per la scelta dello stilista in prenotazione."""
+    s = _get_salon_by_slug(salon)
+    operators = (
+        Operator.objects.filter(salon=s, active=True)
+        .order_by("order", "id")
+        .prefetch_related("services")
+    )
+    return [
+        {
+            "id": op.id,
+            "first_name": op.first_name,
+            "last_name": op.last_name,
+            "initials": op.initials,
+            "color": op.color,
+            "service_ids": list(op.services.values_list("id", flat=True)),
+        }
+        for op in operators
+    ]

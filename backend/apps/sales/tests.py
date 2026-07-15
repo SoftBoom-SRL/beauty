@@ -12,6 +12,7 @@ from ninja.errors import HttpError
 
 from apps.clients.models import Client
 from apps.core.models import ActivityLog, Salon
+from common.auth import create_staff_tokens
 
 from .models import Payment, Sale, SaleLine
 from .services import finalize_sale, line_amount, today_summary
@@ -212,3 +213,46 @@ class TodaySummaryTests(TestCase):
         self.assertEqual(data["count"], 2)
         self.assertEqual(data["checkout_total"], Decimal("100.00"))
         self.assertEqual(data["pos_total"], Decimal("50.00"))
+
+
+class ListSalesApiTests(TestCase):
+    """GET /api/sales/: filtro opzionale client_id (staff, per singolo cliente)."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        tokens = create_staff_tokens(user, self.salon)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+        self.sofia = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        self.giulia = Client.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Bianchi", phone="+393333334444"
+        )
+        self.sale_sofia = Sale.objects.create(
+            salon=self.salon, kind=Sale.Kind.POS, client=self.sofia, total=Decimal("50.00")
+        )
+        self.sale_giulia = Sale.objects.create(
+            salon=self.salon, kind=Sale.Kind.POS, client=self.giulia, total=Decimal("30.00")
+        )
+
+    def test_without_client_id_returns_all(self):
+        resp = self.client.get("/api/sales/", **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(body["count"], 2)
+        self.assertEqual(len(body["items"]), 2)
+
+    def test_client_id_filters_to_single_client(self):
+        resp = self.client.get(f"/api/sales/?client_id={self.sofia.id}", **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(len(body["items"]), 1)
+        self.assertEqual(body["items"][0]["id"], self.sale_sofia.id)
+        self.assertEqual(body["kpi"]["revenue"], "50.00")

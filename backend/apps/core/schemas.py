@@ -23,6 +23,7 @@ class LocationIn(Schema):
 class SettingsOut(Schema):
     logo_url: Optional[str] = None
     brand_color: str
+    opening_hours: str = ""
     agenda_fill: str
     slot_recovery: str
     slot_interval_min: int
@@ -37,7 +38,9 @@ class SettingsOut(Schema):
 
 
 class SettingsIn(Schema):
+    default_lang: Optional[str] = None
     brand_color: Optional[str] = None
+    opening_hours: Optional[str] = None
     agenda_fill: Optional[str] = None
     slot_recovery: Optional[str] = None
     slot_interval_min: Optional[int] = None
@@ -92,6 +95,9 @@ class PublicBrandingOut(Schema):
     default_lang: str
     logo_url: Optional[str] = None
     brand_color: str
+    address: str = ""
+    phone: str = ""
+    opening_hours: str = ""
 
 
 class OkOut(Schema):

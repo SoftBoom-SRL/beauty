@@ -7,14 +7,16 @@ Le view sono chiamate direttamente (bypassando l'HTTP layer): usano solo
 costruito a mano — evita di dipendere dal login reale di apps.accounts.
 """
 
+import datetime as dt
 from decimal import Decimal
 from types import SimpleNamespace
 
 from django.test import TestCase
+from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, Salon
-from common.auth import StaffContext
+from common.auth import StaffContext, create_staff_tokens
 
 from .api import (
     create_category,
@@ -211,3 +213,69 @@ class CategoryTests(ClientsTestCase):
     def test_create_category(self):
         category = create_category(self.request, CategoryIn(name="VIP"))
         self.assertTrue(ClientCategory.objects.filter(id=category.id).exists())
+
+
+class ClientAppointmentsApiTests(TestCase):
+    """GET /api/clients/{id}/appointments: storico appuntamenti del cliente (staff)."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        tokens = create_staff_tokens(user, self.salon)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Bianchi", color="#AACCEE"
+        )
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+391112223333"
+        )
+
+    def _appointment(self, client, start):
+        from apps.agenda.models import Appointment
+
+        return Appointment.objects.create(
+            salon=self.salon, client=client, operator=self.operator, start=start
+        )
+
+    def test_returns_past_and_future_ordered_by_start(self):
+        past = self._appointment(self.client_obj, timezone.now() - dt.timedelta(days=10))
+        future = self._appointment(self.client_obj, timezone.now() + dt.timedelta(days=5))
+        resp = self.client.get(
+            f"/api/clients/{self.client_obj.id}/appointments", **self.auth
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        ids = [a["id"] for a in resp.json()]
+        self.assertEqual(ids, [past.id, future.id])
+
+    def test_only_returns_appointments_of_that_client(self):
+        other_client = Client.objects.create(
+            salon=self.salon, first_name="Altra", last_name="Persona", phone="+399998887777"
+        )
+        mine = self._appointment(self.client_obj, timezone.now())
+        self._appointment(other_client, timezone.now())
+        resp = self.client.get(
+            f"/api/clients/{self.client_obj.id}/appointments", **self.auth
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual([a["id"] for a in resp.json()], [mine.id])
+
+    def test_unknown_client_404(self):
+        resp = self.client.get("/api/clients/999999/appointments", **self.auth)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_client_of_other_salon_404(self):
+        """Isolamento multi-tenant: un cliente di un altro salone non è raggiungibile."""
+        other_salon = Salon.objects.create(name="Altro", slug="altro")
+        foreign_client = Client.objects.create(
+            salon=other_salon, first_name="Estranea", last_name="Cliente", phone="+390001112222"
+        )
+        resp = self.client.get(
+            f"/api/clients/{foreign_client.id}/appointments", **self.auth
+        )
+        self.assertEqual(resp.status_code, 404)

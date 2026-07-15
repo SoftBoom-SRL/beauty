@@ -1,11 +1,11 @@
-// AuthFlow.jsx — client login: phone → OTP (via WhatsApp) → session.
+// AuthFlow.jsx — client login: phone → OTP (via SMS) → session.
 // Unknown number (404) → inline registration form → OTP.
 import React, { useState } from 'react';
 import { ApiError, Icon, clientAuth } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../../ctx.jsx';
 import { headFont } from '../../theme.js';
 
-export default function AuthFlow() {
+export default function AuthFlow({ onClose }) {
   const { t, lang, setLang, brand } = useApp();
   const [step, setStep] = useState('phone'); // phone | register | otp
   const [phone, setPhone] = useState('');
@@ -69,8 +69,21 @@ export default function AuthFlow() {
 
   return (
     <div className="scroll" style={{ flex: 1, minHeight: 0 }}>
-      {/* lang toggle */}
-      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', right: 14, zIndex: 30 }}>
+      {/* torna indietro (chiude l'overlay e riporta alla schermata precedente) */}
+      {onClose && (
+        <button className="press" onClick={onClose} aria-label={t('Indietro', 'Back')}
+          style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', left: 14, zIndex: 30, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 13px 7px 9px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', color: 'var(--ink)', fontSize: 12.5, fontWeight: 700, border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)' }}>
+          <Icon name="chevL" size={16} />{t('Indietro', 'Back')}
+        </button>
+      )}
+      {/* lang toggle + chiusura overlay */}
+      <div style={{ position: 'absolute', top: 'calc(var(--safe-top) - 4px)', right: 14, zIndex: 30, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {onClose && (
+          <button className="press" onClick={onClose} aria-label="Chiudi"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 99, background: 'rgba(255,255,255,0.92)', border: 'none', cursor: 'pointer', marginRight: 8, boxShadow: 'var(--sh-sm)' }}>
+            <Icon name="x" size={16} />
+          </button>
+        )}
         <button className="press" onClick={() => setLang(lang === 'it' ? 'en' : 'it')} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 99, background: 'rgba(255,255,255,0.92)', fontSize: 12, fontWeight: 700, color: 'var(--ink)', boxShadow: 'var(--sh-sm)', border: 'none', cursor: 'pointer' }}>
           <Icon name="globe" size={14} />{lang.toUpperCase()}
         </button>
@@ -94,7 +107,7 @@ export default function AuthFlow() {
           <React.Fragment>
             <div className="t-h3">{t('Accedi con il tuo numero', 'Sign in with your number')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Ti invieremo un codice di accesso su WhatsApp.', 'We will send you an access code on WhatsApp.')}
+              {t('Ti invieremo un codice di accesso via SMS.', 'We will send you an access code by SMS.')}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
@@ -138,7 +151,7 @@ export default function AuthFlow() {
           <React.Fragment>
             <div className="t-h3">{t('Inserisci il codice', 'Enter the code')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Ti abbiamo inviato un codice a 6 cifre su WhatsApp al numero ', 'We sent a 6-digit code on WhatsApp to ')}<b>{phone}</b>.
+              {t('Ti abbiamo inviato un codice a 6 cifre via SMS al numero ', 'We sent a 6-digit code by SMS to ')}<b>{phone}</b>.
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="······"

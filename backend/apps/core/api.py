@@ -36,6 +36,7 @@ def _settings_out(s: SalonSettings) -> dict:
     return {
         "logo_url": s.logo.url if s.logo else None,
         "brand_color": s.brand_color,
+        "opening_hours": s.opening_hours,
         "agenda_fill": s.agenda_fill,
         "slot_recovery": s.slot_recovery,
         "slot_interval_min": s.slot_interval_min,
@@ -71,11 +72,17 @@ def update_settings(request, data: SettingsIn):
     require_owner(ctx)
     s = _settings(ctx.salon)
     payload = data.dict(exclude_unset=True)
+    default_lang = payload.pop("default_lang", None)
+    if default_lang is not None and default_lang not in Salon.Lang.values:
+        raise HttpError(400, "Lingua non valida (it o en)")
     if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
         raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
     for name, value in payload.items():
         setattr(s, name, value)
     s.save()
+    if default_lang is not None:
+        ctx.salon.default_lang = default_lang
+        ctx.salon.save(update_fields=["default_lang"])
     log_activity(ctx.salon, "settings.updated", "Impostazioni aggiornate", actor=ctx.user)
     return _settings_out(s)
 
@@ -87,6 +94,18 @@ def upload_logo(request, logo: UploadedFile = File(...)):
     s = _settings(ctx.salon)
     s.logo.save(logo.name, logo)
     log_activity(ctx.salon, "settings.updated", "Logo aggiornato", actor=ctx.user)
+    return _settings_out(s)
+
+
+@router.delete("/settings/logo", auth=staff_auth, response=SettingsOut)
+def delete_logo(request):
+    ctx = request.auth
+    require_owner(ctx)
+    s = _settings(ctx.salon)
+    if s.logo:
+        s.logo.delete(save=False)
+    s.save()
+    log_activity(ctx.salon, "settings.updated", "Logo rimosso", actor=ctx.user)
     return _settings_out(s)
 
 
@@ -200,10 +219,14 @@ def public_branding(request, salon: str):
     except Salon.DoesNotExist:
         raise HttpError(404, "Salone non trovato")
     st = _settings(s)
+    location = s.locations.filter(is_default=True).first() or s.locations.first()
     return {
         "name": s.name,
         "slug": s.slug,
         "default_lang": s.default_lang,
         "logo_url": st.logo.url if st.logo else None,
         "brand_color": st.brand_color,
+        "address": location.address if location else "",
+        "phone": location.phone if location else "",
+        "opening_hours": st.opening_hours,
     }

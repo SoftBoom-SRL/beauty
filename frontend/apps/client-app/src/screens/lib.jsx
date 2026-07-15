@@ -90,6 +90,20 @@ export function usePublicServices(slug) {
   return { cats, error };
 }
 
+/** Fetch the public list of active operators (stylist picker in booking). */
+export function usePublicOperators(slug) {
+  const [operators, setOperators] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    api.get('/api/staff/public/operators', { params: { salon: slug }, auth: false })
+      .then((d) => { if (alive) setOperators(d); })
+      .catch((e) => { if (alive) setError(e); });
+    return () => { alive = false; };
+  }, [slug]);
+  return { operators, error };
+}
+
 /** Fetch the client's own appointments ({upcoming, past}). */
 export function useClientAppointments() {
   const [data, setData] = React.useState(null);

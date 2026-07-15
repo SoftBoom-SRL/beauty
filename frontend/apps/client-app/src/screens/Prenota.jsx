@@ -1,15 +1,14 @@
 // Prenota.jsx — booking wizard (core flow), ported from prototype ClientBooking.
 // Steps: -1 choice (single/pacchetti) → 0 service picker (public catalog)
-//        → 1 day+time (GET /api/agenda/client/availability) → 2 review
+//        → 1 day+time (GET /api/agenda/client/availability) + stylist picker
+//        (GET /api/staff/public/operators) → 2 review
 //        → POST /api/agenda/client/appointments → success (deposit messaging).
-// NOTE: the prototype's stylist-choice step is skipped — no public/client
-// endpoint exists to list operators (API gap, see report). Bookings go "any".
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, api, clientAuth, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, DetailRow, StickyCta, usePublicServices, svcLangName, catIcon,
+  ClientSubHead, DetailRow, StickyCta, usePublicServices, usePublicOperators, svcLangName, catIcon,
   nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
 
@@ -29,15 +28,20 @@ function StepBar({ i, t }) {
 }
 
 export default function Prenota() {
-  const { t, lang, brand, setView, fireToast } = useApp();
+  const { t, lang, brand, session, setView, fireToast } = useApp();
   const { cats, error: catError } = usePublicServices(SALON_SLUG);
-  const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 9 success
+  const { operators } = usePublicOperators(SALON_SLUG);
+  const [step, setStep] = React.useState(-1);          // -1 choice · 0 service · 1 time · 2 review · 3 dati · 4 otp · 9 success
   const [serviceIds, setServiceIds] = React.useState([]);
   const [dayIdx, setDayIdx] = React.useState(0);
+  const [operatorId, setOperatorId] = React.useState(null); // null = "prima disponibile"
   const [slot, setSlot] = React.useState(null);         // SlotOut {start, assignment}
   const [slots, setSlots] = React.useState(null);       // null = loading
   const [booking, setBooking] = React.useState(false);
   const [booked, setBooked] = React.useState(null);     // AppointmentOut on success
+  const [ident, setIdent] = React.useState({ first_name: '', last_name: '', phone: '' });
+  const [otp, setOtp] = React.useState('');
+  const [otpErr, setOtpErr] = React.useState(null);
   const days = React.useMemo(() => nextDays(14), []);
 
   React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -51,15 +55,25 @@ export default function Prenota() {
   const dur = svcs.reduce((sum, sv) => sum + (sv.duration_min || 0), 0);
   const price = svcs.reduce((sum, sv) => sum + Number(sv.price || 0), 0);
   const toggleSvc = (id) => setServiceIds((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
-  const items = serviceIds.map((id) => ({ service_id: id }));
+  const items = serviceIds.map((id) => ({ service_id: id, operator_id: operatorId }));
+
+  /* ---- stylist picker (step 1): only operators eligible for the chosen services ---- */
+  const eligibleOperators = React.useMemo(() => {
+    if (!operators || !serviceIds.length) return [];
+    const doAll = operators.filter((op) => serviceIds.every((id) => op.service_ids.includes(id)));
+    if (doAll.length) return doAll;
+    return operators.filter((op) => op.service_ids.includes(serviceIds[0]));
+  }, [operators, serviceIds]);
+  const selectedOperator = eligibleOperators.find((op) => op.id === operatorId) || null;
 
   /* ---- availability fetch (step 1) ---- */
   const loadSlots = React.useCallback(async (dIdx) => {
     setSlots(null);
     setSlot(null);
     try {
-      const list = await api.get('/api/agenda/client/availability', {
-        params: { date: toDateStr(days[dIdx]), items },
+      const list = await api.get('/api/agenda/public/availability', {
+        params: { salon: SALON_SLUG, date: toDateStr(days[dIdx]), items },
+        auth: false,
       });
       setSlots(list);
     } catch (err) {
@@ -88,6 +102,62 @@ export default function Prenota() {
     } finally {
       setBooking(false);
     }
+  };
+
+  /* invio OTP: numero noto → request-otp; sconosciuto (404) → register con nome/cognome */
+  const sendBookingOtp = async () => {
+    setOtpErr(null);
+    const phone = ident.phone.trim();
+    if (!ident.first_name.trim() || !ident.last_name.trim() || !phone) return;
+    setBooking(true);
+    try {
+      try {
+        await clientAuth.requestOtp(SALON_SLUG, phone);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          await clientAuth.register({
+            salon_slug: SALON_SLUG,
+            first_name: ident.first_name.trim(),
+            last_name: ident.last_name.trim(),
+            phone,
+            lang,
+          });
+        } else { throw err; }
+      }
+      setStep(4);
+    } catch (err) {
+      errToast(err, fireToast, t);
+    } finally { setBooking(false); }
+  };
+
+  /* verifica OTP → sessione → crea appuntamento */
+  const verifyAndBook = async () => {
+    setOtpErr(null);
+    if (otp.length !== 6 || booking) return;
+    setBooking(true);
+    // 1) verifica OTP → crea la sessione
+    try {
+      await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
+      else if (err instanceof ApiError && err.status === 429) setOtpErr(t('Troppi tentativi. Riprova tra qualche minuto.', 'Too many attempts. Try again in a few minutes.'));
+      else errToast(err, fireToast, t);
+      setBooking(false);
+      return;
+    }
+    // 2) sessione creata → crea l'appuntamento
+    try {
+      const appt = await api.post('/api/agenda/client/appointments', { items, start: slot.start });
+      setBooked(appt);
+      setStep(9);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
+        setStep(1); loadSlots(dayIdx);
+      } else {
+        errToast(err, fireToast, t);
+      }
+    } finally { setBooking(false); }
   };
 
   const head = (title) => (
@@ -237,7 +307,7 @@ export default function Prenota() {
         <div style={{ flex: 1 }} />
         <StickyCta>
           <button className="btn btn--brand btn--block press" disabled={!serviceIds.length} style={{ opacity: serviceIds.length ? 1 : 0.4 }}
-            onClick={() => { setSlot(null); setDayIdx(0); setStep(1); }}>
+            onClick={() => { setSlot(null); setDayIdx(0); setOperatorId(null); setStep(1); }}>
             {serviceIds.length > 1
               ? t(`Continua · ${serviceIds.length} servizi · ${fmtEur(price, lang)}`, `Continue · ${serviceIds.length} services · ${fmtEur(price, lang)}`)
               : t('Continua', 'Continue')}
@@ -271,6 +341,31 @@ export default function Prenota() {
         <StepBar i={1} t={t} />
         <div style={{ padding: '0 22px' }}>
           <SummaryChip />
+          {/* stylist picker — "prima disponibile" + operatrici idonee ai servizi scelti */}
+          {eligibleOperators.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div className="t-meta" style={{ marginBottom: 10 }}>{t('Operatrice', 'Stylist')}</div>
+              <div className="scroll" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 6, marginInline: -2, paddingInline: 2 }}>
+                <button className="press" onClick={() => setOperatorId(null)}
+                  style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', borderRadius: 99, border: '1.5px solid ' + (operatorId === null ? 'var(--brand)' : 'var(--hair)'), background: operatorId === null ? 'var(--brand)' : 'var(--paper-0)', color: operatorId === null ? 'var(--brand-on)' : 'var(--ink)' }}>
+                  <Icon name="sparkle" size={15} color={operatorId === null ? 'var(--brand-on)' : 'var(--brand-ink)'} />
+                  <span style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{t('Prima disponibile', 'First available')}</span>
+                </button>
+                {eligibleOperators.map((op) => {
+                  const on = operatorId === op.id;
+                  return (
+                    <button key={op.id} className="press" onClick={() => setOperatorId(op.id)}
+                      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px 7px 7px', borderRadius: 99, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)' }}>
+                      <div style={{ width: 24, height: 24, borderRadius: 99, background: op.color, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#2a2a2a' }}>{op.initials}</span>
+                      </div>
+                      <span style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap' }}>{op.first_name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {/* day strip — next 14 days */}
           <div className="scroll" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 6, marginBottom: 20, marginInline: -2, paddingInline: 2 }}>
             {days.map((d, i) => {
@@ -328,6 +423,60 @@ export default function Prenota() {
     );
   }
 
+  /* ============ STEP 3: I tuoi dati (solo anonimo) ============ */
+  if (step === 3) {
+    const okData = ident.first_name.trim() && ident.last_name.trim() && ident.phone.trim();
+    return (
+      <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+        {head(t('I tuoi dati', 'Your details'))}
+        <div style={{ padding: '4px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="t-sm" style={{ color: 'var(--muted)' }}>
+            {t('Ti inviamo un codice via SMS per confermare la prenotazione.', 'We send an SMS code to confirm your booking.')}
+          </div>
+          <input className="ca-input" placeholder={t('Nome', 'First name')} autoComplete="given-name"
+            value={ident.first_name} onChange={(e) => setIdent((v) => ({ ...v, first_name: e.target.value }))} />
+          <input className="ca-input" placeholder={t('Cognome', 'Last name')} autoComplete="family-name"
+            value={ident.last_name} onChange={(e) => setIdent((v) => ({ ...v, last_name: e.target.value }))} />
+          <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
+            value={ident.phone} onChange={(e) => setIdent((v) => ({ ...v, phone: e.target.value }))} />
+        </div>
+        <div style={{ flex: 1 }} />
+        <StickyCta>
+          <button className="btn btn--brand btn--block press" disabled={!okData || booking} style={{ opacity: okData && !booking ? 1 : 0.5 }} onClick={sendBookingOtp}>
+            {booking ? t('Invio…', 'Sending…') : t('Invia codice', 'Send code')}
+          </button>
+        </StickyCta>
+      </div>
+    );
+  }
+
+  /* ============ STEP 4: OTP (solo anonimo) ============ */
+  if (step === 4) {
+    return (
+      <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+        {head(t('Conferma il numero', 'Confirm your number'))}
+        <div style={{ padding: '4px 22px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="t-sm" style={{ color: 'var(--muted)' }}>
+            {t('Inserisci il codice a 6 cifre inviato al ', 'Enter the 6-digit code sent to ')}<b>{ident.phone}</b>.
+          </div>
+          {otpErr && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{otpErr}</div>}
+          <input className="ca-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="······"
+            value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && otp.length === 6) verifyAndBook(); }} />
+          <button className="press" style={{ alignSelf: 'flex-start', fontSize: 13, fontWeight: 700, color: 'var(--brand-ink)', background: 'none', border: 'none', cursor: 'pointer' }}
+            onClick={sendBookingOtp} disabled={booking}>{t('Reinvia codice', 'Resend code')}</button>
+        </div>
+        <div style={{ flex: 1 }} />
+        <StickyCta>
+          <button className="btn btn--brand btn--block press" disabled={otp.length !== 6 || booking} style={{ opacity: otp.length === 6 && !booking ? 1 : 0.5 }} onClick={verifyAndBook}>
+            <Icon name="check" size={18} color="var(--brand-on)" />
+            {booking ? t('Conferma…', 'Confirming…') : t('Conferma prenotazione', 'Confirm booking')}
+          </button>
+        </StickyCta>
+      </div>
+    );
+  }
+
   /* ============ STEP 2: review + confirm ============ */
   return (
     <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -358,7 +507,7 @@ export default function Prenota() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             <DetailRow icon="calendar" label={t('Quando', 'When')} value={slot ? fmtDayMed(slot.start, lang) + ' · ' + timeLabel(minutesOfDay(slot.start)) : '—'} />
             <DetailRow icon="clock" label={t('Durata', 'Duration')} value={fmtDur(dur, lang)} />
-            <DetailRow icon="user" label={t('Operatrice', 'Stylist')} value={t('Prima disponibile', 'First available')} />
+            <DetailRow icon="user" label={t('Operatrice', 'Stylist')} value={selectedOperator ? `${selectedOperator.first_name} ${selectedOperator.last_name}` : t('Prima disponibile', 'First available')} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--hair)' }}>
             <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>
@@ -372,7 +521,8 @@ export default function Prenota() {
       </div>
       <div style={{ flex: 1 }} />
       <StickyCta>
-        <button className="btn btn--brand btn--block press" disabled={booking} style={{ opacity: booking ? 0.6 : 1 }} onClick={confirm}>
+        <button className="btn btn--brand btn--block press" disabled={booking} style={{ opacity: booking ? 0.6 : 1 }}
+          onClick={() => (session ? confirm() : setStep(3))}>
           <Icon name="check" size={18} color="var(--brand-on)" />
           {booking ? t('Prenotazione…', 'Booking…') : t('Conferma prenotazione', 'Confirm booking')}
         </button>

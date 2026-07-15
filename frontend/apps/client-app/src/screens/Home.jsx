@@ -34,17 +34,54 @@ function SalonFooter({ brand, t }) {
     <div style={{ marginTop: 22, paddingTop: 22, borderTop: '1px solid var(--hair)', textAlign: 'center' }}>
       <div style={{ fontFamily: headFont(brand), fontSize: 20, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{brand.name}</div>
       <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>{t('Prenotazioni online e promemoria WhatsApp', 'Online booking and WhatsApp reminders')}</div>
+      {brand.address && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{brand.address}</div>}
+      {brand.openingHours && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4, whiteSpace: 'pre-line' }}>{brand.openingHours}</div>}
       <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 12 }}>
         <a href={mapsUrl(brand)} target="_blank" rel="noopener noreferrer" title={t('Indicazioni', 'Directions')}
           style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
           <Icon name="mapPin" size={18} color="var(--brand-ink)" />
         </a>
+        {brand.phone && (
+          <a href={`tel:${brand.phone}`} title={t('Chiama', 'Call')}
+            style={{ width: 40, height: 40, borderRadius: 99, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
+            <Icon name="phone" size={18} color="var(--brand-ink)" />
+          </a>
+        )}
       </div>
     </div>
   );
 }
 
 export default function Home() {
+  const { session, setView, brand, t } = useApp();
+
+  /* ---- HOME ANONIMA ---- */
+  if (!session) {
+    return (
+      <div style={{ paddingBottom: 40, position: 'relative' }}>
+        <Cover brand={brand} t={t} />
+        <div style={{ padding: '20px 22px 0' }} className="stagger">
+          <div style={{ fontFamily: headFont(brand), fontSize: 24, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.15, marginBottom: 8 }}>
+            {t('Prenota il tuo appuntamento', 'Book your appointment')}
+          </div>
+          <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 18, maxWidth: 300 }}>
+            {t(`Scegli il servizio e l'orario da ${brand.name}. Ti bastano un minuto e il tuo numero.`,
+               `Pick a service and time at ${brand.name}. It only takes a minute and your phone number.`)}
+          </div>
+          <button className="btn btn--brand btn--block press" style={{ marginBottom: 18, height: 54 }} onClick={() => setView('prenota')}>
+            <Icon name="plus" size={18} color="var(--brand-on)" />{t('Prenota ora', 'Book now')}
+          </button>
+          <SalonFooter brand={brand} t={t} />
+        </div>
+      </div>
+    );
+  }
+
+  /* ---- HOME LOGGATA (comportamento attuale) ---- */
+  return <HomeLogged />;
+}
+
+function HomeLogged() {
   const { t, lang, brand, client, setView, fireToast } = useApp();
   const { data, error } = useClientAppointments();
   React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
