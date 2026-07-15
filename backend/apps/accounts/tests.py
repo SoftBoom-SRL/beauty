@@ -5,13 +5,14 @@ richiedono che tutte le app di dominio siano presenti (post-integrazione).
 """
 
 import json
+from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.core.models import OutboxEvent, Salon
 
 from .models import ClientOTP, Membership, Role, User
-from .services import ensure_default_roles
+from .services import _send_otp_sms, ensure_default_roles, issue_otp
 
 
 def post_json(client, url, data, **extra):
@@ -211,3 +212,55 @@ class ClientOTPFlowTests(TestCase):
             self.assertEqual(response.status_code, 200)
         response = post_json(self.client, "/api/auth/client/request-otp", payload)
         self.assertEqual(response.status_code, 429)
+
+
+class OtpSmsDeliveryTests(TestCase):
+    """Consegna OTP via SMS (Twilio) con fallback sicuro se non configurato."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _client(self, phone="+393330000001", lang="it"):
+        from apps.clients.models import Client
+
+        return Client.objects.create(
+            salon=self.salon, first_name="Test", last_name="Utente", phone=phone, lang=lang
+        )
+
+    def test_send_sms_senza_credenziali_ritorna_false(self):
+        # default settings: nessuna credenziale Twilio → nessun invio
+        self.assertFalse(_send_otp_sms("+393330000001", "123456", "it"))
+
+    def test_issue_otp_crea_codice_anche_senza_twilio(self):
+        otp = issue_otp(self._client())
+        self.assertEqual(len(otp.code), 6)
+        self.assertTrue(otp.code.isdigit())
+
+    def test_issue_otp_invoca_il_sender_sms(self):
+        c = self._client(phone="+393330000002")
+        with mock.patch(
+            "apps.accounts.services._send_otp_sms", return_value=True
+        ) as m:
+            otp = issue_otp(c)
+        m.assert_called_once_with(c.phone, otp.code, c.lang)
+
+    @override_settings(
+        TWILIO_ACCOUNT_SID="AC_test",
+        TWILIO_AUTH_TOKEN="tok_test",
+        TWILIO_SMS_FROM="+390000000000",
+    )
+    def test_send_sms_usa_twilio_quando_configurato(self):
+        import sys
+
+        fake_client = mock.MagicMock()
+        fake_rest = mock.MagicMock()
+        fake_rest.Client = mock.MagicMock(return_value=fake_client)
+        with mock.patch.dict(
+            sys.modules, {"twilio": mock.MagicMock(), "twilio.rest": fake_rest}
+        ):
+            ok = _send_otp_sms("+393330000003", "654321", "it")
+        self.assertTrue(ok)
+        fake_client.messages.create.assert_called_once()
+        _, kwargs = fake_client.messages.create.call_args
+        self.assertEqual(kwargs.get("to"), "+393330000003")
+        self.assertIn("654321", kwargs.get("body", ""))

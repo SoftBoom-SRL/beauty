@@ -39,9 +39,38 @@ def ensure_default_roles(salon) -> list[Role]:
     return roles
 
 
-def issue_otp(client) -> ClientOTP:
-    """Genera un OTP a 6 cifre per il cliente e lo accoda a Yourang per la consegna.
+def _send_otp_sms(phone: str, code: str, lang: str = "it") -> bool:
+    """Invia il codice OTP via SMS con Twilio. Ritorna True se inviato.
 
+    Se le credenziali Twilio (SID/token/mittente) non sono tutte configurate,
+    non invia nulla e ritorna False → fallback: il codice resta nel log (DEBUG)
+    e nell'outbox `client.otp`. Un errore di invio non fa fallire l'OTP.
+    """
+    sid = settings.TWILIO_ACCOUNT_SID
+    token = settings.TWILIO_AUTH_TOKEN
+    sender = settings.TWILIO_SMS_FROM
+    if not (sid and token and sender):
+        return False
+    body = (
+        f"Your access code is {code}"
+        if lang == "en"
+        else f"Il tuo codice di accesso è {code}"
+    )
+    try:
+        from twilio.rest import Client  # import pigro: dipendenza opzionale
+
+        Client(sid, token).messages.create(to=phone, from_=sender, body=body)
+        return True
+    except Exception:  # non far fallire l'OTP se l'SMS non parte
+        logger.exception("Invio OTP via Twilio fallito per %s", phone)
+        return False
+
+
+def issue_otp(client) -> ClientOTP:
+    """Genera un OTP a 6 cifre e lo invia via SMS (Twilio); resta accodato a
+    Yourang nell'outbox `client.otp`.
+
+    Se Twilio non è configurato, l'SMS non parte (in DEBUG il codice è nel log).
     Max 3 OTP validi contemporanei per cliente → HttpError 429.
     """
     active = ClientOTP.objects.filter(
@@ -61,8 +90,9 @@ def issue_otp(client) -> ClientOTP:
             "lang": client.lang,
         },
     )
+    sent = _send_otp_sms(client.phone, otp.code, client.lang)
     if settings.DEBUG:
-        logger.info("OTP per %s: %s", client.phone, otp.code)
+        logger.info("OTP per %s: %s (sms=%s)", client.phone, otp.code, sent)
     return otp
 
 

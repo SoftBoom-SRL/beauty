@@ -117,6 +117,12 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 YOURANG_API_URL = os.getenv("YOURANG_API_URL", "")
 YOURANG_API_KEY = os.getenv("YOURANG_API_KEY", "")
 
+# Twilio SMS — consegna del codice OTP via SMS. Se una delle tre variabili manca,
+# l'invio è disattivato e l'OTP resta solo nel log (DEBUG) / outbox (fallback sicuro).
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_SMS_FROM = os.getenv("TWILIO_SMS_FROM", "")
+
 # Policy prenotazioni lato cliente (ore minime prima dell'appuntamento)
 CLIENT_MOVE_CANCEL_MIN_HOURS = int(os.getenv("CLIENT_MOVE_CANCEL_MIN_HOURS", "24"))
 AGENDA_SLOT_STEP_MIN = 15
