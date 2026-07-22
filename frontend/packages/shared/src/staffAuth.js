@@ -40,6 +40,10 @@ export async function login(email, password) {
   return data;
 }
 
+/** Apply a session obtained out-of-band (e.g. Login con Yourang popup). Same
+ *  shape as /staff/login: { user, salon, scopes, is_owner, access, refresh }. */
+export function applySession(data) { setSession(data); }
+
 export function logout() { setSession(null); }
 
 /** true if the session has the scope, or is_owner (owner bypasses all scopes) */

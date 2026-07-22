@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { staffAuth, useT, Icon, ApiError } from '@youty/shared';
 
 export default function LoginPage() {
@@ -7,6 +7,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [yourangBusy, setYourangBusy] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -22,6 +23,29 @@ export default function LoginPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Login con Yourang (stile "accedi con Google"): il popup completa l'OAuth e
+  // restituisce la sessione staff; qui la applichiamo e App.jsx entra nella shell.
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
+      setYourangBusy(false);
+      if (e.data.ok && e.data.mode === 'login' && e.data.session) {
+        staffAuth.applySession(e.data.session);
+      } else if (!e.data.ok) {
+        setError(t('Login con Yourang non riuscito', 'Yourang login failed'));
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [t]);
+
+  const loginWithYourang = () => {
+    setError(null);
+    const popup = window.open('/oauth-popup/start?mode=login', 'yourang-oauth', 'width=520,height=680');
+    if (!popup) { setError(t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry')); return; }
+    setYourangBusy(true);
   };
 
   return (
@@ -59,6 +83,21 @@ export default function LoginPage() {
               {busy ? t('Accesso…', 'Signing in…') : t('Entra', 'Sign in')}
             </button>
           </form>
+
+          {/* Divider + login con Yourang (OAuth popup, stile Google) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '18px 0' }}>
+            <div style={{ height: 1, flex: 1, background: 'var(--hair)' }} />
+            <span className="t-sm" style={{ color: 'var(--muted-2)', textTransform: 'uppercase', letterSpacing: '0.04em', fontSize: 11 }}>{t('oppure', 'or')}</span>
+            <div style={{ height: 1, flex: 1, background: 'var(--hair)' }} />
+          </div>
+          <button type="button" onClick={loginWithYourang} disabled={yourangBusy}
+            className="dk-btn dk-btn--ghost"
+            aria-label={t('Accedi con Yourang', 'Sign in with Yourang')}
+            style={{ width: '100%', opacity: yourangBusy ? 0.7 : 1 }}>
+            {yourangBusy
+              ? t('Connessione…', 'Connecting…')
+              : <img src="/yourang-logo.png" alt="yourang.ai" style={{ height: 24, objectFit: 'contain' }} />}
+          </button>
         </div>
         <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', marginTop: 14 }}>
           {t('Demo: sole@theparlour.it', 'Demo: sole@theparlour.it')}

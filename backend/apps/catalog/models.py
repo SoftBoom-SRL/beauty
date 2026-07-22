@@ -44,6 +44,8 @@ class Service(models.Model):
     supplier_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     active = models.BooleanField(default=True)
     order = models.PositiveIntegerField(default=0)
+    # Voce di catalogo Yourang collegata (sync push).
+    yourang_item_id = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         ordering = ["order", "id"]
@@ -58,6 +60,8 @@ class Package(models.Model):
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     active = models.BooleanField(default=True)
+    # Voce di catalogo Yourang collegata (sync push).
+    yourang_item_id = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         ordering = ["id"]

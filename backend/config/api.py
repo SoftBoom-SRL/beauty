@@ -14,6 +14,7 @@ from apps.catalog.api import router as catalog_router  # noqa: E402
 from apps.clients.api import router as clients_router  # noqa: E402
 from apps.core.api import router as core_router  # noqa: E402
 from apps.insights.api import router as insights_router  # noqa: E402
+from apps.integrations.api import router as integrations_router  # noqa: E402
 from apps.inventory.api import router as inventory_router  # noqa: E402
 from apps.marketing.api import router as marketing_router  # noqa: E402
 from apps.sales.api import router as sales_router  # noqa: E402
@@ -30,3 +31,4 @@ api.add_router("/inventory", inventory_router)
 api.add_router("/marketing", marketing_router)
 api.add_router("/automations", automations_router)
 api.add_router("/insights", insights_router)
+api.add_router("/integrations", integrations_router)
