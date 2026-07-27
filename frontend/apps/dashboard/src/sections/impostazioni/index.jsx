@@ -4,7 +4,7 @@
 // Categories open the global 'catsmgr' modal. Consumes deepLink 'log-today'.
 // Commissioni & Notifiche have no API backing → informational rows (fase 2 / Yourang).
 import React, { useEffect, useState } from 'react';
-import { Icon } from '@youty/shared';
+import { Icon, api } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import BookingsOptimPage from './BookingsOptimPage.jsx';
 import ActivityLogPage from './ActivityLogPage.jsx';
@@ -47,6 +47,7 @@ export default function ImpostazioniSection() {
   const [brandOpen, setBrandOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
 
   // deep link from agenda cash-up → activity log filtered to today
   useEffect(() => {
@@ -56,6 +57,26 @@ export default function ImpostazioniSection() {
       setDeepLink(null);
     }
   }, [deepLink, setDeepLink]);
+
+  // Yourang connection status + handshake from the OAuth popup.
+  useEffect(() => {
+    if (!isOwner) return undefined;
+    const load = () => api.get('/api/integrations/yourang/status').then(setYourang).catch(() => setYourang(null));
+    load();
+    const onMsg = (e) => {
+      if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
+      if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
+      else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed'), icon: 'info' });
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner]);
+
+  const connectYourang = () => {
+    const popup = window.open('/oauth-popup/start?mode=connect', 'yourang-oauth', 'width=520,height=680');
+    if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
+  };
 
   if (page === 'bookings') return <BookingsOptimPage onBack={() => setPage(null)} />;
   if (page === 'log') return <ActivityLogPage key={logPeriod} onBack={() => { setPage(null); setLogPeriod('all'); }} initialPeriod={logPeriod} />;
@@ -117,6 +138,20 @@ export default function ImpostazioniSection() {
           sub={t('Le percentuali per membro arriveranno con la fase 2: per ora le vendite sono attribuite all’operatrice senza calcolo commissioni.', 'Per-member percentages ship with phase 2: for now sales are attributed to the operator without commission math.')} />
         <Row icon="tag" label={t('Categorie', 'Categories')} sub={t('Clienti, servizi e magazzino', 'Clients, services and inventory')} onClick={() => openModal('catsmgr', { kind: 'clienti' })} />
       </Group>
+
+      {/* YOURANG — connessione OAuth + sync (titolare) */}
+      {isOwner && (
+        <Group title={t('Integrazione Yourang', 'Yourang integration')}>
+          <Row first icon="globe"
+            label={t('Collega Yourang', 'Connect Yourang')}
+            tag="Yourang"
+            sub={yourang?.connected
+              ? t('Clienti, servizi e appuntamenti sincronizzati con Yourang.', 'Clients, services and appointments synced with Yourang.')
+              : t('Collega la piattaforma Yourang per sincronizzare clienti, servizi e prenotazioni.', 'Connect the Yourang platform to sync clients, services and bookings.')}
+            value={yourang?.connected ? t('Connesso', 'Connected') : t('Non connesso', 'Not connected')}
+            onClick={connectYourang} />
+        </Group>
+      )}
 
       {/* NOTIFICHE */}
       <Group title={t('Notifiche & comunicazioni', 'Notifications & communications')}>

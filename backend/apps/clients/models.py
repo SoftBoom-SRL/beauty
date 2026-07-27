@@ -65,11 +65,18 @@ class Client(models.Model):
     stripe_payment_method_id = models.CharField(max_length=120, blank=True)
     deposit_always = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    # Contatto Yourang collegato (sync). Vuoto = non ancora sincronizzato.
+    yourang_contact_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     class Meta:
         ordering = ["first_name", "last_name", "id"]
         constraints = [
-            models.UniqueConstraint(fields=["salon", "phone"], name="uniq_client_salon_phone")
+            models.UniqueConstraint(fields=["salon", "phone"], name="uniq_client_salon_phone"),
+            models.UniqueConstraint(
+                fields=["salon", "yourang_contact_id"],
+                condition=~models.Q(yourang_contact_id=""),
+                name="uniq_client_salon_yourang_contact",
+            ),
         ]
         indexes = [models.Index(fields=["salon", "is_active"])]
 

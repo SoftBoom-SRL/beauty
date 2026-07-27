@@ -31,6 +31,7 @@ class Appointment(TimeStampedModel):
     class CreatedVia(models.TextChoices):
         DASHBOARD = "dashboard", "Dashboard"
         APP = "app", "App cliente"
+        YOURANG = "yourang", "Yourang"
 
     # Stati che NON occupano lo slot in agenda.
     INACTIVE_STATUSES = (Status.CANCELLED, Status.NO_SHOW)
@@ -66,12 +67,21 @@ class Appointment(TimeStampedModel):
     )
     cancel_reason = models.CharField(max_length=255, blank=True)
     cancelled_late = models.BooleanField(default=False)
+    # Evento Yourang collegato (prenotazione importata via webhook/sync).
+    yourang_event_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     class Meta:
         ordering = ["start"]
         indexes = [
             models.Index(fields=["salon", "start"]),
             models.Index(fields=["operator", "start"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["salon", "yourang_event_id"],
+                condition=~models.Q(yourang_event_id=""),
+                name="uniq_appointment_salon_yourang_event",
+            ),
         ]
 
     def __str__(self):
