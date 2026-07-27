@@ -4,8 +4,9 @@ Porta il pattern di food (`provisionOrLinkYourangUser`) su Django: risolve o
 provisiona Salone + Utente + Membership a partire dal claim `org` del token e
 dall'id_token OIDC, poi conia i token staff e (best-effort) collega+sincronizza.
 
-Precedenza:
-  A. `org` già mappata su un salone (login precedente / connect) → entra lì.
+Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Yourang):
+  A. `org` già mappata su un salone (login precedente / connect) → entra lì come
+     membro (owner solo se il salone non ha ancora nessuno).
   B. utente noto per email VERIFICATA → adotta un suo salone senza connessione.
   C. altrimenti → provisiona utente (se serve) + salone nuovo.
 """
@@ -40,9 +41,13 @@ def _unique_salon_slug(seed: str) -> str:
     return slug
 
 
-def _get_or_create_user(email: str, name: str) -> User:
+def _get_or_create_user(email: str, name: str, email_verified: bool) -> User:
     user = User.objects.filter(email__iexact=email).first()
     if user:
+        # Anti account-takeover (come food): colleghiamo un account beauty già
+        # esistente solo se Yourang certifica l'email come verificata.
+        if not email_verified:
+            raise ValueError("Email Yourang non verificata: account già esistente")
         return user
     first, last = _split_name(name)
     # password=None → set_unusable_password: l'accesso avviene solo via Yourang.
@@ -53,15 +58,6 @@ def _membership_for(salon: Salon, user: User) -> Membership | None:
     return (
         Membership.objects.select_related("user", "salon", "role")
         .filter(salon=salon, user=user)
-        .first()
-    )
-
-
-def _primary_membership(salon: Salon) -> Membership | None:
-    return (
-        Membership.objects.select_related("user", "salon", "role")
-        .filter(salon=salon)
-        .order_by("-is_owner", "id")
         .first()
     )
 
@@ -87,12 +83,13 @@ def _session_payload(membership: Membership, tokens: dict) -> dict:
 
 
 def _resolve_salon(org: str, email: str, email_verified: bool) -> tuple[Salon | None, User | None]:
-    # A. org già collegata a un salone
+    # A. org già collegata a un salone → si entra lì, ma con l'identità di CHI
+    # sta accedendo (non con quella del titolare): il collega che apre la stessa
+    # org su Yourang deve diventare un membro, non impersonare il proprietario.
     if org:
         conn = YourangConnection.objects.select_related("salon").filter(yourang_org_id=org).first()
         if conn:
-            m = _primary_membership(conn.salon)
-            return conn.salon, (m.user if m else None)
+            return conn.salon, None
     # B. utente noto (email verificata) → adotta un salone senza connessione
     if email_verified:
         user = User.objects.filter(email__iexact=email).first()
@@ -117,10 +114,10 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
     salon, user = _resolve_salon(org, email, email_verified)
 
     if salon is None:
-        user = user or _get_or_create_user(email, name)
+        user = user or _get_or_create_user(email, name, email_verified)
         salon = _provision_salon(user, name)
     elif user is None:
-        user = _get_or_create_user(email, name)
+        user = _get_or_create_user(email, name, email_verified)
 
     membership = _membership_for(salon, user)
     if membership is None:

@@ -177,12 +177,22 @@ class YourangClient:
         resp = self._request("GET", f"/contacts?limit={limit}&offset={offset}")
         return self._data(resp) or []
 
-    def upsert_contact_by_phone(self, phone: str, payload: dict) -> dict:
-        # PUT by-phone: crea se manca, aggiorna se esiste (idempotente sul telefono).
-        # Il '+' va percent-encodato o verrebbe letto come spazio nel path.
-        resp = self._request(
-            "PUT", f"/contacts/by-phone/{quote(phone, safe='')}", json=payload
-        )
+    def create_or_get_contact(self, phone: str, payload: dict) -> dict:
+        """Crea il contatto; se il telefono esiste già lo recupera e basta.
+
+        L'external API NON ha un upsert by-phone (solo GET/PATCH/DELETE; il PUT
+        vive su /contacts/{id}), e il telefono è univoco per org → la create
+        risponde 400 quando c'è già. Il '+' va percent-encodato nel path o
+        verrebbe letto come spazio.
+        """
+        try:
+            resp = self._request(
+                "POST", "/contacts", json={**payload, "phone_number": phone}
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            resp = self._request("GET", f"/contacts/by-phone/{quote(phone, safe='')}")
         return self._data(resp) or {}
 
     # -- cataloghi --

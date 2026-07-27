@@ -94,7 +94,9 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
         for c in Client.objects.filter(salon=salon).exclude(yourang_contact_id="")
     }
     locals_by_phone = {}
-    for c in Client.objects.filter(salon=salon, is_active=True):
+    # Anche i disattivati: il vincolo unique (salon, phone) vale comunque, quindi
+    # senza di loro un contatto remoto con quel numero farebbe fallire la create.
+    for c in Client.objects.filter(salon=salon):
         norm = normalize_phone(c.phone)
         if norm:
             locals_by_phone.setdefault(norm, c)
@@ -150,7 +152,7 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
         if not phone:
             continue
         try:
-            created = client.upsert_contact_by_phone(
+            created = client.create_or_get_contact(
                 phone,
                 {
                     "first_name": local.first_name,

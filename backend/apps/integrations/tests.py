@@ -7,7 +7,7 @@ round-trip cifratura, idempotenza import evento.
 import hashlib
 import hmac
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, TestCase, override_settings
 
@@ -61,6 +61,77 @@ class CryptoRoundTripTests(SimpleTestCase):
     def test_empty(self):
         self.assertEqual(crypto.encrypt(""), "")
         self.assertEqual(crypto.decrypt(""), "")
+
+
+class ContactPushTests(TestCase):
+    """Il push usa POST /contacts: l'external API non ha un upsert by-phone."""
+
+    def setUp(self):
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
+
+        self.salon = Salon.objects.create(name="Test Salon", slug="test-salon-push")
+        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org2")
+
+    def _push(self, request_mock):
+        from apps.clients.models import Client
+        from apps.integrations.sync import sync_clients
+
+        Client.objects.create(
+            salon=self.salon, first_name="Mario", last_name="Rossi", phone="+393331234567"
+        )
+        with patch("apps.integrations.client.YourangClient.list_contacts", return_value=[]), \
+             patch("apps.integrations.client.YourangClient._request", request_mock):
+            report = sync_clients(self.conn)
+        return report, Client.objects.get(phone="+393331234567")
+
+    def test_pushes_with_post(self):
+        resp = Mock()
+        resp.json.return_value = {"ok": True, "data": {"id": "c-1"}}
+        req = Mock(return_value=resp)
+        report, client = self._push(req)
+
+        method, path = req.call_args.args
+        self.assertEqual((method, path), ("POST", "/contacts"))
+        self.assertEqual(req.call_args.kwargs["json"]["phone_number"], "+393331234567")
+        self.assertEqual(report.pushed, 1)
+        self.assertEqual(client.yourang_contact_id, "c-1")
+
+    def test_duplicate_phone_falls_back_to_lookup(self):
+        import httpx
+
+        ok = Mock()
+        ok.json.return_value = {"ok": True, "data": {"id": "c-9"}}
+        conflict = httpx.HTTPStatusError(
+            "400", request=Mock(), response=Mock(status_code=400)
+        )
+        req = Mock(side_effect=[conflict, ok])
+        report, client = self._push(req)
+
+        self.assertEqual(req.call_args.args[0], "GET")
+        self.assertIn("/contacts/by-phone/", req.call_args.args[1])
+        self.assertEqual(client.yourang_contact_id, "c-9")
+        self.assertEqual(report.errors, [])
+
+
+class LoginIdentityTests(TestCase):
+    """Un'org già collegata dà il SALONE, mai l'utente titolare: chi accede
+    entra con la propria identità Yourang."""
+
+    def test_mapped_org_does_not_return_the_owner(self):
+        from apps.accounts.models import Membership, User
+        from apps.core.models import Salon
+        from apps.integrations.login import _resolve_salon
+        from apps.integrations.models import YourangConnection
+
+        salon = Salon.objects.create(name="Salone", slug="salone-org")
+        owner = User.objects.create_user(email="titolare@x.it", password=None)
+        Membership.objects.create(user=owner, salon=salon, is_owner=True)
+        YourangConnection.objects.create(salon=salon, yourang_org_id="org3")
+
+        self.assertEqual(
+            _resolve_salon("org3", "collega@x.it", True), (salon, None)
+        )
 
 
 class ImportEventIdempotencyTests(TestCase):
