@@ -508,3 +508,104 @@ class DoubleChargeProtectionTests(TestCase):
         self.assertEqual(resp.status_code, 200, resp.content)
         # senza passare l'id: lo ha ritrovato dal registro attività
         self.assertEqual(fake.Refund.create.call_args.kwargs["payment_intent"], "pi_9")
+
+
+class PsdTwoAuthRequiredTests(TestCase):
+    """Il caso PSD2 (la banca chiede l'autenticazione) deve produrre
+    ChargeAuthRequired con l'id del PaymentIntent, non un crash né un errore
+    generico. Gli oggetti Stripe NON sono dizionari: entrambe le forme
+    (oggetto e dict) vanno gestite."""
+
+    def test_codice_letto_da_exc_code(self):
+        import stripe
+
+        from .stripe_service import _error_code
+
+        exc = stripe.CardError("m", None, "authentication_required")
+        self.assertEqual(_error_code(exc), "authentication_required")
+
+    def test_codice_generico_non_confuso_col_psd2(self):
+        import stripe
+
+        from .stripe_service import _error_code
+
+        self.assertEqual(_error_code(stripe.CardError("m", None, "card_declined")),
+                         "card_declined")
+
+    def test_intent_id_da_oggetto_stripe(self):
+        """Un PaymentIntent vero: accesso per attributo, MAI .get()."""
+        import stripe
+
+        from .stripe_service import _intent_id_from
+
+        pi = stripe.PaymentIntent.construct_from({"id": "pi_obj"}, "sk_x")
+        self.assertFalse(hasattr(pi, "get"))  # il motivo per cui serve questo codice
+        exc = stripe.CardError("m", None, "authentication_required")
+        exc.error = stripe.PaymentIntent.construct_from(
+            {"code": "authentication_required", "payment_intent": pi}, "sk_x"
+        )
+        self.assertEqual(_intent_id_from(exc), "pi_obj")
+
+    def test_intent_id_da_dict(self):
+        import stripe
+
+        from .stripe_service import _intent_id_from
+
+        exc = stripe.CardError("m", None, "authentication_required")
+        exc.error = stripe.PaymentIntent.construct_from(
+            {"payment_intent": {"id": "pi_dict"}}, "sk_x"
+        )
+        self.assertEqual(_intent_id_from(exc), "pi_dict")
+
+    def test_intent_assente_non_esplode(self):
+        import stripe
+
+        from .stripe_service import _intent_id_from
+
+        self.assertEqual(_intent_id_from(stripe.CardError("m", None, "x")), "")
+
+    def test_charge_off_session_alza_ChargeAuthRequired(self):
+        """Il percorso completo: un CardError PSD2 diventa 'in attesa', non un 400."""
+        import datetime as dt
+
+        import stripe
+        from django.test import override_settings
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment
+        from apps.core.models import Salon
+        from apps.integrations.models import StripeConnection
+        from apps.staff.models import Operator
+
+        from . import stripe_service
+
+        salon = Salon.objects.create(name="Psd Salon", slug="psd-salon")
+        StripeConnection.objects.create(
+            salon=salon, stripe_account_id="acct_PSD", charges_enabled=True
+        )
+        cli = Client.objects.create(
+            salon=salon, first_name="P", last_name="Q", phone="+393330005001",
+            consents={"card_charge": True}, stripe_payment_method_id="pm_p",
+            stripe_customer_id="cus_p",
+        )
+        op = Operator.objects.create(salon=salon, first_name="O", last_name="P")
+        appt = Appointment.objects.create(
+            salon=salon, client=cli, operator=op,
+            start=timezone.now() - dt.timedelta(hours=1),
+            status=Appointment.Status.NO_SHOW,
+        )
+
+        err = stripe.CardError("auth", None, "authentication_required")
+        err.error = stripe.PaymentIntent.construct_from(
+            {"payment_intent": {"id": "pi_psd"}}, "sk_x"
+        )
+        fake = Mock()
+        fake.CardError = stripe.CardError
+        fake.StripeError = stripe.StripeError
+        fake.PaymentIntent.create.side_effect = err
+
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake):
+            with self.assertRaises(stripe_service.ChargeAuthRequired) as cm:
+                stripe_service.charge_off_session(appt, Decimal("10.00"), kind="no_show")
+        self.assertEqual(cm.exception.payment_intent_id, "pi_psd")

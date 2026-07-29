@@ -172,6 +172,39 @@ class ChargeAuthRequired(Exception):
         super().__init__(message or "Addebito da autenticare dalla cliente")
 
 
+def _error_code(exc) -> str:
+    """Codice errore di un CardError.
+
+    Va letto da `exc.code`: la libreria lo popola sempre, mentre `exc.error` può
+    essere None. Leggendolo solo da `exc.error.code` il ramo PSD2 non scatterebbe
+    e un addebito da autenticare verrebbe riportato come errore generico.
+    """
+    code = getattr(exc, "code", "") or ""
+    if code:
+        return str(code)
+    err = getattr(exc, "error", None)
+    return str(getattr(err, "code", "") or "") if err is not None else ""
+
+
+def _intent_id_from(exc) -> str:
+    """Id del PaymentIntent da un CardError, qualunque forma abbia.
+
+    Attenzione: in stripe-python gli oggetti NON sono dizionari — non hanno
+    `.get()` — ma supportano l'accesso per attributo e per chiave. Un dict
+    semplice arriva invece dai test. Vanno gestite entrambe le forme, altrimenti
+    un caso previsto (autenticazione richiesta) diventa un crash.
+    """
+    err = getattr(exc, "error", None)
+    pi = getattr(err, "payment_intent", None) if err is not None else None
+    if pi is None:
+        pi = getattr(exc, "payment_intent", None)
+    if pi is None:
+        return ""
+    if isinstance(pi, dict):
+        return str(pi.get("id") or "")
+    return str(getattr(pi, "id", "") or "")
+
+
 def charge_off_session(appointment, amount, *, kind: str):
     """Addebito off-session sulla carta salvata, sull'account del salone.
 
@@ -202,11 +235,8 @@ def charge_off_session(appointment, amount, *, kind: str):
             stripe_account=account,
         )
     except stripe.CardError as exc:
-        err = getattr(exc, "error", None)
-        code = getattr(err, "code", "") or ""
-        intent = getattr(err, "payment_intent", None) or {}
-        if code == "authentication_required":
-            raise ChargeAuthRequired(intent.get("id", "")) from exc
+        if _error_code(exc) == "authentication_required":
+            raise ChargeAuthRequired(_intent_id_from(exc)) from exc
         raise HttpError(400, f"Addebito non riuscito: {getattr(exc, 'user_message', None) or exc}")
     except stripe.StripeError as exc:
         raise HttpError(400, f"Addebito non riuscito: {getattr(exc, 'user_message', None) or exc}")
