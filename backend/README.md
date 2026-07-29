@@ -3,6 +3,11 @@
 Backend Django unico per la **dashboard gestionale** e la **web app cliente** (yourang).
 Riferimento funzionale: `../yourang - Manuale flussi.doc` · Architettura e contratto: `SPEC.md`.
 
+> **Pagamenti (Stripe):** il codice è completo e testato ma **non è mai stato
+> eseguito contro Stripe reale**. Chi deve configurarlo e provarlo segua
+> [`../docs/setup-stripe.md`](../docs/setup-stripe.md): guida passo per passo,
+> non richiede di saper programmare per la parte di configurazione.
+
 ## Stack
 
 Django 5 · Django Ninja (API REST + OpenAPI) · PostgreSQL (SQLite in locale) · JWT (staff e clienti) ·
