@@ -2,6 +2,7 @@
 // Local to this section (no shared statusMeta equivalent exists for the marketing
 // `Communication.status` enum, which is draft|scheduled|sent — unrelated to
 // appointment/deposit statuses in @youty/shared).
+import { salonIsoAt, salonParts } from '@youty/shared';
 
 export const COM_STATUS_KEYS = ['draft', 'scheduled', 'sent'];
 
@@ -18,29 +19,34 @@ export function comStatusMeta(status, t) {
 const MONTHS_IT = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
 const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** ISO datetime -> "1 lug 2026 · 10:00" (local time, bilingual months). */
+/** ISO datetime -> "1 lug 2026 · 10:00" (SALON time, bilingual months). */
 export function comWhenLabel(iso, lang) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const p = salonParts(iso);
   const mon = lang === 'en' ? MONTHS_EN : MONTHS_IT;
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getDate()} ${mon[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${p.d} ${mon[p.m - 1]} ${p.y} · ${pad(p.h)}:${pad(p.min)}`;
 }
 
-/** API ISO datetime -> value for <input type="datetime-local"> (local time, no offset). */
+/* La coppia isoToDtLocal/dtLocalToIso deve parlare LO STESSO fuso, altrimenti
+   riaprire una comunicazione programmata ne sposterebbe l'orario. Entrambe usano
+   l'ora del salone: è quella che il titolare intende quando scrive "ore 10:00". */
+
+/** API ISO datetime -> value for <input type="datetime-local"> (salon wall-clock). */
 export function isoToDtLocal(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const p = salonParts(iso);
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${p.y}-${pad(p.m)}-${pad(p.d)}T${pad(p.h)}:${pad(p.min)}`;
 }
 
-/** <input type="datetime-local"> value -> full ISO8601 with offset (UTC), or null. */
+/** <input type="datetime-local"> value (salon wall-clock) -> ISO8601 with the
+ *  salon's offset, or null. */
 export function dtLocalToIso(value) {
   if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!m) return null;
+  return salonIsoAt(m[1], +m[2] * 60 + +m[3]);
 }
 
 /** Human summary of a communication's audience, given the salon's client categories. */

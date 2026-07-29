@@ -3,14 +3,14 @@
 // so staff can stagger times against the live grid. Submits each row sequentially to
 // POST /api/agenda/appointments, tracks per-row status, and never aborts the batch on one failure.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, salonTodayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { initialsOf, toastErr, fmtMoney } from '../lib.js';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, serviceCategories, operators, fireToast, hasScope } = useDash();
   const canWrite = hasScope('agenda');
-  const baseDate = date || todayStr();
+  const baseDate = date || salonTodayStr();
 
   const seq = useRef(1);
   const newRow = () => ({
@@ -378,7 +378,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
               <div className="t-meta" style={{ margin: 0 }}>{t('Data e orario', 'Date & time')}</div>
               <div style={{ flex: 1 }} />
-              <input type="date" value={row.date} min={todayStr()} onChange={(e) => onPatch({ date: e.target.value || todayStr(), selStart: null })} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
+              <input type="date" value={row.date} min={salonTodayStr()} onChange={(e) => onPatch({ date: e.target.value || salonTodayStr(), selStart: null })} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
             </div>
             {slots === null ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>

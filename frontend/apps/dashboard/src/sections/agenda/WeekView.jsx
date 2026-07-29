@@ -2,7 +2,7 @@
 // Interactions mirror the day view (DayGrid): drag a block to reschedule/reassign,
 // click a block to open its detail, click an empty slot to create a new appointment.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, minutesOfDay, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
+import { api, ApiError, minutesOfDay, salonNowMinutes, salonTodayStr, timeLabel, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin } from './lib.js';
 
@@ -36,9 +36,8 @@ export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onN
 
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
   const gridH = (DK_END - DK_START) * PXM;
-  const today = todayStr();
-  const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const today = salonTodayStr();
+  const nowMin = salonNowMinutes();
 
   if (days === null) {
     return (

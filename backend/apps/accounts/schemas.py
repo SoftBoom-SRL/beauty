@@ -138,9 +138,18 @@ class ClientMeOut(Schema):
     email: str
     lang: str
     whatsapp_reminders: bool
+    # Stato della carta: serve all'app per mostrare "salva la carta" oppure
+    # "carta salvata". Non si espone MAI il metodo di pagamento, solo il fatto
+    # che ci sia — l'app non deve avere in mano identificativi Stripe.
+    has_saved_card: bool = False
+    card_charge_consent: bool = False
 
 
 class ClientMeIn(Schema):
     lang: Optional[str] = None
     email: Optional[str] = None
     whatsapp_reminders: Optional[bool] = None
+    # La cliente autorizza (o revoca) l'addebito sulla carta salvata. Senza questo
+    # consenso `charge_off_session` rifiuta, quindi la carta da sola non basta:
+    # deve poterlo dare — e ritirare — dall'app, non solo dallo staff in salone.
+    card_charge_consent: Optional[bool] = None

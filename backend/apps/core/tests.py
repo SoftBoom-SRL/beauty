@@ -208,3 +208,83 @@ class LogoApiTests(TestCase):
         settings_obj.refresh_from_db()
         self.assertFalse(settings_obj.logo)
         self.assertFalse(os.path.exists(logo_path))
+
+
+class AutoNoShowWindowTests(TestCase):
+    """Il no-show automatico NON deve pescare arretrati: senza limite inferiore,
+    accendere la modalità automatica addebiterebbe mesi di appuntamenti mai chiusi."""
+
+    def setUp(self):
+        import datetime as dt
+
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.clients.models import Client
+        from apps.core.models import Salon, SalonSettings
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="Win Salon", slug="win-salon")
+        self.st = SalonSettings.objects.create(
+            salon=self.salon,
+            noshow_charge_mode=SalonSettings.NoShowMode.AUTOMATIC,
+            noshow_charge_delay_min=30,
+            noshow_charge_pct=100,
+        )
+        op = Operator.objects.create(salon=self.salon, first_name="A", last_name="B")
+        cat = ServiceCategory.objects.create(salon=self.salon, name_it="C")
+        svc = Service.objects.create(
+            salon=self.salon, category=cat, name_it="S", duration_min=60, price=50
+        )
+        cli = Client.objects.create(
+            salon=self.salon, first_name="X", last_name="Y", phone="+393330001111"
+        )
+        now = timezone.now()
+
+        def appt(hours_ago):
+            a = Appointment.objects.create(
+                salon=self.salon, client=cli, operator=op,
+                start=now - dt.timedelta(hours=hours_ago),
+                status=Appointment.Status.CONFIRMED,
+            )
+            AppointmentService.objects.create(
+                appointment=a, service=svc, operator=op, duration_min=60, price=50
+            )
+            return a
+
+        self.recente = appt(2)      # dentro la finestra
+        self.vecchio = appt(24 * 30)  # un mese fa: arretrato dimenticato
+
+    def _run(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("process_payment_policies", "--salon", str(self.salon.id),
+                     "--dry-run", stdout=out)
+        return out.getvalue()
+
+    def _label(self, appt):
+        from django.utils import timezone
+
+        return timezone.localtime(appt.start).strftime("%d/%m %H:%M")
+
+    def test_prende_il_recente(self):
+        self.assertIn(self._label(self.recente), self._run())
+
+    def test_ignora_l_arretrato_e_lo_dichiara(self):
+        out = self._run()
+        # L'arretrato non viene marcato…
+        self.assertNotIn(self._label(self.vecchio), out)
+        # …ma il comando lo dice invece di tacere: un arretrato ignorato in
+        # silenzio si leggerebbe come "tutto a posto".
+        self.assertIn("oltre la finestra", out)
+
+    def test_modalita_manuale_non_fa_nulla(self):
+        from apps.core.models import SalonSettings
+
+        self.st.noshow_charge_mode = SalonSettings.NoShowMode.MANUAL
+        self.st.save(update_fields=["noshow_charge_mode"])
+        self.assertNotIn("no-show", self._run().lower())

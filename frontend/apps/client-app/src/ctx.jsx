@@ -1,7 +1,7 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Screen agents CONSUME this via useApp() — never edit it.
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, clientAuth, mediaUrl, useT, useToastHost } from '@youty/shared';
+import { api, clientAuth, mediaUrl, setSalonTimeZone, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
 
 export const SALON_SLUG = import.meta.env.VITE_SALON_SLUG || 'the-parlour';
@@ -21,6 +21,9 @@ export function AppProvider({ children }) {
     setBrandError(null);
     try {
       const b = await api.get('/api/core/public/branding', { params: { salon: SALON_SLUG }, auth: false });
+      // Gli orari mostrati e prenotati sono quelli del SALONE: una cliente che
+      // apre l'app da un altro fuso deve vedere l'ora del salone, non la propria.
+      setSalonTimeZone(b.timezone);
       setBrand(makeBrand({
         color: b.brand_color || FALLBACK_BRAND_COLOR,
         name: b.name,

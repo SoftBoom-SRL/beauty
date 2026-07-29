@@ -5,6 +5,7 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity
+from apps.integrations.gate import require_yourang
 from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
@@ -88,6 +89,10 @@ def list_automations(request):
 def create_automation(request, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
+    # Le regole le esegue Yourang: crearne una senza strumento disponibile
+    # produrrebbe un'automazione che non partirà mai. Le LETTURE restano libere,
+    # così chi non è collegato può comunque vedere com'è fatta la sezione.
+    require_yourang(ctx.salon)
     automation = Automation.objects.create(salon=ctx.salon, **data.dict())
     log_activity(
         ctx.salon,
@@ -104,6 +109,7 @@ def create_automation(request, data: AutomationIn):
 def update_automation(request, automation_id: int, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
+    require_yourang(ctx.salon)
     automation = salon_get(Automation, ctx, automation_id)
     for name, value in data.dict().items():
         setattr(automation, name, value)
@@ -145,6 +151,10 @@ def toggle_automation(request, automation_id: int):
     ctx = request.auth
     require_scope(ctx, "marketing")
     automation = salon_get(Automation, ctx, automation_id)
+    # Spegnere una regola è sempre concesso (è una messa in sicurezza);
+    # accenderla richiede uno strumento Yourang disponibile.
+    if not automation.active:
+        require_yourang(ctx.salon)
     automation.active = not automation.active
     automation.save(update_fields=["active", "updated_at"])
     log_activity(

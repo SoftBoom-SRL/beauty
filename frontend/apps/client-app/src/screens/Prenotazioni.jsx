@@ -2,7 +2,7 @@
 // chips; upcoming items expose sposta/annulla actions.
 // Data: GET /api/agenda/client/appointments.
 import React from 'react';
-import { Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
+import { api, ApiError, Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import {
   ClientSubHead, Meta, DashedEmpty, useClientAppointments,
@@ -18,7 +18,7 @@ function StatusChip({ status, t }) {
   );
 }
 
-function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla }) {
+function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, onPayDeposit, payingDeposit }) {
   const dm = depositMeta(appt.deposit_status, t);
   const depAmt = Number(appt.deposit_amount || 0);
   return (
@@ -37,6 +37,18 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla }) {
           <span style={{ width: 6, height: 6, borderRadius: 99, background: dm.dot }} />
           {dm.label}{depAmt > 0 ? ' · ' + fmtEur(depAmt, lang) : ''}
         </div>
+      )}
+      {/* Caparra da versare: si salda con il Checkout ospitato da Stripe (che
+          salva anche la carta, così un'eventuale mancata presentazione non
+          richiede un secondo passaggio). */}
+      {appt.deposit_status === 'required' && depAmt > 0 && (
+        <button className="press" onClick={onPayDeposit} disabled={payingDeposit}
+          style={{ width: '100%', marginTop: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px 0', borderRadius: 'var(--r-pill)', border: 'none', background: 'var(--brand)', color: 'var(--brand-on)', fontWeight: 700, fontSize: 13.5, opacity: payingDeposit ? 0.6 : 1 }}>
+          <Icon name="wallet" size={15} color="var(--brand-on)" />
+          {payingDeposit
+            ? t('Apertura pagamento…', 'Opening payment…')
+            : t(`Versa la caparra · ${fmtEur(depAmt, lang)}`, `Pay the deposit · ${fmtEur(depAmt, lang)}`)}
+        </button>
       )}
       {actions && (
         <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)' }}>
@@ -63,6 +75,28 @@ export default function Prenotazioni() {
   const upcoming = data?.upcoming || [];
   const past = data?.past || [];
 
+  /* Caparra: si apre il Checkout ospitato da Stripe sull'account del salone.
+     Sostituiamo la pagina invece di aprire una scheda: da telefono il ritorno
+     con `?deposit=ok` riporta la cliente esattamente qui. */
+  const [paying, setPaying] = React.useState(null);
+  const payDeposit = async (appt) => {
+    if (paying) return;
+    setPaying(appt.id);
+    try {
+      const res = await api.post(`/api/sales/client/appointments/${appt.id}/deposit-checkout`);
+      if (res.checkout_url) window.location.assign(res.checkout_url);
+      else throw new Error('missing checkout url');
+    } catch (err) {
+      setPaying(null);
+      if (err instanceof ApiError && (err.status === 412 || err.status === 503)) {
+        // Il salone non ha (ancora) i pagamenti attivi: non è colpa della cliente.
+        fireToast({ msg: t('Pagamento online non disponibile: contatta il salone', 'Online payment unavailable: please contact the salon'), icon: 'info' });
+      } else {
+        errToast(err, fireToast, t);
+      }
+    }
+  };
+
   return (
     <div style={{ paddingBottom: 30 }}>
       <ClientSubHead brand={brand} title={t('Le tue prenotazioni', 'Your bookings')} onBack={() => setView('home')} />
@@ -78,7 +112,9 @@ export default function Prenotazioni() {
             {upcoming.map((appt) => (
               <ApptRow key={appt.id} appt={appt} t={t} lang={lang} actions
                 onSposta={() => setView('sposta', { appt })}
-                onAnnulla={() => setView('annulla', { appt })} />
+                onAnnulla={() => setView('annulla', { appt })}
+                onPayDeposit={() => payDeposit(appt)}
+                payingDeposit={paying === appt.id} />
             ))}
           </div>
         ) : (

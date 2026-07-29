@@ -9,6 +9,7 @@ import { useDash } from '../../ctx.jsx';
 import BookingsOptimPage from './BookingsOptimPage.jsx';
 import ActivityLogPage from './ActivityLogPage.jsx';
 import LocationsPage from './LocationsPage.jsx';
+import PaymentsPage from './PaymentsPage.jsx';
 import BrandDrawer from './BrandDrawer.jsx';
 import TeamDrawer from './TeamDrawer.jsx';
 import RolesDrawer from './RolesDrawer.jsx';
@@ -37,7 +38,8 @@ const Row = ({ icon, label, sub, value, onClick, first, locked, tag }) => (
 );
 
 export default function ImpostazioniSection() {
-  const { t, lang, setLang, session, hasScope, salon, locations, openModal, fireToast, deepLink, setDeepLink } = useDash();
+  const { t, lang, setLang, session, hasScope, salon, locations, openModal, fireToast, deepLink, setDeepLink,
+    yourang, yourangState, reloadYourang } = useDash();
   const isOwner = !!session?.is_owner;
   const canTeam = hasScope('team');
   const canLog = hasScope('activity_log');
@@ -47,7 +49,8 @@ export default function ImpostazioniSection() {
   const [brandOpen, setBrandOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
-  const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
+  // Lo stato Yourang vive nel ctx (serve a tutte le sezioni per il gate): qui lo
+  // si legge e si chiede solo un refresh dopo l'handshake OAuth.
 
   // deep link from agenda cash-up → activity log filtered to today
   useEffect(() => {
@@ -58,14 +61,21 @@ export default function ImpostazioniSection() {
     }
   }, [deepLink, setDeepLink]);
 
-  // Yourang connection status + handshake from the OAuth popup.
+  // Stato Stripe solo per l'etichetta della riga: il dettaglio sta in PaymentsPage.
+  const [stripeReady, setStripeReady] = useState(null);
+  useEffect(() => {
+    if (!isOwner) return;
+    api.get('/api/integrations/stripe/status')
+      .then((s) => setStripeReady(!!s.can_charge))
+      .catch(() => setStripeReady(false));
+  }, [isOwner, page]);
+
+  // Handshake dal popup OAuth → refresh dello stato nel ctx.
   useEffect(() => {
     if (!isOwner) return undefined;
-    const load = () => api.get('/api/integrations/yourang/status').then(setYourang).catch(() => setYourang(null));
-    load();
     const onMsg = (e) => {
       if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
-      if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
+      if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); reloadYourang(); }
       else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed'), icon: 'info' });
     };
     window.addEventListener('message', onMsg);
@@ -73,14 +83,24 @@ export default function ImpostazioniSection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
 
+  // "Collega" è la via per chi HA già un accesso Yourang da collegare a youty.
   const connectYourang = () => {
     const popup = window.open('/oauth-popup/start?mode=connect', 'yourang-oauth', 'width=520,height=680');
     if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
   };
 
+  // Chi NON ha ancora accesso alla piattaforma va alla richiesta informazioni:
+  // attivazione del piano e setting li curano gli specialisti Yourang.
+  const requestYourangInfo = () => {
+    const url = yourang?.activation_url;
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    else fireToast({ msg: t('Destinazione Yourang non configurata', 'Yourang destination not configured'), icon: 'info' });
+  };
+
   if (page === 'bookings') return <BookingsOptimPage onBack={() => setPage(null)} />;
   if (page === 'log') return <ActivityLogPage key={logPeriod} onBack={() => { setPage(null); setLogPeriod('all'); }} initialPeriod={logPeriod} />;
   if (page === 'sedi') return <LocationsPage onBack={() => setPage(null)} />;
+  if (page === 'pagamenti') return <PaymentsPage onBack={() => setPage(null)} />;
 
   const defaultLoc = locations.find((l) => l.is_default) || locations[0];
   const langLabel = { it: 'Italiano', en: 'English' };
@@ -139,6 +159,23 @@ export default function ImpostazioniSection() {
         <Row icon="tag" label={t('Categorie', 'Categories')} sub={t('Clienti, servizi e magazzino', 'Clients, services and inventory')} onClick={() => openModal('catsmgr', { kind: 'clienti' })} />
       </Group>
 
+      {/* PAGAMENTI — account Stripe del salone + policy caparra/no-show (titolare) */}
+      {isOwner && (
+        <Group title={t('Pagamenti', 'Payments')}>
+          <Row first icon="wallet"
+            label={t('Account Stripe e caparre', 'Stripe account & deposits')}
+            sub={stripeReady === null
+              ? t('Incassi, caparre e mancate presentazioni.', 'Payments, deposits and no-shows.')
+              : stripeReady
+                ? t('Incassi attivi: caparre e mancate presentazioni sul tuo conto Stripe.', 'Charges enabled: deposits and no-shows land in your Stripe account.')
+                : t('Collega il tuo account Stripe per incassare caparre e mancate presentazioni.', 'Connect your Stripe account to collect deposits and no-show charges.')}
+            value={stripeReady === null
+              ? ''
+              : stripeReady ? t('Attivo', 'Active') : t('Da collegare', 'Not connected')}
+            onClick={() => setPage('pagamenti')} />
+        </Group>
+      )}
+
       {/* YOURANG — connessione OAuth + sync (titolare) */}
       {isOwner && (
         <Group title={t('Integrazione Yourang', 'Yourang integration')}>
@@ -147,9 +184,35 @@ export default function ImpostazioniSection() {
             tag="Yourang"
             sub={yourang?.connected
               ? t('Clienti, servizi e appuntamenti sincronizzati con Yourang.', 'Clients, services and appointments synced with Yourang.')
-              : t('Collega la piattaforma Yourang per sincronizzare clienti, servizi e prenotazioni.', 'Connect the Yourang platform to sync clients, services and bookings.')}
-            value={yourang?.connected ? t('Connesso', 'Connected') : t('Non connesso', 'Not connected')}
+              : t('Hai già un accesso Yourang? Collegalo per sincronizzare clienti, servizi e prenotazioni.', 'Already have Yourang access? Connect it to sync clients, services and bookings.')}
+            value={{
+              active: t('Attivo', 'Active'),
+              no_credit: t('Credito esaurito', 'Out of credit'),
+              not_connected: t('Non connesso', 'Not connected'),
+            }[yourangState]}
             onClick={connectYourang} />
+          {/* Credito finito: si ricarica sulla piattaforma. */}
+          {yourangState === 'no_credit' && (
+            <Row icon="wallet"
+              label={t('Ricarica il credito', 'Top up credit')}
+              tag="Yourang"
+              sub={t('Il credito è esaurito: gli invii restano in attesa finché non ricarichi su Yourang.', 'Credit has run out: sends stay queued until you top up on Yourang.')}
+              value={t('Apri', 'Open')}
+              onClick={() => {
+                const url = yourang?.topup_url || yourang?.activation_url;
+                if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                else fireToast({ msg: t('Destinazione Yourang non configurata', 'Yourang destination not configured'), icon: 'info' });
+              }} />
+          )}
+          {/* Nessun accesso alla piattaforma: attivazione e setting con gli specialisti. */}
+          {yourangState === 'not_connected' && (
+            <Row icon="sparkle"
+              label={t('Non hai ancora Yourang?', 'Don’t have Yourang yet?')}
+              tag="Yourang"
+              sub={t('Richiedi informazioni: gli specialisti curano l’attivazione del piano e la configurazione della piattaforma.', 'Request information: the specialists handle plan activation and platform setup.')}
+              value={t('Richiedi', 'Request')}
+              onClick={requestYourangInfo} />
+          )}
         </Group>
       )}
 

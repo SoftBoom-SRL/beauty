@@ -20,10 +20,10 @@ from common.auth import staff_auth
 from common.permissions import require_owner
 
 from . import client as yc
-from . import crypto, sync
+from . import crypto, gate, stripe_connect, sync
 from .login import WEBHOOK_EVENT_TYPES, login_with_yourang
-from .models import YourangConnection, YourangOAuthState
-from .schemas import AuthorizeOut, ExchangeIn, OkOut, StatusOut
+from .models import StripeConnection, YourangConnection, YourangOAuthState
+from .schemas import AuthorizeOut, ExchangeIn, OkOut, StatusOut, StripeStatusOut
 
 logger = logging.getLogger("youty.integrations")
 router = Router(tags=["integrations"])
@@ -31,9 +31,21 @@ router = Router(tags=["integrations"])
 STATE_TTL_SECONDS = 600
 
 
+def _gate_urls() -> dict:
+    return {
+        "activation_url": settings.YOURANG_ACTIVATION_URL,
+        "topup_url": settings.YOURANG_TOPUP_URL or settings.YOURANG_ACTIVATION_URL,
+    }
+
+
 def _status_out(conn: YourangConnection | None) -> dict:
     if conn is None or conn.status != YourangConnection.Status.CONNECTED:
-        return {"connected": False, "status": conn.status if conn else "disconnected"}
+        return {
+            "connected": False,
+            "status": conn.status if conn else "disconnected",
+            "feature_state": gate.NOT_CONNECTED,
+            **_gate_urls(),
+        }
     return {
         "connected": True,
         "status": conn.status,
@@ -41,6 +53,10 @@ def _status_out(conn: YourangConnection | None) -> dict:
         "last_sync_at": conn.last_sync_at,
         "scope": conn.scope,
         "yourang_org_id": conn.yourang_org_id,
+        "feature_state": conn.feature_state,
+        "credit_exhausted": conn.credit_exhausted,
+        "credit_exhausted_at": conn.credit_exhausted_at,
+        **_gate_urls(),
     }
 
 
@@ -151,6 +167,66 @@ def disconnect(request):
     ctx = request.auth
     require_owner(ctx)
     YourangConnection.objects.filter(salon=ctx.salon).delete()
+    return OkOut()
+
+
+# ---- Stripe Connect (Standard + direct charges) -----------------------------
+# Il salone collega il SUO account Stripe: incassa lui caparre e addebiti
+# no-show, è lui il merchant of record, la piattaforma non trattiene commissioni.
+
+
+def _stripe_status_out(conn: StripeConnection | None) -> dict:
+    base = {"configured": stripe_connect.configured()}
+    if conn is None:
+        return {**base, "connected": False, "status": "disconnected"}
+    return {
+        **base,
+        "connected": conn.status == StripeConnection.Status.CONNECTED,
+        "status": conn.status,
+        "can_charge": conn.can_charge,
+        "stripe_account_id": conn.stripe_account_id,
+        "charges_enabled": conn.charges_enabled,
+        "payouts_enabled": conn.payouts_enabled,
+        "details_submitted": conn.details_submitted,
+        "livemode": conn.livemode,
+        "connected_at": conn.connected_at,
+        "last_error": conn.last_error,
+    }
+
+
+@router.get("/stripe/oauth/start", auth=staff_auth, response=AuthorizeOut)
+def stripe_oauth_start(request):
+    """Avvia il collegamento dell'account Stripe del salone (solo titolare)."""
+    ctx = request.auth
+    require_owner(ctx)
+    return {"authorize_url": stripe_connect.start(ctx.salon, ctx.user)}
+
+
+@router.post("/stripe/oauth/exchange", auth=None, response=StripeStatusOut)
+def stripe_oauth_exchange(request, data: ExchangeIn):
+    """Scambia il code: il salone dello `state` viene collegato al suo account."""
+    return _stripe_status_out(stripe_connect.exchange(data.code, data.state))
+
+
+@router.get("/stripe/status", auth=staff_auth, response=StripeStatusOut)
+def stripe_status(request):
+    conn = StripeConnection.objects.filter(salon=request.auth.salon).first()
+    return _stripe_status_out(conn)
+
+
+@router.post("/stripe/refresh", auth=staff_auth, response=StripeStatusOut)
+def stripe_refresh(request):
+    """Rilegge da Stripe se l'onboarding è completo e gli incassi sono abilitati."""
+    ctx = request.auth
+    require_owner(ctx)
+    return _stripe_status_out(stripe_connect.refresh(ctx.salon))
+
+
+@router.delete("/stripe/connection", auth=staff_auth, response=OkOut)
+def stripe_disconnect(request):
+    ctx = request.auth
+    require_owner(ctx)
+    stripe_connect.disconnect(ctx.salon)
     return OkOut()
 
 

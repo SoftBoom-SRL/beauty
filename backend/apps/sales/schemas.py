@@ -117,11 +117,48 @@ class ChargeNoShowOut(Schema):
     ok: bool = True
     payment_intent_id: str
     amount: Decimal
+    # Sotto PSD2 un addebito off-session può richiedere l'autenticazione della
+    # cliente: in quel caso ok=False e l'incasso è "in attesa", non riuscito.
+    requires_authentication: bool = False
 
 
 class SetupIntentOut(Schema):
     setup_intent_id: str
     client_secret: Optional[str] = None
+
+
+class CardSetupOut(Schema):
+    """Sessione Checkout in modalità setup: salva la carta senza addebiti."""
+
+    checkout_url: str
+    session_id: str
+
+
+class DepositCheckoutOut(Schema):
+    """Sessione Checkout ospitata da Stripe per saldare la caparra."""
+
+    checkout_url: str
+    session_id: str
+    amount: Decimal
+
+
+class RefundIn(Schema):
+    """Rimborso di un incasso dell'appuntamento (caparra o addebito no-show).
+
+    `payment_intent_id` omesso = si rimborsa l'ultimo incasso registrato per
+    quell'appuntamento. `amount` omesso = rimborso totale.
+    """
+
+    payment_intent_id: str = ""
+    amount: Optional[Decimal] = None
+    reason: str = ""
+
+
+class RefundOut(Schema):
+    ok: bool = True
+    refund_id: str
+    amount: Decimal
+    payment_intent_id: str
 
 
 class OkOut(Schema):

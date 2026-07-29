@@ -1,5 +1,5 @@
 // lib.js — agenda section helpers (grid math, ISO building, waitlist ranking)
-import { ApiError, fmtEur, minutesOfDay, parseISO, timeLabel, toDateStr } from '@youty/shared';
+import { ApiError, fmtEur, minutesOfDay, parseISO, salonIsoAt, salonWeekday, timeLabel, toDateStr } from '@youty/shared';
 
 export const DK_START = 8 * 60;   // grid 08:00
 export const DK_END = 20 * 60;    // grid 20:00
@@ -55,16 +55,10 @@ export function itemBlocks(appt) {
   });
 }
 
-/** "YYYY-MM-DD" + minutes-of-day → local ISO8601 with offset ("2026-07-06T10:30:00+02:00") */
-export function isoAtMin(dateStr, minutes) {
-  const d = parseISO(dateStr);
-  d.setHours(0, minutes, 0, 0);
-  const pad = (n) => String(n).padStart(2, '0');
-  const off = -d.getTimezoneOffset();
-  const sign = off >= 0 ? '+' : '-';
-  const abs = Math.abs(off);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
-}
+/** "YYYY-MM-DD" + minutes-of-day → ISO8601 with the SALON's offset
+ *  ("2026-07-06T10:30:00+02:00"). Delegates to the shared salon-timezone layer:
+ *  the grid position must persist as the salon's wall-clock, not the browser's. */
+export const isoAtMin = salonIsoAt;
 
 /** Monday (Date) of the week containing the given date/ISO string */
 export function mondayOf(date) {
@@ -145,7 +139,7 @@ export function wlMatches(waitlist, appt) {
 /** rank waitlist entries for a freed slot (service match assumed) */
 export function wlRank(entries, appt) {
   const hour = Math.floor(aStartMin(appt) / 60);
-  const dow = (parseISO(appt.start).getDay() + 6) % 7;
+  const dow = (salonWeekday(appt.start) + 6) % 7; // 0 = Monday, in salon time
   const score = (w) => {
     let s = 10;
     if (w.operator_id != null && w.operator_id === appt.operator_id) s += 5;

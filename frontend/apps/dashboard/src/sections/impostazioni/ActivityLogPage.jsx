@@ -4,7 +4,7 @@
 // The prototype's per-author filter has no API param → dropped (q searches the summary).
 // Scope 'activity_log' (owner bypasses).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Icon, todayStr, toDateStr, addDays } from '@youty/shared';
+import { api, Icon, salonDayDiff, salonParts, salonTodayStr, toDateStr, addDays } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote } from './lib.jsx';
 
@@ -48,19 +48,18 @@ function typeMeta(type) {
   return { icon: base.icon, color: SUFFIX_COLOR[suffix] || base.color };
 }
 
+/* Giorno e ora del SALONE: il registro attività deve leggersi uguale da qualunque
+   fuso, altrimenti "Oggi" e l'orario di un'azione non corrispondono al salone. */
 function logDateLabel(iso, lang) {
-  const d = new Date(iso);
-  const now = new Date();
-  const day0 = new Date(d); day0.setHours(0, 0, 0, 0);
-  const t0 = new Date(now); t0.setHours(0, 0, 0, 0);
-  const diff = Math.round((t0 - day0) / 86400000);
-  const hm = d.toTimeString().slice(0, 5);
+  const p = salonParts(iso);
+  const hm = String(p.h).padStart(2, '0') + ':' + String(p.min).padStart(2, '0');
+  const diff = salonDayDiff(iso);
   if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
   const months = lang === 'en'
     ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + hm;
+  return p.d + ' ' + months[p.m - 1] + ' ' + p.y + ' · ' + hm;
 }
 
 export default function ActivityLogPage({ onBack, initialPeriod }) {
@@ -72,7 +71,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const [filt, setFilt] = useState('');            // type prefix, '' = all
   const [period, setPeriod] = useState(initialPeriod || 'all');
   const [from, setFrom] = useState(toDateStr(addDays(new Date(), -30)));
-  const [to, setTo] = useState(todayStr());
+  const [to, setTo] = useState(salonTodayStr());
   const [items, setItems] = useState(null);        // null = loading
   const [count, setCount] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -81,7 +80,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   useEffect(() => { const h = setTimeout(() => setQDeb(q), 300); return () => clearTimeout(h); }, [q]);
 
   const dateRange = useCallback(() => {
-    const today = todayStr();
+    const today = salonTodayStr();
     if (period === 'today') return { date_from: today, date_to: today };
     if (period === '7d') return { date_from: toDateStr(addDays(new Date(), -7)), date_to: today };
     if (period === '30d') return { date_from: toDateStr(addDays(new Date(), -30)), date_to: today };
@@ -162,7 +161,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} style={{ ...inputCss, fontSize: 13, padding: '8px 11px', cursor: 'pointer' }} />
               <span className="t-sm" style={{ color: 'var(--muted-2)' }}>→</span>
-              <input type="date" value={to} min={from} max={todayStr()} onChange={(e) => setTo(e.target.value)} style={{ ...inputCss, fontSize: 13, padding: '8px 11px', cursor: 'pointer' }} />
+              <input type="date" value={to} min={from} max={salonTodayStr()} onChange={(e) => setTo(e.target.value)} style={{ ...inputCss, fontSize: 13, padding: '8px 11px', cursor: 'pointer' }} />
             </div>
           )}
 

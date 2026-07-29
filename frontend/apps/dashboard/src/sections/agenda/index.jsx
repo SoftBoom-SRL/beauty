@@ -1,6 +1,6 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, minutesOfDay, salonNowMinutes, salonTodayStr, timeLabel, toDateStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
@@ -22,7 +22,7 @@ export default function AgendaSection() {
   const canWrite = hasScope('agenda');
 
   /* ---- navigation state ---- */
-  const [date, setDate] = useState(todayStr());
+  const [date, setDate] = useState(salonTodayStr());
   const [calView, setCalView] = useState('day'); // day | week | month
   const [jumpOpen, setJumpOpen] = useState(false);
   const [railOpen, setRailOpenRaw] = useState(() => {
@@ -33,13 +33,13 @@ export default function AgendaSection() {
     try { localStorage.setItem('dk-agenda-rail', v ? '1' : '0'); } catch { /* ignore */ }
   };
 
-  /* ---- real "now" (updated every 30s) ---- */
-  const [nowMin, setNowMin] = useState(() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); });
+  /* ---- real "now" (updated every 30s) — in SALON time, like the grid ---- */
+  const [nowMin, setNowMin] = useState(() => salonNowMinutes());
   useEffect(() => {
-    const id = setInterval(() => { const d = new Date(); setNowMin(d.getHours() * 60 + d.getMinutes()); }, 30000);
+    const id = setInterval(() => setNowMin(salonNowMinutes()), 30000);
     return () => clearInterval(id);
   }, []);
-  const isToday = date === todayStr();
+  const isToday = date === salonTodayStr();
 
   /* ---- day data ---- */
   const [dayData, setDayData] = useState(null);   // null = first load → skeleton
@@ -263,7 +263,7 @@ export default function AgendaSection() {
                   );
                 })}
               </div>
-              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 40 }} onClick={() => setDate(todayStr())}>{t('Oggi', 'Today')}</button>}
+              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 40 }} onClick={() => setDate(salonTodayStr())}>{t('Oggi', 'Today')}</button>}
             </React.Fragment>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -274,7 +274,7 @@ export default function AgendaSection() {
                 </button>
                 {jumpOpen && <JumpPopover t={t} MONTHS={MONTHS} curM={cur.getMonth()} curY={cur.getFullYear()} onClose={() => setJumpOpen(false)} onMonth={jumpToMonth} onDate={jumpToDate} />}
               </div>
-              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 36 }} onClick={() => setDate(todayStr())}>{t('Oggi', 'Today')}</button>}
+              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 36 }} onClick={() => setDate(salonTodayStr())}>{t('Oggi', 'Today')}</button>}
             </div>
           )}
           <div style={{ flex: 1 }} />
@@ -433,14 +433,11 @@ export default function AgendaSection() {
   );
 }
 
-/* minutes-of-day for an ISO datetime (kept local to avoid re-import churn) */
-function aMin(iso) {
-  const d = parseISO(iso);
-  return d.getHours() * 60 + d.getMinutes();
-}
+/* minutes-of-day for an ISO datetime, in salon time (same math as the grid) */
+const aMin = minutesOfDay;
 
 function isTodayInWeek(weekDays) {
-  const today = todayStr();
+  const today = salonTodayStr();
   return weekDays.some((d) => toDateStr(d) === today);
 }
 

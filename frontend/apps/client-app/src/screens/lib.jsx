@@ -1,7 +1,7 @@
 // lib.jsx — shared helpers/components for the client-app screens (ported from
 // prototype screen-cliente.jsx). Lives inside screens/ per folder ownership.
 import React from 'react';
-import { ApiError, Icon, api, parseISO, timeLabel, minutesOfDay, toDateStr, addDays } from '@youty/shared';
+import { ApiError, Icon, api, parseISO, timeLabel, minutesOfDay, toDateStr, addDays, salonDayDiff, salonTimeZone, salonTodayStr } from '@youty/shared';
 import { headFont } from '../theme.js';
 
 /* ============================== UI bits ============================== */
@@ -121,9 +121,10 @@ export function useClientAppointments() {
 
 const locale = (lang) => (lang === 'en' ? 'en-GB' : 'it-IT');
 
-/** Next n days as Date[] starting today (booking day strip). */
+/** Next n days as Date[] starting from the SALON's today (booking day strip):
+ *  una cliente all'estero deve poter prenotare il "oggi" del salone. */
 export function nextDays(n = 14) {
-  const today = new Date();
+  const today = parseISO(salonTodayStr());
   return Array.from({ length: n }, (_, i) => addDays(today, i));
 }
 
@@ -133,19 +134,22 @@ export function dayStripLabel(date, lang) {
   return { wd: wd.charAt(0).toUpperCase() + wd.slice(1), num: String(date.getDate()) };
 }
 
-/** "Gio 14 nov" style medium label. */
+/** "Gio 14 nov" style medium label. Un ISO datetime (istante) viene reso nel fuso
+ *  del salone; una data-calendario o un Date carrier restano come sono. */
 export function fmtDayMed(dateish, lang) {
-  const d = parseISO(dateish);
-  const s = d.toLocaleDateString(locale(lang), { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '');
+  const opts = { weekday: 'short', day: 'numeric', month: 'short' };
+  if (typeof dateish === 'string' && !/^\d{4}-\d{2}-\d{2}$/.test(dateish)) {
+    opts.timeZone = salonTimeZone();
+  }
+  const s = parseISO(dateish).toLocaleDateString(locale(lang), opts).replace(/\./g, '');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Big relative label for the next appointment: "Oggi alle 15:30" / "Domani alle 10:00" / "Gio 14 nov · 10:00". */
+/** Big relative label for the next appointment: "Oggi alle 15:30" / "Domani alle 10:00" / "Gio 14 nov · 10:00".
+ *  "Oggi"/"Domani" sono relativi al giorno del SALONE, come l'orario mostrato. */
 export function relLabel(iso, lang, t) {
   const d = parseISO(iso);
-  const now = new Date();
-  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((midnight(d) - midnight(now)) / 86400000);
+  const days = -salonDayDiff(iso);
   const hm = timeLabel(minutesOfDay(iso));
   if (days === 0) return t('Oggi alle ', 'Today at ') + hm;
   if (days === 1) return t('Domani alle ', 'Tomorrow at ') + hm;
@@ -184,7 +188,10 @@ export function mapsUrl(brand) {
 /** Build an .ics data URL for an appointment (client-side add-to-calendar). */
 export function icsDataUrl(appt, brandName) {
   const pad = (n) => String(n).padStart(2, '0');
-  const fmt = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+  // UTC ("...Z"): un orario "floating" preso dal fuso del dispositivo finirebbe
+  // nel calendario della cliente all'ora sbagliata se non è nel fuso del salone.
+  const fmt = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`
+    + `T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
   const start = parseISO(appt.start);
   const end = appt.end ? parseISO(appt.end) : new Date(start.getTime() + apptDur(appt) * 60000);
   const summary = (apptServiceNames(appt) || 'Appuntamento') + (brandName ? ' — ' + brandName : '');

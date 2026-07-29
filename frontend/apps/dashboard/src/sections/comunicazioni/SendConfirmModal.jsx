@@ -14,7 +14,7 @@ const inputCss = {
 };
 
 export default function SendConfirmModal({ comm, onClose, onSent }) {
-  const { t, clientCategories, fireToast } = useDash();
+  const { t, clientCategories, fireToast, yourangGate } = useDash();
   const [mode, setMode] = useState(comm.scheduled_at ? 'schedule' : 'now'); // 'now' | 'schedule'
   const [when, setWhen] = useState(isoToDtLocal(comm.scheduled_at));
   const [sending, setSending] = useState(false);
@@ -45,6 +45,9 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
       });
       onSent(updated);
     } catch (err) {
+      // L'invio è di Yourang: se lo strumento non è disponibile chiudi questa
+      // conferma e lascia parlare il popup (ricarica o attivazione).
+      if (yourangGate(err)) { onClose(); return; }
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
       setSending(false);
     }

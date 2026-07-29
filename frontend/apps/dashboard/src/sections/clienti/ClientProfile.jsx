@@ -13,7 +13,7 @@ import WalletTab from './tabs/WalletTab.jsx';
 import ConsensiTab from './tabs/ConsensiTab.jsx';
 
 export default function ClientProfile({ clientId, onChanged, onDeleted }) {
-  const { t, lang, fireToast, hasScope, clientCategories, openModal } = useDash();
+  const { t, lang, fireToast, hasScope, clientCategories, openModal, yourang, requireYourang } = useDash();
   const canWrite = hasScope('clients');
 
   const [c, setC] = useState(null);
@@ -143,7 +143,15 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
           {c.email
             ? <a className="dk-btn dk-btn--ghost" style={btnA} href={`mailto:${c.email}`}><Icon name="mail" size={17} />Email</a>
             : <button className="dk-btn dk-btn--ghost" onClick={() => fireToast({ msg: t('Nessuna email in anagrafica', 'No email on file'), icon: 'mail' })}><Icon name="mail" size={17} />Email</button>}
-          <button className="dk-btn dk-btn--clay" title={t('La conversazione si gestisce su Yourang', 'The conversation is managed on Yourang')} onClick={() => fireToast({ msg: t('Apertura di Yourang…', 'Opening Yourang…'), icon: 'ext' })}><Icon name="ext" size={16} color="#fff" />Yourang</button>
+          {/* La conversazione vive su Yourang: se lo strumento non è disponibile
+              il popup spiega il perché e porta alla destinazione giusta. */}
+          <button className="dk-btn dk-btn--clay" title={t('La conversazione si gestisce su Yourang', 'The conversation is managed on Yourang')}
+            onClick={() => {
+              if (!requireYourang()) return;
+              const url = yourang?.topup_url || yourang?.activation_url;
+              if (url) window.open(url, '_blank', 'noopener,noreferrer');
+              else fireToast({ msg: t('Destinazione Yourang non configurata', 'Yourang destination not configured'), icon: 'info' });
+            }}><Icon name="ext" size={16} color="#fff" />Yourang</button>
           {canWrite && (
             <button className="dk-iconbtn" title={t('Archivia cliente', 'Archive client')} onClick={() => setConfirmDel(true)} style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, var(--hair))' }}>
               <Icon name="x" size={16} color="var(--danger)" />

@@ -71,6 +71,43 @@ class SalonSettings(TimeStampedModel):
     flexible_window_min = models.PositiveSmallIntegerField(default=30)
     flexible_reward_pct = models.PositiveSmallIntegerField(default=10)
 
+    # ---- Policy pagamenti (Stripe) -------------------------------------------
+    # Due automatismi DISTINTI, con tempi distinti:
+    #   PRIMA dell'appuntamento → scadenza della caparra (deposit_deadline_*)
+    #   DOPO l'inizio           → mancata presentazione (noshow_*)
+    # Ogni salone ha esigenze diverse: la modalità no-show è per salone, non globale.
+
+    class NoShowMode(models.TextChoices):
+        MANUAL = "manual", "Manuale (decide lo staff)"
+        AUTOMATIC = "automatic", "Automatico"
+
+    class DepositDeadlineAction(models.TextChoices):
+        NONE = "none", "Solo avviso"
+        CHARGE = "charge", "Addebita la caparra sulla carta salvata"
+        CANCEL = "cancel", "Annulla l'appuntamento e libera lo slot"
+
+    # Caparra: interruttore generale letto da agenda.services.compute_deposit.
+    # A False non si chiede caparra quali che siano le DepositRule (sospensione
+    # senza cancellare le regole). Default True: senza regole configurate la
+    # caparra resta comunque 0, quindi non cambia nulla per chi non le usa.
+    deposit_enabled = models.BooleanField(default=True)
+    # Ore prima dell'appuntamento entro cui la caparra va saldata (0 = nessuna scadenza).
+    deposit_deadline_hours = models.PositiveSmallIntegerField(default=0)
+    deposit_deadline_action = models.CharField(
+        max_length=10, choices=DepositDeadlineAction.choices, default=DepositDeadlineAction.NONE
+    )
+    # No-show: manuale (default, una persona giudica) oppure automatico dopo N minuti
+    # dall'ORARIO DI INIZIO se l'appuntamento non è mai passato in check-in.
+    noshow_charge_mode = models.CharField(
+        max_length=10, choices=NoShowMode.choices, default=NoShowMode.MANUAL
+    )
+    noshow_charge_delay_min = models.PositiveSmallIntegerField(default=30)
+    # Percentuale del totale trattenuta in caso di mancata presentazione.
+    noshow_charge_pct = models.PositiveSmallIntegerField(default=100)
+    # Percentuale trattenuta per un annullamento tardivo (0 = si trattiene solo la
+    # caparra già versata, che è il comportamento storico e il più difendibile).
+    late_cancel_charge_pct = models.PositiveSmallIntegerField(default=0)
+
     def __str__(self):
         return f"Impostazioni · {self.salon.name}"
 

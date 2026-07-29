@@ -114,6 +114,9 @@ def _client_profile(client) -> dict:
         "email": client.email or "",
         "lang": client.lang,
         "whatsapp_reminders": client.whatsapp_reminders,
+        # Solo il FATTO che una carta esista: mai l'identificativo Stripe.
+        "has_saved_card": bool(client.stripe_payment_method_id),
+        "card_charge_consent": bool((client.consents or {}).get("card_charge")),
     }
 
 
@@ -372,6 +375,13 @@ def accept_invitation(request, data: InvitationAcceptIn):
 def client_register(request, data: ClientRegisterIn):
     salon = _salon_by_slug(data.salon_slug)
     from apps.clients.models import Client  # lazy: evita cicli in fase di load
+    from apps.integrations.gate import require_yourang  # lazy: evita cicli
+
+    # L'OTP viaggia SEMPRE su Yourang (nessun canale alternativo): senza uno
+    # strumento Yourang disponibile la registrazione non potrebbe completarsi,
+    # quindi si blocca prima di creare il cliente. 412 = non collegato,
+    # 402 = credito esaurito → l'app mostra il popup e il rinvio corretto.
+    require_yourang(salon)
 
     phone = data.phone.strip()
     if not phone:
@@ -409,7 +419,10 @@ def client_register(request, data: ClientRegisterIn):
 
 @router.post("/client/request-otp", response=OkOut)
 def client_request_otp(request, data: OTPRequestIn):
+    from apps.integrations.gate import require_yourang  # lazy: evita cicli
+
     salon = _salon_by_slug(data.salon_slug)
+    require_yourang(salon)  # l'OTP passa sempre da Yourang — vedi client_register
     client = _client_by_phone(salon, data.phone)
     issue_otp(client)
     return OkOut()
@@ -444,5 +457,18 @@ def client_update_me(request, data: ClientMeIn):
         client.email = (updates["email"] or "").strip()
     if "whatsapp_reminders" in updates:
         client.whatsapp_reminders = bool(updates["whatsapp_reminders"])
+    if "card_charge_consent" in updates:
+        # `consents` è un JSON con più voci (privacy, marketing, card_charge):
+        # si aggiorna SOLO card_charge, senza sovrascrivere le altre.
+        consents = dict(client.consents or {})
+        consents["card_charge"] = bool(updates["card_charge_consent"])
+        client.consents = consents
+        log_activity(
+            client.salon,
+            "client.card_consent_changed",
+            f"Consenso addebito {'concesso' if consents['card_charge'] else 'revocato'}"
+            f" — {client.full_name}",
+            payload={"client_id": client.id, "granted": consents["card_charge"]},
+        )
     client.save()
     return _client_profile(client)

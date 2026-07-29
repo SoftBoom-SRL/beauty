@@ -1,7 +1,7 @@
 // ctx.jsx — DashboardProvider: session, base catalogs from the API, navigation,
 // modal/drawer/toast plumbing. Section agents CONSUME this via useDash() — never edit it.
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api, staffAuth, useT, useToastHost } from '@youty/shared';
+import { api, setSalonTimeZone, staffAuth, useT, useToastHost } from '@youty/shared';
 
 const DashCtx = createContext(null);
 export const useDash = () => useContext(DashCtx);
@@ -26,7 +26,12 @@ export function DashboardProvider({ children }) {
   const [bootError, setBootError] = useState(null);
 
   const reload = useMemo(() => ({
-    salon: () => api.get('/api/core/salon').then(setSalon),
+    // Pin the display timezone to the salon's BEFORE any section renders: the
+    // agenda grid maths on salon-local minutes, not on the browser's clock.
+    salon: () => api.get('/api/core/salon').then((s) => {
+      setSalonTimeZone(s?.settings?.timezone);
+      setSalon(s);
+    }),
     operators: () => api.get('/api/staff/').then(setOperators),
     services: () => api.get('/api/catalog/services').then(setServices),
     serviceCategories: () => api.get('/api/catalog/categories').then(setServiceCategories),
@@ -73,6 +78,43 @@ export function DashboardProvider({ children }) {
   /* ---- toast ---- */
   const { fireToast, toastProps } = useToastHost();
 
+  /* ---- gate strumenti Yourang -------------------------------------------
+   * Non "piano free vs premium" ma disponibilità dello strumento: tre stati
+   * (active | no_credit | not_connected) e due motivi di blocco che portano
+   * l'utente in due posti diversi su Yourang. Il popup arriva SEMPRE prima
+   * del rinvio esterno.
+   *   requireYourang()  → preventivo: false + popup se lo strumento non c'è
+   *   yourangGate(err)  → reattivo: intercetta 402/412 da una chiamata fallita
+   */
+  const [yourang, setYourang] = useState(null);      // StatusOut o null
+  const [yourangGateReason, setYourangGateReason] = useState(null); // 'no_credit' | 'not_connected'
+  const loadYourang = useCallback(
+    () => api.get('/api/integrations/yourang/status').then(setYourang).catch(() => setYourang(null)),
+    [],
+  );
+  const yourangState = yourang?.feature_state || 'not_connected';
+
+  const requireYourang = useCallback(() => {
+    if (yourangState === 'active') return true;
+    setYourangGateReason(yourangState);
+    return false;
+  }, [yourangState]);
+
+  const yourangGate = useCallback((err) => {
+    const status = err?.status;
+    if (status !== 402 && status !== 412) return false;
+    setYourangGateReason(status === 402 ? 'no_credit' : 'not_connected');
+    // La verità è del server: riallinea lo stato locale (es. credito appena finito).
+    loadYourang();
+    return true;
+  }, [loadYourang]);
+
+  const closeYourangGate = useCallback(() => setYourangGateReason(null), []);
+
+  // Caricato fuori dal boot: se l'endpoint non risponde la dashboard deve
+  // comunque partire (lo stato resta 'not_connected', che è il default sicuro).
+  useEffect(() => { loadYourang(); }, [loadYourang]);
+
   /* ---- cross-section UI state ---- */
   const [search, setSearch] = useState('');
   const [selClient, setSelClient] = useState(null);   // client id for the Clienti profile
@@ -106,6 +148,8 @@ export function DashboardProvider({ children }) {
     openModal, closeModal, modal,
     drawer, setDrawer,
     fireToast, toastProps,
+    yourang, yourangState, requireYourang, yourangGate,
+    yourangGateReason, closeYourangGate, reloadYourang: loadYourang,
     search, setSearch,
     selClient, setSelClient,
     deepLink, setDeepLink,

@@ -13,6 +13,11 @@ export { LangProvider, useT, makeT } from './i18n.jsx';
 export {
   fmtEur, timeLabel, fmtDur,
   todayStr, toDateStr, parseISO, minutesOfDay, addDays, fmtDateIt,
+  // Salon-timezone layer: every INSTANT coming from the API must be rendered
+  // through these, never through the browser's local time. See format.js.
+  setSalonTimeZone, salonTimeZone, salonParts, salonTodayStr, salonNowMinutes,
+  salonWeekday, fmtTimeSalon, fmtDateTimeSalon, salonIsoAt,
+  salonDateStr, salonDayDiff,
 } from './format.js';
 
 export * from './ui/index.js';

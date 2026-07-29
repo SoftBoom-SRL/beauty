@@ -754,3 +754,44 @@ class PublicAvailabilityApiTests(AgendaTestBase):
             f"&date={self.date_str}&items={items}"
         )
         self.assertEqual(resp.status_code, 404, resp.content)
+
+
+class DepositEnabledSwitchTests(TestCase):
+    """L'interruttore generale sospende le caparre senza toccare le regole."""
+
+    def setUp(self):
+        from apps.core.models import DepositRule, Salon, SalonSettings
+
+        self.salon = Salon.objects.create(name="Dep Salon", slug="dep-salon")
+        self.settings = SalonSettings.objects.create(salon=self.salon)
+        DepositRule.objects.create(
+            salon=self.salon, name="30%", conditions={},
+            amount_type=DepositRule.AmountType.PERCENT, amount=30, active=True,
+        )
+        from apps.clients.models import Client
+
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="A", last_name="B", phone="+393330000900"
+        )
+
+    def test_attivo_applica_la_regola(self):
+        from decimal import Decimal
+
+        from apps.agenda.services import compute_deposit
+
+        self.assertEqual(
+            compute_deposit(self.salon, self.client_obj, Decimal("100.00")),
+            Decimal("30.00"),
+        )
+
+    def test_spento_azzera_pur_con_regole_attive(self):
+        from decimal import Decimal
+
+        from apps.agenda.services import compute_deposit
+
+        self.settings.deposit_enabled = False
+        self.settings.save(update_fields=["deposit_enabled"])
+        self.assertEqual(
+            compute_deposit(self.salon, self.client_obj, Decimal("100.00")),
+            Decimal("0.00"),
+        )

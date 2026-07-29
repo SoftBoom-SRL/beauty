@@ -90,6 +90,13 @@ class StaffAuthTests(TestCase):
 class ClientOTPFlowTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        # L'OTP viaggia sempre su Yourang: senza uno strumento disponibile
+        # register/request-otp rispondono 412 (vedi apps.integrations.gate).
+        from apps.integrations.models import YourangConnection
+
+        YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.CONNECTED
+        )
 
     def _make_client(self, phone="+393331234567"):
         from apps.clients.models import Client
@@ -211,3 +218,55 @@ class ClientOTPFlowTests(TestCase):
             self.assertEqual(response.status_code, 200)
         response = post_json(self.client, "/api/auth/client/request-otp", payload)
         self.assertEqual(response.status_code, 429)
+
+
+class ClientCardConsentTests(TestCase):
+    """La cliente concede/revoca il consenso all'addebito dall'app, senza che le
+    altre voci di `consents` (privacy, marketing) vengano sovrascritte."""
+
+    def setUp(self):
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from common.auth import create_client_tokens
+
+        self.salon = Salon.objects.create(name="Consent Salon", slug="consent-salon")
+        self.c = Client.objects.create(
+            salon=self.salon, first_name="Ada", last_name="L", phone="+393330003001",
+            consents={"privacy": True, "marketing": True},
+        )
+        tokens = create_client_tokens(self.c)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+    def _put(self, payload):
+        import json
+
+        return self.client.put(
+            "/api/auth/client/me", data=json.dumps(payload),
+            content_type="application/json", **self.auth,
+        )
+
+    def test_concede_il_consenso(self):
+        resp = self._put({"card_charge_consent": True})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertTrue(resp.json()["card_charge_consent"])
+        self.c.refresh_from_db()
+        self.assertIs(self.c.consents.get("card_charge"), True)
+
+    def test_non_sovrascrive_gli_altri_consensi(self):
+        self._put({"card_charge_consent": True})
+        self.c.refresh_from_db()
+        self.assertIs(self.c.consents.get("privacy"), True)
+        self.assertIs(self.c.consents.get("marketing"), True)
+
+    def test_revoca(self):
+        self._put({"card_charge_consent": True})
+        self._put({"card_charge_consent": False})
+        self.c.refresh_from_db()
+        self.assertIs(self.c.consents.get("card_charge"), False)
+        self.assertIs(self.c.consents.get("privacy"), True)
+
+    def test_me_espone_stato_carta_senza_dati_stripe(self):
+        resp = self.client.get("/api/auth/client/me", **self.auth)
+        body = resp.json()
+        self.assertIn("has_saved_card", body)
+        self.assertFalse(any(k.startswith("stripe") for k in body))

@@ -10,7 +10,7 @@ import Builder from './Builder.jsx';
 import { eventIcon, offsetPhrase, catLabel } from './catalog.js';
 
 export default function AutomazioniSection() {
-  const { t, lang, fireToast, hasScope } = useDash();
+  const { t, lang, fireToast, hasScope, yourangGate } = useDash();
   const canWrite = hasScope('marketing');
 
   const [rules, setRules] = useState(null);      // null = loading
@@ -58,7 +58,9 @@ export default function AutomazioniSection() {
       await api.post(`/api/automations/${rule.id}/toggle`);
       await refetch();
     } catch (err) {
-      toastErr(err);
+      // Accendere una regola richiede Yourang (spegnerla è sempre concesso):
+      // 402/412 → popup e rinvio, non un toast d'errore.
+      if (!yourangGate(err)) toastErr(err);
       try { await refetch(); } catch { /* list already shown */ }
     }
   };

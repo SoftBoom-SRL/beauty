@@ -1,7 +1,7 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, salonTodayStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
@@ -144,6 +144,58 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 
   const checkIn = async () => { if (await lifecycle('check-in', null, t('Check-in registrato', 'Checked in'), 'check')) onClose(); };
   const startAppt = async () => { if (await lifecycle('start', null, t('Trattamento avviato', 'Treatment started'), 'clock')) onClose(); };
+
+  /* ---- addebito mancata presentazione / rimborso -------------------------
+     Visibile solo su appuntamenti chiusi in negativo, con scope sales e con una
+     percentuale configurata dal salone: senza policy non c'è nulla da addebitare. */
+  const canSales = hasScope('sales');
+  const penaltyPct = appt.status === 'no_show'
+    ? (settings?.noshow_charge_pct ?? 100)
+    : (appt.cancelled_late ? (settings?.late_cancel_charge_pct ?? 0) : 0);
+  const penaltyAmount = (Number(appt.total_price || 0) * penaltyPct) / 100;
+  const showPenaltyBox = canSales && penaltyPct > 0
+    && ['no_show', 'cancelled'].includes(appt.status)
+    && (appt.status === 'no_show' || appt.cancelled_late);
+
+  const [charged, setCharged] = useState(false);
+  const [payBusy, setPayBusy] = useState(false);
+
+  const doCharge = async () => {
+    setPayBusy(true);
+    try {
+      const res = await api.post(`/api/sales/appointments/${appt.id}/charge-no-show`);
+      setCharged(true);
+      fireToast({
+        msg: res.requires_authentication
+          // PSD2: la banca chiede alla cliente di autenticarsi → non è incassato.
+          ? t('Addebito in attesa: la cliente deve autenticarlo con la banca',
+               'Charge pending: the client must authenticate with her bank')
+          : t(`Addebitato ${fmtEur(Number(res.amount), lang)}`,
+               `Charged ${fmtEur(Number(res.amount), lang)}`),
+        icon: res.requires_authentication ? 'info' : 'check',
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 422) setCharged(true); // già addebitato
+      toastErr(err, t, fireToast);
+    } finally { setPayBusy(false); }
+  };
+
+  const doRefund = async () => {
+    setPayBusy(true);
+    try {
+      const res = await api.post(`/api/sales/appointments/${appt.id}/refund`, {
+        reason: t('Rimborso dalla dashboard', 'Refunded from dashboard'),
+      });
+      fireToast({
+        msg: t(`Rimborsati ${fmtEur(Number(res.amount), lang)}`,
+               `Refunded ${fmtEur(Number(res.amount), lang)}`),
+        icon: 'check',
+      });
+      setCharged(false);
+    } catch (err) {
+      toastErr(err, t, fireToast);
+    } finally { setPayBusy(false); }
+  };
 
   /* cancel / no-show → then offer the freed slot to matching waitlist entries */
   async function destroy(kind) {
@@ -445,6 +497,44 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
               {appt.cancel_reason && <span className="t-sm" style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{appt.cancel_reason}</span>}
             </div>
           )}
+
+          {/* ---- Addebito / rimborso -------------------------------------------
+              In modalità manuale è lo staff a decidere se addebitare: quindi il
+              pulsante c'è solo qui, dopo che la mancata presentazione è stata
+              registrata. Il rimborso serve quando l'addebito è stato un errore
+              (tipico: check-in dimenticato su una cliente presente). */}
+          {showPenaltyBox && (
+            <div style={{ marginTop: 12, padding: '13px 14px', borderRadius: 12, border: '1px solid var(--hair)', background: 'var(--surface-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
+                <Icon name="wallet" size={16} color="var(--muted)" />
+                <span style={{ fontWeight: 700, fontSize: 13.5 }}>
+                  {t('Addebito', 'Charge')}
+                </span>
+                <span className="t-sm" style={{ color: 'var(--muted-2)', marginLeft: 'auto' }}>
+                  {penaltyPct}% · {fmtEur(penaltyAmount, lang)}
+                </span>
+              </div>
+              <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12, lineHeight: 1.45 }}>
+                {charged
+                  ? t('Addebito effettuato. Se è stato un errore, puoi rimborsarlo.',
+                       'Charge completed. If it was a mistake, you can refund it.')
+                  : t('Preleva l’importo previsto dalla carta salvata della cliente.',
+                       'Take the configured amount from the client’s saved card.')}
+              </div>
+              <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+                {!charged && (
+                  <button className="dk-btn dk-btn--soft" disabled={payBusy} onClick={doCharge}>
+                    <Icon name="wallet" size={15} />
+                    {payBusy ? t('Addebito…', 'Charging…') : t('Addebita', 'Charge')}
+                  </button>
+                )}
+                <button className="dk-btn dk-btn--ghost" disabled={payBusy} onClick={doRefund}
+                  style={{ color: 'var(--danger)' }}>
+                  {payBusy ? t('Rimborso…', 'Refunding…') : t('Rimborsa', 'Refund')}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -466,7 +556,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 
 /* ---- Riprogramma: pick a new slot via availability, then POST /move ---- */
 function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone }) {
-  const [date, setDate] = useState(appt.start.slice(0, 10) >= todayStr() ? appt.start.slice(0, 10) : todayStr());
+  const [date, setDate] = useState(appt.start.slice(0, 10) >= salonTodayStr() ? appt.start.slice(0, 10) : salonTodayStr());
   const [slots, setSlots] = useState(null);
   const [selStart, setSelStart] = useState(null);
   const items = (appt.items || []).map((it) => ({ service_id: it.service_id, operator_id: it.operator_id }));
@@ -512,7 +602,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
           <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Nuova data', 'New date')}</div>
           <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmtDateIt(date)}</div>
         </div>
-        <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
+        <input type="date" value={date} min={salonTodayStr()} onChange={(e) => setDate(e.target.value || salonTodayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
       </div>
       <div className="t-meta" style={{ marginBottom: 9 }}>{t('Orari disponibili', 'Available times')}</div>
       {slots === null ? (

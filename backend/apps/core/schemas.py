@@ -35,6 +35,19 @@ class SettingsOut(Schema):
     # Soglia (ore) sotto la quale una cancellazione è "tardiva" → caparra trattenuta.
     # Derivata da settings.CLIENT_MOVE_CANCEL_MIN_HOURS, sola lettura.
     cancel_min_hours: int
+    # Fuso orario del salone (IANA). La matematica degli slot lato server è
+    # ora-locale-salone: il frontend DEVE rendere gli orari in questo fuso, non in
+    # quello del browser. Derivato da settings.TIME_ZONE, sola lettura.
+    timezone: str
+    # Policy pagamenti (Stripe). Due automatismi distinti: "prima" = scadenza
+    # caparra, "dopo" = mancata presentazione. Configurabili per salone.
+    deposit_enabled: bool = True
+    deposit_deadline_hours: int = 0
+    deposit_deadline_action: str = "none"
+    noshow_charge_mode: str = "manual"
+    noshow_charge_delay_min: int = 30
+    noshow_charge_pct: int = 100
+    late_cancel_charge_pct: int = 0
 
 
 class SettingsIn(Schema):
@@ -49,6 +62,14 @@ class SettingsIn(Schema):
     flexible_enabled: Optional[bool] = None
     flexible_window_min: Optional[int] = None
     flexible_reward_pct: Optional[int] = None
+    # Policy pagamenti: "prima" governa la caparra, "dopo" il no-show.
+    deposit_enabled: Optional[bool] = None
+    deposit_deadline_hours: Optional[int] = None
+    deposit_deadline_action: Optional[str] = None
+    noshow_charge_mode: Optional[str] = None
+    noshow_charge_delay_min: Optional[int] = None
+    noshow_charge_pct: Optional[int] = None
+    late_cancel_charge_pct: Optional[int] = None
 
 
 class SalonOut(Schema):
@@ -98,6 +119,9 @@ class PublicBrandingOut(Schema):
     address: str = ""
     phone: str = ""
     opening_hours: str = ""
+    # Fuso del salone: l'app cliente lo legge prima del login per rendere gli
+    # orari di prenotazione nell'ora del salone e non in quella del dispositivo.
+    timezone: str = ""
 
 
 class OkOut(Schema):

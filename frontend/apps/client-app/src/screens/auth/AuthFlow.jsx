@@ -1,12 +1,21 @@
-// AuthFlow.jsx — client login: phone → OTP (via SMS) → session.
+// AuthFlow.jsx — client login: phone → OTP (via WhatsApp/Yourang) → session.
 // Unknown number (404) → inline registration form → OTP.
+//
+// Il codice di accesso viaggia SEMPRE su Yourang. Se il salone non ha lo
+// strumento disponibile il backend risponde 412 (non collegato) o 402 (credito
+// esaurito). Qui NON si rimanda la cliente a Yourang: quel rinvio riguarda il
+// titolare del salone, non chi sta cercando di prenotare. Alla cliente si dice
+// che l'accesso con codice non è disponibile e come raggiungere il salone.
 import React, { useState } from 'react';
 import { ApiError, Icon, clientAuth } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../../ctx.jsx';
 import { headFont } from '../../theme.js';
 
+const isYourangGate = (err) => err instanceof ApiError && (err.status === 412 || err.status === 402);
+
 export default function AuthFlow({ onClose }) {
   const { t, lang, setLang, brand } = useApp();
+  const [gateBlocked, setGateBlocked] = useState(false);
   const [step, setStep] = useState('phone'); // phone | register | otp
   const [phone, setPhone] = useState('');
   const [reg, setReg] = useState({ first_name: '', last_name: '', email: '' });
@@ -26,7 +35,9 @@ export default function AuthFlow({ onClose }) {
       await clientAuth.requestOtp(SALON_SLUG, phone.trim());
       setStep('otp');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
+      if (isYourangGate(err)) {
+        setGateBlocked(true);
+      } else if (err instanceof ApiError && err.status === 404) {
         setStep('register'); // "Numero non registrato" → offer registration
       } else if (err instanceof ApiError && err.status === 429) {
         setError(t('Troppi codici richiesti. Riprova tra qualche minuto.', 'Too many codes requested. Try again in a few minutes.'));
@@ -48,7 +59,8 @@ export default function AuthFlow({ onClose }) {
       });
       setStep('otp'); // register already issues the OTP
     } catch (err) {
-      setError(err?.message || t('Errore di rete', 'Network error'));
+      if (isYourangGate(err)) setGateBlocked(true);
+      else setError(err?.message || t('Errore di rete', 'Network error'));
     }
   });
 
@@ -103,7 +115,31 @@ export default function AuthFlow({ onClose }) {
       </div>
 
       <div style={{ padding: '26px 24px 40px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {step === 'phone' && (
+        {/* Strumento di messaggistica del salone non disponibile: il codice non
+            può arrivare. Alla cliente serve un modo per raggiungere il salone,
+            non un rinvio a una piattaforma che non la riguarda. */}
+        {gateBlocked && (
+          <React.Fragment>
+            <div className="t-h3">{t('Accesso con codice non disponibile', 'Code sign-in unavailable')}</div>
+            <div className="t-body" style={{ color: 'var(--muted)' }}>
+              {t(
+                'In questo momento non possiamo inviarti il codice di accesso. Contatta il salone per prenotare o per farti attivare l’accesso.',
+                'We can’t send you the access code right now. Please contact the salon to book or to get your access enabled.',
+              )}
+            </div>
+            {brand?.phone && (
+              <a className="btn btn--brand btn--block press" href={`tel:${brand.phone}`}
+                style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                <Icon name="phone" size={16} color="var(--brand-on)" />{t('Chiama il salone', 'Call the salon')}
+              </a>
+            )}
+            <button className="btn btn--block press" onClick={() => { setGateBlocked(false); setError(null); }}>
+              {t('Riprova', 'Try again')}
+            </button>
+          </React.Fragment>
+        )}
+
+        {!gateBlocked && step === 'phone' && (
           <React.Fragment>
             <div className="t-h3">{t('Accedi con il tuo numero', 'Sign in with your number')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
@@ -120,7 +156,7 @@ export default function AuthFlow({ onClose }) {
           </React.Fragment>
         )}
 
-        {step === 'register' && (
+        {!gateBlocked && step === 'register' && (
           <React.Fragment>
             <div className="t-h3">{t('Numero non registrato', 'Number not registered')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
@@ -147,7 +183,7 @@ export default function AuthFlow({ onClose }) {
           </React.Fragment>
         )}
 
-        {step === 'otp' && (
+        {!gateBlocked && step === 'otp' && (
           <React.Fragment>
             <div className="t-h3">{t('Inserisci il codice', 'Enter the code')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>

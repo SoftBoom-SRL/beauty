@@ -112,6 +112,10 @@ JWT_REFRESH_TTL_DAYS = int(os.getenv("JWT_REFRESH_TTL_DAYS", "30"))
 # Stripe — opzionale: senza chiave gli endpoint pagamento rispondono 503
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Stripe Connect (Standard + direct charges): ca_… dalle impostazioni Connect della
+# piattaforma. Serve a far collegare al salone il SUO account Stripe: incassa lui,
+# è lui il merchant of record, la piattaforma non trattiene commissioni.
+STRIPE_CONNECT_CLIENT_ID = os.getenv("STRIPE_CONNECT_CLIENT_ID", "")
 
 # Yourang (piattaforma esterna: WhatsApp + esecuzione automazioni).
 # Gli eventi vengono accodati in core.OutboxEvent finché le API non sono disponibili.
@@ -130,6 +134,17 @@ YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+# Origine dell'app cliente (ritorno dal Checkout Stripe della caparra).
+CLIENT_APP_ORIGIN = os.getenv("CLIENT_APP_ORIGIN", "http://localhost:5174")
+
+# Yourang — dove mandare l'utente quando uno strumento non è disponibile.
+# Il gate (apps/integrations/gate.py) distingue due motivi e quindi due mete:
+#   ATTIVAZIONE  salone non collegato → richiesta info + setting con gli specialisti
+#   RICARICA     salone collegato ma senza credito → acquisto di nuovo credito
+# Servite al frontend dentro /api/integrations/yourang/status, così cambiarle non
+# richiede una release. Se TOPUP è vuoto si ricade su ACTIVATION.
+YOURANG_ACTIVATION_URL = os.getenv("YOURANG_ACTIVATION_URL", "https://yourang.ai/contact")
+YOURANG_TOPUP_URL = os.getenv("YOURANG_TOPUP_URL", "")
 
 # Policy prenotazioni lato cliente (ore minime prima dell'appuntamento)
 CLIENT_MOVE_CANCEL_MIN_HOURS = int(os.getenv("CLIENT_MOVE_CANCEL_MIN_HOURS", "24"))

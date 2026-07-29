@@ -1,5 +1,5 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { fmtEur } from '@youty/shared';
+import { fmtEur, salonDayDiff, salonParts } from '@youty/shared';
 
 export const round2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 
@@ -80,20 +80,19 @@ export function paymentsError(v, due, t) {
   return null;
 }
 
-/** "Oggi · 14:30" / "Ieri · 10:12" / "24 giu 2026 · 11:48" from an ISO datetime. */
+/** "Oggi · 14:30" / "Ieri · 10:12" / "24 giu 2026 · 11:48" — giorno e ora del SALONE.
+ *  ("oggi" per il salone, non per il fuso di chi guarda la dashboard) */
 export function saleDateLabel(iso, lang) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  const day0 = new Date(d); day0.setHours(0, 0, 0, 0);
-  const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-  const diff = Math.round((t0 - day0) / 86400000);
+  if (!iso || Number.isNaN(new Date(iso).getTime())) return '';
+  const p = salonParts(iso);
+  const hm = String(p.h).padStart(2, '0') + ':' + String(p.min).padStart(2, '0');
+  const diff = salonDayDiff(iso);
   if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
   const months = lang === 'en'
     ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + hm;
+  return p.d + ' ' + months[p.m - 1] + ' ' + p.y + ' · ' + hm;
 }
 
 export const inputCss = {

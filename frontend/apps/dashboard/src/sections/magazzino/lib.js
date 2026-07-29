@@ -1,5 +1,5 @@
 // lib.js — Magazzino: API-enum metadata + pure helpers shared by the sub-tabs.
-import { ApiError } from '@youty/shared';
+import { ApiError, salonParts, salonTimeZone } from '@youty/shared';
 
 /* ---- stock_state (server-computed: low / warning / ok) ---- */
 export const STOCK_META = {
@@ -58,13 +58,16 @@ export function orderLineMath(qty, cost, vatRate) {
   return { net, vat, total: net + vat };
 }
 
-/** ISO datetime → "3 lug · 14:30" */
+/** ISO datetime → "3 lug · 14:30" (in SALON time) */
 export function fmtWhen(iso, lang) {
   if (!iso) return '';
   const d = new Date(iso);
-  const day = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short' });
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
+  const day = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', {
+    day: 'numeric', month: 'short', timeZone: salonTimeZone(),
+  });
+  const p = salonParts(iso);
+  const hh = String(p.h).padStart(2, '0');
+  const mm = String(p.min).padStart(2, '0');
   return `${day} · ${hh}:${mm}`;
 }
 

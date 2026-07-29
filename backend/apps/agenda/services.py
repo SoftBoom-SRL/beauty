@@ -230,7 +230,18 @@ def compute_deposit(salon, client, total_price) -> Decimal:
     - altrimenti prima DepositRule attiva le cui conditions matchano i facts
       del cliente (clients.services.client_facts);
     - pct -> percentuale del totale, fixed -> importo. 0 se nessuna regola.
+
+    Interruttore generale: con `SalonSettings.deposit_enabled` a False non si
+    chiede alcuna caparra, quali che siano le regole configurate. Serve a
+    sospendere le caparre senza cancellare le regole (default: attivo, così un
+    salone che ha già delle regole continua a comportarsi come prima).
     """
+    from apps.core.models import SalonSettings  # lazy: evita cicli
+
+    st = SalonSettings.objects.filter(salon=salon).only("deposit_enabled").first()
+    if st is not None and not st.deposit_enabled:
+        return Decimal("0.00")
+
     rules = list(DepositRule.objects.filter(salon=salon, active=True))  # ordering: priority
     if not rules:
         return Decimal("0.00")
@@ -740,7 +751,55 @@ def cancel_appointment(appointment: Appointment, *, reason: str = "", actor=None
         {**_event_payload(appointment), "reason": reason, "late": late},
     )
     free_slot_event(appointment)
+    if late:
+        # Dopo il commit: un addebito è una chiamata esterna e non deve né tenere
+        # aperta la transazione né poter far fallire l'annullamento.
+        transaction.on_commit(lambda: charge_late_cancel_if_configured(appointment))
     return appointment
+
+
+def charge_late_cancel_if_configured(appointment: Appointment) -> None:
+    """Addebita la percentuale prevista per l'annullo tardivo, se il salone la usa.
+
+    Best-effort: l'annullamento è già avvenuto e resta valido comunque. L'esito
+    (riuscito, da autenticare, impossibile) finisce nel registro attività, che è
+    dove il salone lo va a leggere.
+    """
+    from apps.core.models import SalonSettings  # lazy: evita cicli
+    from apps.sales import stripe_service  # lazy: dipendenza opzionale
+
+    st = SalonSettings.objects.filter(salon=appointment.salon).first()
+    pct = getattr(st, "late_cancel_charge_pct", 0) or 0
+    if pct <= 0:
+        return  # default: si trattiene solo la caparra già versata
+    amount = stripe_service.pct_of(appointment.total_price, pct)
+    try:
+        intent = stripe_service.charge_late_cancel(appointment, pct=pct)
+    except stripe_service.ChargeAuthRequired as exc:
+        log_activity(
+            appointment.salon,
+            "sale.late_cancel_charge_pending",
+            f"Addebito annullo tardivo € {amount} da autenticare — {appointment.client.full_name}",
+            payload={"appointment_id": appointment.id, "amount": str(amount),
+                     "payment_intent_id": exc.payment_intent_id},
+        )
+        return
+    except Exception as exc:  # noqa: BLE001 — carta assente, consenso mancante, Stripe giù…
+        log_activity(
+            appointment.salon,
+            "sale.late_cancel_charge_failed",
+            f"Addebito annullo tardivo non riuscito — {appointment.client.full_name}",
+            payload={"appointment_id": appointment.id, "amount": str(amount),
+                     "error": str(exc)[:300]},
+        )
+        return
+    log_activity(
+        appointment.salon,
+        "sale.late_cancel_charged",
+        f"Addebito annullo tardivo € {amount} ({pct}%) — {appointment.client.full_name}",
+        payload={"appointment_id": appointment.id, "amount": str(amount), "pct": pct,
+                 "payment_intent_id": intent["id"]},
+    )
 
 
 def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):

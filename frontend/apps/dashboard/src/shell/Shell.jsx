@@ -5,14 +5,17 @@ import { EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 import { SECTIONS } from '../sections/registry.js';
 import DkModals from '../modals/DkModals.jsx';
-import { DkToast, DkDrawer } from '../ui/index.js';
+import { DkToast, DkDrawer, YourangGate } from '../ui/index.js';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
 
 const AnalystDrawer = lazy(() => import('../sections/insight/AnalystDrawer.jsx'));
 
 export default function Shell() {
-  const { tab, drawer, setDrawer, toastProps, t, lang, session, fireToast } = useDash();
+  const {
+    tab, drawer, setDrawer, toastProps, t, lang, session, fireToast,
+    yourang, yourangGateReason, closeYourangGate,
+  } = useDash();
 
   const [sideCollapsed, setSideCollapsed] = useState(() => {
     try { return localStorage.getItem('dk-side-collapsed') === '1'; } catch { return false; }
@@ -66,6 +69,8 @@ export default function Shell() {
       <DkToast {...toastProps} />
       <DkModals />
       <DkDrawer open={!!drawer} onClose={() => setDrawer(null)}>{drawer}</DkDrawer>
+      {/* avviso che precede ogni rinvio alla piattaforma Yourang */}
+      <YourangGate reason={yourangGateReason} yourang={yourang} t={t} onClose={closeYourangGate} />
     </div>
   );
 }

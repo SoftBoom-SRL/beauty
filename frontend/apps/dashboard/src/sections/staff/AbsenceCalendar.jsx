@@ -4,7 +4,7 @@
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
 import React, { useMemo, useState } from 'react';
-import { api, ApiError, Icon, todayStr } from '@youty/shared';
+import { api, ApiError, Icon, salonTodayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
 
@@ -24,7 +24,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
   const startDow = (first.getDay() + 6) % 7; // Monday-first
   const daysInMonth = new Date(y, m + 1, 0).getDate();
   const key = (d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  const today = todayStr();
+  const today = salonTodayStr();
 
   /* date "YYYY-MM-DD" → covering absence (first match) */
   const coverage = useMemo(() => {

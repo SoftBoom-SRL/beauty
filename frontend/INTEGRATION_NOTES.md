@@ -10,15 +10,21 @@ Build di produzione verdi per entrambe le app. E2E backend 14/14 (`backend/scrip
   `webhook_token` resta volutamente stringa.
 
 ## Gap API noti (candidati fase 2 — il frontend ha workaround attivi)
-- **Operatrici pubbliche**: nessun endpoint client/pubblico per elencare le operatrici → l'app cliente
-  prenota "prima disponibile" (niente scelta stilista, né in prenotazione né in lista d'attesa).
-- **Branding pubblico**: mancano address/phone/hours/social → footer app e CTA `tel:` senza dati.
+
+> **Verificato il 29/07/2026**: le voci barrate qui sotto sono state chiuse (branch
+> `feat/phase2-gaps` e lavori successivi). Le altre restano valide.
+
+- ~~**Operatrici pubbliche**~~: chiuso — esiste `GET /api/staff/public/operators`
+  (e `GET /api/agenda/public/availability` per la disponibilità pre-login).
+- **Branding pubblico**: address/phone ora ci sono (più `timezone`); restano da esporre
+  hours strutturati e social.
 - **Catalogo**: nessun flag "prenotabile online", deposito %, buffer, patch-test, descrizione per servizio;
   niente deposito/validità sui pacchetti. L'app cliente mostra tutti i servizi attivi.
 - **Clienti (staff)**: manca storico appuntamenti per cliente; vendite/coupon/gift per cliente solo via
   `q=` su nome (serve param `client_id`); saldo fedeltà staff-side richiede scan di `accounts` per
   programma (rompe oltre limit=200 — servirebbe un mirror staff di `client/wallet`); note senza update;
-  `TechnicalSheetIn` senza campo foto; PUT clients richiede payload completo (parziale resetta i default).
+  `TechnicalSheetIn` senza campo foto. ~~PUT clients richiede payload completo~~ → chiuso:
+  verificato che un PUT parziale non azzera più i campi non inviati.
 - **Sales**: `SaleLineOut` senza `product_name`; `kpi.revenue` decimale non quantizzato.
 - **Comunicazioni**: niente upload immagine, niente `q`, niente metriche; audience vuota = zero destinatari;
   `send_communication` fa `scheduled_at or comm.scheduled_at` → "invia subito" richiede PUT null prima.
@@ -28,10 +34,18 @@ Build di produzione verdi per entrambe le app. E2E backend 14/14 (`backend/scrip
 - **Staff**: role_title monolingua; niente timbrature/commissioni (fase 2); overlap assenze non validato;
   eccezioni orarie one-off non rappresentabili; turni spezzati 3+ segmenti semplificati al salvataggio.
 - **Automazioni**: events-catalog senza metadati di tipo campo; niente metriche di consegna (Yourang).
-- **Agenda**: `day`/`week` restituiscono UTC mentre `availability` restituisce +02:00 (il frontend
-  normalizza; da unificare server-side); `week` non porta il payload completo degli appuntamenti;
-  nessuna creazione lista d'attesa staff-side.
-- **Insights**: `occupancy_pct` è 0–100 mentre i `*_rate` sono 0–1 (da normalizzare).
+- **Agenda**: `day`/`week` restituiscono UTC mentre `availability` restituisce +02:00.
+  ~~Da unificare server-side~~ → **verificato innocuo**: sono lo stesso istante e il layer
+  date del frontend li normalizza in modo identico in ogni fuso (provato su 5 fusi e sui
+  due cambi di ora legale). Resta pulizia, non un bug. Il problema vero era un altro ed
+  è stato corretto: il frontend renderizzava nel fuso del BROWSER anziché del salone
+  (vedi `salon*` in `packages/shared/src/format.js` e `settings.timezone`).
+  Restano aperti: `week` non porta il payload completo degli appuntamenti; nessuna
+  creazione lista d'attesa staff-side.
+- **Insights**: ~~`occupancy_pct` 0–100 vs `*_rate` 0–1 da normalizzare~~ → **non è un difetto**:
+  è una convenzione coerente col nome del campo (`*_pct` = 0–100, `*_rate` = 0–1) e il
+  frontend la rispetta già (`kpiDefs.js`: occupancy grezzo + '%', i rate via `pct()`).
+  Rinominare sarebbe una rottura di contratto senza beneficio: lasciare così.
 - **Core**: nessuna API per cambiare `default_lang` del salone o cancellare il logo.
 
 ## Note di design v1 (intenzionali, da conoscere)

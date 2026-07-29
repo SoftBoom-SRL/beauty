@@ -22,6 +22,13 @@ class AutomationsApiTests(TestCase):
         )
         tokens = create_staff_tokens(self.user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        # Le automazioni le esegue Yourang: creare/modificare/attivare richiede uno
+        # strumento disponibile, altrimenti 412/402 (vedi apps.integrations.gate).
+        from apps.integrations.models import YourangConnection
+
+        YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.CONNECTED
+        )
 
     def _post(self, path, payload=None):
         return self.client.post(

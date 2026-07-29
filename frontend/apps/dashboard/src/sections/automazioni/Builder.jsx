@@ -46,7 +46,7 @@ const QUICK = [
 ];
 
 export default function Builder({ rule, catalog, canWrite, onSaved }) {
-  const { t, lang, fireToast, clientCategories } = useDash();
+  const { t, lang, fireToast, clientCategories, yourang, requireYourang, yourangGate } = useDash();
   const [draft, setDraft] = useState(() => initDraft(rule, catalog));
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
@@ -93,7 +93,10 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
       fireToast({ msg: t('Automazione salvata', 'Automation saved'), icon: 'check' });
       onSaved(saved);
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
+      // 402/412 → non è un errore da toast: è uno strumento non disponibile,
+      // quindi popup + rinvio a Yourang (ricarica o attivazione).
+      if (yourangGate(err)) { /* gestito dal popup */ }
+      else if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
       else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
     } finally {
       setSaving(false);
@@ -262,7 +265,13 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
             </div>
             <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('L’esecuzione (canale, invio, dinamiche) è gestita da Yourang. Qui sono sincronizzati.', 'Execution (channel, send, dynamics) is handled by Yourang. Synced here.')}</div>
           </div>
-          <button className="dk-btn dk-btn--primary" style={{ height: 40, flexShrink: 0 }} onClick={() => fireToast({ msg: t('Apertura di Yourang per canale e messaggio…', 'Opening Yourang for channel and message…'), icon: 'ext' })}>
+          <button className="dk-btn dk-btn--primary" style={{ height: 40, flexShrink: 0 }}
+            onClick={() => {
+              if (!requireYourang()) return;   // popup + rinvio corretto
+              const url = yourang?.topup_url || yourang?.activation_url;
+              if (url) window.open(url, '_blank', 'noopener,noreferrer');
+              else fireToast({ msg: t('Destinazione Yourang non configurata', 'Yourang destination not configured'), icon: 'info' });
+            }}>
             <Icon name="ext" size={16} color="#fff" />{t('Apri su Yourang', 'Open in Yourang')}
           </button>
         </div>

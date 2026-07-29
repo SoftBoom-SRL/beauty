@@ -5,7 +5,7 @@ che finalize_sale li invochi con gli argomenti giusti, come da SPEC §8.
 """
 
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import TestCase
 from ninja.errors import HttpError
@@ -256,3 +256,255 @@ class ListSalesApiTests(TestCase):
         self.assertEqual(len(body["items"]), 1)
         self.assertEqual(body["items"][0]["id"], self.sale_sofia.id)
         self.assertEqual(body["kpi"]["revenue"], "50.00")
+
+
+class StripePolicyTests(TestCase):
+    """Percentuali della policy pagamenti (nessuna chiamata a Stripe)."""
+
+    def test_pct_of_arrotonda_al_centesimo(self):
+        from decimal import Decimal
+
+        from .stripe_service import pct_of
+
+        self.assertEqual(pct_of("35.00", 100), Decimal("35.00"))
+        self.assertEqual(pct_of("35.00", 50), Decimal("17.50"))
+        self.assertEqual(pct_of("35.00", 0), Decimal("0.00"))
+        # 33% di 35.00 = 11.55
+        self.assertEqual(pct_of("35.00", 33), Decimal("11.55"))
+        # arrotondamento al centesimo, non troncamento
+        self.assertEqual(pct_of("10.01", 33), Decimal("3.30"))
+
+    def test_pct_of_su_importo_nullo(self):
+        from decimal import Decimal
+
+        from .stripe_service import pct_of
+
+        self.assertEqual(pct_of(None, 100), Decimal("0.00"))
+
+    def test_senza_chiave_stripe_risponde_503(self):
+        from django.test import override_settings
+        from ninja.errors import HttpError
+
+        from .stripe_service import _client
+
+        with override_settings(STRIPE_SECRET_KEY=""):
+            with self.assertRaises(HttpError) as cm:
+                _client()
+            self.assertEqual(cm.exception.status_code, 503)
+
+
+class MultiTenantStripeTests(TestCase):
+    """GARANZIA MULTI-SALONE: ogni salone incassa sul PROPRIO account Stripe.
+
+    Ogni chiamata a Stripe deve portare `stripe_account` con l'account di QUEL
+    salone. Se qualcuno domani aggiunge una chiamata dimenticandolo, i soldi
+    finirebbero sull'account della piattaforma: questo test lo impedisce.
+    """
+
+    def setUp(self):
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from apps.integrations.models import StripeConnection
+
+        self.a = Salon.objects.create(name="Salone A", slug="salone-a-mt")
+        self.b = Salon.objects.create(name="Salone B", slug="salone-b-mt")
+        StripeConnection.objects.create(
+            salon=self.a, stripe_account_id="acct_AAA", charges_enabled=True
+        )
+        StripeConnection.objects.create(
+            salon=self.b, stripe_account_id="acct_BBB", charges_enabled=True
+        )
+        self.ca = Client.objects.create(
+            salon=self.a, first_name="Anna", last_name="A", phone="+393330002001",
+            consents={"card_charge": True}, stripe_payment_method_id="pm_a",
+        )
+        self.cb = Client.objects.create(
+            salon=self.b, first_name="Bea", last_name="B", phone="+393330002002",
+            consents={"card_charge": True}, stripe_payment_method_id="pm_b",
+        )
+
+    def test_due_saloni_due_account_distinti(self):
+        from apps.integrations.stripe_connect import require_account
+
+        self.assertEqual(require_account(self.a), "acct_AAA")
+        self.assertEqual(require_account(self.b), "acct_BBB")
+
+    def test_customer_creato_sull_account_del_proprio_salone(self):
+        from django.test import override_settings
+
+        from . import stripe_service
+
+        for client, expected in ((self.ca, "acct_AAA"), (self.cb, "acct_BBB")):
+            fake = Mock()
+            fake.Customer.create.return_value = {"id": "cus_x"}
+            with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+                 patch.object(stripe_service, "_client", return_value=fake):
+                stripe_service.ensure_customer(client)
+            self.assertEqual(
+                fake.Customer.create.call_args.kwargs["stripe_account"], expected,
+                f"il Customer di {client.first_name} è finito sull'account sbagliato",
+            )
+
+    def test_setup_intent_sull_account_giusto(self):
+        from django.test import override_settings
+
+        from . import stripe_service
+
+        self.ca.stripe_customer_id = "cus_a"
+        self.ca.save(update_fields=["stripe_customer_id"])
+        fake = Mock()
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake):
+            stripe_service.create_setup_intent(self.ca)
+        self.assertEqual(
+            fake.SetupIntent.create.call_args.kwargs["stripe_account"], "acct_AAA"
+        )
+
+    def test_addebito_no_show_sull_account_giusto(self):
+        import datetime as dt
+
+        from django.test import override_settings
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment
+        from apps.staff.models import Operator
+
+        from . import stripe_service
+
+        op = Operator.objects.create(salon=self.b, first_name="O", last_name="P")
+        appt = Appointment.objects.create(
+            salon=self.b, client=self.cb, operator=op,
+            start=timezone.now() - dt.timedelta(hours=1),
+            status=Appointment.Status.CONFIRMED,
+        )
+        self.cb.stripe_customer_id = "cus_b"
+        self.cb.save(update_fields=["stripe_customer_id"])
+        fake = Mock()
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake), \
+             patch.object(type(appt), "total_price", 50):
+            stripe_service.charge_no_show(appt, pct=100)
+        kwargs = fake.PaymentIntent.create.call_args.kwargs
+        self.assertEqual(kwargs["stripe_account"], "acct_BBB")
+        self.assertEqual(kwargs["payment_method"], "pm_b")
+
+    def test_rimborso_sull_account_giusto(self):
+        from django.test import override_settings
+
+        from . import stripe_service
+
+        fake = Mock()
+        fake.Refund.create.return_value = {"id": "re_x", "amount": 1000}
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake):
+            stripe_service.refund_payment(self.a, "pi_x")
+        self.assertEqual(
+            fake.Refund.create.call_args.kwargs["stripe_account"], "acct_AAA"
+        )
+
+    def test_salone_senza_stripe_non_tocca_l_account_di_un_altro(self):
+        from django.test import override_settings
+        from ninja.errors import HttpError
+
+        from apps.core.models import Salon
+        from apps.clients.models import Client
+
+        from . import stripe_service
+
+        c = Salon.objects.create(name="Salone C", slug="salone-c-mt")
+        cc = Client.objects.create(
+            salon=c, first_name="Cla", last_name="C", phone="+393330002003"
+        )
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"):
+            with self.assertRaises(HttpError) as cm:
+                stripe_service.ensure_customer(cc)
+        self.assertEqual(cm.exception.status_code, 412)
+
+
+class DoubleChargeProtectionTests(TestCase):
+    """Un appuntamento non deve poter essere addebitato due volte: due click sul
+    pulsante, o un automatismo che si sovrappone all'azione manuale, sarebbero
+    un doppio prelievo sulla carta della cliente."""
+
+    def setUp(self):
+        import datetime as dt
+
+        from django.utils import timezone
+
+        from apps.accounts.models import Membership, Role, User
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from apps.integrations.models import StripeConnection
+        from apps.staff.models import Operator
+        from common.auth import create_staff_tokens
+
+        self.salon = Salon.objects.create(name="Dbl Salon", slug="dbl-salon")
+        StripeConnection.objects.create(
+            salon=self.salon, stripe_account_id="acct_DBL", charges_enabled=True
+        )
+        user = User.objects.create_user(email="own@dbl.it", password="pw12345!")
+        role = Role.objects.create(salon=self.salon, name="M", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+
+        op = Operator.objects.create(salon=self.salon, first_name="O", last_name="P")
+        cat = ServiceCategory.objects.create(salon=self.salon, name_it="C")
+        svc = Service.objects.create(
+            salon=self.salon, category=cat, name_it="S", duration_min=60, price=40
+        )
+        cli = Client.objects.create(
+            salon=self.salon, first_name="Z", last_name="W", phone="+393330004001",
+            consents={"card_charge": True}, stripe_payment_method_id="pm_z",
+            # già presente sull'account del salone: evita la creazione del Customer
+            stripe_customer_id="cus_z",
+        )
+        self.appt = Appointment.objects.create(
+            salon=self.salon, client=cli, operator=op,
+            start=timezone.now() - dt.timedelta(hours=2),
+            status=Appointment.Status.NO_SHOW,
+        )
+        AppointmentService.objects.create(
+            appointment=self.appt, service=svc, operator=op, duration_min=60, price=40
+        )
+
+    def test_secondo_addebito_bloccato(self):
+        from django.test import override_settings
+
+        from . import stripe_service
+
+        fake = Mock()
+        fake.PaymentIntent.create.return_value = {"id": "pi_1"}
+        url = f"/api/sales/appointments/{self.appt.id}/charge-no-show"
+
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake):
+            first = self.client.post(url, **self.auth)
+            second = self.client.post(url, **self.auth)
+
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(second.status_code, 422, second.content)
+        # e Stripe è stato chiamato UNA sola volta
+        self.assertEqual(fake.PaymentIntent.create.call_count, 1)
+
+    def test_il_rimborso_ritrova_l_incasso_da_solo(self):
+        from django.test import override_settings
+
+        from . import stripe_service
+
+        fake = Mock()
+        fake.PaymentIntent.create.return_value = {"id": "pi_9"}
+        fake.Refund.create.return_value = {"id": "re_9", "amount": 4000}
+        with override_settings(STRIPE_SECRET_KEY="sk_test_x"), \
+             patch.object(stripe_service, "_client", return_value=fake):
+            self.client.post(
+                f"/api/sales/appointments/{self.appt.id}/charge-no-show", **self.auth
+            )
+            resp = self.client.post(
+                f"/api/sales/appointments/{self.appt.id}/refund",
+                data="{}", content_type="application/json", **self.auth,
+            )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        # senza passare l'id: lo ha ritrovato dal registro attività
+        self.assertEqual(fake.Refund.create.call_args.kwargs["payment_intent"], "pi_9")

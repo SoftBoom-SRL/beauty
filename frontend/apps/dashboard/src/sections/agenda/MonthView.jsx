@@ -1,6 +1,6 @@
 // MonthView — month grid built from parallel GET /api/agenda/week calls (not 30 day calls)
 import React, { useEffect, useState } from 'react';
-import { api, toDateStr, todayStr, parseISO } from '@youty/shared';
+import { api, toDateStr, salonTodayStr, parseISO } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DOW_IT, DOW_EN, mondayOf, fmtMoney, toastErr } from './lib.js';
 
@@ -47,7 +47,7 @@ export default function MonthView({ anchor, onOpenDay }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   while (cells.length % 7) cells.push(null);
 
-  const today = todayStr();
+  const today = salonTodayStr();
   const load = (n) => (n === 0 ? 'var(--faint)' : n >= 6 ? 'var(--clay)' : n >= 3 ? 'var(--warn)' : 'var(--ok)');
 
   if (byDate === null) {

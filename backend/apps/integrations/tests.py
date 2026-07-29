@@ -11,7 +11,10 @@ from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from apps.core.models import Salon
+
 from . import crypto
+from .models import YourangConnection
 from .sync import import_event, normalize_phone
 
 # 32-byte hex key (openssl rand -hex 32) — stesso formato di food/real_estate.
@@ -159,3 +162,210 @@ class ImportEventIdempotencyTests(TestCase):
             import_event(self.conn, "evt-1")
 
         self.assertEqual(Appointment.objects.filter(yourang_event_id="evt-1").count(), 1)
+
+
+class GateTests(TestCase):
+    """Gate a tre stati: active / no_credit / not_connected, e i codici che
+    portano il motivo al frontend (412 non collegato, 402 credito esaurito)."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="Gate Salon", slug="gate-salon")
+
+    def test_senza_connessione_e_not_connected(self):
+        from .gate import NOT_CONNECTED, feature_state, yourang_available
+
+        self.assertEqual(feature_state(self.salon), NOT_CONNECTED)
+        self.assertFalse(yourang_available(self.salon))
+
+    def test_connessione_attiva_e_active(self):
+        from .gate import ACTIVE, feature_state, yourang_available
+
+        YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.CONNECTED
+        )
+        self.assertEqual(feature_state(self.salon), ACTIVE)
+        self.assertTrue(yourang_available(self.salon))
+
+    def test_credito_esaurito_e_no_credit_anche_se_connesso(self):
+        from .gate import NO_CREDIT, feature_state
+
+        YourangConnection.objects.create(
+            salon=self.salon,
+            status=YourangConnection.Status.CONNECTED,
+            credit_exhausted=True,
+        )
+        self.assertEqual(feature_state(self.salon), NO_CREDIT)
+
+    def test_connessione_in_errore_e_not_connected(self):
+        from .gate import NOT_CONNECTED, feature_state
+
+        YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.ERROR
+        )
+        self.assertEqual(feature_state(self.salon), NOT_CONNECTED)
+
+    def test_require_yourang_alza_412_se_non_collegato(self):
+        from ninja.errors import HttpError
+
+        from .gate import require_yourang
+
+        with self.assertRaises(HttpError) as cm:
+            require_yourang(self.salon)
+        self.assertEqual(cm.exception.status_code, 412)
+
+    def test_require_yourang_alza_402_se_senza_credito(self):
+        from ninja.errors import HttpError
+
+        from .gate import require_yourang
+
+        YourangConnection.objects.create(
+            salon=self.salon,
+            status=YourangConnection.Status.CONNECTED,
+            credit_exhausted=True,
+        )
+        with self.assertRaises(HttpError) as cm:
+            require_yourang(self.salon)
+        self.assertEqual(cm.exception.status_code, 402)
+
+    def test_require_yourang_passa_se_attivo(self):
+        from .gate import require_yourang
+
+        YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.CONNECTED
+        )
+        self.assertIsNotNone(require_yourang(self.salon))
+
+
+class CreditDetectionTests(SimpleTestCase):
+    """Riconoscimento della risposta "credito esaurito" (forma non ancora
+    confermata da Yourang: la difesa è volutamente larga)."""
+
+    def _resp(self, status, body=""):
+        r = Mock()
+        r.status_code = status
+        r.text = body
+        return r
+
+    def test_402_e_credito_esaurito(self):
+        from .client import is_credit_exhausted
+
+        self.assertTrue(is_credit_exhausted(self._resp(402)))
+
+    def test_403_con_marcatore_e_credito_esaurito(self):
+        from .client import is_credit_exhausted
+
+        self.assertTrue(
+            is_credit_exhausted(self._resp(403, '{"code":"insufficient_credit"}'))
+        )
+
+    def test_400_con_messaggio_italiano(self):
+        from .client import is_credit_exhausted
+
+        self.assertTrue(
+            is_credit_exhausted(self._resp(400, '{"detail":"Credito esaurito"}'))
+        )
+
+    def test_403_generico_non_e_credito(self):
+        from .client import is_credit_exhausted
+
+        self.assertFalse(is_credit_exhausted(self._resp(403, '{"code":"forbidden"}')))
+
+    def test_404_non_e_mai_credito(self):
+        from .client import is_credit_exhausted
+
+        self.assertFalse(is_credit_exhausted(self._resp(404, "insufficient_credit")))
+
+
+class CreditLatchTests(TestCase):
+    """Il latch si accende sull'errore e si spegne alla prima chiamata riuscita."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="Latch Salon", slug="latch-salon")
+        self.conn = YourangConnection.objects.create(
+            salon=self.salon, status=YourangConnection.Status.CONNECTED
+        )
+
+    def test_chiamata_riuscita_spegne_il_latch(self):
+        from .client import YourangClient
+
+        self.conn.credit_exhausted = True
+        self.conn.save(update_fields=["credit_exhausted"])
+        client = YourangClient(self.conn)
+        client._mark_credit(False)
+        self.conn.refresh_from_db()
+        self.assertFalse(self.conn.credit_exhausted)
+        self.assertIsNone(self.conn.credit_exhausted_at)
+
+    def test_errore_accende_il_latch_con_timestamp(self):
+        from .client import YourangClient
+
+        YourangClient(self.conn)._mark_credit(True)
+        self.conn.refresh_from_db()
+        self.assertTrue(self.conn.credit_exhausted)
+        self.assertIsNotNone(self.conn.credit_exhausted_at)
+        self.assertEqual(self.conn.feature_state, "no_credit")
+
+
+class StripeConnectionTests(TestCase):
+    """Connect Standard: `can_charge` è l'unico stato che autorizza un incasso."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="Stripe Salon", slug="stripe-salon")
+
+    def _conn(self, **kw):
+        from .models import StripeConnection
+
+        defaults = {
+            "salon": self.salon,
+            "stripe_account_id": "acct_test123",
+            "status": StripeConnection.Status.CONNECTED,
+            "charges_enabled": True,
+        }
+        return StripeConnection.objects.create(**{**defaults, **kw})
+
+    def test_collegato_e_abilitato_puo_incassare(self):
+        self.assertTrue(self._conn().can_charge)
+
+    def test_onboarding_incompleto_non_puo_incassare(self):
+        # Collegato ma Stripe non ha ancora abilitato gli incassi.
+        self.assertFalse(self._conn(charges_enabled=False).can_charge)
+
+    def test_connessione_in_errore_non_puo_incassare(self):
+        from .models import StripeConnection
+
+        self.assertFalse(self._conn(status=StripeConnection.Status.ERROR).can_charge)
+
+    def test_senza_account_id_non_puo_incassare(self):
+        self.assertFalse(self._conn(stripe_account_id="").can_charge)
+
+    def test_require_account_412_se_non_collegato(self):
+        from ninja.errors import HttpError
+
+        from .stripe_connect import require_account
+
+        with self.assertRaises(HttpError) as cm:
+            require_account(self.salon)
+        self.assertEqual(cm.exception.status_code, 412)
+
+    def test_require_account_412_se_incassi_non_abilitati(self):
+        from ninja.errors import HttpError
+
+        from .stripe_connect import require_account
+
+        self._conn(charges_enabled=False)
+        with self.assertRaises(HttpError) as cm:
+            require_account(self.salon)
+        self.assertEqual(cm.exception.status_code, 412)
+        self.assertIn("verifica", str(cm.exception.message).lower())
+
+    def test_require_account_restituisce_l_account(self):
+        from .stripe_connect import require_account
+
+        self._conn()
+        self.assertEqual(require_account(self.salon), "acct_test123")
+
+    def test_redirect_uri_dedicata_a_stripe(self):
+        """Yourang e Stripe tornano entrambi con ?code&state: i percorsi vanno distinti."""
+        from .stripe_connect import redirect_uri
+
+        self.assertTrue(redirect_uri().endswith("/oauth-popup/stripe-done"))

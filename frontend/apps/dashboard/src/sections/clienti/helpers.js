@@ -1,4 +1,5 @@
 // helpers.js — clienti section utilities (pure functions, no React).
+import { salonParts } from '@youty/shared';
 
 /* Shared input style used across the section's forms (from the prototype). */
 export const inputCss = {
@@ -60,15 +61,15 @@ export function clientQueryWord(c) {
   return (c.last_name || c.first_name || c.full_name || '').trim().split(/\s+/).pop() || '';
 }
 
-/* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
+/* "12 mar 2026 · 15:30" from an ISO datetime, localized, in SALON time. */
 export function dateTimeLabel(iso, lang) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const p = salonParts(iso);
   const months = lang === 'en'
     ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} · ${hm}`;
+  const hm = String(p.h).padStart(2, '0') + ':' + String(p.min).padStart(2, '0');
+  return `${p.d} ${months[p.m - 1]} ${p.y} · ${hm}`;
 }
 
 /* "12 mar 2026" from an ISO date/datetime. */

@@ -49,6 +49,34 @@ export default function Profilo() {
   const fullName = [firstName, lastName].filter(Boolean).join(' ');
   const initials = ((firstName[0] || '') + (lastName[0] || '')).toUpperCase() || (firstName.slice(0, 2) || '·').toUpperCase();
   const waOn = !!me?.whatsapp_reminders;
+  const hasCard = !!me?.has_saved_card;
+  const cardConsent = !!me?.card_charge_consent;
+
+  /* Salvataggio carta: pagina ospitata da Stripe, in modalità "solo salvataggio"
+     (nessun addebito). Sostituiamo la pagina invece di aprire una scheda: da
+     telefono il ritorno con `?card=ok` riporta la cliente qui. */
+  const [savingCard, setSavingCard] = React.useState(false);
+  const saveCard = async () => {
+    if (savingCard) return;
+    setSavingCard(true);
+    try {
+      const res = await api.post('/api/sales/client/save-card-checkout');
+      if (res.checkout_url) window.location.assign(res.checkout_url);
+      else throw new Error('missing checkout url');
+    } catch (err) {
+      setSavingCard(false);
+      // 412/503 = il salone non ha i pagamenti attivi: non è colpa della cliente.
+      if (err?.status === 412 || err?.status === 503) {
+        fireToast({
+          msg: t('Pagamenti non disponibili: contatta il salone',
+                 'Payments unavailable: please contact the salon'),
+          icon: 'info',
+        });
+      } else {
+        errToast(err, fireToast, t);
+      }
+    }
+  };
 
   return (
     <div style={{ paddingBottom: 30 }}>
@@ -125,6 +153,60 @@ export default function Profilo() {
               ? <Toggle on={waOn} onChange={(v) => saveMe({ whatsapp_reminders: v }, () => fireToast({ msg: v ? t('Promemoria WhatsApp attivi', 'WhatsApp reminders on') : t('Promemoria WhatsApp disattivati', 'WhatsApp reminders off'), icon: 'check' }))} />
               : <span className="skel" style={{ height: 28, width: 46, borderRadius: 99, display: 'inline-block' }} />}
           </div>
+        </div>
+
+        {/* ---- Metodo di pagamento ------------------------------------------
+            La carta serve alle caparre e, se il salone lo prevede, all'addebito
+            in caso di mancata presentazione. Si salva sulla pagina di Stripe:
+            qui dentro non passa mai un numero di carta.
+            Il consenso è separato e revocabile: senza consenso nessun addebito
+            è possibile, anche con la carta salvata. */}
+        <div className="t-meta" style={{ margin: '18px 0 10px' }}>{t('Pagamenti', 'Payments')}</div>
+        <div className="card" style={{ padding: 4, marginBottom: 20, boxShadow: 'none', border: '1px solid var(--hair)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px' }}>
+            <Icon name="wallet" size={18} color="var(--brand)" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="t-sm" style={{ color: 'var(--muted)' }}>
+                {t('Metodo di pagamento', 'Payment method')}
+              </div>
+              {me && (
+                <div style={{ fontSize: 11.5, color: hasCard ? '#3F9D58' : 'var(--muted-2)', fontWeight: 600, marginTop: 2 }}>
+                  {hasCard ? t('Carta salvata', 'Card saved') : t('Nessuna carta', 'No card')}
+                </div>
+              )}
+            </div>
+            {me
+              ? (
+                <button className="press" onClick={saveCard} disabled={savingCard}
+                  style={{ padding: '8px 14px', borderRadius: 99, fontSize: 12.5, fontWeight: 700, border: '1.5px solid var(--brand)', background: 'transparent', color: 'var(--brand-ink)', opacity: savingCard ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                  {savingCard
+                    ? t('Apertura…', 'Opening…')
+                    : hasCard ? t('Sostituisci', 'Replace') : t('Salva carta', 'Save card')}
+                </button>
+              )
+              : <span className="skel" style={{ height: 30, width: 88, borderRadius: 99, display: 'inline-block' }} />}
+          </div>
+
+          {hasCard && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px', borderTop: '1px solid var(--hair)' }}>
+              <Icon name="shield" size={18} color="var(--muted)" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span className="t-sm" style={{ color: 'var(--muted)' }}>
+                  {t('Autorizzo l’addebito', 'Allow charges')}
+                </span>
+                <div style={{ fontSize: 11.5, color: 'var(--muted-2)', marginTop: 2, lineHeight: 1.35 }}>
+                  {t('Per caparre e mancata presentazione, secondo le regole del salone. Puoi revocarlo quando vuoi.',
+                     'For deposits and no-shows, per the salon’s policy. You can revoke it any time.')}
+                </div>
+              </div>
+              <Toggle on={cardConsent}
+                onChange={(v) => saveMe({ card_charge_consent: v }, () => fireToast({
+                  msg: v ? t('Addebito autorizzato', 'Charges allowed')
+                         : t('Autorizzazione revocata', 'Authorisation revoked'),
+                  icon: 'check',
+                }))} />
+            </div>
+          )}
         </div>
 
         <button className="press"

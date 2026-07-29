@@ -46,6 +46,14 @@ def _settings_out(s: SalonSettings) -> dict:
         "flexible_window_min": s.flexible_window_min,
         "flexible_reward_pct": s.flexible_reward_pct,
         "cancel_min_hours": django_settings.CLIENT_MOVE_CANCEL_MIN_HOURS,
+        "timezone": django_settings.TIME_ZONE,
+        "deposit_enabled": s.deposit_enabled,
+        "deposit_deadline_hours": s.deposit_deadline_hours,
+        "deposit_deadline_action": s.deposit_deadline_action,
+        "noshow_charge_mode": s.noshow_charge_mode,
+        "noshow_charge_delay_min": s.noshow_charge_delay_min,
+        "noshow_charge_pct": s.noshow_charge_pct,
+        "late_cancel_charge_pct": s.late_cancel_charge_pct,
     }
 
 
@@ -77,6 +85,20 @@ def update_settings(request, data: SettingsIn):
         raise HttpError(400, "Lingua non valida (it o en)")
     if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
         raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
+    # Policy pagamenti: percentuali e scelte devono restare sensate, altrimenti si
+    # finirebbe per addebitare importi arbitrari alle clienti.
+    for field in ("noshow_charge_pct", "late_cancel_charge_pct"):
+        if field in payload and not (0 <= int(payload[field]) <= 100):
+            raise HttpError(400, "La percentuale deve essere fra 0 e 100")
+    if "noshow_charge_mode" in payload and payload["noshow_charge_mode"] not in SalonSettings.NoShowMode.values:
+        raise HttpError(400, "Modalità no-show non valida (manual o automatic)")
+    if ("deposit_deadline_action" in payload
+            and payload["deposit_deadline_action"] not in SalonSettings.DepositDeadlineAction.values):
+        raise HttpError(400, "Azione alla scadenza della caparra non valida")
+    if "noshow_charge_delay_min" in payload and not (0 <= int(payload["noshow_charge_delay_min"]) <= 1440):
+        raise HttpError(400, "Il ritardo per il no-show deve essere fra 0 e 1440 minuti")
+    if "deposit_deadline_hours" in payload and not (0 <= int(payload["deposit_deadline_hours"]) <= 720):
+        raise HttpError(400, "La scadenza della caparra deve essere fra 0 e 720 ore")
     for name, value in payload.items():
         setattr(s, name, value)
     s.save()
@@ -229,4 +251,5 @@ def public_branding(request, salon: str):
         "address": location.address if location else "",
         "phone": location.phone if location else "",
         "opening_hours": st.opening_hours,
+        "timezone": django_settings.TIME_ZONE,
     }

@@ -1,7 +1,7 @@
 // NewApptModal — booking composer: client search, multi-service items, availability slots
 // POST /api/agenda/appointments (shows returned deposit_amount/deposit_status, handles 409)
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr, depositMeta, statusMeta } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, timeLabel, minutesOfDay, salonTodayStr, depositMeta, statusMeta } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { initialsOf, toastErr, fmtMoney } from '../lib.js';
@@ -33,7 +33,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
   }, [pf.clientId]);
 
   /* ---- date + items ---- */
-  const [date, setDate] = useState(pf.date || (pf.start ? pf.start.slice(0, 10) : todayStr()));
+  const [date, setDate] = useState(pf.date || (pf.start ? pf.start.slice(0, 10) : salonTodayStr()));
   const seq = useRef(1);
   const initialItems = useMemo(() => {
     if (pf.serviceIds?.length) return pf.serviceIds.map((sid) => ({ key: 'i' + (seq.current++), service_id: sid, operator_id: pf.operatorId || null }));
@@ -110,7 +110,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
 
   const dateLabel = (() => {
     const d = new Date(date + 'T00:00');
-    const today = new Date(todayStr() + 'T00:00');
+    const today = new Date(salonTodayStr() + 'T00:00');
     const diff = Math.round((d - today) / 86400000);
     const base = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
     if (diff === 0) return t('Oggi', 'Today') + ' · ' + base;
@@ -253,7 +253,7 @@ export default function NewApptModal({ prefill, onClose, asDrawer, onCreated }) 
         <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Data', 'Date')}</div>
         <div style={{ fontWeight: 700, fontSize: 13.5, textTransform: 'capitalize' }}>{dateLabel}</div>
       </div>
-      <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
+      <input type="date" value={date} min={salonTodayStr()} onChange={(e) => setDate(e.target.value || salonTodayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
     </div>
   );
   const formBody = (

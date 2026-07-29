@@ -414,8 +414,13 @@ def delete_communication(request, comm_id: int):
 
 @router.post("/communications/{int:comm_id}/send", auth=staff_auth, response=CommunicationOut)
 def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn):
+    from apps.integrations.gate import require_yourang  # lazy: evita cicli
+
     ctx = request.auth
     require_scope(ctx, "marketing")
+    # L'invio è interamente di Yourang: senza strumento disponibile non si accoda
+    # nulla, altrimenti la comunicazione risulterebbe "inviata" senza esserlo.
+    require_yourang(ctx.salon)
     comm = salon_get(Communication, ctx, comm_id)
     if comm.status == Communication.Status.SENT:
         raise HttpError(422, "Comunicazione già inviata")

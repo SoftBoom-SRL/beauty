@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 import httpx
 import jwt
 from django.conf import settings
+from django.utils import timezone
 
 from . import crypto
 from .models import YourangConnection
@@ -140,9 +141,48 @@ def store_tokens(conn: YourangConnection, token_resp: dict) -> None:
 # ---- Client autenticato ----------------------------------------------------
 
 
+# ---- Rilevamento "credito esaurito" ---------------------------------------
+# Yourang non espone un saldo: l'esaurimento del credito si scopre SOLO
+# dall'errore di una chiamata. La forma esatta della risposta non è ancora
+# confermata dal team Yourang, quindi il riconoscimento vive TUTTO qui: quando
+# arriva la specifica si corregge questa funzione e nient'altro.
+#
+# 402 Payment Required è il caso semanticamente atteso; il resto sono difese per
+# non far passare inosservato un blocco espresso in altro modo.
+_CREDIT_STATUSES = (402,)
+_CREDIT_MARKERS = (
+    "insufficient_credit", "insufficient credit", "no_credit", "credit_exhausted",
+    "out_of_credit", "quota_exceeded", "credit_limit", "credito esaurito",
+    "credito insufficiente",
+)
+
+
+def is_credit_exhausted(resp: httpx.Response) -> bool:
+    """True se la risposta di Yourang indica credito esaurito."""
+    if resp.status_code in _CREDIT_STATUSES:
+        return True
+    if resp.status_code not in (400, 403, 409, 422, 429):
+        return False
+    try:
+        body = resp.text[:2000].lower()
+    except Exception:  # noqa: BLE001 — corpo illeggibile: non è un caso credito
+        return False
+    return any(marker in body for marker in _CREDIT_MARKERS)
+
+
 class YourangClient:
     def __init__(self, conn: YourangConnection):
         self.conn = conn
+
+    def _mark_credit(self, exhausted: bool) -> None:
+        """Latch dello stato credito sulla connessione. Si accende all'errore e si
+        spegne alla prima chiamata riuscita (cioè appena l'utente ha ricaricato)."""
+        conn = self.conn
+        if conn.credit_exhausted == exhausted:
+            return
+        conn.credit_exhausted = exhausted
+        conn.credit_exhausted_at = timezone.now() if exhausted else None
+        conn.save(update_fields=["credit_exhausted", "credit_exhausted_at"])
 
     def _access_token(self) -> str:
         conn = self.conn
@@ -165,7 +205,13 @@ class YourangClient:
         resp = httpx.request(
             method, f"{_api_base()}{path}", headers=headers, timeout=TIMEOUT, **kwargs
         )
-        resp.raise_for_status()
+        if resp.is_error:
+            if is_credit_exhausted(resp):
+                self._mark_credit(True)
+            resp.raise_for_status()
+        else:
+            # Chiamata riuscita: se era latchato "senza credito", ora ha ricaricato.
+            self._mark_credit(False)
         return resp
 
     @staticmethod
