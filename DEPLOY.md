@@ -26,12 +26,13 @@ sottodominio (`the-parlour.beautyclients.yourang.ai` → salone `the-parlour`), 
 
 ## 1. DNS
 
-Tre record A nella zona `yourang.ai`, tutti verso l'IP del server:
+Tre record A nella zona `yourang.ai`, tutti verso l'IP del server Coolify
+(`coolify-v1` su Hetzner, **91.99.117.151**):
 
 ```
-beauty              A   <IP-SERVER>     dashboard staff
-beautyapi           A   <IP-SERVER>     backend + admin
-*.beautyclients     A   <IP-SERVER>     app cliente (wildcard, uno per salone)
+beauty              A   91.99.117.151     dashboard staff
+beautyapi           A   91.99.117.151     backend + admin
+*.beautyclients     A   91.99.117.151     app cliente (wildcard, uno per salone)
 ```
 
 Il record dei clienti **deve essere wildcard**: ogni salone vive su
@@ -41,9 +42,21 @@ L'host `beautyclients.yourang.ai` "nudo" non serve a niente (nessuno slug davant
 l'app cade sul fallback `VITE_SALON_SLUG`): non creare il record, oppure fallo
 puntare a una landing.
 
-I certificati invece restano per-dominio: Coolify li emette via Let's Encrypt
-HTTP-01, quindi ogni sottodominio di salone va **aggiunto nella lista domini** di
-`beauty-client` (un certificato wildcard richiederebbe la challenge DNS-01).
+I certificati restano per-dominio: ogni sottodominio di salone va **aggiunto nella
+lista domini** di `beauty-client` (un certificato wildcard richiederebbe la
+challenge DNS-01).
+
+> **Porta 80 filtrata su questo server** (verificato il 31/07/2026: 443 raggiungibile,
+> 80 droppata a monte). Due conseguenze:
+> - I certificati Let's Encrypt **non** possono usare la challenge HTTP-01. Il proxy
+>   Coolify è già configurato per TLS-ALPN-01, che lavora sulla 443: l'emissione
+>   funziona, ma al primo deploy controlla i log del proxy se un dominio resta senza
+>   certificato.
+> - **Non esiste il redirect http→https.** Un link scritto `http://...` non risponde.
+>   Tutti i link ai saloni condivisi con i clienti (WhatsApp, QR, biglietti da visita)
+>   devono essere `https://` espliciti.
+>
+> È un limite del server, non di questo progetto: va risolto con un ticket a Hetzner.
 
 > **Se `yourang.ai` è su Cloudflare**: i tre record vanno in modalità *DNS only*
 > (nuvoletta grigia). Con il proxy attivo, l'Universal SSL gratuito copre
