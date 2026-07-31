@@ -391,9 +391,9 @@ def public_hook(request, data: HookLeadIn):
     except Salon.DoesNotExist:
         raise HttpError(404, "Salone non trovato")
 
-    # Rate limit best-effort per IP. La cache di default è per-processo, quindi
-    # con più worker il limite effettivo si moltiplica: serve a fermare lo spam
-    # banale, non un attacco deciso. Per quello il posto giusto è il proxy.
+    # Rate limit per IP. La cache è su database (vedi settings.CACHES): condivisa
+    # fra i worker, altrimenti ognuno conterebbe per conto suo e il limite non
+    # limiterebbe nulla.
     key = f"hook:{salon.id}:{_client_ip(request)}"
     hits = cache.get(key, 0)
     if hits >= HOOK_MAX_PER_WINDOW:

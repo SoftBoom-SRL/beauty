@@ -83,6 +83,17 @@ DATABASES = {
     )
 }
 
+# Cache su database, non in memoria: con più worker gunicorn una LocMemCache
+# darebbe a ciascuno il suo contatore, e i rate limit che ci si appoggiano non
+# limiterebbero niente (verificato in produzione: 9 invii passati su un limite
+# di 5). La tabella la crea l'entrypoint con `createcachetable`.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "django_cache",
+    }
+}
+
 AUTH_USER_MODEL = "accounts.User"
 
 AUTH_PASSWORD_VALIDATORS = [
