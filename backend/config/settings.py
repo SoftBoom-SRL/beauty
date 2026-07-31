@@ -11,7 +11,11 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-change-me")
 DEBUG = os.getenv("DEBUG", "1") == "1"
-ALLOWED_HOSTS = [h for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
+# L'healthcheck del container chiama http://127.0.0.1:8000/healthz
+for _local in ("localhost", "127.0.0.1"):
+    if _local not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_local)
 
 INSTALLED_APPS = [
     # unfold: deve precedere django.contrib.admin per sovrascrivere i template
@@ -42,6 +46,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # whitenoise serve /static/ (admin Unfold) senza bisogno di un web server davanti
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -94,15 +100,43 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# In produzione /static/ passa da whitenoise (compressione + hash nei nomi file).
+# Niente manifest storage: un riferimento mancante nei CSS di terze parti
+# farebbe fallire l'intera pagina invece di degradare.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+
+# I media sono upload degli utenti (logo salone, foto schede, immagini comunicazioni):
+# whitenoise indicizza i file all'avvio e non li vedrebbe, quindi li serve Django.
+# Metti a 0 se un giorno finiranno su S3 o dietro un nginx dedicato.
+SERVE_MEDIA = os.getenv("SERVE_MEDIA", "1") == "1"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Dietro il reverse proxy di Coolify (Traefik): senza questo Django crede di
+# essere in HTTP e il controllo CSRF dell'admin fallisce.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+
+# Origini fidate per il POST di login all'admin (schema incluso: https://api.esempio.it)
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
+]
 
 # CORS — in sviluppo tutto aperto, in produzione whitelist dei frontend
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 else:
     CORS_ALLOWED_ORIGINS = [
-        o for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o
+        o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
     ]
+    # L'app cliente vive su un sottodominio per salone (<slug>.prenota.esempio.it):
+    # le origini non si possono elencare a mano, servono i regex. Separatore = spazio,
+    # perché la virgola compare nei quantificatori regex ({1,3}).
+    # Es. CORS_ALLOWED_ORIGIN_REGEXES=^https://[a-z0-9-]+\.prenota\.esempio\.it$
+    CORS_ALLOWED_ORIGIN_REGEXES = os.getenv("CORS_ALLOWED_ORIGIN_REGEXES", "").split()
 
 # JWT (staff dashboard + clienti web app)
 JWT_SECRET = os.getenv("JWT_SECRET", SECRET_KEY)

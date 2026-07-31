@@ -4,7 +4,29 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { api, clientAuth, mediaUrl, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
 
-export const SALON_SLUG = import.meta.env.VITE_SALON_SLUG || 'the-parlour';
+/* ---- salone servito da questa pagina ----
+ * Un solo deploy serve tutti i saloni: lo slug arriva dal sottodominio.
+ * Ordine di precedenza:
+ *   1. ?salon=<slug>        override esplicito (test e anteprime)
+ *   2. sottodominio         <slug>.<VITE_CLIENT_BASE_HOST>, es. the-parlour.prenota.esempio.it
+ *   3. VITE_SALON_SLUG      fallback a build time (sviluppo, deploy mono-salone)
+ * Il confronto con VITE_CLIENT_BASE_HOST è obbligatorio: senza, su un host a due
+ * livelli come prenota.esempio.it prenderemmo "prenota" come slug. */
+function resolveSalonSlug() {
+  const override = new URLSearchParams(window.location.search).get('salon');
+  if (override) return override;
+
+  const base = import.meta.env.VITE_CLIENT_BASE_HOST;
+  const host = window.location.hostname;
+  if (base && host.endsWith('.' + base)) {
+    const sub = host.slice(0, -(base.length + 1));
+    if (sub && sub !== 'www' && !sub.includes('.')) return sub;
+  }
+
+  return import.meta.env.VITE_SALON_SLUG || 'the-parlour';
+}
+
+export const SALON_SLUG = resolveSalonSlug();
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx);
