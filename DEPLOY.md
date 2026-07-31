@@ -9,14 +9,17 @@ Quattro risorse Coolify, tutte dallo stesso repository:
 | `beauty-db` | Database PostgreSQL | — (interno) | — | 5432 |
 | `beauty-api` | Application · Dockerfile | `beautyapi.yourang.ai` | `/backend` | 8000 |
 | `beauty-dashboard` | Application · Dockerfile | `beauty.yourang.ai` | `/frontend` | 80 |
-| `beauty-client` | Application · Dockerfile | `*.beautyclients.yourang.ai` | `/frontend` | 80 |
+| `beauty-client` | Application · Dockerfile | `beautyclients.yourang.ai` | `/frontend` | 80 |
 
 Le due SPA sono file statici serviti da nginx: chiamano l'API in cross-origin, per
 questo il backend ha un dominio suo (che ospita anche `/admin`).
 
-**L'app cliente serve tutti i saloni con un solo deploy**: lo slug arriva dal
-sottodominio (`the-parlour.beautyclients.yourang.ai` → salone `the-parlour`), vedi
-`resolveSalonSlug()` in `frontend/apps/client-app/src/ctx.jsx`.
+**L'app cliente serve tutti i saloni con un solo deploy**: lo slug è il primo
+segmento del path (`beautyclients.yourang.ai/the-parlour` → salone `the-parlour`),
+vedi `resolveSalonSlug()` in `frontend/packages/shared/src/salon.js`.
+
+Non c'è **nessun passo** da fare quando arriva un salone nuovo: creato in admin, il
+suo URL funziona subito. Un dominio, un certificato, per sempre.
 
 ## Prerequisiti
 
@@ -26,43 +29,28 @@ sottodominio (`the-parlour.beautyclients.yourang.ai` → salone `the-parlour`), 
 
 ## 1. DNS
 
-Tre record A nella zona `yourang.ai`, tutti verso l'IP del server Coolify
+Due record A nella zona `yourang.ai`, entrambi verso l'IP del server Coolify
 (`coolify-v1` su Hetzner, **91.99.117.151**):
 
 ```
-beauty              A   91.99.117.151     dashboard staff
-beautyapi           A   91.99.117.151     backend + admin
-*.beautyclients     A   91.99.117.151     app cliente (wildcard, uno per salone)
+beauty          A   91.99.117.151     dashboard staff
+beautyapi       A   91.99.117.151     backend + admin
+beautyclients   A   91.99.117.151     app cliente (tutti i saloni)
 ```
 
-Il record dei clienti **deve essere wildcard**: ogni salone vive su
-`<slug>.beautyclients.yourang.ai`. Così non tocchi più il DNS a ogni nuovo salone.
-
-L'host `beautyclients.yourang.ai` "nudo" non serve a niente (nessuno slug davanti →
-l'app cade sul fallback `VITE_SALON_SLUG`): non creare il record, oppure fallo
-puntare a una landing.
-
-I certificati restano per-dominio: ogni sottodominio di salone va **aggiunto nella
-lista domini** di `beauty-client` (un certificato wildcard richiederebbe la
-challenge DNS-01).
+Nessun wildcard: i saloni stanno nel path, non nell'host. Se avevi già creato
+`*.beautyclients`, puoi rimuoverlo.
 
 > **Porta 80 filtrata su questo server** (verificato il 31/07/2026: 443 raggiungibile,
 > 80 droppata a monte). Due conseguenze:
 > - I certificati Let's Encrypt **non** possono usare la challenge HTTP-01. Il proxy
->   Coolify è già configurato per TLS-ALPN-01, che lavora sulla 443: l'emissione
->   funziona, ma al primo deploy controlla i log del proxy se un dominio resta senza
->   certificato.
+>   Coolify usa TLS-ALPN-01 sulla 443: l'emissione funziona (verificata su tutti e
+>   tre gli host).
 > - **Non esiste il redirect http→https.** Un link scritto `http://...` non risponde.
->   Tutti i link ai saloni condivisi con i clienti (WhatsApp, QR, biglietti da visita)
->   devono essere `https://` espliciti.
+>   Tutti i link ai saloni condivisi con le clienti (WhatsApp, QR, biglietti da
+>   visita) devono essere `https://` espliciti.
 >
 > È un limite del server, non di questo progetto: va risolto con un ticket a Hetzner.
-
-> **Se `yourang.ai` è su Cloudflare**: i tre record vanno in modalità *DNS only*
-> (nuvoletta grigia). Con il proxy attivo, l'Universal SSL gratuito copre
-> `yourang.ai` e `*.yourang.ai` ma **non** un wildcard di terzo livello come
-> `*.beautyclients.yourang.ai`, e gli host dei saloni darebbero errore TLS.
-> `beauty` e `beautyapi` sarebbero invece coperti: è solo il wildcard il problema.
 
 ## 2. Database
 
@@ -103,8 +91,7 @@ DEBUG=0
 DATABASE_URL=<Postgres URL interna dal punto 2>
 ALLOWED_HOSTS=beautyapi.yourang.ai
 CSRF_TRUSTED_ORIGINS=https://beautyapi.yourang.ai
-CORS_ALLOWED_ORIGINS=https://beauty.yourang.ai
-CLIENT_BASE_HOST=beautyclients.yourang.ai
+CORS_ALLOWED_ORIGINS=https://beauty.yourang.ai,https://beautyclients.yourang.ai
 FRONTEND_ORIGIN=https://beauty.yourang.ai
 ENCRYPTION_KEY=<genera: openssl rand -hex 32>
 DJANGO_SUPERUSER_EMAIL=tu@yourang.ai
@@ -171,28 +158,31 @@ produzione un frontend che chiama `http://localhost:8000`.
 | Base Directory | `/frontend` |
 | Dockerfile Location | `/Dockerfile` |
 | Ports Exposes | `80` |
-| Domains | `https://the-parlour.beautyclients.yourang.ai` (uno per salone, separati da virgola) |
+| Domains | `https://beautyclients.yourang.ai` |
 
 Build Variables:
 
 ```
 APP=client-app
 VITE_API_URL=https://beautyapi.yourang.ai
-VITE_CLIENT_BASE_HOST=beautyclients.yourang.ai
-VITE_SALON_SLUG=the-parlour
 ```
 
-`VITE_CLIENT_BASE_HOST` è quello che abilita il multi-salone: l'app confronta
-`window.location.hostname` con questo valore e usa come slug ciò che sta davanti.
-`VITE_SALON_SLUG` resta solo come fallback (sviluppo, o host che non combacia).
+Un solo dominio per tutti i saloni. `VITE_SALON_SLUG` non serve in produzione:
+resta solo come fallback per lo sviluppo locale, dove non c'è slug nel path.
 
 ### Aggiungere un salone
 
-1. Crea il salone in `/admin/` (o via dashboard) con lo slug che vuoi, es. `bellezza-mia`.
-2. In `beauty-client` → *Domains*, aggiungi `https://bellezza-mia.beautyclients.yourang.ai`.
-3. Salva: Coolify aggiorna Traefik ed emette il certificato. **Nessun rebuild.**
+Crealo in `/admin/` (o dalla dashboard) con lo slug che vuoi, es. `bellezza-mia`.
+Il suo URL — `https://beautyclients.yourang.ai/bellezza-mia` — è già attivo.
 
-Il DNS è già coperto dal wildcard e il CORS dal regex.
+Niente DNS, niente domini in Coolify, niente rebuild, niente certificati. Era
+esattamente il passo manuale che questa scelta elimina.
+
+### Sessioni
+
+Tutti i saloni condividono l'origin, quindi il localStorage. La chiave di sessione
+è namespacizzata per slug (`yt.client.session:<slug>`, vedi `clientAuth.js`):
+una cliente che apre due saloni diversi non si porta dietro il token sbagliato.
 
 ## 6. Verifica
 
@@ -200,8 +190,8 @@ Il DNS è già coperto dal wildcard e il CORS dal regex.
 - `https://beautyapi.yourang.ai/admin/` → login funzionante **con il CSS al suo posto**
   (se l'admin è senza stile, whitenoise non sta servendo `/static/`)
 - `https://beauty.yourang.ai` → pagina di login staff, nessun errore CORS in console
-- `https://the-parlour.beautyclients.yourang.ai` → branding del salone caricato
-  (se vedi il salone sbagliato, controlla `VITE_CLIENT_BASE_HOST`)
+- `https://beautyclients.yourang.ai/the-parlour` → branding del salone caricato
+  (se vedi un errore, il salone con quello slug non esiste nel database)
 - Carica un logo da *Impostazioni → Brand*, poi ricarica l'app cliente: se il logo
   appare, il volume dei media e la rotta `/media/` funzionano.
 
@@ -253,8 +243,8 @@ Per svuotarli serve un job schedulato (Coolify → *Scheduled Tasks* sulla risor
 
 ## Note
 
-- Cambiare `VITE_API_URL` o `VITE_CLIENT_BASE_HOST` richiede un **redeploy con
-  rebuild** del frontend interessato: sono costanti compilate nel bundle.
+- Cambiare `VITE_API_URL` richiede un **redeploy con rebuild** del frontend
+  interessato: è una costante compilata nel bundle.
 - `/media/` è servito da Django (`config/urls.py`). Va benissimo per logo e foto di
   un salone; se un giorno il volume di upload cresce, sposta i media su S3 e metti
   `SERVE_MEDIA=0`.

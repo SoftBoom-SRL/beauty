@@ -12,10 +12,8 @@ FROM node:22-alpine AS build
 ARG APP
 ARG VITE_API_URL
 ARG VITE_SALON_SLUG
-ARG VITE_CLIENT_BASE_HOST
 ENV VITE_API_URL=$VITE_API_URL \
-    VITE_SALON_SLUG=$VITE_SALON_SLUG \
-    VITE_CLIENT_BASE_HOST=$VITE_CLIENT_BASE_HOST
+    VITE_SALON_SLUG=$VITE_SALON_SLUG
 
 # Senza questo il bundle punterebbe silenziosamente a http://localhost:8000 (default di api.js)
 RUN test -n "$VITE_API_URL" || { \
