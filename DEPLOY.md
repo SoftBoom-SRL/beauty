@@ -104,22 +104,35 @@ DATABASE_URL=<Postgres URL interna dal punto 2>
 ALLOWED_HOSTS=beautyapi.yourang.ai
 CSRF_TRUSTED_ORIGINS=https://beautyapi.yourang.ai
 CORS_ALLOWED_ORIGINS=https://beauty.yourang.ai
-CORS_ALLOWED_ORIGIN_REGEXES=^https://[a-z0-9-]+\.beautyclients\.yourang\.ai$
+CLIENT_BASE_HOST=beautyclients.yourang.ai
 FRONTEND_ORIGIN=https://beauty.yourang.ai
 ENCRYPTION_KEY=<genera: openssl rand -hex 32>
 DJANGO_SUPERUSER_EMAIL=tu@yourang.ai
 DJANGO_SUPERUSER_PASSWORD=<password forte>
+
+YOURANG_ISSUER_URL=https://api.yourang.ai
+YOURANG_CLIENT_ID=<dal provisioning Yourang>
+YOURANG_CLIENT_SECRET=<dal provisioning Yourang>
+YOURANG_WEBHOOK_RECEIVER_URL=https://beautyapi.yourang.ai/api/integrations/yourang/webhook
 ```
+
+Le quattro `YOURANG_*` servono al login con account Yourang e al sync fra i due
+portali: senza `YOURANG_ISSUER_URL` e `YOURANG_CLIENT_ID` gli endpoint OAuth
+rispondono `503 Integrazione Yourang non configurata` e il pulsante nella pagina
+di login va in errore. Vedi §8 per il redirect_uri da far whitelistare.
+
+`FRONTEND_ORIGIN` non è cosmetica: `client.py::redirect_uri()` la usa per costruire
+`<FRONTEND_ORIGIN>/oauth-popup/done`. Se non combacia con la whitelist lato Yourang,
+l'authorization server rifiuta la richiesta.
+
+`ENCRYPTION_KEY` diventa obbligatoria con l'integrazione attiva: i token OAuth sono
+cifrati a riposo (AES-256-GCM) e senza chiave lo scambio solleva un errore.
 
 Opzionali, da aggiungere quando servono:
 
 ```
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
-YOURANG_ISSUER_URL=https://api.yourang.ai
-YOURANG_CLIENT_ID=beauty-crm
-YOURANG_CLIENT_SECRET=...
-YOURANG_WEBHOOK_RECEIVER_URL=https://beautyapi.yourang.ai/api/integrations/yourang/webhook
 ```
 
 `entrypoint.sh` esegue `migrate` e `collectstatic` a ogni avvio, e crea il superuser
@@ -213,9 +226,26 @@ ai dati reali e rimuoverlo dopo. `--reset` lo ricrea da zero.
 **Stripe** — endpoint webhook: `https://beautyapi.yourang.ai/api/sales/stripe/webhook`.
 Senza `STRIPE_SECRET_KEY` gli endpoint di pagamento rispondono 503, il resto funziona.
 
-**Yourang OAuth** — il `redirect_uri` da far whitelistare lato Yourang è
-`https://beauty.yourang.ai/oauth-popup/done`. Richiede `ENCRYPTION_KEY` impostata
-(i token sono cifrati a riposo) e `FRONTEND_ORIGIN` uguale al dominio della dashboard.
+**Yourang OAuth** — abilita sia il "login con Yourang" dalla pagina di login (che
+provisiona/collega il salone e conia la sessione staff) sia il "collega" dalle
+impostazioni, seguito dal primo sync di contatti e servizi.
+
+Da fare **lato Yourang**, una volta sola:
+
+1. Provisionare il client OAuth e prendere `client_id` / `client_secret`.
+2. Whitelistare il redirect_uri **esatto**: `https://beauty.yourang.ai/oauth-popup/done`.
+
+Verificato il 31/07/2026 su `https://api.yourang.ai/.well-known/openid-configuration`:
+l'issuer è `https://api.yourang.ai`, ma l'`authorization_endpoint` sta su
+`https://app.yourang.ai/oauth/authorize`. Il codice legge gli endpoint dal documento
+di discovery invece di derivarli dall'issuer, quindi funziona — ma non provare a
+ricostruirli a mano. Tutti gli scope richiesti da `client.py::SCOPES` (`openid
+profile email offline_access contacts:read contacts:write events:read`) risultano
+supportati dall'authorization server.
+
+Il webhook in ingresso (`YOURANG_WEBHOOK_RECEIVER_URL`) viene registrato in
+automatico durante lo scambio del code. Se lo ometti la connessione riesce lo
+stesso, ma Yourang non spinge eventi: il sync resta quello iniziale.
 
 **Outbox** — gli eventi verso Yourang si accodano in `core_outboxevent`.
 Per svuotarli serve un job schedulato (Coolify → *Scheduled Tasks* sulla risorsa

@@ -1,6 +1,7 @@
 """Django settings — youty backend (dashboard salone + web app cliente)."""
 
 import os
+import re
 from pathlib import Path
 
 import dj_database_url
@@ -133,10 +134,23 @@ else:
         o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
     ]
     # L'app cliente vive su un sottodominio per salone (<slug>.prenota.esempio.it):
-    # le origini non si possono elencare a mano, servono i regex. Separatore = spazio,
-    # perché la virgola compare nei quantificatori regex ({1,3}).
-    # Es. CORS_ALLOWED_ORIGIN_REGEXES=^https://[a-z0-9-]+\.prenota\.esempio\.it$
-    CORS_ALLOWED_ORIGIN_REGEXES = os.getenv("CORS_ALLOWED_ORIGIN_REGEXES", "").split()
+    # le origini non si possono elencare a mano.
+    #
+    # Il regex lo costruiamo QUI, non lo facciamo passare per l'env: i pannelli web
+    # raddoppiano i backslash (Coolify lo fa), e `\\.` in regex significa "backslash
+    # letterale", non "punto". Il match fallisce senza errori e le richieste vengono
+    # semplicemente rifiutate. Basta quindi il nome dell'host:
+    #   CLIENT_BASE_HOST=prenota.esempio.it
+    CLIENT_BASE_HOST = os.getenv("CLIENT_BASE_HOST", "").strip()
+    CORS_ALLOWED_ORIGIN_REGEXES = []
+    if CLIENT_BASE_HOST:
+        CORS_ALLOWED_ORIGIN_REGEXES.append(
+            r"^https://[a-z0-9-]+\.%s$" % re.escape(CLIENT_BASE_HOST)
+        )
+    # Via di fuga per casi non coperti dal pattern sopra. Separatore = spazio, perché
+    # la virgola compare nei quantificatori regex ({1,3}). Occhio all'escaping del
+    # pannello se la usi.
+    CORS_ALLOWED_ORIGIN_REGEXES += os.getenv("CORS_ALLOWED_ORIGIN_REGEXES", "").split()
 
 # JWT (staff dashboard + clienti web app)
 JWT_SECRET = os.getenv("JWT_SECRET", SECRET_KEY)
