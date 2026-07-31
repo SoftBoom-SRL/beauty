@@ -1,32 +1,14 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Screen agents CONSUME this via useApp() — never edit it.
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, clientAuth, mediaUrl, useT, useToastHost } from '@youty/shared';
+import { api, clientAuth, mediaUrl, SALON_SLUG, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
 
-/* ---- salone servito da questa pagina ----
- * Un solo deploy serve tutti i saloni: lo slug arriva dal sottodominio.
- * Ordine di precedenza:
- *   1. ?salon=<slug>        override esplicito (test e anteprime)
- *   2. sottodominio         <slug>.<VITE_CLIENT_BASE_HOST>, es. the-parlour.prenota.esempio.it
- *   3. VITE_SALON_SLUG      fallback a build time (sviluppo, deploy mono-salone)
- * Il confronto con VITE_CLIENT_BASE_HOST è obbligatorio: senza, su un host a due
- * livelli come prenota.esempio.it prenderemmo "prenota" come slug. */
-function resolveSalonSlug() {
-  const override = new URLSearchParams(window.location.search).get('salon');
-  if (override) return override;
-
-  const base = import.meta.env.VITE_CLIENT_BASE_HOST;
-  const host = window.location.hostname;
-  if (base && host.endsWith('.' + base)) {
-    const sub = host.slice(0, -(base.length + 1));
-    if (sub && sub !== 'www' && !sub.includes('.')) return sub;
-  }
-
-  return import.meta.env.VITE_SALON_SLUG || 'the-parlour';
-}
-
-export const SALON_SLUG = resolveSalonSlug();
+/* Il salone servito da questa pagina è il primo segmento del path
+ * (`/the-parlour`). La risoluzione vive in @youty/shared perché serve anche a
+ * clientAuth, che namespacizza la sessione per salone. Vedi shared/src/salon.js.
+ * Ri-esportato qui: gli schermi lo importano da '../ctx.jsx'. */
+export { SALON_SLUG };
 
 const AppCtx = createContext(null);
 export const useApp = () => useContext(AppCtx);
