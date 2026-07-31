@@ -162,3 +162,21 @@ class TechnicalSheetIn(Schema):
 
 class OkOut(Schema):
     ok: bool = True
+
+
+class HookLeadIn(Schema):
+    """Form pubblico di raccolta contatti (/<slug>/hook nell'app cliente)."""
+
+    salon_slug: str
+    first_name: str
+    last_name: str = ""
+    phone: str
+    email: str = ""
+    marketing: bool = False
+    privacy: bool = False
+    # Honeypot: campo nascosto via CSS. Se arriva pieno è un bot.
+    website: str = ""
+
+
+class HookLeadOut(Schema):
+    ok: bool = True

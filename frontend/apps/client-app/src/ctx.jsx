@@ -33,6 +33,7 @@ export function AppProvider({ children }) {
         address: b.address || '',
         phone: b.phone || '',
         openingHours: b.opening_hours || '',
+        privacyUrl: b.privacy_policy_url || '',
       }));
     } catch (err) {
       setBrandError(err?.message || 'Errore');
