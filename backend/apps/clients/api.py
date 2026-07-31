@@ -347,7 +347,11 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
 
 HOOK_LABEL = "Da form"
 HOOK_LABEL_COLOR = "#8B5CF6"
-HOOK_MAX_PER_WINDOW = 5
+# Soglia per IP e per salone. Non troppo bassa: un salone che fa compilare il
+# form da un tablet sul bancone, o clienti sulla stessa rete pubblica, arrivano
+# tutti dallo stesso IP. Serve a fermare uno script, non a contare le persone —
+# contro lo spam mirato la difesa è l'honeypot.
+HOOK_MAX_PER_WINDOW = 20
 HOOK_WINDOW_SECONDS = 3600
 
 
