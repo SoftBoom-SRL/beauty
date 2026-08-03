@@ -11,7 +11,7 @@ export default function Hook() {
   const [f, setF] = useState({ first_name: '', last_name: '', phone: '', email: '' });
   const [marketing, setMarketing] = useState(false);
   const [privacy, setPrivacy] = useState(false);
-  const [website, setWebsite] = useState(''); // honeypot
+  const [trap, setTrap] = useState(false); // honeypot: deve restare false
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
@@ -32,7 +32,7 @@ export default function Hook() {
         email: f.email.trim(),
         marketing,
         privacy,
-        website,
+        trap,
       }, { auth: false });
       setDone(true);
     } catch (err) {
@@ -84,9 +84,12 @@ export default function Hook() {
             <input className="ca-input" type="email" inputMode="email" autoComplete="email" placeholder={t('Email', 'Email')}
               value={f.email} onChange={set('email')} />
 
-            {/* honeypot: invisibile a chi compila, irresistibile per i bot */}
-            <input tabIndex={-1} autoComplete="off" aria-hidden="true" value={website}
-              onChange={(e) => setWebsite(e.target.value)}
+            {/* Honeypot: una CHECKBOX, non un campo di testo. L'autofill di Chrome
+              * riempiva il vecchio input `website` e faceva scartare utenti veri
+              * in silenzio; le checkbox l'autofill non le spunta, mentre un bot
+              * che compila tutto quello che trova sì. */}
+            <input type="checkbox" tabIndex={-1} aria-hidden="true" checked={trap}
+              onChange={(e) => setTrap(e.target.checked)}
               style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }} />
 
             <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 13, lineHeight: 1.45, cursor: 'pointer' }}>

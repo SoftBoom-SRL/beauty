@@ -94,6 +94,25 @@ CACHES = {
     }
 }
 
+# Logging esplicito: la configurazione di default di Django non fa arrivare a
+# stdout gli INFO dei logger applicativi, e senza handler il fallback di Python
+# mostra solo WARNING e oltre. Risultato: le nostre righe diagnostiche erano
+# invisibili proprio quando servivano (una submission scartata dall'honeypot non
+# lasciava traccia).
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"simple": {"format": "%(levelname)s %(name)s: %(message)s"}},
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "simple"},
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {
+        "youty": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+    },
+}
+
 AUTH_USER_MODEL = "accounts.User"
 
 AUTH_PASSWORD_VALIDATORS = [

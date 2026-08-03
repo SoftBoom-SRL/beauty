@@ -174,7 +174,12 @@ class HookLeadIn(Schema):
     email: str = ""
     marketing: bool = False
     privacy: bool = False
-    # Honeypot: campo nascosto via CSS. Se arriva pieno è un bot.
+    # Honeypot a CHECKBOX, nascosta via CSS: deve arrivare False.
+    # Non un campo di testo: l'autofill di Chrome riempiva il vecchio `website`
+    # (token che riconosce) e scartava utenti veri in silenzio. Le checkbox
+    # l'autofill non le spunta, i bot che compilano tutto sì.
+    trap: bool = False
+    # Accettato per retrocompatibilità con bundle vecchi ancora in cache.
     website: str = ""
 
 
