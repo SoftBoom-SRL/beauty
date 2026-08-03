@@ -12,6 +12,7 @@ import LocationsPage from './LocationsPage.jsx';
 import BrandDrawer from './BrandDrawer.jsx';
 import TeamDrawer from './TeamDrawer.jsx';
 import RolesDrawer from './RolesDrawer.jsx';
+import PasswordDrawer from './PasswordDrawer.jsx';
 
 /* grouped link-style rows — module scope: stable identity across re-renders */
 const Group = ({ title, children }) => (
@@ -43,6 +44,7 @@ export default function ImpostazioniSection() {
   const canLog = hasScope('activity_log');
 
   const [page, setPage] = useState(null);           // 'bookings' | 'log' | 'sedi'
+  const [pwOpen, setPwOpen] = useState(false);
   const [logPeriod, setLogPeriod] = useState('all');
   const [brandOpen, setBrandOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
@@ -170,6 +172,9 @@ export default function ImpostazioniSection() {
           locked={!canTeam}
           value={canTeam ? t('Gestisci', 'Manage') : undefined}
           onClick={canTeam ? () => setRolesOpen(true) : lockToast} />
+        <Row icon="settings" label={t('Cambia password', 'Change password')}
+          sub={t('La tua password di accesso alla dashboard', 'Your dashboard sign-in password')}
+          onClick={() => setPwOpen(true)} />
         <Row icon="clock" label={t('Registro attività', 'Activity log')}
           sub={canLog ? t('Ogni azione con data, ora e autore', 'Every action with date, time and author') : t('Richiede il permesso Registro attività', 'Requires the Activity log permission')}
           locked={!canLog}
@@ -183,6 +188,7 @@ export default function ImpostazioniSection() {
       {brandOpen && <BrandDrawer onClose={() => setBrandOpen(false)} />}
       {teamOpen && <TeamDrawer onClose={() => setTeamOpen(false)} onRoles={() => { setTeamOpen(false); setRolesOpen(true); }} />}
       {rolesOpen && <RolesDrawer onClose={() => setRolesOpen(false)} />}
+      {pwOpen && <PasswordDrawer onClose={() => setPwOpen(false)} />}
     </div>
   );
 }
