@@ -146,7 +146,12 @@ se le lasci come env di runtime il container parte ma il bundle punta a localhos
 ```
 APP=dashboard
 VITE_API_URL=https://beautyapi.yourang.ai
+VITE_CLIENT_APP_URL=https://beautyclients.yourang.ai
 ```
+
+`VITE_CLIENT_APP_URL` serve a *Impostazioni → Link pubblici*, dove la titolare
+copia i propri URL (app cliente e modulo contatti). La dashboard sta su un altro
+dominio e non può dedurlo. Se manca, quella sezione non compare.
 
 Il Dockerfile fallisce apposta se `VITE_API_URL` manca, così non ti ritrovi in
 produzione un frontend che chiama `http://localhost:8000`.
