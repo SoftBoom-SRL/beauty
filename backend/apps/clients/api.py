@@ -378,8 +378,14 @@ def public_hook(request, data: HookLeadIn):
     trasformerebbe l'endpoint in un oracolo: chiunque potrebbe verificare se un
     numero è cliente di quel salone provandolo.
     """
-    if data.website.strip():  # honeypot
-        logger.info("hook: scartata submission con honeypot pieno")
+    if data.trap or data.website.strip():  # honeypot
+        # WARNING, non INFO: se questa trappola scatta su un utente vero
+        # perdiamo un contatto senza che nessuno lo sappia, quindi deve essere
+        # visibile nei log. La risposta resta 200 per non istruire i bot.
+        logger.warning(
+            "hook: submission scartata dall'honeypot (salone=%s, trap=%s, website=%r)",
+            data.salon_slug, data.trap, data.website[:40],
+        )
         return {"ok": True}
 
     if not data.privacy:
