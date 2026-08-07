@@ -49,6 +49,21 @@ class PhoneTests(SimpleTestCase):
     def test_double_zero_prefix(self):
         self.assertEqual(normalize_phone("0039 333 1234567"), "+393331234567")
 
+    def test_italian_landline_keeps_the_area_zero(self):
+        # In Italia lo 0 di distretto fa parte del numero: +39 02 …, non +39 2 …
+        self.assertEqual(normalize_phone("02 1234567"), "+39021234567")
+        self.assertEqual(normalize_phone("0577 12345"), "+39057712345")
+
+    def test_italian_landline_spellings_converge(self):
+        # Il fallimento vero: due modi di scrivere lo stesso fisso non devono
+        # dare due chiavi diverse, o diventano due contatti Yourang.
+        self.assertEqual(normalize_phone("011 1234567"), normalize_phone("+39 011 1234567"))
+        self.assertEqual(normalize_phone("011 1234567"), normalize_phone("0039 011 1234567"))
+
+    def test_foreign_trunk_zero_dropped(self):
+        # Fuori dall'Italia lo 0 iniziale è prefisso interurbano e va tolto.
+        self.assertEqual(normalize_phone("0161 4960000", default_cc="44"), "+441614960000")
+
     def test_garbage_returns_none(self):
         self.assertIsNone(normalize_phone("n/a"))
 

@@ -36,6 +36,17 @@ _EVENT_STATUS = {
 }
 
 
+# Paesi in cui lo 0 iniziale NON è un prefisso interurbano da togliere ma fa
+# parte del numero nazionale, e quindi resta in E.164. L'Italia è il caso raro:
+# +39 02 1234567 è giusto, +39 2 1234567 non esiste. Altrove (UK, Germania,
+# Francia) lo 0 va tolto.
+#
+# La distinzione conta perché il telefono è la chiave naturale dei contatti
+# Yourang: togliendo lo 0 ai fissi, lo stesso numero scritto "02 1234567" e
+# "+39 02 1234567" darebbe due chiavi diverse, cioè due contatti.
+TRUNK_ZERO_KEPT = {"39"}
+
+
 def normalize_phone(raw: str, default_cc: str = "39") -> str | None:
     """Porta un numero a testo libero in E.164 (`+39...`). None se non normalizzabile."""
     if not raw:
@@ -46,7 +57,8 @@ def normalize_phone(raw: str, default_cc: str = "39") -> str | None:
     elif s.startswith("00"):
         digits = s[2:]
     else:
-        digits = default_cc + s.lstrip("0")
+        national = s if default_cc in TRUNK_ZERO_KEPT else s.lstrip("0")
+        digits = default_cc + national
     if not re.fullmatch(r"[1-9]\d{6,14}", digits):
         return None
     return "+" + digits
