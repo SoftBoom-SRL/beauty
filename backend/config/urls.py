@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.urls import path, re_path
 from django.views.static import serve as media_serve
 
+from apps.core.views import activity_stream
 from config.api import api
 
 
@@ -18,6 +19,9 @@ def healthz(_request):
 urlpatterns = [
     path("healthz", healthz),
     path("admin/", admin.site.urls),
+    # Stream SSE: vista Django "nuda" (StreamingHttpResponse), registrata prima
+    # del mount di Ninja così la risolve Django e non il router.
+    path("api/core/activity/stream", activity_stream),
     path("api/", api.urls),
 ]
 

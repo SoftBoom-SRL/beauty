@@ -4,10 +4,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Avatar, EmptyState, Icon } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
-import { initialsOf, relRange } from './helpers.js';
+import { initialsOf, relRange, daysToBirthday, genderGlyph, genderLabel } from './helpers.js';
 
 const PAGE = 50;
 
@@ -22,6 +22,7 @@ export default function ClientiSection() {
   const [catCounts, setCatCounts] = useState(null); // { __active: n, [catId]: n }
   const [refreshKey, setRefreshKey] = useState(0);
   const bump = useCallback(() => setRefreshKey((k) => k + 1), []);
+  useLive(/^client(_category)?\./, bump); // anagrafica creata/modificata altrove → lista reale
 
   /* debounce the shared topbar search before hitting the API */
   const [q, setQ] = useState(search);
@@ -156,7 +157,11 @@ export default function ClientiSection() {
                       <span style={{ fontWeight: 700, fontSize: 14.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cl.full_name}</span>
                       {cl.deposit_always && <Icon name="coupon" size={13} color="var(--warn)" />}
                     </div>
-                    <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1 }}>{cl.phone || '—'}{cl.lang === 'en' ? ' · EN' : ''}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className="tabnum">{cl.phone || '—'}</span>{cl.lang === 'en' ? <span>· EN</span> : null}
+                      {cl.gender && <span title={genderLabel(cl.gender, t)} style={{ color: 'var(--muted-2)' }}>{genderGlyph(cl.gender)}</span>}
+                      {(() => { const n = daysToBirthday(cl.birthday); return n != null && n <= 7 ? <span title={n === 0 ? t('Compleanno oggi', 'Birthday today') : t(`Compleanno tra ${n} giorni`, `Birthday in ${n} days`)} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--warn)', fontWeight: 700, fontSize: 11 }}><Icon name="cake" size={11} color="var(--warn)" />{n === 0 ? t('oggi', 'today') : `${n}g`}</span> : null; })()}
+                    </div>
                     <div style={{ display: 'flex', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
                       <RelBadge score={cl.reliability} t={t} sm />
                       {(cl.categories || []).slice(0, 2).map((cat) => <CatChip key={cat.id} cat={cat} sm />)}

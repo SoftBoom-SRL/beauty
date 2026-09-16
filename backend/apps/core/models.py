@@ -54,7 +54,12 @@ class SalonSettings(TimeStampedModel):
     salon = models.OneToOneField(Salon, on_delete=models.CASCADE, related_name="settings")
     logo = models.ImageField(upload_to="branding/", blank=True, null=True)
     brand_color = models.CharField(max_length=7, default="#6366F1")
+    # Testo mostrato nell'app cliente. Se `opening_hours_week` è compilato viene
+    # generato da lì (vedi core.services.opening_hours_text).
     opening_hours = models.TextField(blank=True, default="")
+    # Orari del centro per giorno: {"0": [["09:00","13:00"],["14:00","19:00"]], …, "6": []}
+    # (0 = lunedì; lista vuota = chiuso). Fonte unica per agenda, app cliente e impostazioni.
+    opening_hours_week = models.JSONField(default=dict, blank=True)
     agenda_fill = models.CharField(
         max_length=20, choices=AgendaFill.choices, default=AgendaFill.FREE
     )

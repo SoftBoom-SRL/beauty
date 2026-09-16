@@ -10,6 +10,7 @@ import BookingsOptimPage from './BookingsOptimPage.jsx';
 import ActivityLogPage from './ActivityLogPage.jsx';
 import LocationsPage from './LocationsPage.jsx';
 import BrandDrawer from './BrandDrawer.jsx';
+import HoursDrawer, { dayLabel, todayRanges } from './HoursDrawer.jsx';
 import TeamDrawer from './TeamDrawer.jsx';
 import RolesDrawer from './RolesDrawer.jsx';
 import PasswordDrawer from './PasswordDrawer.jsx';
@@ -53,6 +54,7 @@ export default function ImpostazioniSection() {
   const [pwOpen, setPwOpen] = useState(false);
   const [logPeriod, setLogPeriod] = useState('all');
   const [brandOpen, setBrandOpen] = useState(false);
+  const [hoursOpen, setHoursOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
@@ -64,6 +66,7 @@ export default function ImpostazioniSection() {
       setPage('log');
       setDeepLink(null);
     }
+    if (deepLink === 'hours') { setHoursOpen(true); setDeepLink(null); }
   }, [deepLink, setDeepLink]);
 
   // Yourang connection status + handshake from the OAuth popup.
@@ -120,7 +123,13 @@ export default function ImpostazioniSection() {
 
       {/* SALONE */}
       <Group title={t('Salone', 'Salon')}>
-        <Row first icon="mapPin" label={t('Sedi', 'Locations')}
+        <Row first icon="clock" label={t('Orari di apertura', 'Opening hours')}
+          sub={settings?.opening_hours_week && Object.keys(settings.opening_hours_week).length
+            ? t('Oggi', 'Today') + ': ' + dayLabel(todayRanges(settings.opening_hours_week), t)
+            : t('Non ancora impostati: compaiono in agenda e nell’app cliente', 'Not set yet: shown in the agenda and the client app')}
+          value={settings?.opening_hours_week && Object.keys(settings.opening_hours_week).length ? t('Modifica', 'Edit') : t('Imposta', 'Set')}
+          onClick={() => setHoursOpen(true)} />
+        <Row icon="mapPin" label={t('Sedi', 'Locations')}
           sub={t('Indirizzi e recapiti delle sedi', 'Location addresses and contacts')}
           value={locations.length + (defaultLoc ? ' · ' + defaultLoc.name : '')}
           onClick={() => setPage('sedi')} />
@@ -219,6 +228,7 @@ export default function ImpostazioniSection() {
       </div>
 
       {brandOpen && <BrandDrawer onClose={() => setBrandOpen(false)} />}
+      {hoursOpen && <HoursDrawer onClose={() => setHoursOpen(false)} />}
       {teamOpen && <TeamDrawer onClose={() => setTeamOpen(false)} onRoles={() => { setTeamOpen(false); setRolesOpen(true); }} />}
       {rolesOpen && <RolesDrawer onClose={() => setRolesOpen(false)} />}
       {pwOpen && <PasswordDrawer onClose={() => setPwOpen(false)} />}

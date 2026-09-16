@@ -55,19 +55,20 @@ export function DurationInput({ value, onChange, min = 5 }) {
 }
 
 /** overlapping avatar stack for the operators assigned to a service */
-export function OperatorAvatarStack({ ops, max = 4 }) {
+export function OperatorAvatarStack({ ops, max = 4, size = 28 }) {
   if (!ops.length) return <span className="t-sm" style={{ color: 'var(--muted-2)' }}>—</span>;
   const shown = ops.slice(0, max);
   const extra = ops.length - shown.length;
+  const ov = Math.round(size * 0.3);
   return (
     <div style={{ display: 'flex', alignItems: 'center' }}>
       {shown.map((o, i) => (
-        <div key={o.id} style={{ marginLeft: i ? -8 : 0 }} title={`${o.first_name} ${o.last_name}`}>
-          <Avatar initials={o.initials} size={28} color={o.color} ring />
+        <div key={o.id} style={{ marginLeft: i ? -ov : 0 }} title={`${o.first_name} ${o.last_name}`}>
+          <Avatar initials={o.initials} size={size} color={o.color} ring />
         </div>
       ))}
       {extra > 0 && (
-        <div style={{ marginLeft: -8, width: 28, height: 28, borderRadius: '50%', background: 'var(--paper-2)', border: '1px solid var(--hair)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, color: 'var(--ink-2)' }}>
+        <div style={{ marginLeft: -ov, width: size, height: size, borderRadius: '50%', background: 'var(--paper-2)', border: '1px solid var(--hair)', display: 'grid', placeItems: 'center', fontSize: Math.max(10, size * 0.38), fontWeight: 700, color: 'var(--ink-2)' }}>
           +{extra}
         </div>
       )}

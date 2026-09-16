@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, mediaUrl, Icon, EmptyState } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import ComEditModal from './ComEditModal.jsx';
 import SendConfirmModal from './SendConfirmModal.jsx';
 import { COM_STATUS_KEYS, audienceSummary, comStatusMeta, comWhenLabel } from './helpers.js';
@@ -45,6 +45,7 @@ export default function ComunicazioniSection() {
   }, [statusF, fireToast, t]);
 
   useEffect(() => { fetchList(); }, [fetchList]);
+  useLive(/^communication\./, () => fetchList());
 
   const refetch = useCallback(() => fetchList(), [fetchList]);
 

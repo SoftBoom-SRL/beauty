@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { initialsOf, toastErr, fmtMoney } from '../lib.js';
+import ClientPicker from '../ClientPicker.jsx';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, serviceCategories, operators, fireToast, hasScope } = useDash();
@@ -15,7 +16,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const seq = useRef(1);
   const newRow = () => ({
     key: 'r' + seq.current++,
-    client: null, q: '',
+    client: null,
     items: [],          // [{ key, service_id, operator_id }]
     date: baseDate,
     selStart: null,     // ISO string of chosen slot
@@ -203,20 +204,6 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
   const eligibleOps = (serviceId) => (operators || []).filter((o) => (o.service_ids || []).includes(serviceId));
 
-  /* ---- client search (debounced) ---- */
-  const [clients, setClients] = useState(null); // null = loading
-  useEffect(() => {
-    if (row.client) return; // picker closed once a client is chosen
-    let alive = true;
-    setClients(null);
-    const tm = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: row.q || undefined, limit: 6 } })
-        .then((res) => { if (alive) setClients(res.items || []); })
-        .catch(() => { if (alive) setClients([]); });
-    }, 220);
-    return () => { alive = false; clearTimeout(tm); };
-  }, [row.q, row.client]);
-
   /* ---- items ---- */
   const addItem = (serviceId) => onPatch((r) => ({ items: [...r.items, { key: 'it' + itemSeq.current++, service_id: serviceId, operator_id: null }], selStart: null }));
   const removeItem = (key) => onPatch((r) => ({ items: r.items.filter((x) => x.key !== key), selStart: null }));
@@ -290,31 +277,10 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
           </div>
         )}
 
-        {/* client picker */}
-        {row.client ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px', borderRadius: 10, background: 'var(--clay-tint)', marginBottom: 12 }}>
-            <Avatar initials={initialsOf(row.client.full_name)} size={30} />
-            <span style={{ flex: 1, fontWeight: 700, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.client.full_name}</span>
-            <button onClick={() => onPatch({ client: null })} style={{ cursor: 'pointer', border: 'none', background: 'transparent', display: 'grid', placeItems: 'center' }} aria-label={t('Cambia cliente', 'Change client')}><Icon name="x" size={14} color="var(--muted-2)" /></button>
-          </div>
-        ) : (
-          <div style={{ marginBottom: 12 }}>
-            <div className="dk-search" style={{ width: '100%', marginBottom: 6, height: 38 }}>
-              <Icon name="search" size={16} color="var(--muted-2)" />
-              <input value={row.q} onChange={(e) => onPatch({ q: e.target.value })} placeholder={t('Cerca cliente…', 'Search client…')} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {clients === null && [...Array(3)].map((_, i) => <div key={i} className="skel" style={{ height: 42, borderRadius: 10 }} />)}
-              {(clients || []).map((cl) => (
-                <button key={cl.id} className="dk-row" onClick={() => onPatch({ client: cl })} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px', borderRadius: 10, background: 'transparent', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
-                  <Avatar initials={initialsOf(cl.full_name)} size={30} />
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cl.full_name}</span>
-                </button>
-              ))}
-              {clients && !clients.length && <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '8px 4px' }}>{t('Nessun cliente trovato', 'No client found')}</div>}
-            </div>
-          </div>
-        )}
+        {/* client picker — componente condiviso con il drawer nuova prenotazione */}
+        <div style={{ marginBottom: 12 }}>
+          <ClientPicker value={row.client} onChange={(c) => onPatch({ client: c })} />
+        </div>
 
         {/* services catalogue */}
         <div className="t-meta" style={{ marginBottom: 7 }}>{t('Servizi', 'Services')}</div>
@@ -348,15 +314,16 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
                   </div>
                   {/* compact operator picker */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '8px 11px' }}>
-                    <button onClick={() => setItemOp(it.key, null)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 99, cursor: 'pointer', border: '1.5px solid ' + (it.operator_id === null ? 'var(--clay)' : 'var(--hair)'), background: it.operator_id === null ? 'var(--clay-tint)' : 'var(--surface)', fontSize: 12, fontWeight: it.operator_id === null ? 700 : 600, color: it.operator_id === null ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                      <Icon name="sparkle" size={12} color={it.operator_id === null ? 'var(--clay-ink)' : 'var(--muted-2)'} />{t('Prima disp.', 'First avail.')}
+                    <button onClick={() => setItemOp(it.key, null)} className={'dk-pill' + (it.operator_id === null ? ' dk-pill--on' : '')} style={{ padding: '4px 10px', fontSize: 12 }}>
+                      <Icon name="sparkle" size={12} color={it.operator_id === null ? '#fff' : 'var(--muted-2)'} />{t('Prima disp.', 'First avail.')}
                     </button>
                     {eligible.map((o) => {
                       const on = o.id === it.operator_id;
                       return (
-                        <button key={o.id} onClick={() => setItemOp(it.key, o.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px 3px 4px', borderRadius: 99, cursor: 'pointer', border: '1.5px solid ' + (on ? (o.color || 'var(--clay)') : 'var(--hair)'), background: on ? `color-mix(in srgb, ${o.color || 'var(--clay)'} 18%, var(--surface))` : 'var(--surface)' }}>
-                          <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} />
-                          <span style={{ fontSize: 12, fontWeight: on ? 700 : 600, whiteSpace: 'nowrap' }}>{o.first_name}</span>
+                        <button key={o.id} onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12 }}>
+                          <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
+                          <span>{o.first_name}</span>
+                          {on && <Icon name="check" size={12} stroke={2.6} />}
                         </button>
                       );
                     })}
@@ -389,7 +356,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
                 {slots.map((sl) => {
                   const sel = sl.start === row.selStart;
                   return (
-                    <button key={sl.start} onClick={() => onPatch({ selStart: sl.start })} className="tabnum" style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1.5px solid ' + (sel ? 'var(--ink)' : 'var(--hair)'), background: sel ? 'var(--ink)' : 'var(--surface)', color: sel ? '#fff' : 'var(--ink)' }}>
+                    <button key={sl.start} onClick={() => onPatch({ selStart: sl.start })} className={'dk-slot' + (sel ? ' dk-slot--on' : '')}>
                       {timeLabel(minutesOfDay(sl.start))}
                     </button>
                   );

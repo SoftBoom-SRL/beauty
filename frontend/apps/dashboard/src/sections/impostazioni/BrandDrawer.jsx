@@ -13,7 +13,6 @@ export default function BrandDrawer({ onClose }) {
   const { t, session, salon, settings, reload, fireToast } = useDash();
   const isOwner = !!session?.is_owner;
   const [color, setColor] = useState(settings?.brand_color || '#6366F1');
-  const [openingHours, setOpeningHours] = useState(settings?.opening_hours || '');
   const [privacyUrl, setPrivacyUrl] = useState(settings?.privacy_policy_url || '');
   const [file, setFile] = useState(null);        // pending File
   const [filePreview, setFilePreview] = useState(null); // data URL of pending file
@@ -37,7 +36,7 @@ export default function BrandDrawer({ onClose }) {
     setSaving(true);
     try {
       if (file) await api.postForm('/api/core/settings/logo', { logo: file });
-      await api.put('/api/core/settings', { brand_color: color, opening_hours: openingHours, privacy_policy_url: privacyUrl.trim() });
+      await api.put('/api/core/settings', { brand_color: color, privacy_policy_url: privacyUrl.trim() });
       await reload.salon();
       fireToast({ msg: t('Brand salvato', 'Brand saved'), icon: 'check' });
       onClose();
@@ -113,17 +112,13 @@ export default function BrandDrawer({ onClose }) {
           <span className="t-sm" style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{t('Colore e logo vengono applicati alla web app cliente al prossimo caricamento.', 'Colour and logo are applied to the client web app on the next load.')}</span>
         </div>
 
-        {/* orari di apertura — testo libero, mostrato nel footer dell'app cliente */}
-        <div className="t-meta" style={{ marginBottom: 10 }}>{t('Orari di apertura', 'Opening hours')}</div>
-        <textarea
-          value={openingHours}
-          disabled={!isOwner}
-          onChange={(e) => setOpeningHours(e.target.value)}
-          placeholder={t('es. Lun-Ven 9:00-19:00\nSab 9:00-13:00', 'e.g. Mon-Fri 9am-7pm\nSat 9am-1pm')}
-          rows={3}
-          style={{ ...inputCss, width: '100%', boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.5, opacity: isOwner ? 1 : 0.55 }}
-        />
-        <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6, marginBottom: 22 }}>{t('Compare nel footer dell’app cliente.', 'Shown in the client app footer.')}</div>
+        {/* orari: si impostano per giorno in Impostazioni → Orari di apertura; qui solo il riepilogo */}
+        <div className="t-meta" style={{ marginBottom: 8 }}>{t('Orari di apertura', 'Opening hours')}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: '1px solid var(--hair)', borderRadius: 12, marginBottom: 22, background: 'var(--surface-2)' }}>
+          <Icon name="clock" size={16} color="var(--muted)" />
+          <span className="t-sm" style={{ flex: 1, color: settings?.opening_hours ? 'var(--ink-2)' : 'var(--muted-2)', lineHeight: 1.45 }}>{settings?.opening_hours || t('Non impostati', 'Not set')}</span>
+          <span className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5, whiteSpace: 'nowrap' }}>{t('da Impostazioni › Orari', 'from Settings › Hours')}</span>
+        </div>
 
         {/* informativa privacy — obbligatoria nel form pubblico di raccolta contatti */}
         <div className="t-meta" style={{ marginBottom: 10 }}>{t('Informativa privacy', 'Privacy policy')}</div>

@@ -1,5 +1,5 @@
 // Topbar.jsx — real date, section title, client search, notifications, "Nuova" menu, avatar.
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Avatar, EmptyState, Icon, fmtDateIt } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 
@@ -18,10 +18,28 @@ const TITLES = {
   profile: ['Profilo titolare', 'Owner profile'],
 };
 
+/* Chiude un popover al click fuori o con Esc. Non usa un fondo `position: fixed`:
+ * dentro `.dk-top` il backdrop-filter lo confinerebbe alla sola barra e i click
+ * sul resto della pagina non lo raggiungerebbero (il pannello restava aperto). */
+function useClickAway(ref, open, onClose) {
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown, true); document.removeEventListener('keydown', onKey); };
+  }, [ref, open, onClose]);
+}
+
 export default function Topbar() {
-  const { t, tab, setTab, search, setSearch, openModal, session } = useDash();
+  const { t, lang, tab, setTab, search, setSearch, openModal, session, live } = useDash();
   const [notifOpen, setNotifOpen] = useState(false);
   const [newMenu, setNewMenu] = useState(false);
+  const notifRef = useRef(null);
+  const newRef = useRef(null);
+  useClickAway(notifRef, notifOpen, () => setNotifOpen(false));
+  useClickAway(newRef, newMenu, () => setNewMenu(false));
 
   const title = t(...(TITLES[tab] || TITLES.agenda));
   const initials = (session?.user?.name || '?')
@@ -45,22 +63,21 @@ export default function Topbar() {
       </div>
 
       {/* notifications */}
-      <div style={{ position: 'relative' }}>
-        <button className="dk-iconbtn" onClick={() => setNotifOpen((o) => !o)} style={{ background: notifOpen ? 'var(--surface-2)' : 'var(--surface)', borderColor: notifOpen ? 'var(--line-strong)' : 'var(--hair)' }}>
+      <div ref={notifRef} style={{ position: 'relative' }}>
+        <button className="dk-iconbtn" aria-label={t('Notifiche', 'Notifications')} onClick={() => { setNotifOpen((o) => !o); live?.markRead?.(); }} style={{ position: 'relative', background: notifOpen ? 'var(--surface-2)' : 'var(--surface)', borderColor: notifOpen ? 'var(--line-strong)' : 'var(--hair)' }}>
           <Icon name="bell" size={19} />
         </button>
-        {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} t={t} />}
+        {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} t={t} lang={lang} events={live?.events || []} myId={session?.user?.id} />}
       </div>
 
       {/* "Nuova" quick-create menu */}
-      <div style={{ position: 'relative' }}>
-        <button className="dk-btn dk-btn--clay" onClick={() => setNewMenu((o) => !o)}>
+      <div ref={newRef} style={{ position: 'relative' }}>
+        <button className="dk-btn dk-btn--clay" onClick={() => setNewMenu((o) => !o)} aria-expanded={newMenu}>
           <Icon name="plus" size={18} color="#fff" />{t('Nuova', 'New')}
           <Icon name="chevD" size={15} color="#fff" style={{ marginLeft: 2, transform: newMenu ? 'rotate(180deg)' : 'none', transition: 'transform 140ms' }} />
         </button>
         {newMenu && (
           <React.Fragment>
-            <div onClick={() => setNewMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 70 }} />
             <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 71, width: 280, padding: 6, boxShadow: 'var(--sh-pop)' }}>
               {[
                 { icon: 'calendar', title: t('Nuovo appuntamento', 'New appointment'), sub: t('Prenotazione telefonica in agenda', 'Phone booking in the agenda'), act: () => openModal('newappt') },
@@ -88,17 +105,56 @@ export default function Topbar() {
   );
 }
 
-/* Empty for now — real notifications will be wired to backend events later. */
-function NotifPanel({ onClose, t }) {
+/* Feed live: le ultime azioni del team (registro attività), aggiornate dal
+ * polling in ctx. Le proprie azioni sono attenuate; quelle altrui in evidenza. */
+const FEED_ICON = {
+  appointment: 'calendar', pause: 'clock', waitlist: 'clients', slot: 'calendar', visit: 'check',
+  client: 'user', sale: 'wallet', service: 'scissors', package: 'gift', category: 'tag',
+  operator: 'user', product: 'box', stock: 'box', order: 'send', supplier: 'box',
+  coupon: 'coupon', giftcard: 'gift', loyalty: 'heart', communication: 'message', automation: 'bolt',
+};
+function relTime(iso, lang) {
+  const diff = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (diff < 60) return lang === 'en' ? 'now' : 'adesso';
+  if (diff < 3600) return `${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
+  return new Date(iso).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short' });
+}
+function NotifPanel({ onClose, t, lang, events, myId }) {
   return (
     <React.Fragment>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
-      <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, width: 340, padding: 8, boxShadow: 'var(--sh-pop)', zIndex: 61 }}>
-        <div style={{ padding: '6px 10px 0' }}>
-          <span className="t-meta">{t('Notifiche', 'Notifications')}</span>
+      <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, width: 360, padding: 8, boxShadow: 'var(--sh-pop)', zIndex: 61, maxHeight: 'min(520px, 70vh)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px 8px' }}>
+          <span className="t-meta">{t('Attività del team', 'Team activity')}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: live?.streamOk ? 'var(--ok)' : 'var(--warn)' }} title={live?.streamOk ? t('Connessione live attiva: le viste si aggiornano appena qualcuno modifica i dati', 'Live connection on: views refresh as soon as someone changes data') : t('Connessione live in riconnessione: aggiornamento ogni pochi secondi', 'Live connection reconnecting: refreshing every few seconds')}>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: live?.streamOk ? 'var(--ok)' : 'var(--warn)', boxShadow: `0 0 0 3px ${live?.streamOk ? 'var(--ok-tint)' : 'var(--warn-tint)'}` }} />{live?.streamOk ? t('Live', 'Live') : t('Riconnessione…', 'Reconnecting…')}
+          </span>
         </div>
-        <EmptyState icon="bell" title={t('Nessuna notifica', 'No notifications')}
-          sub={t('Qui vedrai conferme, scorte e promemoria.', 'Confirmations, stock alerts and reminders will show up here.')} />
+        {!events.length ? (
+          <EmptyState icon="bell" title={t('Tutto tranquillo', 'All quiet')}
+            sub={t('Qui compaiono in tempo reale le azioni delle altre postazioni: prenotazioni, spostamenti, incassi.', 'Actions from other workstations show up here live: bookings, moves, payments.')} />
+        ) : (
+          <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, padding: '0 2px 4px' }}>
+            {events.map((e) => {
+              const mine = e.actor_id != null && e.actor_id === myId;
+              const icon = FEED_ICON[String(e.type).split('.')[0]] || 'edit';
+              const bad = /deleted|cancelled|no_show|removed/.test(e.type);
+              return (
+                <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '9px 10px', borderRadius: 10, opacity: mine ? 0.6 : 1 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center', background: bad ? 'var(--danger-tint)' : 'var(--clay-tint)' }}>
+                    <Icon name={icon} size={15} color={bad ? 'var(--danger)' : 'var(--clay-ink)'} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.3 }}>{e.summary}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
+                      {e.actor_name ? (mine ? t('Tu', 'You') : e.actor_name) : t('Sistema', 'System')} · {relTime(e.created_at, lang)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </React.Fragment>
   );

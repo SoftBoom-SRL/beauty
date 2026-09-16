@@ -108,8 +108,8 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
             const on = draft.category_id === c.id;
             return (
               <button
-                key={c.id} onClick={() => set({ category_id: c.id })}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--ink)' : 'var(--hair)'), background: on ? 'var(--ink)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}
+                key={c.id} type="button" onClick={() => set({ category_id: c.id })} aria-pressed={on}
+                className={'dk-pill' + (on ? ' dk-pill--on' : '')} style={{ padding: '5px 12px', fontSize: 12.5 }}
               >
                 <CategoryDot color={c.color} size={9} />{catName(c, lang)}
               </button>
@@ -201,12 +201,12 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
             const on = opIds.includes(o.id);
             return (
               <button
-                key={o.id} onClick={canTeam ? () => toggleOp(o.id) : undefined} disabled={!canTeam}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 13px 6px 6px', borderRadius: 99, cursor: canTeam ? 'pointer' : 'not-allowed', opacity: canTeam ? 1 : 0.55, border: '1.5px solid ' + (on ? o.color : 'var(--hair)'), background: on ? `color-mix(in srgb, ${o.color} 12%, transparent)` : 'var(--surface)' }}
+                key={o.id} type="button" onClick={canTeam ? () => toggleOp(o.id) : undefined} aria-disabled={!canTeam} aria-pressed={on}
+                className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color, padding: '5px 12px 5px 5px' }}
               >
                 <Avatar initials={o.initials} size={24} color={o.color} ring={on} />
-                <span style={{ fontSize: 13, fontWeight: 600, color: on ? 'var(--ink)' : 'var(--ink-2)' }}>{o.first_name}</span>
-                {on && <Icon name="check" size={13} color={o.color} stroke={2.6} />}
+                <span>{o.first_name}</span>
+                {on && <Icon name="check" size={13} stroke={2.6} />}
               </button>
             );
           })}

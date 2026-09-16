@@ -24,6 +24,8 @@ class SettingsOut(Schema):
     logo_url: Optional[str] = None
     brand_color: str
     opening_hours: str = ""
+    # {"0": [["09:00","13:00"],["14:00","19:00"]], …, "6": []} — 0 = lunedì
+    opening_hours_week: dict = {}
     agenda_fill: str
     slot_recovery: str
     slot_interval_min: int
@@ -43,6 +45,7 @@ class SettingsIn(Schema):
     default_lang: Optional[str] = None
     brand_color: Optional[str] = None
     opening_hours: Optional[str] = None
+    opening_hours_week: Optional[dict] = None
     agenda_fill: Optional[str] = None
     slot_recovery: Optional[str] = None
     slot_interval_min: Optional[int] = None
@@ -92,6 +95,24 @@ class ActivityLogOut(Schema):
     created_at: datetime
 
 
+class ActivityFeedEventOut(Schema):
+    """Voce del feed live (sottoinsieme del registro, con l'id dell'autore per
+    distinguere le proprie azioni da quelle degli altri)."""
+
+    id: int
+    type: str
+    summary: str
+    actor_id: Optional[int] = None
+    actor_name: str
+    payload: dict
+    created_at: datetime
+
+
+class ActivityFeedOut(Schema):
+    cursor: int  # ultimo id noto: da ripassare come `after` alla prossima chiamata
+    events: list[ActivityFeedEventOut]
+
+
 class PublicBrandingOut(Schema):
     name: str
     slug: str
@@ -101,6 +122,7 @@ class PublicBrandingOut(Schema):
     address: str = ""
     phone: str = ""
     opening_hours: str = ""
+    opening_hours_week: dict = {}
     privacy_policy_url: str = ""
 
 

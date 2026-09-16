@@ -8,11 +8,16 @@ costruito a mano — evita di dipendere dal login reale di apps.accounts.
 """
 
 import datetime as dt
+import json
+import shutil
+import tempfile
 from decimal import Decimal
 from types import SimpleNamespace
 
+from django.conf import settings
 from django.core.cache import cache
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -144,7 +149,7 @@ class ImportUpsertTests(ClientsTestCase):
             {"first_name": "Fresh", "last_name": "Client", "phone": "+393339998888", "email": ""},
         ]
         result = import_rows(self.salon, rows)
-        self.assertEqual(result, {"created": 1, "updated": 1})
+        self.assertEqual((result["created"], result["updated"]), (1, 1))
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "New")
         self.assertTrue(Client.objects.filter(salon=self.salon, phone="+393339998888").exists())
@@ -154,13 +159,13 @@ class ImportUpsertTests(ClientsTestCase):
         result = import_rows(
             self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": ""}]
         )
-        self.assertEqual(result, {"created": 0, "updated": 1})
+        self.assertEqual((result["created"], result["updated"]), (0, 1))
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "Giulia")
 
     def test_import_row_without_phone_or_match_is_skipped(self):
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
-        self.assertEqual(result, {"created": 0, "updated": 0})
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
 
     def test_import_endpoint_logs_activity(self):
         data = ImportIn(rows=[ImportRowIn(first_name="A", phone="+393330000000")])
@@ -173,9 +178,9 @@ class NotesTests(ClientsTestCase):
     def test_create_and_delete_note(self):
         client = self.make_client()
         note = create_note(self.request, client.id, NoteIn(text="Allergica al lattice"))
-        self.assertEqual(list_notes(self.request, client.id).count(), 1)
-        delete_note(self.request, client.id, note.id)
-        self.assertFalse(ClientNote.objects.filter(id=note.id).exists())
+        self.assertEqual(len(list_notes(self.request, client.id)), 1)
+        delete_note(self.request, client.id, note["id"])
+        self.assertFalse(ClientNote.objects.filter(id=note["id"]).exists())
 
 
 class TechnicalSheetTests(ClientsTestCase):
@@ -383,3 +388,192 @@ class PublicHookTests(TestCase):
         # 21ª richiesta, prefisso mai visto ma stesso peer in fondo → scartata.
         self.assertEqual(post("9.9.9.9", "3339999999").status_code, 200)
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 20)
+
+
+# ---------------------------------------------------------------------------
+# Genere + compleanno senza anno, import flessibile, note con allegati, storico
+# ---------------------------------------------------------------------------
+
+
+def _staff_http(salon, scopes):
+    from apps.accounts.models import Membership, Role, User
+
+    user = User.objects.create_user(email=f"staff{salon.id}@theparlour.it", password="x" * 10)
+    role = Role.objects.create(salon=salon, name="Ruolo test", scopes=scopes)
+    Membership.objects.create(user=user, salon=salon, role=role, is_owner=False)
+    tokens = create_staff_tokens(user, salon)
+    return user, {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+
+class ClientGenderBirthdayApiTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients"])
+
+    def _post(self, payload):
+        return self.client.post("/api/clients/", data=json.dumps(payload), content_type="application/json", **self.auth)
+
+    def test_birthday_without_year_roundtrip(self):
+        res = self._post({"first_name": "Sofia", "phone": "+393331112233", "birthday": "--03-15", "gender": "female"})
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body["birthday"], "--03-15")
+        self.assertFalse(body["birthday_year_known"])
+        self.assertIsNone(body["age"])
+        self.assertEqual(body["gender"], "female")
+        client = Client.objects.get(id=body["id"])
+        self.assertEqual((client.birthday.month, client.birthday.day), (3, 15))
+        self.assertEqual(client.birthday.year, Client.BIRTHDAY_YEAR_UNKNOWN)
+
+        detail = self.client.get(f"/api/clients/{body['id']}", **self.auth).json()
+        self.assertEqual(detail["birthday"], "--03-15")
+
+    def test_full_birthday_gives_age_and_update_keeps_format(self):
+        res = self._post({"first_name": "Giada", "phone": "+393331112299", "birthday": "1990-03-15"})
+        body = res.json()
+        self.assertEqual(body["birthday"], "1990-03-15")
+        self.assertTrue(body["birthday_year_known"])
+        self.assertGreaterEqual(body["age"], 30)
+        put = self.client.put(
+            f"/api/clients/{body['id']}",
+            data=json.dumps({"first_name": "Giada", "phone": "+393331112299", "birthday": "--12-24", "gender": "other"}),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(put.status_code, 200, put.content)
+        self.assertEqual(put.json()["birthday"], "--12-24")
+        self.assertEqual(put.json()["gender"], "other")
+
+    def test_invalid_birthday_or_gender_rejected(self):
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "birthday": "--13-40"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "birthday": "15/03/1990"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "gender": "boh"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "", "phone": "+39111"}).status_code, 400)
+
+
+class ImportFlexibleTests(ClientsTestCase):
+    def test_phone_key_matching_and_extra_fields(self):
+        existing = self.make_client(phone="+39 348 221 0094", first_name="Sofia", last_name="")
+        result = import_rows(self.salon, [{
+            "first_name": "Sofia", "last_name": "Ricci", "phone": "3482210094",
+            "gender": "female", "birthday": "--03-15", "categories": ["VIP", " Expat "],
+            "note": "Allergica al nichel", "lang": "en",
+        }])
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 1, 0))
+        existing.refresh_from_db()
+        self.assertEqual(existing.last_name, "Ricci")
+        self.assertEqual(existing.gender, "female")
+        self.assertFalse(existing.birthday_year_known)
+        self.assertEqual(existing.lang, "en")
+        self.assertEqual(existing.phone, "+39 348 221 0094")  # il numero originale resta
+        self.assertEqual(sorted(existing.categories.values_list("name", flat=True)), ["Expat", "VIP"])
+        self.assertEqual(existing.notes.count(), 1)
+
+    def test_update_existing_false_skips_matches(self):
+        self.make_client(phone="+393331112233")
+        result = import_rows(self.salon, [{"first_name": "Sofia", "phone": "+39 333 111 2233"}], update_existing=False)
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
+
+    def test_errors_are_reported_per_row(self):
+        result = import_rows(self.salon, [
+            {"first_name": "", "phone": "+39111"},              # nome mancante
+            {"first_name": "A", "phone": "+39222", "birthday": "--02-30"},  # data impossibile
+            {"first_name": "B", "phone": "+39333", "gender": "male"},       # ok
+        ])
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["skipped"], 2)
+        self.assertEqual([e["row"] for e in result["errors"]], [0, 1])
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-media-"))
+class NoteAttachmentsApiTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients"])
+        self.client_obj = Client.objects.create(salon=self.salon, first_name="Sofia", phone="+391112223333")
+
+    def tearDown(self):
+        shutil.rmtree(settings.MEDIA_ROOT, ignore_errors=True)
+
+    def test_upload_note_with_files_then_remove_attachment(self):
+        png = SimpleUploadedFile("prima.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64, content_type="image/png")
+        pdf = SimpleUploadedFile("consenso.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "Prima seduta", "visibility": "private", "files": [png, pdf]},
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        note = res.json()
+        self.assertEqual(note["text"], "Prima seduta")
+        self.assertEqual(len(note["attachments"]), 2)
+        self.assertTrue(note["attachments"][0]["is_image"])
+        self.assertFalse(note["attachments"][1]["is_image"])
+        self.assertTrue(note["attachments"][0]["url"].startswith("/media/"))
+
+        att_id = note["attachments"][0]["id"]
+        res = self.client.delete(f"/api/clients/{self.client_obj.id}/notes/{note['id']}/attachments/{att_id}", **self.auth)
+        self.assertEqual(res.status_code, 200)
+        notes = self.client.get(f"/api/clients/{self.client_obj.id}/notes", **self.auth).json()
+        self.assertEqual(len(notes[0]["attachments"]), 1)
+
+    def test_unsupported_type_rejected(self):
+        zipf = SimpleUploadedFile("x.zip", b"PK\x03\x04", content_type="application/zip")
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "x", "files": [zipf]}, **self.auth,
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(ClientNote.objects.count(), 0)
+
+    def test_note_can_be_edited(self):
+        note = ClientNote.objects.create(client=self.client_obj, text="vecchio")
+        res = self.client.put(
+            f"/api/clients/{self.client_obj.id}/notes/{note.id}",
+            data=json.dumps({"text": "nuovo", "visibility": "ai"}), content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["text"], "nuovo")
+        self.assertEqual(res.json()["visibility"], "ai")
+
+
+class ClientHistoryApiTests(TestCase):
+    def setUp(self):
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients", "agenda"])
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
+        self.client_obj = Client.objects.create(salon=self.salon, first_name="Sofia", phone="+391112223333")
+
+    def test_history_groups_notes_and_sheets_under_the_visit(self):
+        from apps.agenda.models import Appointment
+
+        now = timezone.now()
+        past = Appointment.objects.create(salon=self.salon, client=self.client_obj, operator=self.operator, start=now - dt.timedelta(days=10))
+        future = Appointment.objects.create(salon=self.salon, client=self.client_obj, operator=self.operator, start=now + dt.timedelta(days=3))
+        ClientNote.objects.create(client=self.client_obj, appointment=past, text="Nota di trattamento", author=self.user)
+        ClientNote.objects.create(client=self.client_obj, text="Nota libera")
+        TechnicalSheet.objects.create(client=self.client_obj, appointment=past, category="nail", treatment="Gel")
+
+        res = self.client.get(f"/api/clients/{self.client_obj.id}/history", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        data = res.json()
+        kinds = [e["kind"] for e in data["entries"]]
+        self.assertEqual(kinds.count("visit"), 2)
+        self.assertEqual(kinds.count("note"), 1)  # solo quella non legata a una visita
+        self.assertEqual(kinds.count("sheet"), 0)  # la scheda sta dentro la visita
+        visits = [e for e in data["entries"] if e["kind"] == "visit"]
+        self.assertTrue(visits[0]["upcoming"])
+        self.assertEqual(visits[0]["appointment"]["id"], future.id)
+        past_entry = visits[1]
+        self.assertEqual(len(past_entry["notes"]), 1)
+        self.assertEqual(past_entry["notes"][0]["author_name"], self.user.email)
+        self.assertEqual(len(past_entry["sheets"]), 1)
+        self.assertEqual(past_entry["operator_name"], "Giulia Bianchi")
+        self.assertEqual(data["counts"], {"visits": 1, "upcoming": 1, "notes": 2, "sheets": 1, "sales": 0})
+
+    def test_history_of_other_salon_client_is_404(self):
+        other = Salon.objects.create(name="Altro", slug="altro")
+        foreign = Client.objects.create(salon=other, first_name="X", phone="+39999")
+        res = self.client.get(f"/api/clients/{foreign.id}/history", **self.auth)
+        self.assertEqual(res.status_code, 404)

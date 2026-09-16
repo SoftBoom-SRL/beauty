@@ -1,8 +1,9 @@
 // components.jsx — small presentational pieces shared inside the clienti section.
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
-import { relMeta } from './helpers.js';
+import { relMeta, MONTHS_IT, MONTHS_EN, parseBirthday, buildBirthday } from './helpers.js';
+import GenderPickerUi from '../../ui/GenderPicker.jsx';
 
 /* Reliability ring (ported RelRing). */
 export function RelRing({ score, color, size = 46 }) {
@@ -91,6 +92,52 @@ export function Field({ label, hint, children }) {
         {hint && <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--muted-2)' }}>{hint}</span>}
       </div>
       {children}
+    </div>
+  );
+}
+
+/* Genere: pillole a scelta singola (componente condiviso in ui/). */
+export function GenderPicker(props) { return <GenderPickerUi {...props} />; }
+
+/* Compleanno: giorno + mese obbligatori insieme, anno facoltativo.
+ * value: 'YYYY-MM-DD' | '--MM-DD' | ''  →  onChange(stringa API).
+ * Lo stato parziale (es. solo il mese scelto) resta locale finché il valore
+ * non è completo, così l'ordine di compilazione è libero. */
+export function BirthdayInput({ value, onChange, t, lang, disabled }) {
+  const fromValue = (v) => { const b = parseBirthday(v); return b ? { d: String(b.d), m: String(b.m), y: b.y ? String(b.y) : '' } : { d: '', m: '', y: '' }; };
+  const [part, setPart] = useState(() => fromValue(value));
+  useEffect(() => { const ext = fromValue(value); if (buildBirthday({ d: +part.d, m: +part.m, y: +part.y || null }) !== (value || '')) setPart(ext); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const months = lang === 'en' ? MONTHS_EN : MONTHS_IT;
+  const update = (patch) => {
+    const next = { ...part, ...patch };
+    setPart(next);
+    if (!next.d && !next.m && !next.y) { onChange(''); return; }
+    if (next.d && next.m && (!next.y || next.y.length === 4)) onChange(buildBirthday({ d: Number(next.d), m: Number(next.m), y: Number(next.y) || null }));
+  };
+  const sel = { border: '1px solid var(--hair)', borderRadius: 10, padding: '9px 10px', fontSize: 14, fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none', cursor: disabled ? 'default' : 'pointer' };
+  const daysInMonth = part.m ? new Date(2000, Number(part.m), 0).getDate() : 31;
+  const complete = part.d && part.m;
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '84px 1fr 96px', gap: 8 }}>
+        <select value={part.d} disabled={disabled} onChange={(e) => update({ d: e.target.value })} style={sel} aria-label={t('Giorno', 'Day')}>
+          <option value="">{t('Giorno', 'Day')}</option>
+          {[...Array(daysInMonth)].map((_, i) => <option key={i + 1} value={String(i + 1)}>{i + 1}</option>)}
+        </select>
+        <select value={part.m} disabled={disabled} onChange={(e) => update({ m: e.target.value })} style={sel} aria-label={t('Mese', 'Month')}>
+          <option value="">{t('Mese', 'Month')}</option>
+          {months.map((name, i) => <option key={i + 1} value={String(i + 1)}>{name}</option>)}
+        </select>
+        <input value={part.y} disabled={disabled} inputMode="numeric" maxLength={4} placeholder={t('Anno', 'Year')} aria-label={t('Anno (facoltativo)', 'Year (optional)')}
+          onChange={(e) => update({ y: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+          onBlur={() => { if (part.y && part.y.length < 4) update({ y: '' }); }}
+          style={{ ...sel, cursor: 'text' }} />
+      </div>
+      <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 5, fontSize: 11.5 }}>
+        {complete && !part.y
+          ? t('Solo giorno e mese: niente età, ma gli auguri arrivano lo stesso.', 'Day and month only: no age, birthday wishes still go out.')
+          : t('L\u2019anno è facoltativo: chi non vuole dire l\u2019età può dare solo il giorno.', 'Year is optional: clients who prefer not to share their age can give just the day.')}
+      </div>
     </div>
   );
 }

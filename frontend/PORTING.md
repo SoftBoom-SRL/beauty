@@ -144,6 +144,15 @@ openModal('newappt', { prefill: { start, operatorId } });  // props reach your c
 Registered names → files (all pre-stubbed in the owning section's folder):
 `newappt, apptdetail, freedslot, waitlist, opportunity` (agenda) · `sell` (pos) ·
 `newclient, bulkimport, techsheet` (clienti) · `catsmgr` (impostazioni).
+
+Every `openModal` call mounts a FRESH instance (the dispatcher keys the component on an
+incrementing open id): re-opening the same modal with different props never leaks the
+previous form state. `newappt` is the ONLY way to create an appointment: it renders as a
+right-side drawer without scrim (the agenda stays live) from wherever it is opened —
+topbar, slot click, waiting list, freed slot, client profile. While it is open the agenda
+is in "pick mode": clicking a free slot calls `setAgendaPick({ operatorId, start, date })`
+and the drawer applies it. Reuse `sections/agenda/ClientPicker.jsx` (search + inline
+quick-create) wherever a client has to be chosen.
 Need a NEW modal name? You can't add it to the registry — render it locally inside your section
 (just `<DkModal>` in your own tree) or note it in your report.
 
@@ -153,7 +162,15 @@ Need a NEW modal name? You can't add it to the registry — render it locally in
 operators, services, serviceCategories, clientCategories, reload.{salon|operators|services|
 serviceCategories|clientCategories}(), tab, setTab(id, sub?), subTab, setSubTab, openModal,
 closeModal, modal, drawer, setDrawer(<element>|null), fireToast, search, setSearch, selClient,
-setSelClient, deepLink, setDeepLink, showRevenue, setShowRevenue, opColors, setOpColor, opPalette`.
+setSelClient, deepLink, setDeepLink, agendaPick, setAgendaPick, live, showRevenue, setShowRevenue,
+opColors, setOpColor, opPalette`.
+
+- **Shared data must always be current.** Import `useLive` from `ctx.jsx` and call
+  `useLive(/^(product|stock)\./, refetch)` in any section that shows data another workstation
+  can change: it fires (debounced) when matching activity-log events arrive over the server push
+  (SSE stream, polling fallback). Never show a toast for other people's changes — just refresh.
+  The ctx base catalogs (operators, services, categories, settings) refresh on their own.
+  `live` = `{ events, unread, markRead, subscribe(fn), version, streamOk }` is the low-level API.
 
 - Base catalogs are loaded once at boot; call `reload.<collection>()` after your writes mutate them.
 - Everything else (appointments, sales, products, ...) is **your section's own state** — fetch it
@@ -174,6 +191,11 @@ session, client, fireToast, view, setView(view, params?), viewParams`.
 - **Loading**: skeletons with the `.skel` class (`<div className="skel" style={{height: 90}}/>`),
   never spinners.
 - **Toasts**: `fireToast({ msg, icon: 'check', undo: t('Annulla','Undo'), undoFn })` from ctx.
+- **Selectable chips**: use `.dk-pill` (+ `.dk-pill--on`, `.dk-pill--tint` with `--pill-c` for
+  operator colours, `.dk-pill--muted`) and `.dk-slot` / `.dk-slot--on` for time slots. The "on"
+  state must be unmistakable (dark border + bold + check), never just a pastel tint.
+- **Never disable the primary button silently**: use `aria-disabled` and, on click, toast what is
+  missing (see the checklist in `NewApptModal`). A click that does nothing is a bug.
 - **Styling**: keep the prototype look — CSS classes from `styles.css`/`desktop.css`
   (`.dk-card .dk-btn .dk-btn--clay .dk-row .dk-iconbtn .dk-page .t-title .t-meta ...`) plus inline
   styles referencing CSS variables (`var(--clay)`, `var(--ok-tint)`, ...). Do NOT hardcode colors;

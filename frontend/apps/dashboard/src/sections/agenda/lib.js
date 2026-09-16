@@ -230,3 +230,84 @@ export function cancelSteps(appt, late, matchCount, t, lang) {
     _waitlistStep(matchCount, t),
   ];
 }
+
+/* ---- Spiegazione della disponibilità di uno slot (lato client) --------------
+ * Replica le regole di apps/agenda/services.py sui dati già in pagina (righe di
+ * GET /api/agenda/day): finestre di turno, appuntamenti (fase attiva + posa) e
+ * pause dell'operatrice. Serve a dire PRIMA di provare — e non dopo un 409 —
+ * perché in quel punto non si può inserire o spostare un appuntamento.
+ *
+ * row      : { operator, windows, appointments, pauses }   (una riga del giorno)
+ * startMin : inizio richiesto (minuti da mezzanotte), durMin: durata totale
+ * opts     : { excludeApptId, nowMin (solo se la data è oggi), t }
+ *
+ * Ritorna { ok, code, label, detail } con code ∈
+ *   ok | past | off | closed | pause | busy | soak
+ * `soak` è ok=true con avviso: sovrapposizione alla posa altrui (ammessa a mano).
+ */
+export function explainSlot(row, startMin, durMin, opts = {}) {
+  const { excludeApptId = null, excludePauseId = null, nowMin = null, t = (it) => it } = opts;
+  const endMin = startMin + Math.max(durMin || 0, 1);
+  const win = (row?.windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
+  const winLabel = win.map(([a, b]) => `${timeLabel(a)}–${timeLabel(b)}`).join(' · ');
+
+  if (nowMin != null && startMin < nowMin) {
+    return { ok: false, code: 'past', label: t('Orario passato', 'Time already passed'), detail: '' };
+  }
+  if (!win.length) {
+    return { ok: false, code: 'off', label: t('Non in turno oggi', 'Not on shift today'), detail: '' };
+  }
+  const inside = win.find(([a, b]) => a <= startMin && endMin <= b);
+  if (!inside) {
+    const starts = win.find(([a, b]) => a <= startMin && startMin < b);
+    if (starts) {
+      return {
+        ok: false, code: 'closed',
+        label: t(`Sfora la fine del turno (${timeLabel(starts[1])})`, `Runs past the end of the shift (${timeLabel(starts[1])})`),
+        detail: t('Turno', 'Shift') + ' ' + winLabel,
+      };
+    }
+    return { ok: false, code: 'closed', label: t('Fuori turno', 'Off shift'), detail: t('Turno', 'Shift') + ' ' + winLabel };
+  }
+  for (const p of row.pauses || []) {
+    if (excludePauseId != null && p.id === excludePauseId) continue;
+    const ps = aStartMin(p), pe = ps + (p.duration_min || 0);
+    if (ps < endMin && pe > startMin) {
+      return { ok: false, code: 'pause', label: t(`In pausa fino alle ${timeLabel(pe)}`, `On a break until ${timeLabel(pe)}`), detail: p.note || '' };
+    }
+  }
+  let soakHit = null;
+  for (const a of row.appointments || []) {
+    if (excludeApptId != null && a.id === excludeApptId) continue;
+    if (a.status === 'cancelled' || a.status === 'no_show') continue;
+    for (const b of itemBlocks(a)) {
+      if (b.opId !== row.operator?.id) continue;
+      const activeEnd = b.startMin + b.activeMin;
+      if (b.startMin < endMin && activeEnd > startMin) {
+        return {
+          ok: false, code: 'busy',
+          label: t(`Occupata fino alle ${timeLabel(activeEnd)}`, `Busy until ${timeLabel(activeEnd)}`),
+          detail: `${a.client?.full_name || ''} · ${b.item.service_name}`.trim(),
+        };
+      }
+      if (b.soakMin && activeEnd < endMin && activeEnd + b.soakMin > startMin) soakHit = { a, until: activeEnd + b.soakMin };
+    }
+  }
+  if (soakHit) {
+    return {
+      ok: true, code: 'soak',
+      label: t(`Posa di ${firstName(soakHit.a.client?.full_name)} fino alle ${timeLabel(soakHit.until)}`, `${firstName(soakHit.a.client?.full_name)}'s soak until ${timeLabel(soakHit.until)}`),
+      detail: t('Sovrapposizione consentita', 'Overlap allowed'),
+    };
+  }
+  return { ok: true, code: 'ok', label: t('Disponibile', 'Available'), detail: '' };
+}
+
+/** Prossimi orari liberi (max `n`) per l'operatrice a partire da `fromMin`, a passi di `step`. */
+export function nextFreeSlots(row, fromMin, durMin, step, n = 4, opts = {}) {
+  const out = [];
+  for (let m = fromMin; m < DK_END && out.length < n; m += step) {
+    if (explainSlot(row, m, durMin, opts).ok) out.push(m);
+  }
+  return out;
+}

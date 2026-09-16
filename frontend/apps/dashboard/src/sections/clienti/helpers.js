@@ -41,7 +41,8 @@ export function toClientIn(c, patch = {}) {
     category_ids: (c.categories || []).map((x) => x.id),
     reliability: c.reliability ?? 100,
     origin: c.origin || '',
-    birthday: c.birthday || null,
+    gender: c.gender || '',
+    birthday: c.birthday || null,   // 'YYYY-MM-DD' | '--MM-DD' | null (l'API accetta entrambi)
     since: c.since || null,
     consents: { ...(c.consents || {}) },
     whatsapp_reminders: !!c.whatsapp_reminders,
@@ -107,4 +108,46 @@ export function sheetVal(sheet, key) {
     return Object.entries(v).map(([k, x]) => `${k}: ${x}`).join(' · ');
   }
   return v || '';
+}
+
+/* ---- Genere: definizione condivisa in ui/GenderPicker.jsx ---- */
+export { GENDERS, genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
+
+/* ---- Compleanno: 'YYYY-MM-DD' (anno noto) oppure '--MM-DD' (solo giorno e mese) ----
+ * Alcune clienti non vogliono dire l'età ma dicono volentieri quando festeggiano:
+ * l'API accetta e restituisce il formato ISO 8601 senza anno. */
+export const MONTHS_IT = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** → { d, m, y } (y = null se l'anno non è noto) oppure null */
+export function parseBirthday(v) {
+  if (!v) return null;
+  let m = /^--(\d{2})-(\d{2})$/.exec(v);
+  if (m) return { d: Number(m[2]), m: Number(m[1]), y: null };
+  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  if (m) return { d: Number(m[3]), m: Number(m[2]), y: Number(m[1]) };
+  return null;
+}
+/** { d, m, y } → stringa API ('' se incompleto) */
+export function buildBirthday({ d, m, y }) {
+  if (!d || !m) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return y ? `${y}-${pad(m)}-${pad(d)}` : `--${pad(m)}-${pad(d)}`;
+}
+/** "15 marzo" · "15 marzo 1990" */
+export function formatBirthday(v, lang) {
+  const b = parseBirthday(v);
+  if (!b) return '';
+  const months = lang === 'en' ? MONTHS_EN : MONTHS_IT;
+  const base = lang === 'en' ? `${months[b.m - 1]} ${b.d}` : `${b.d} ${months[b.m - 1]}`;
+  return b.y ? `${base} ${b.y}` : base;
+}
+/** giorni al prossimo compleanno (0 = oggi), null se non impostato */
+export function daysToBirthday(v) {
+  const b = parseBirthday(v);
+  if (!b) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let next = new Date(today.getFullYear(), b.m - 1, b.d);
+  if (next < today) next = new Date(today.getFullYear() + 1, b.m - 1, b.d);
+  return Math.round((next - today) / 86400000);
 }

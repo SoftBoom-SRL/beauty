@@ -41,6 +41,30 @@ export function AppProvider({ children }) {
   }, []);
   useEffect(() => { loadBrand(); }, [loadBrand]);
 
+  /* favicon e titolo white-label: logo del salone se c'è, altrimenti un
+   * monogramma nel colore del brand (SVG inline, nessun file da servire). */
+  useEffect(() => {
+    if (!brand) return;
+    try {
+      document.title = brand.name || document.title;
+      const letter = String(brand.name || 'y').trim().charAt(0).toUpperCase() || 'Y';
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="24" fill="${brand.color || '#7C4A57'}"/><text x="50" y="68" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="56" font-weight="700" fill="#fff">${letter}</text></svg>`;
+      const href = brand.logo || 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+      document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach((l) => l.remove());
+      const link = document.createElement('link');
+      link.rel = 'icon';
+      link.type = brand.logo ? '' : 'image/svg+xml';
+      link.href = href;
+      document.head.appendChild(link);
+      const touch = document.createElement('link');
+      touch.rel = 'apple-touch-icon';
+      touch.href = href;
+      document.head.appendChild(touch);
+      const theme = document.querySelector('meta[name="theme-color"]');
+      if (theme && brand.color) theme.setAttribute('content', brand.color);
+    } catch { /* ambiente senza DOM completo */ }
+  }, [brand]);
+
   /* ---- session ---- */
   const [session, setSession] = useState(clientAuth.getSession());
   useEffect(() => clientAuth.subscribe(setSession), []);

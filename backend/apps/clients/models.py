@@ -45,6 +45,15 @@ class Client(models.Model):
         IT = "it"
         EN = "en"
 
+    class Gender(models.TextChoices):
+        FEMALE = "female", "Donna"
+        MALE = "male", "Uomo"
+        OTHER = "other", "Altro"
+
+    # Anno segnaposto per i compleanni di cui il cliente dà solo giorno e mese
+    # (bisestile, così il 29 febbraio è rappresentabile). Vedi birthday_year_known.
+    BIRTHDAY_YEAR_UNKNOWN = 1904
+
     salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="clients")
     first_name = models.CharField(max_length=80)
     last_name = models.CharField(max_length=80, blank=True)
@@ -57,7 +66,12 @@ class Client(models.Model):
         default=100, validators=[MinValueValidator(0), MaxValueValidator(100)]
     )
     origin = models.CharField(max_length=60, blank=True)  # Instagram, Google...
+    # I trattamenti cambiano spesso in base al genere: vuoto = non specificato.
+    gender = models.CharField(max_length=8, choices=Gender.choices, blank=True, default="")
     birthday = models.DateField(null=True, blank=True)
+    # False quando il cliente ha dato solo giorno e mese: l'anno in `birthday`
+    # è BIRTHDAY_YEAR_UNKNOWN e non va mostrato né usato per l'età.
+    birthday_year_known = models.BooleanField(default=True)
     since = models.DateField(null=True, blank=True)
     consents = models.JSONField(default=default_consents, blank=True)
     whatsapp_reminders = models.BooleanField(default=True)
@@ -87,6 +101,28 @@ class Client(models.Model):
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
+    @property
+    def age(self):
+        """Età in anni, oppure None se il compleanno manca o è senza anno."""
+        if not self.birthday or not self.birthday_year_known:
+            return None
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        years = today.year - self.birthday.year
+        if (today.month, today.day) < (self.birthday.month, self.birthday.day):
+            years -= 1
+        return max(0, years)
+
+    @property
+    def birthday_iso(self):
+        """Compleanno per l'API: 'YYYY-MM-DD', oppure '--MM-DD' se l'anno non è noto."""
+        if not self.birthday:
+            return None
+        if self.birthday_year_known:
+            return self.birthday.isoformat()
+        return f"--{self.birthday.month:02d}-{self.birthday.day:02d}"
+
 
 class ClientNote(models.Model):
     """Nota interna sul cliente (privata dello staff oppure utilizzabile dall'AI)."""
@@ -96,7 +132,15 @@ class ClientNote(models.Model):
         AI = "ai"
 
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="notes")
-    text = models.TextField()
+    # Nota di trattamento: legata alla visita in cui è stata scritta (storico).
+    appointment = models.ForeignKey(
+        "agenda.Appointment",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="client_notes",
+    )
+    text = models.TextField(blank=True)  # può essere vuota se ci sono allegati
     visibility = models.CharField(
         max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE
     )
@@ -108,12 +152,47 @@ class ClientNote(models.Model):
         related_name="+",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"Nota #{self.pk} · cliente {self.client_id}"
+
+
+def note_attachment_path(instance, filename: str) -> str:
+    return f"client_notes/{instance.note.client.salon_id}/{instance.note.client_id}/{filename}"
+
+
+class ClientNoteAttachment(models.Model):
+    """Foto o documento allegato a una nota (prima/dopo trattamento, consenso firmato…)."""
+
+    IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif")
+    DOC_TYPES = (
+        "application/pdf",
+        "text/plain",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    MAX_BYTES = 15 * 1024 * 1024
+
+    note = models.ForeignKey(ClientNote, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to=note_attachment_path)
+    name = models.CharField(max_length=200)
+    content_type = models.CharField(max_length=100, blank=True)
+    size = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def is_image(self) -> bool:
+        return self.content_type in self.IMAGE_TYPES
 
 
 class TechnicalSheet(models.Model):

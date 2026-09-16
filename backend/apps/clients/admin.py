@@ -1,7 +1,7 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin, TabularInline
 
-from .models import Client, ClientCategory, ClientNote, TechnicalSheet
+from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
 
 
 @admin.register(ClientCategory)
@@ -39,16 +39,23 @@ class ClientAdmin(ModelAdmin):
         "reliability",
         "is_active",
     )
-    list_filter = ("salon", "is_active", "categories", "lang")
+    list_filter = ("salon", "is_active", "categories", "lang", "gender")
     search_fields = ("first_name", "last_name", "phone", "email")
     filter_horizontal = ("categories",)
     inlines = [ClientNoteInline, TechnicalSheetInline]
 
 
+class ClientNoteAttachmentInline(TabularInline):
+    model = ClientNoteAttachment
+    extra = 0
+    readonly_fields = ("name", "content_type", "size", "created_at")
+
+
 @admin.register(ClientNote)
 class ClientNoteAdmin(ModelAdmin):
-    list_display = ("client", "visibility", "author", "created_at")
+    list_display = ("client", "appointment", "visibility", "author", "created_at")
     list_filter = ("visibility",)
+    inlines = [ClientNoteAttachmentInline]
 
 
 @admin.register(TechnicalSheet)
