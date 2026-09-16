@@ -1,4 +1,5 @@
 from django.conf import settings as django_settings
+from django.db.models import Q
 from django.utils.dateparse import parse_date
 from ninja import File, Router
 from ninja.errors import HttpError
@@ -11,6 +12,7 @@ from common.utils import salon_get
 
 from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
 from .schemas import (
+    ActivityFeedOut,
     ActivityLogOut,
     DepositRuleIn,
     DepositRuleOut,
@@ -22,7 +24,7 @@ from .schemas import (
     SettingsIn,
     SettingsOut,
 )
-from .services import log_activity
+from .services import log_activity, normalize_opening_hours_week, opening_hours_text
 
 router = Router(tags=["core"])
 
@@ -37,6 +39,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "logo_url": s.logo.url if s.logo else None,
         "brand_color": s.brand_color,
         "opening_hours": s.opening_hours,
+        "opening_hours_week": s.opening_hours_week or {},
         "agenda_fill": s.agenda_fill,
         "slot_recovery": s.slot_recovery,
         "slot_interval_min": s.slot_interval_min,
@@ -78,6 +81,14 @@ def update_settings(request, data: SettingsIn):
         raise HttpError(400, "Lingua non valida (it o en)")
     if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
         raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
+    if "opening_hours_week" in payload:
+        try:
+            payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        # il testo per l'app cliente segue gli orari strutturati, salvo testo esplicito
+        if "opening_hours" not in payload:
+            payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
     for name, value in payload.items():
         setattr(s, name, value)
     s.save()
@@ -210,6 +221,74 @@ def list_activity(
     return qs
 
 
+# Prefissi di evento che alimentano il feed live della dashboard (aggiornamenti
+# in tempo reale fra postazioni + notifiche). Esclusi di proposito team/user/
+# settings: sono amministrativi e non riguardano il lavoro condiviso in sala.
+LIVE_FEED_PREFIXES = (
+    "appointment.", "pause.", "waitlist.", "slot.", "visit.",
+    "client.", "sale.", "service.", "package.", "category.",
+    "operator.", "product.", "stock.", "order.", "supplier.",
+    "coupon.", "giftcard.", "loyalty.", "communication.", "automation.",
+)
+LIVE_FEED_LIMIT = 50
+
+
+@router.get("/activity/feed", auth=staff_auth, response=ActivityFeedOut)
+def activity_feed(request, after: int | None = None):
+    """Feed live per il polling della dashboard.
+
+    Senza `after` restituisce solo il cursore corrente: il client parte da lì
+    e non riceve lo storico (un salone nuovo parte da 0, che è un cursore
+    valido). Con `after=<id>` restituisce, in ordine cronologico, gli eventi
+    con id maggiore (max LIVE_FEED_LIMIT) e il nuovo cursore. Richiede solo
+    l'autenticazione staff: gli eventi sono le stesse operazioni che ogni
+    membro vede accadere in agenda.
+    """
+    ctx = request.auth
+    qs = ActivityLog.objects.filter(salon=ctx.salon)
+    latest = qs.order_by("-id").values_list("id", flat=True).first() or 0
+    if after is None:
+        return {"cursor": latest, "events": []}
+
+    prefix_q = Q()
+    for prefix in LIVE_FEED_PREFIXES:
+        prefix_q |= Q(type__startswith=prefix)
+    events = list(
+        qs.filter(id__gt=after).filter(prefix_q).order_by("id")[:LIVE_FEED_LIMIT]
+    )
+    # Il cursore avanza sempre fino all'ultimo id visto (anche se filtrato via),
+    # così un evento amministrativo non viene richiesto all'infinito.
+    scanned = qs.filter(id__gt=after).order_by("id").values_list("id", flat=True)[:LIVE_FEED_LIMIT]
+    scanned = list(scanned)
+    cursor = max([after] + scanned + [e.id for e in events])
+    if len(scanned) < LIVE_FEED_LIMIT:
+        cursor = max(cursor, latest)
+    return {
+        "cursor": cursor,
+        "events": [
+            {
+                "id": e.id,
+                "type": e.type,
+                "summary": e.summary,
+                "actor_id": e.actor_id,
+                "actor_name": e.actor_name,
+                "payload": e.payload,
+                "created_at": e.created_at,
+            }
+            for e in events
+        ],
+    }
+
+
+@router.post("/activity/stream-ticket", auth=staff_auth)
+def activity_stream_ticket(request):
+    """Ticket effimero per aprire lo stream SSE (EventSource non manda header)."""
+    from .views import STREAM_TICKET_TTL, issue_stream_ticket
+
+    ctx = request.auth
+    return {"ticket": issue_stream_ticket(ctx.salon.id, ctx.user.id if ctx.user else None), "expires_in": STREAM_TICKET_TTL}
+
+
 # ---- Endpoint pubblico per il boot della web app cliente --------------------
 
 
@@ -230,5 +309,6 @@ def public_branding(request, salon: str):
         "address": location.address if location else "",
         "phone": location.phone if location else "",
         "opening_hours": st.opening_hours,
+        "opening_hours_week": st.opening_hours_week or {},
         "privacy_policy_url": st.privacy_policy_url,
     }

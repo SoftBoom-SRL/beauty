@@ -12,8 +12,9 @@ from django.core.cache import cache
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from ninja import Router
+from ninja import File, Form, Router
 from ninja.errors import HttpError
+from ninja.files import UploadedFile
 from ninja.pagination import LimitOffsetPagination, paginate
 
 from apps.agenda.schemas import AppointmentOut
@@ -23,8 +24,9 @@ from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
 
-from .models import Client, ClientCategory, ClientNote, TechnicalSheet
+from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
 from .schemas import (
+    AttachmentOut,
     CategoryIn,
     CategoryOut,
     HookLeadIn,
@@ -36,11 +38,12 @@ from .schemas import (
     ImportOut,
     NoteIn,
     NoteOut,
+    NoteUpdateIn,
     OkOut,
     TechnicalSheetIn,
     TechnicalSheetOut,
 )
-from .services import client_stats, import_rows
+from .services import client_stats, import_rows, normalize_gender, parse_birthday
 
 logger = logging.getLogger("youty.clients")
 router = Router(tags=["clients"])
@@ -150,14 +153,28 @@ def list_clients(
     return qs.distinct()
 
 
+def _client_payload(data: ClientIn) -> tuple[dict, list[int]]:
+    """ClientIn → kwargs del modello: compleanno (con/senza anno) e genere validati."""
+    payload = data.dict()
+    category_ids = payload.pop("category_ids")
+    payload["phone"] = payload["phone"].strip()
+    payload["gender"] = normalize_gender(payload.get("gender") or "")
+    birthday, year_known = parse_birthday(payload.pop("birthday", None))
+    payload["birthday"] = birthday
+    payload["birthday_year_known"] = year_known
+    if not payload["first_name"].strip():
+        raise HttpError(400, "Il nome è obbligatorio")
+    if not payload["phone"]:
+        raise HttpError(400, "Il telefono è obbligatorio")
+    return payload, category_ids
+
+
 @router.post("/", auth=staff_auth, response=ClientOut)
 def create_client(request, data: ClientIn):
     ctx = request.auth
     require_scope(ctx, "clients")
-    payload = data.dict()
-    category_ids = payload.pop("category_ids")
-    phone = payload["phone"].strip()
-    payload["phone"] = phone
+    payload, category_ids = _client_payload(data)
+    phone = payload["phone"]
     _check_phone_unique(ctx, phone)
     client = Client.objects.create(salon=ctx.salon, **payload)
     _set_categories(client, category_ids)
@@ -187,10 +204,8 @@ def update_client(request, client_id: int, data: ClientIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    payload = data.dict()
-    category_ids = payload.pop("category_ids")
-    phone = payload["phone"].strip()
-    payload["phone"] = phone
+    payload, category_ids = _client_payload(data)
+    phone = payload["phone"]
     _check_phone_unique(ctx, phone, exclude_id=client.id)
     for name, value in payload.items():
         setattr(client, name, value)
@@ -227,13 +242,18 @@ def delete_client(request, client_id: int):
 def import_clients(request, data: ImportIn):
     ctx = request.auth
     require_scope(ctx, "clients")
-    result = import_rows(ctx.salon, [row.dict() for row in data.rows])
+    result = import_rows(
+        ctx.salon,
+        [row.dict() for row in data.rows],
+        update_existing=data.update_existing,
+        actor=ctx.user,
+    )
     log_activity(
         ctx.salon,
         "client.imported",
-        f"Import clienti: {result['created']} creati, {result['updated']} aggiornati",
+        f"Import clienti: {result['created']} creati, {result['updated']} aggiornati, {result['skipped']} saltati",
         actor=ctx.user,
-        payload=result,
+        payload={k: result[k] for k in ("created", "updated", "skipped")},
     )
     return result
 
@@ -263,14 +283,182 @@ def list_client_appointments(request, client_id: int):
     return [_appointment_out(a) for a in appointments]
 
 
-# ---- Note interne ---------------------------------------------------------------
+# ---- Storico unificato (visite + note + schede) ---------------------------------
+
+
+def _note_out(note: ClientNote) -> dict:
+    author = getattr(note, "author", None)
+    return {
+        "id": note.id,
+        "client_id": note.client_id,
+        "appointment_id": note.appointment_id,
+        "text": note.text,
+        "visibility": note.visibility,
+        "author_id": note.author_id,
+        "author_name": (author.get_full_name() or author.email) if author else "",
+        "attachments": [_attachment_out(a) for a in note.attachments.all()],
+        "created_at": note.created_at,
+        "updated_at": note.updated_at,
+    }
+
+
+def _attachment_out(att: ClientNoteAttachment) -> dict:
+    try:
+        url = att.file.url
+    except ValueError:
+        url = ""
+    return {
+        "id": att.id,
+        "name": att.name,
+        "url": url,
+        "content_type": att.content_type,
+        "size": att.size,
+        "is_image": att.is_image,
+        "created_at": att.created_at,
+    }
+
+
+def _sheet_out(sheet: TechnicalSheet) -> dict:
+    author = getattr(sheet, "author", None)
+    return {
+        "id": sheet.id,
+        "client_id": sheet.client_id,
+        "appointment_id": sheet.appointment_id,
+        "category": sheet.category,
+        "treatment": sheet.treatment,
+        "zone": sheet.zone,
+        "products": sheet.products,
+        "params": sheet.params,
+        "outcome": sheet.outcome,
+        "duration_hold": sheet.duration_hold,
+        "advice": sheet.advice,
+        "protocol": sheet.protocol,
+        "next_step": sheet.next_step,
+        "photo": sheet.photo.url if sheet.photo else None,
+        "author_id": sheet.author_id,
+        "author_name": (author.get_full_name() or author.email) if author else "",
+        "created_at": sheet.created_at,
+    }
+
+
+@router.get("/{int:client_id}/history", auth=staff_auth)
+def client_history(request, client_id: int):
+    """Storico completo del cliente in un'unica timeline (più recente prima).
+
+    Voci: `visit` (appuntamento con servizi, operatrici, stato, incasso, nota
+    appuntamento + note di trattamento e schede tecniche collegate), `sale`
+    (vendita al banco senza appuntamento), `note` e `sheet` non legate a una
+    visita. Gli appuntamenti futuri hanno `upcoming: true`.
+    """
+    ctx = request.auth
+    client = salon_get(Client, ctx, client_id)
+
+    from apps.agenda.api import _appointment_out  # lazy: riuso serializzazione
+    from apps.agenda.models import Appointment  # lazy
+    from apps.sales.api import _sale_out  # lazy
+    from apps.sales.models import Sale  # lazy
+
+    appointments = list(
+        Appointment.objects.filter(salon=ctx.salon, client=client)
+        .select_related("client", "operator")
+        .prefetch_related("items__service", "items__operator")
+        .order_by("-start")
+    )
+    sales = {
+        s.appointment_id: s
+        for s in Sale.objects.filter(salon=ctx.salon, client=client).select_related("client")
+        if s.appointment_id
+    }
+    counter_sales = [
+        s for s in Sale.objects.filter(salon=ctx.salon, client=client).select_related("client")
+        if not s.appointment_id
+    ]
+    notes = list(client.notes.select_related("author").prefetch_related("attachments"))
+    sheets = list(client.sheets.select_related("author"))
+    notes_by_appt: dict = {}
+    for n in notes:
+        if n.appointment_id:
+            notes_by_appt.setdefault(n.appointment_id, []).append(n)
+    sheets_by_appt: dict = {}
+    for sh in sheets:
+        if sh.appointment_id:
+            sheets_by_appt.setdefault(sh.appointment_id, []).append(sh)
+
+    now = timezone.now()
+    entries = []
+    for a in appointments:
+        sale = sales.get(a.id)
+        entries.append(
+            {
+                "kind": "visit",
+                "date": a.start,
+                "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
+                "appointment": _appointment_out(a),
+                "operator_name": f"{a.operator.first_name} {a.operator.last_name}".strip() if a.operator_id else "",
+                "sale": _sale_out(sale) if sale else None,
+                "notes": [_note_out(n) for n in notes_by_appt.get(a.id, [])],
+                "sheets": [_sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
+            }
+        )
+    for s in counter_sales:
+        entries.append({"kind": "sale", "date": s.created_at, "sale": _sale_out(s)})
+    for n in notes:
+        if not n.appointment_id:
+            entries.append({"kind": "note", "date": n.created_at, "note": _note_out(n)})
+    for sh in sheets:
+        if not sh.appointment_id:
+            entries.append({"kind": "sheet", "date": sh.created_at, "sheet": _sheet_out(sh)})
+    entries.sort(key=lambda e: e["date"], reverse=True)
+    return {
+        "client_id": client.id,
+        "counts": {
+            "visits": sum(1 for e in entries if e["kind"] == "visit" and not e["upcoming"]),
+            "upcoming": sum(1 for e in entries if e["kind"] == "visit" and e["upcoming"]),
+            "notes": len(notes),
+            "sheets": len(sheets),
+            "sales": len(sales) + len(counter_sales),
+        },
+        "entries": entries,
+    }
+
+
+# ---- Note interne (con allegati: foto e documenti) -------------------------------
+
+
+def _appointment_for(ctx, client: Client, appointment_id):
+    if not appointment_id:
+        return None
+    from apps.agenda.models import Appointment  # lazy
+
+    appointment = Appointment.objects.filter(salon=ctx.salon, client=client, id=appointment_id).first()
+    if appointment is None:
+        raise HttpError(404, "Appuntamento non trovato per questo cliente")
+    return appointment
+
+
+def _validate_upload(f: UploadedFile) -> None:
+    ctype = (f.content_type or "").lower()
+    if ctype not in ClientNoteAttachment.IMAGE_TYPES + ClientNoteAttachment.DOC_TYPES:
+        raise HttpError(400, f"Formato non supportato: {f.name} (immagini, PDF, Word o testo)")
+    if f.size > ClientNoteAttachment.MAX_BYTES:
+        raise HttpError(400, f"File troppo grande: {f.name} (max 15 MB)")
+
+
+def _attach_files(note: ClientNote, files: list[UploadedFile]) -> None:
+    for f in files:
+        _validate_upload(f)
+    for f in files:
+        att = ClientNoteAttachment(
+            note=note, name=f.name[:200], content_type=(f.content_type or "")[:100], size=f.size
+        )
+        att.file.save(f.name, f, save=True)
 
 
 @router.get("/{int:client_id}/notes", auth=staff_auth, response=list[NoteOut])
 def list_notes(request, client_id: int):
     ctx = request.auth
     client = salon_get(Client, ctx, client_id)
-    return client.notes.all()
+    return [_note_out(n) for n in client.notes.select_related("author").prefetch_related("attachments")]
 
 
 @router.post("/{int:client_id}/notes", auth=staff_auth, response=NoteOut)
@@ -278,9 +466,12 @@ def create_note(request, client_id: int, data: NoteIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
+    if not data.text.strip():
+        raise HttpError(400, "Il testo della nota è obbligatorio")
     note = ClientNote.objects.create(
         client=client,
-        text=data.text,
+        appointment=_appointment_for(ctx, client, data.appointment_id),
+        text=data.text.strip(),
         visibility=data.visibility,
         author=ctx.user,
     )
@@ -291,7 +482,84 @@ def create_note(request, client_id: int, data: NoteIn):
         actor=ctx.user,
         payload={"client_id": client.id, "note_id": note.id},
     )
-    return note
+    return _note_out(note)
+
+
+@router.post("/{int:client_id}/notes/upload", auth=staff_auth, response=NoteOut)
+def create_note_with_files(
+    request,
+    client_id: int,
+    files: list[UploadedFile] = File(...),
+    text: str = Form(""),
+    visibility: str = Form("private"),
+    appointment_id: Optional[int] = Form(None),
+):
+    """Nota di trattamento con foto/documenti allegati (multipart)."""
+    ctx = request.auth
+    require_scope(ctx, "clients")
+    client = salon_get(Client, ctx, client_id)
+    if not files and not text.strip():
+        raise HttpError(400, "Scrivi una nota o allega almeno un file")
+    for f in files:
+        _validate_upload(f)
+    note = ClientNote.objects.create(
+        client=client,
+        appointment=_appointment_for(ctx, client, appointment_id),
+        text=text.strip(),
+        visibility=visibility if visibility in ("private", "ai", "shared") else "private",
+        author=ctx.user,
+    )
+    _attach_files(note, files)
+    log_activity(
+        ctx.salon,
+        "client.note_added",
+        f"Nota con {len(files)} allegat{'o' if len(files) == 1 else 'i'} per {client.full_name}",
+        actor=ctx.user,
+        payload={"client_id": client.id, "note_id": note.id, "attachments": len(files)},
+    )
+    return _note_out(note)
+
+
+@router.put("/{int:client_id}/notes/{int:note_id}", auth=staff_auth, response=NoteOut)
+def update_note(request, client_id: int, note_id: int, data: NoteUpdateIn):
+    ctx = request.auth
+    require_scope(ctx, "clients")
+    client = salon_get(Client, ctx, client_id)
+    note = get_object_or_404(ClientNote, pk=note_id, client=client)
+    if data.text is not None:
+        if not data.text.strip() and not note.attachments.exists():
+            raise HttpError(400, "Una nota senza allegati non può essere vuota")
+        note.text = data.text.strip()
+    if data.visibility is not None:
+        note.visibility = data.visibility
+    note.save()
+    return _note_out(note)
+
+
+@router.post("/{int:client_id}/notes/{int:note_id}/attachments", auth=staff_auth, response=NoteOut)
+def add_attachments(request, client_id: int, note_id: int, files: list[UploadedFile] = File(...)):
+    ctx = request.auth
+    require_scope(ctx, "clients")
+    client = salon_get(Client, ctx, client_id)
+    note = get_object_or_404(ClientNote, pk=note_id, client=client)
+    _attach_files(note, files)
+    note.save(update_fields=["updated_at"])
+    return _note_out(note)
+
+
+@router.delete(
+    "/{int:client_id}/notes/{int:note_id}/attachments/{int:attachment_id}",
+    auth=staff_auth,
+    response=OkOut,
+)
+def delete_attachment(request, client_id: int, note_id: int, attachment_id: int):
+    ctx = request.auth
+    require_scope(ctx, "clients")
+    client = salon_get(Client, ctx, client_id)
+    att = get_object_or_404(ClientNoteAttachment, pk=attachment_id, note_id=note_id, note__client=client)
+    att.file.delete(save=False)
+    att.delete()
+    return OkOut()
 
 
 @router.delete("/{int:client_id}/notes/{int:note_id}", auth=staff_auth, response=OkOut)
@@ -300,6 +568,8 @@ def delete_note(request, client_id: int, note_id: int):
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     note = get_object_or_404(ClientNote, pk=note_id, client=client)
+    for att in note.attachments.all():
+        att.file.delete(save=False)
     note.delete()
     log_activity(
         ctx.salon,
@@ -338,6 +608,23 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
         actor=ctx.user,
         payload={"client_id": client.id, "sheet_id": sheet.id},
     )
+    return sheet
+
+
+@router.post("/{int:client_id}/sheets/{int:sheet_id}/photo", auth=staff_auth, response=TechnicalSheetOut)
+def upload_sheet_photo(request, client_id: int, sheet_id: int, photo: UploadedFile = File(...)):
+    """Foto della scheda tecnica (unico campo modificabile dopo la creazione)."""
+    ctx = request.auth
+    require_scope(ctx, "clients")
+    client = salon_get(Client, ctx, client_id)
+    sheet = get_object_or_404(TechnicalSheet, pk=sheet_id, client=client)
+    if (photo.content_type or "").lower() not in ClientNoteAttachment.IMAGE_TYPES:
+        raise HttpError(400, "La foto deve essere un'immagine (JPEG, PNG, WebP, HEIC)")
+    if photo.size > ClientNoteAttachment.MAX_BYTES:
+        raise HttpError(400, "Foto troppo grande (max 15 MB)")
+    if sheet.photo:
+        sheet.photo.delete(save=False)
+    sheet.photo.save(photo.name, photo, save=True)
     return sheet
 
 

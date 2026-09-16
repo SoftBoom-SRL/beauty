@@ -465,6 +465,13 @@ def update_pause(request, pause_id: int, data: PauseIn):
     pause.duration_min = data.duration_min
     pause.note = data.note
     pause.save()
+    log_activity(
+        ctx.salon,
+        "pause.updated",
+        f"Pausa di {_operator_name(pause.operator)} aggiornata",
+        actor=ctx.user,
+        payload={"pause_id": pause.id, "start": pause.start.isoformat()},
+    )
     return _pause_out(pause)
 
 
@@ -472,7 +479,17 @@ def update_pause(request, pause_id: int, data: PauseIn):
 def delete_pause(request, pause_id: int):
     ctx = request.auth
     require_scope(ctx, "agenda")
-    salon_get(Pause, ctx, pause_id).delete()
+    pause = salon_get(Pause, ctx, pause_id)
+    operator_name = _operator_name(pause.operator)
+    start = pause.start.isoformat()
+    pause.delete()
+    log_activity(
+        ctx.salon,
+        "pause.deleted",
+        f"Pausa di {operator_name} rimossa",
+        actor=ctx.user,
+        payload={"pause_id": pause_id, "start": start},
+    )
     return OkOut()
 
 

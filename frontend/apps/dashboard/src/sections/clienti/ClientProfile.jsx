@@ -3,9 +3,9 @@
 // and the 5 tabs (Storico / Scheda tecnica / Note / Wallet / Consensi).
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur } from '@youty/shared';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
-import { initialsOf, relMeta, toClientIn, waHref } from './helpers.js';
+import { initialsOf, relMeta, toClientIn, waHref, formatBirthday, daysToBirthday, genderLabel, genderGlyph, dateLabel } from './helpers.js';
 import StoricoTab from './tabs/StoricoTab.jsx';
 import TechSheetTab from './tabs/TechSheetTab.jsx';
 import NotesTab from './tabs/NotesTab.jsx';
@@ -37,6 +37,10 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       .catch((err) => { if (!dead) { setFailed(true); toastErr(err); } });
     return () => { dead = true; };
   }, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // la scheda cambia altrove (altra postazione, altra scheda) → ricarico in silenzio
+  useLive(/^client\.(updated|deleted)/, (events) => {
+    if (events.some((e) => e.payload?.client_id === clientId)) api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+  });
 
   /* waiting-list badge (needs agenda read scope; fail silently) */
   useEffect(() => {
@@ -104,6 +108,14 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const wa = waHref(c.phone);
   const sinceYear = c.since ? String(c.since).slice(0, 4) : null;
   const assignedIds = (c.categories || []).map((x) => x.id);
+  const bdays = daysToBirthday(c.birthday);
+  const subtitle = [
+    genderLabel(c.gender, t),
+    c.age != null ? t(`${c.age} anni`, `${c.age} years old`) : null,
+    sinceYear ? t(`cliente dal ${sinceYear}`, `client since ${sinceYear}`) : null,
+    c.origin || null,
+  ].filter(Boolean).join(' · ');
+  const openEdit = () => openModal('newclient', { client: c, onSaved: (u) => { setC((prev) => ({ ...prev, ...u })); onChanged && onChanged(); } });
 
   const tabs = [
     ['storico', t('Storico', 'History')],
@@ -118,19 +130,25 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   return (
     <div style={{ padding: '26px 30px 40px', maxWidth: 880 }}>
       {/* header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18, marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18, marginBottom: 22, flexWrap: 'wrap' }}>
         <Avatar initials={initialsOf(c.full_name)} size={76} />
-        <div style={{ flex: 1, minWidth: 210 }}>
+        <div style={{ flex: '1 1 210px', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: 'var(--serif)', fontSize: 28, fontWeight: 500, whiteSpace: 'nowrap' }}>{c.full_name}</span>
+            <span style={{ fontFamily: 'var(--serif)', fontSize: 28, fontWeight: 500 }}>{c.full_name}</span>
+            {c.gender && <span title={genderLabel(c.gender, t)} aria-label={genderLabel(c.gender, t)} style={{ fontSize: 18, color: 'var(--muted)', lineHeight: 1 }}>{genderGlyph(c.gender)}</span>}
+            {bdays != null && bdays <= 14 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, background: 'var(--warn-tint)', color: 'var(--warn)', whiteSpace: 'nowrap' }}>
+                <Icon name="cake" size={12} color="var(--warn)" />{bdays === 0 ? t('Compleanno oggi!', 'Birthday today!') : bdays === 1 ? t('Compleanno domani', 'Birthday tomorrow') : t(`Compleanno tra ${bdays} giorni`, `Birthday in ${bdays} days`)}
+              </span>
+            )}
             {onWaitlist && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, background: 'var(--clay-tint)', color: 'var(--clay-ink)', border: '1px solid color-mix(in srgb, var(--clay) 25%, transparent)', whiteSpace: 'nowrap' }}>
                 <Icon name="clock" size={11} color="var(--clay-ink)" />{t("In lista d'attesa", 'On waiting list')}
               </span>
             )}
           </div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>
-            {sinceYear ? t(`Cliente dal ${sinceYear}`, `Client since ${sinceYear}`) : t('Cliente', 'Client')}{c.origin ? ' · ' + c.origin : ''}
+          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6, textTransform: 'none' }}>
+            {subtitle || t('Cliente', 'Client')}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -144,6 +162,9 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
             ? <a className="dk-btn dk-btn--ghost" style={btnA} href={`mailto:${c.email}`}><Icon name="mail" size={17} />Email</a>
             : <button className="dk-btn dk-btn--ghost" onClick={() => fireToast({ msg: t('Nessuna email in anagrafica', 'No email on file'), icon: 'mail' })}><Icon name="mail" size={17} />Email</button>}
           <button className="dk-btn dk-btn--clay" title={t('La conversazione si gestisce su Yourang', 'The conversation is managed on Yourang')} onClick={() => fireToast({ msg: t('Apertura di Yourang…', 'Opening Yourang…'), icon: 'ext' })}><Icon name="ext" size={16} color="#fff" />Yourang</button>
+          {canWrite && (
+            <button className="dk-btn dk-btn--ghost" onClick={openEdit} title={t('Modifica dati anagrafici', 'Edit personal details')}><Icon name="edit" size={16} />{t('Modifica', 'Edit')}</button>
+          )}
           {canWrite && (
             <button className="dk-iconbtn" title={t('Archivia cliente', 'Archive client')} onClick={() => setConfirmDel(true)} style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, var(--hair))' }}>
               <Icon name="x" size={16} color="var(--danger)" />
@@ -193,10 +214,10 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       </div>
 
       {/* KPIs (visits / total_spent / avg ticket from ClientDetailOut) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 14 }}>
         <ProfStat label={t('Visite', 'Visits')} value={visits} />
-        <ProfStat label={t('Valore totale', 'Lifetime value')} value={fmtEur(totalSpent, lang)} />
-        <ProfStat label={t('Scontrino medio', 'Avg ticket')} value={fmtEur(Math.round(totalSpent / Math.max(1, visits)), lang)} />
+        <ProfStat label={t('Valore totale', 'Lifetime value')} value={totalSpent ? fmtEur(totalSpent, lang) : '€0'} />
+        <ProfStat label={t('Scontrino medio', 'Avg ticket')} value={totalSpent ? fmtEur(Math.round(totalSpent / Math.max(1, visits)), lang) : '€0'} />
         <div className="dk-card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Affidabilità', 'Reliability')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -208,10 +229,38 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
           </div>
         </div>
       </div>
+      {/* anagrafica: tutto ciò che si può modificare, con il percorso per farlo */}
+      <div className="dk-card" style={{ padding: '14px 16px', marginBottom: 14, boxShadow: 'none', border: '1px solid var(--hair)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <div className="t-meta">{t('Anagrafica', 'Personal details')}</div>
+          <div style={{ flex: 1 }} />
+          {canWrite && <button onClick={openEdit} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}><Icon name="edit" size={13} color="var(--clay-ink)" />{t('Modifica', 'Edit')}</button>}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px 18px' }}>
+          {[
+            [t('Telefono', 'Phone'), c.phone, 'phone'],
+            ['Email', c.email, 'mail'],
+            [t('Genere', 'Gender'), genderLabel(c.gender, t), 'user'],
+            [t('Compleanno', 'Birthday'), c.birthday ? formatBirthday(c.birthday, lang) + (c.age != null ? ` · ${c.age} ${t('anni', 'y.o.')}` : ` · ${t('anno non indicato', 'no year')}`) : '', 'cake'],
+            [t('Come ci ha conosciuto', 'How they found us'), c.origin, 'sparkle'],
+            [t('Cliente dal', 'Client since'), c.since ? dateLabel(c.since, lang) : '', 'calendar'],
+          ].map(([label, value, icon]) => (
+            <div key={label} style={{ minWidth: 0 }}>
+              <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 5 }}><Icon name={icon} size={11} color="var(--muted-2)" />{label}</div>
+              {value
+                ? <div style={{ fontSize: 14, fontWeight: 600, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} className={icon === 'phone' ? 'tabnum' : ''}>{value}</div>
+                : canWrite
+                  ? <button onClick={openEdit} style={{ fontSize: 13, fontWeight: 600, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none', padding: 0, marginTop: 2 }}>+ {t('aggiungi', 'add')}</button>
+                  : <div style={{ fontSize: 14, color: 'var(--muted-2)', marginTop: 2 }}>—</div>}
+            </div>
+          ))}
+        </div>
+      </div>
       {c.deposit_always && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', background: 'var(--warn-tint)', borderRadius: 12, marginBottom: 14 }}>
           <Icon name="coupon" size={18} color="var(--warn)" />
-          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink-2)' }}>{t('Deposito sempre richiesto per questo cliente', 'Deposit always required for this client')}</span>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink-2)', flex: 1 }}>{t('Deposito sempre richiesto per questo cliente', 'Deposit always required for this client')}</span>
+          {canWrite && <button onClick={() => updateClient({ deposit_always: false }, { msg: t('Caparra obbligatoria rimossa', 'Mandatory deposit removed'), icon: 'check' })} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}>{t('Rimuovi', 'Remove')}</button>}
         </div>
       )}
 

@@ -2,15 +2,26 @@
 // API, no update/delete route) and creation form. Shared by the profile tab
 // and the registry TechSheetModal. Prototype TECH_FIELDS mapped onto the
 // API's flat TechnicalSheet columns (see helpers.js).
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, mediaUrl } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { TECH_FIELDS, dateTimeLabel, initialsOf, inputCss, sheetVal } from './helpers.js';
 
-export function TechSheetCard({ sheet, defaultOpen }) {
-  const { t, lang } = useDash();
+export function TechSheetCard({ sheet: initial, defaultOpen }) {
+  const { t, lang, hasScope, fireToast } = useDash();
+  const [sheet, setSheet] = useState(initial);
   const [open, setOpen] = useState(!!defaultOpen);
+  const fileRef = useRef(null);
   const fields = TECH_FIELDS(t);
+  const canWrite = hasScope('clients');
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    try {
+      const updated = await api.postForm(`/api/clients/${sheet.client_id}/sheets/${sheet.id}/photo`, { photo: file });
+      setSheet(updated);
+      fireToast({ msg: t('Foto salvata nella scheda', 'Photo saved to the sheet'), icon: 'check' });
+    } catch (err) { fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); }
+  };
   return (
     <div className="dk-card" style={{ padding: 0, boxShadow: 'none', border: '1px solid var(--hair)', overflow: 'hidden' }}>
       <button className="dk-row" onClick={() => setOpen((v) => !v)} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '14px 18px', width: '100%', textAlign: 'left', background: 'transparent', cursor: 'pointer', border: 'none' }}>
@@ -39,12 +50,22 @@ export function TechSheetCard({ sheet, defaultOpen }) {
               );
             })}
           </div>
-          {sheet.photo && (
-            <div style={{ marginTop: 16 }}>
-              <div className="t-meta" style={{ marginBottom: 8 }}>{t('Foto', 'Photo')}</div>
-              <img src={mediaUrl(sheet.photo)} alt="" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--hair)' }} />
-            </div>
-          )}
+          <div style={{ marginTop: 16, display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+            {sheet.photo && (
+              <div>
+                <div className="t-meta" style={{ marginBottom: 8 }}>{t('Foto', 'Photo')}</div>
+                <a href={mediaUrl(sheet.photo)} target="_blank" rel="noreferrer"><img src={mediaUrl(sheet.photo)} alt="" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--hair)', display: 'block' }} /></a>
+              </div>
+            )}
+            {canWrite && (
+              <React.Fragment>
+                <input ref={fileRef} type="file" accept="image/*" onChange={(e) => { uploadPhoto(e.target.files?.[0]); e.target.value = ''; }} style={{ display: 'none' }} />
+                <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={() => fileRef.current?.click()}>
+                  <Icon name="camera" size={14} />{sheet.photo ? t('Sostituisci foto', 'Replace photo') : t('Aggiungi foto', 'Add photo')}
+                </button>
+              </React.Fragment>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -58,6 +79,8 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
   const [category, setCategory] = useState(defaultCategory || catOptions[0] || t('Generale', 'General'));
   const [values, setValues] = useState({});
   const [saving, setSaving] = useState(false);
+  const [photo, setPhoto] = useState(null);
+  const photoRef = useRef(null);
   const setV = (k, v) => setValues((o) => ({ ...o, [k]: v }));
   const canSave = !!(values.treatment || '').trim() && !!category;
 
@@ -77,7 +100,11 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
         protocol: values.protocol || '',
         next_step: values.next_step || '',
       };
-      const sheet = await api.post(`/api/clients/${clientId}/sheets`, body);
+      let sheet = await api.post(`/api/clients/${clientId}/sheets`, body);
+      if (photo) {
+        try { sheet = await api.postForm(`/api/clients/${clientId}/sheets/${sheet.id}/photo`, { photo }); }
+        catch (err) { fireToast({ msg: t('Scheda salvata, ma la foto non è stata caricata: ', 'Sheet saved, but the photo failed to upload: ') + (err instanceof ApiError ? err.message : ''), icon: 'alert' }); }
+      }
       onSaved && onSaved(sheet);
     } catch (err) {
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
@@ -97,7 +124,7 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
           {[...new Set([...(defaultCategory ? [defaultCategory] : []), ...catOptions])].map((name) => {
             const on = category === name;
             return (
-              <button key={name} onClick={() => setCategory(name)} style={{ padding: '6px 12px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{name}</button>
+              <button key={name} type="button" onClick={() => setCategory(name)} className={'dk-pill' + (on ? ' dk-pill--on' : '')} style={{ padding: '5px 12px', fontSize: 12.5 }}>{name}</button>
             );
           })}
         </div>
@@ -119,7 +146,18 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
           </div>
         ))}
       </div>
-      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+      {/* foto facoltativa (prima/dopo, dettaglio del lavoro) */}
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', border: '1px dashed var(--line-strong)', borderRadius: 12 }}>
+        <input ref={photoRef} type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} style={{ display: 'none' }} />
+        {photo ? <img src={URL.createObjectURL(photo)} alt="" style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8 }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: 'var(--surface-2)', display: 'grid', placeItems: 'center' }}><Icon name="camera" size={18} color="var(--muted-2)" /></div>}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Foto del lavoro', 'Photo of the work')} <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 500 }}>· {t('facoltativa', 'optional')}</span></div>
+          <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photo ? photo.name : t('Prima/dopo, tonalità, dettaglio: resta nello storico.', 'Before/after, shade, detail: kept in the history.')}</div>
+        </div>
+        <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5 }} onClick={() => photoRef.current?.click()}>{photo ? t('Cambia', 'Change') : t('Scegli', 'Choose')}</button>
+        {photo && <button type="button" className="dk-iconbtn" style={{ width: 32, height: 32, borderRadius: 8 }} onClick={() => setPhoto(null)} aria-label={t('Rimuovi', 'Remove')}><Icon name="x" size={14} /></button>}
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
         <button className="dk-btn dk-btn--ghost" style={{ flex: 1 }} onClick={onCancel}>{t('Annulla', 'Cancel')}</button>
         <button className="dk-btn dk-btn--clay" style={{ flex: 1, opacity: canSave && !saving ? 1 : 0.4 }} disabled={!canSave || saving} onClick={save}>
           <Icon name="check" size={16} color="#fff" />{saving ? t('Salvo…', 'Saving…') : t('Salva scheda', 'Save sheet')}

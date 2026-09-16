@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, Icon, Toggle, EmptyState } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import Builder from './Builder.jsx';
 import { eventIcon, offsetPhrase, catLabel } from './catalog.js';
 
@@ -49,6 +49,7 @@ export default function AutomazioniSection() {
   }, [toastErr]);
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive(/^automation\./, () => load());
 
   /* ---- toggle active (optimistic, then refetch) ---- */
   const toggle = async (rule) => {

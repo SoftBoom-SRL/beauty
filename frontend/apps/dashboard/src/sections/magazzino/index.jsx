@@ -3,7 +3,7 @@
 // passed to the sub-tabs; each sub-tab fetches its own paginated lists.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@youty/shared';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import { STOCK_META, errMsg } from './lib.js';
 import ProdottiSub from './ProdottiSub.jsx';
 import OrdiniSub from './OrdiniSub.jsx';
@@ -38,6 +38,7 @@ export default function MagazzinoSection() {
 
   useEffect(() => { loadShared(true); }, [loadShared]);
   const refreshShared = useCallback(() => { loadShared(true); }, [loadShared]);
+  useLive(/^(product|stock|order|supplier)\./, refreshShared);
 
   const lowCount = useMemo(
     () => (allProds || []).filter((p) => p.active && p.stock_state === 'low').length,

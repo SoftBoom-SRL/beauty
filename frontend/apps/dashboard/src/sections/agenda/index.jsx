@@ -10,16 +10,16 @@ import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
 import MonthView from './MonthView.jsx';
 import RightRail from './RightRail.jsx';
-import NewApptModal from './modals/NewApptModal.jsx';
 import GroupBookingDrawer from './modals/GroupBookingDrawer.jsx';
 
 export default function AgendaSection() {
   const {
     t, lang, operators, services, serviceCategories, hasScope,
     openModal, modal, fireToast, opColors, setOpColor, opPalette,
-    setTab, setDeepLink, showRevenue,
+    setTab, setDeepLink, showRevenue, live, setAgendaPick, settings, session,
   } = useDash();
   const canWrite = hasScope('agenda');
+  const noWrite = useCallback(() => fireToast({ msg: t('Il tuo ruolo non ha il permesso “agenda”: puoi solo consultare', 'Your role lacks the “agenda” permission: read only'), icon: 'lock' }), [fireToast, t]);
 
   /* ---- navigation state ---- */
   const [date, setDate] = useState(todayStr());
@@ -63,6 +63,14 @@ export default function AgendaSection() {
     return () => { alive = false; };
   }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { fetchWaitlist(); fetchSummary(); }, [fetchWaitlist, fetchSummary]);
+
+  /* live: quando un'altra postazione tocca l'agenda, ricarica (debounce breve) */
+  const liveTimer = useRef(null);
+  useEffect(() => live.subscribe(({ events }) => {
+    if (!events.some((e) => /^(appointment|pause|waitlist|slot|visit|sale)\./.test(e.type))) return;
+    clearTimeout(liveTimer.current);
+    liveTimer.current = setTimeout(refetchAll, 250);
+  }), [live, refetchAll]);
 
   /* refetch after any modal closes — mutations happen inside modals, keep the grid fresh */
   const prevModal = useRef(modal);
@@ -110,10 +118,28 @@ export default function AgendaSection() {
     setHover({ a, x: right ? r.right + 10 : r.left - 10, y: Math.min(r.top, window.innerHeight - 260), side: right ? 'right' : 'left' });
   };
 
-  /* ---- new-appointment drawer (#5) + group booking (#6): live panels, agenda resta visibile ---- */
-  const [newAppt, setNewAppt] = useState(null); // prefill | null
+  /* ---- nuova prenotazione: UN solo drawer (modale 'newappt'), da qualunque punto si parta ----
+   * Mentre è aperto l'agenda è in "pick mode": un clic su uno slot libero
+   * passa orario e operatrice al drawer invece di aprire il menu. */
   const [groupOpen, setGroupOpen] = useState(false);
-  const openNewAppt = useCallback((prefill) => { if (canWrite) setNewAppt(prefill || {}); }, [canWrite]);
+  const pickMode = modal?.name === 'newappt';
+  const openNewAppt = useCallback((prefill) => {
+    if (!canWrite) { noWrite(); return; }
+    openModal('newappt', { prefill: prefill || {}, onCreated: refetchAll });
+  }, [canWrite, noWrite, openModal, refetchAll]);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'n' && e.key !== 'N') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (modal) return;
+      e.preventDefault();
+      openNewAppt({ date });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openNewAppt, date, modal]);
 
   /* ---- mutations (drag & drop, pauses) ---- */
   const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
@@ -133,7 +159,7 @@ export default function AgendaSection() {
       });
       await fetchDay();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Orario non più disponibile', 'Time no longer available'), icon: 'alert' });
+      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato: nel frattempo lo slot è stato occupato o è fuori turno', 'Move refused: the slot was taken meanwhile or is off shift'), icon: 'alert' });
       else toastErr(err, t, fireToast);
       await fetchDay().catch(() => {}); // revert to server truth
     } finally { setPending(null); }
@@ -277,11 +303,17 @@ export default function AgendaSection() {
               {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 36 }} onClick={() => setDate(todayStr())}>{t('Oggi', 'Today')}</button>}
             </div>
           )}
+          <SalonHoursChip settings={settings} date={date} t={t} isOwner={!!session?.is_owner} onOpen={() => { setDeepLink && setDeepLink('hours'); setTab('impostazioni'); }} />
           <div style={{ flex: 1 }} />
           {canWrite && (
-            <button className="dk-btn dk-btn--soft" style={{ height: 40 }} onClick={() => setGroupOpen(true)} title={t('Prenota più clienti insieme', 'Book several clients together')}>
-              <Icon name="clients" size={16} />{t('Gruppo', 'Group')}
-            </button>
+            <React.Fragment>
+              <button className="dk-btn dk-btn--soft" style={{ height: 40 }} onClick={() => setGroupOpen(true)} title={t('Prenota più clienti insieme', 'Book several clients together')}>
+                <Icon name="clients" size={16} />{t('Gruppo', 'Group')}
+              </button>
+              <button className="dk-btn dk-btn--clay" style={{ height: 40 }} onClick={() => openNewAppt({ date })} title={t('Nuova prenotazione (N)', 'New booking (N)')}>
+                <Icon name="plus" size={16} color="#fff" />{t('Prenota', 'Book')}
+              </button>
+            </React.Fragment>
           )}
           {/* view selector: Giorno / Settimana / Mese */}
           <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 12, padding: 4 }}>
@@ -307,10 +339,10 @@ export default function AgendaSection() {
                   const on = vis[o.id] !== false;
                   const col = colorOf(o.id);
                   return (
-                    <button key={o.id} onClick={() => toggleVis(o.id)} title={`${o.first_name} ${o.last_name}`.trim() + (o.role_title ? ' · ' + o.role_title : '')} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px 5px 6px', borderRadius: 99, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap', border: '1px solid ' + (on ? 'transparent' : 'var(--hair)'), background: on ? col : 'var(--surface)', transition: 'all 140ms' }}>
-                      <Avatar initials={o.initials} size={24} color={col} />
-                      <span style={{ fontSize: 13, fontWeight: 700, color: on ? 'var(--ink)' : 'var(--muted)' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</span>
-                      {on && <Icon name="check" size={13} color="var(--ink)" stroke={2.6} />}
+                    <button key={o.id} onClick={() => toggleVis(o.id)} aria-pressed={on} title={`${o.first_name} ${o.last_name}`.trim() + (o.role_title ? ' · ' + o.role_title : '') + ' · ' + (on ? t('visibile', 'shown') : t('nascosta', 'hidden'))} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : ' dk-pill--muted')} style={{ '--pill-c': col, padding: '4px 11px 4px 5px', flexShrink: 0 }}>
+                      <Avatar initials={o.initials} size={24} color={col} ring={on} />
+                      <span>{opDisplay(o.first_name, o.last_name, opFirsts)}</span>
+                      <Icon name={on ? 'check' : 'plus'} size={13} stroke={2.6} color={on ? 'var(--ink)' : 'var(--muted-2)'} />
                     </button>
                   );
                 })}
@@ -320,12 +352,19 @@ export default function AgendaSection() {
               <button className="dk-btn dk-btn--soft" style={{ height: 32, fontSize: 12.5, flexShrink: 0 }} onClick={() => setAll(!allOn)}>{allOn ? t('Deseleziona', 'Clear') : t('Tutte', 'All')}</button>
             </div>
 
+            {pickMode && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 26px', background: 'var(--clay-tint)', borderBottom: '1px solid var(--hair)', color: 'var(--clay-ink)', fontSize: 13, fontWeight: 600 }}>
+                <Icon name="target" size={15} color="var(--clay-ink)" />
+                {t('Scelta orario: clicca uno spazio libero per impostare orario e operatrice nella prenotazione', 'Pick a time: click a free space to set time and stylist in the booking')}
+              </div>
+            )}
             {dayData === null ? (
               <DaySkeleton />
             ) : (
               <DayGrid
                 rows={visibleRows}
                 date={date}
+                pickMode={pickMode}
                 nowMin={isToday ? nowMin : null}
                 colorOf={colorOf}
                 itemColor={itemColor}
@@ -339,7 +378,12 @@ export default function AgendaSection() {
                 onHover={onHover}
                 onLeave={() => setHover(null)}
                 onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll })}
-                onSlotMenu={(opId, startMin, x, y) => { if (canWrite) setSlotMenu({ opId, startMin, x, y }); }}
+                onInvalidDrop={(v) => fireToast({ msg: t('Non spostato · ', 'Not moved · ') + v.label + (v.detail ? ' · ' + v.detail : ''), icon: 'alert' })}
+                onSlotMenu={(opId, startMin, x, y, verdict) => {
+                  if (!canWrite) { noWrite(); return; }
+                  if (pickMode) { setAgendaPick({ operatorId: opId, start: isoAtMin(date, startMin), date }); return; }
+                  setSlotMenu({ opId, startMin, x, y, verdict });
+                }}
                 onMoveAppt={moveAppt}
                 onResizeItem={resizeItem}
                 onMovePause={movePause}
@@ -379,8 +423,15 @@ export default function AgendaSection() {
         <React.Fragment>
           <div onClick={() => setSlotMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 95 }} />
           <div className="dk-card" style={{ position: 'fixed', boxSizing: 'border-box', top: Math.min(slotMenu.y, window.innerHeight - (slotMenu.mode === 'break' ? 300 : 130)), left: Math.min(slotMenu.x, window.innerWidth - 246), zIndex: 96, width: 234, padding: 6, boxShadow: 'var(--sh-pop)', overflow: 'hidden' }}>
-            <div className="t-meta" style={{ padding: '6px 10px 4px' }}>
-              {firstName((operators.find((o) => o.id === slotMenu.opId) || {}).first_name)} · {timeLabel(slotMenu.startMin)}
+            <div style={{ padding: '8px 10px 6px' }}>
+              <div className="t-meta">{firstName((operators.find((o) => o.id === slotMenu.opId) || {}).first_name)} · {timeLabel(slotMenu.startMin)}</div>
+              {slotMenu.verdict && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 12.5, fontWeight: 700, color: slotMenu.verdict.ok ? (slotMenu.verdict.code === 'soak' ? 'var(--warn)' : 'var(--ok)') : 'var(--danger)' }}>
+                  <Icon name={slotMenu.verdict.ok ? 'check' : 'x'} size={13} stroke={2.6} color="currentColor" />
+                  <span>{slotMenu.verdict.label}</span>
+                </div>
+              )}
+              {slotMenu.verdict?.detail && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2, fontSize: 12 }}>{slotMenu.verdict.detail}</div>}
             </div>
             {slotMenu.mode === 'break' ? (
               <div style={{ padding: '4px 8px 8px' }}>
@@ -408,7 +459,10 @@ export default function AgendaSection() {
               <React.Fragment>
                 <button className="dk-row" onClick={() => { const m = slotMenu; setSlotMenu(null); openNewAppt({ operatorId: m.opId, start: isoAtMin(date, m.startMin), date }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="plus" size={15} color="var(--clay-ink)" /></div>
-                  <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Nuovo appuntamento', 'New appointment')}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Nuovo appuntamento', 'New appointment')}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{slotMenu.verdict && !slotMenu.verdict.ok ? t('ti mostrerà gli orari liberi più vicini', 'shows the closest free times') : t(`alle ${timeLabel(slotMenu.startMin)}`, `at ${timeLabel(slotMenu.startMin)}`)}</div>
+                  </div>
                 </button>
                 <button className="dk-row" onClick={() => setSlotMenu((m) => ({ ...m, mode: 'break', dur: 60 }))} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--surface-2)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="clock" size={15} color="var(--muted)" /></div>
@@ -418,11 +472,6 @@ export default function AgendaSection() {
             )}
           </div>
         </React.Fragment>
-      )}
-
-      {/* #5 — nuovo appuntamento come drawer laterale: l'agenda resta viva e cliccabile */}
-      {newAppt && (
-        <NewApptModal asDrawer prefill={newAppt} onClose={() => setNewAppt(null)} onCreated={refetchAll} />
       )}
 
       {/* #6 — prenotazione di gruppo: drawer con l'agenda visibile per scaglionare gli slot */}
@@ -485,5 +534,26 @@ function DaySkeleton() {
         {[...Array(5)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 520, borderRadius: 12 }} />)}
       </div>
     </div>
+  );
+}
+
+
+/* ---- orari del centro per il giorno mostrato (Impostazioni → Orari di apertura) ---- */
+function SalonHoursChip({ settings, date, t, isOwner, onOpen }) {
+  const week = settings?.opening_hours_week;
+  const has = week && Object.keys(week).length > 0;
+  const idx = (parseISO(date).getDay() + 6) % 7;
+  const ranges = has ? (week[String(idx)] || []) : null;
+  const label = !has
+    ? (isOwner ? t('Orari del centro: imposta', 'Salon hours: set') : t('Orari del centro non impostati', 'Salon hours not set'))
+    : ranges.length
+      ? t('Centro', 'Salon') + ' ' + ranges.map(([a, b]) => `${a.replace(/^0/, '')}–${b.replace(/^0/, '')}`).join(' · ')
+      : t('Centro chiuso', 'Salon closed');
+  return (
+    <button type="button" onClick={onOpen} title={t('Orari di apertura del centro · clicca per modificarli', 'Salon opening hours · click to edit')}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px', borderRadius: 99, border: '1px solid ' + (has ? 'var(--hair)' : 'var(--warn)'), background: has ? 'var(--surface)' : 'var(--warn-tint)', color: has ? (ranges.length ? 'var(--ink-2)' : 'var(--muted)') : 'var(--warn)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+      <Icon name="clock" size={13} color="currentColor" />
+      <span className="tabnum">{label}</span>
+    </button>
   );
 }

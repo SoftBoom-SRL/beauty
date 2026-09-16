@@ -3,7 +3,7 @@
 // so edits show immediately; syncs the ctx base catalogs via reload.* after writes.
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@youty/shared';
-import { useDash } from '../../ctx.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
 import ServiziSub from './ServiziSub.jsx';
 import PacchettiSub from './PacchettiSub.jsx';
 import SvcEditModal from './SvcEditModal.jsx';
@@ -44,6 +44,8 @@ export default function ServiziSection() {
     fetchPackages().catch(toastErr).finally(() => setLoadingPkg(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // modifiche da altre postazioni → lista sempre reale
+  useLive(/^(service|package|category|operator)\./, () => { fetchServices().catch(() => {}); fetchPackages().catch(() => {}); });
 
   /* ---- modal state ---- */
   const [editSvc, setEditSvc] = useState(null); // service object | {} for new

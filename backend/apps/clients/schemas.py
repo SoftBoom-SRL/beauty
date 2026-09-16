@@ -36,7 +36,11 @@ class ClientOut(Schema):
     categories: list[CategoryOut]
     reliability: int
     origin: str
-    birthday: Optional[date] = None
+    gender: str = ""  # female | male | other | "" (non specificato)
+    # 'YYYY-MM-DD', oppure '--MM-DD' se il cliente non ha dato l'anno (ISO 8601)
+    birthday: Optional[str] = None
+    birthday_year_known: bool = True
+    age: Optional[int] = None
     since: Optional[date] = None
     consents: dict
     whatsapp_reminders: bool
@@ -44,6 +48,15 @@ class ClientOut(Schema):
     stripe_payment_method_id: str
     deposit_always: bool
     is_active: bool
+
+
+    @staticmethod
+    def resolve_birthday(obj):
+        return getattr(obj, "birthday_iso", None)
+
+    @staticmethod
+    def resolve_age(obj):
+        return getattr(obj, "age", None)
 
 
 class ClientDetailOut(ClientOut):
@@ -62,7 +75,9 @@ class ClientIn(Schema):
     category_ids: list[int] = []
     reliability: int = 100
     origin: str = ""
-    birthday: Optional[date] = None
+    gender: str = ""
+    # 'YYYY-MM-DD' | '--MM-DD' (solo giorno e mese) | None
+    birthday: Optional[str] = None
     since: Optional[date] = None
     consents: dict = {}
     whatsapp_reminders: bool = True
@@ -76,44 +91,75 @@ class ClientIn(Schema):
 
 
 class ImportRowIn(Schema):
+    """Riga già mappata e normalizzata dal frontend (mapping colonne → campi)."""
+
     first_name: str = ""
     last_name: str = ""
     email: str = ""
     phone: str = ""
+    gender: str = ""            # female | male | other | ""
+    birthday: str = ""          # 'YYYY-MM-DD' | '--MM-DD' | ""
+    origin: str = ""
+    lang: str = ""              # it | en | ""
+    note: str = ""              # diventa una nota privata sul cliente
+    categories: list[str] = []  # nomi etichetta: create se mancanti
 
 
 class ImportIn(Schema):
     rows: list[ImportRowIn]
+    # False: i clienti già in rubrica (stesso telefono/email) vengono saltati, non toccati
+    update_existing: bool = True
+
+
+class ImportErrorOut(Schema):
+    row: int
+    reason: str
 
 
 class ImportOut(Schema):
     created: int
     updated: int
+    skipped: int = 0
+    errors: list[ImportErrorOut] = []
 
 
 # ---- Note ----------------------------------------------------------------------
 
 
+class AttachmentOut(Schema):
+    id: int
+    name: str
+    url: str
+    content_type: str
+    size: int
+    is_image: bool
+    created_at: datetime
+
+
 class NoteOut(Schema):
+    """Serializzata da api._note_out (dizionari), non da istanze: niente resolver."""
+
     id: int
     client_id: int
+    appointment_id: Optional[int] = None
     text: str
     visibility: str
     author_id: Optional[int] = None
     author_name: str = ""
+    attachments: list[AttachmentOut] = []
     created_at: datetime
-
-    @staticmethod
-    def resolve_author_name(obj) -> str:
-        author = getattr(obj, "author", None)
-        if not author:
-            return ""
-        return author.get_full_name() or author.email
+    updated_at: Optional[datetime] = None
 
 
 class NoteIn(Schema):
-    text: str
+    text: str = ""
     visibility: str = "private"
+    appointment_id: Optional[int] = None
+
+
+class NoteUpdateIn(Schema):
+    text: Optional[str] = None
+    visibility: Optional[str] = None
 
 
 # ---- Schede tecniche (sola lettura dopo la creazione) -------------------------

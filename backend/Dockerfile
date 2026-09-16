@@ -27,9 +27,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]
+# gthread: le connessioni SSE della dashboard (aggiornamenti in tempo reale)
+# restano aperte a lungo; con worker sync ognuna bloccherebbe un processo intero.
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "3", \
+     "--worker-class", "gthread", \
+     "--threads", "24", \
      "--timeout", "60", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]

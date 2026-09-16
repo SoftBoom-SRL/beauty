@@ -1,12 +1,133 @@
 // ctx.jsx — DashboardProvider: session, base catalogs from the API, navigation,
-// modal/drawer/toast plumbing. Section agents CONSUME this via useDash() — never edit it.
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api, staffAuth, useT, useToastHost } from '@youty/shared';
+// modal/drawer/toast plumbing, live feed. Section agents CONSUME this via useDash().
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { api, API_URL, staffAuth, useT, useToastHost } from '@youty/shared';
 
 const DashCtx = createContext(null);
 export const useDash = () => useContext(DashCtx);
 
+/** Ricarica in silenzio quando arrivano eventi con questi prefissi (RegExp o
+ *  stringa). `fn(events)` è chiamata al più una volta ogni 250 ms. Usalo nelle
+ *  sezioni che mostrano dati condivisi: chi guarda lo schermo deve vedere lo
+ *  stato reale, non quello di quando ha aperto la pagina. */
+export function useLive(match, fn) {
+  const { live } = useContext(DashCtx) || {};
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  useEffect(() => {
+    if (!live) return undefined;
+    const re = match instanceof RegExp ? match : new RegExp('^(' + [].concat(match).join('|').replace(/\./g, '\\.') + ')');
+    let timer = null;
+    return live.subscribe(({ events }) => {
+      const hit = events.filter((e) => re.test(e.type));
+      if (!hit.length) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => { try { fnRef.current?.(hit); } catch { /* ignore */ } }, 250);
+    });
+  }, [live, String(match)]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 const OP_FALLBACK_PALETTE = ['#C9B8F2', '#B3DDF7', '#F7C5D9', '#FBE7A1', '#C2E8CB', '#FBD7B5', '#BFE9E1', '#C3CDF7', '#D2E5BE'];
+
+/* ---- dati sempre aggiornati ----------------------------------------------------
+ * Polling leggero di GET /api/core/activity/feed (ogni LIVE_POLL_MS mentre la
+ * scheda è visibile, subito al ritorno in primo piano). Funziona con gunicorn
+ * sync in Docker senza connessioni persistenti. NON è un sistema di notifiche:
+ * quando un'altra postazione cambia qualcosa, le viste che mostrano quel dato
+ * si ricaricano in silenzio, così sullo schermo c'è sempre lo stato reale.
+ * Le sezioni si agganciano con `useLive(prefissi, fn)`; i cataloghi base del
+ * contesto (operatrici, servizi, categorie, impostazioni) si aggiornano qui. */
+const LIVE_POLL_MS = 3000;          // polling di riserva quando lo stream non è connesso
+const LIVE_POLL_STREAM_MS = 30000;  // con lo stream attivo: solo un controllo di coerenza
+const LIVE_KEEP = 40;
+
+function useLiveFeed(session) {
+  const cursor = useRef(0);
+  const booted = useRef(false);   // dopo il primo giro `after` viaggia sempre, anche se 0
+  const listeners = useRef(new Set());
+  const [events, setEvents] = useState([]);   // più recenti prima
+  const [unread, setUnread] = useState(0);
+  const [version, setVersion] = useState(0);  // cambia quando arrivano eventi di altri
+  const [streamOk, setStreamOk] = useState(false);
+  const streamOkRef = useRef(false);
+  const myId = session?.user?.id;
+
+  /* consegna comune (stream o polling): aggiorna cursore, lista, ascoltatori */
+  const deliver = useCallback((list, newCursor) => {
+    cursor.current = Math.max(cursor.current, Number(newCursor) || 0);
+    if (!list.length) return;
+    setEvents((l) => [...list.slice().reverse(), ...l].slice(0, LIVE_KEEP));
+    const foreign = list.filter((e) => e.actor_id !== myId);
+    if (foreign.length) { setUnread((n) => n + foreign.length); setVersion((v) => v + 1); }
+    listeners.current.forEach((fn) => { try { fn({ events: list, foreign }); } catch { /* listener error */ } });
+  }, [myId]);
+
+  /* ---- push dal server: Server-Sent Events ----
+   * Una connessione HTTP aperta; il server spinge gli eventi appena scritti
+   * (latenza ~1 s, qualunque worker li abbia prodotti). Se cade si riapre con
+   * un ticket nuovo; nel frattempo il polling di riserva accelera. */
+  useEffect(() => {
+    let es = null, alive = true, retry = 3000, timer = null;
+    const connect = async () => {
+      if (!alive || document.visibilityState !== 'visible') { timer = setTimeout(connect, 2000); return; }
+      try {
+        const { ticket } = await api.post('/api/core/activity/stream-ticket');
+        if (!alive) return;
+        const url = `${API_URL}/api/core/activity/stream?ticket=${encodeURIComponent(ticket)}&after=${cursor.current || 0}`;
+        es = new EventSource(url);
+        es.addEventListener('ready', (ev) => {
+          retry = 3000; streamOkRef.current = true; setStreamOk(true); booted.current = true;
+          try { const d = JSON.parse(ev.data); cursor.current = Math.max(cursor.current, Number(d.cursor) || 0); } catch { /* ignore */ }
+        });
+        es.addEventListener('events', (ev) => {
+          try { const d = JSON.parse(ev.data); deliver(d.events || [], d.cursor); } catch { /* ignore */ }
+        });
+        es.addEventListener('bye', () => { es.close(); es = null; if (alive) connect(); }); // riciclo lato server: riapro subito
+        es.onerror = () => {
+          streamOkRef.current = false; setStreamOk(false);
+          es?.close(); es = null;
+          if (alive) { timer = setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); }
+        };
+      } catch {
+        streamOkRef.current = false; setStreamOk(false);
+        if (alive) { timer = setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); }
+      }
+    };
+    connect();
+    return () => { alive = false; clearTimeout(timer); es?.close(); streamOkRef.current = false; };
+  }, [myId, deliver]);
+
+  const subscribe = useCallback((fn) => { listeners.current.add(fn); return () => listeners.current.delete(fn); }, []);
+  const markRead = useCallback(() => setUnread(0), []);
+
+  useEffect(() => {
+    let alive = true, timer = null, inflight = false;
+    const tick = async () => {
+      if (!alive || inflight || document.visibilityState !== 'visible') return;
+      inflight = true;
+      try {
+        const res = await api.get('/api/core/activity/feed', { params: booted.current ? { after: cursor.current } : {} });
+        if (!alive) return;
+        const bootstrap = !booted.current;
+        booted.current = true;
+        const list = bootstrap ? [] : (res.events || []);
+        deliver(list, res.cursor);
+      } catch { /* silenzioso: riprova al prossimo giro */ } finally { inflight = false; }
+    };
+    const loop = () => { timer = setTimeout(async () => { await tick(); if (alive) loop(); }, streamOkRef.current ? LIVE_POLL_STREAM_MS : LIVE_POLL_MS); };
+    tick(); loop();
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      alive = false; clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [myId, deliver]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return useMemo(() => ({ events, unread, markRead, subscribe, version, streamOk }), [events, unread, markRead, subscribe, version, streamOk]);
+}
 
 export function DashboardProvider({ children }) {
   const { t, lang, setLang } = useT();
@@ -14,7 +135,7 @@ export function DashboardProvider({ children }) {
   /* ---- session ---- */
   const [session, setSession] = useState(staffAuth.getSession());
   useEffect(() => staffAuth.subscribe(setSession), []);
-  const hasScope = useCallback((scope) => staffAuth.hasScope(scope), [session]);
+  const hasScope = useCallback((scope) => staffAuth.hasScope(scope), [session]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- base data (loaded once, reloadable per collection) ---- */
   const [salon, setSalon] = useState(null);                       // SalonOut {id,name,slug,locations,settings,...}
@@ -64,19 +185,39 @@ export function DashboardProvider({ children }) {
     setSubTab(sub != null ? sub : null);
   }, []);
 
-  /* ---- modal / drawer hosts ---- */
-  const [modal, setModal] = useState(null);   // { name, props }
-  const openModal = useCallback((name, props) => setModal({ name, props }), []);
+  /* ---- modal / drawer hosts ----
+   * Ogni openModal ha un id crescente: il dispatcher lo usa come key, così una
+   * riapertura con props diverse rimonta il componente con stato pulito
+   * (prima un secondo openModal('newappt', …) riusava il form precedente). */
+  const modalSeq = useRef(0);
+  const [modal, setModal] = useState(null);   // { id, name, props }
+  const openModal = useCallback((name, props) => setModal({ id: ++modalSeq.current, name, props }), []);
   const closeModal = useCallback(() => setModal(null), []);
   const [drawer, setDrawer] = useState(null); // React element (rendered inside <DkDrawer>) or null
 
   /* ---- toast ---- */
   const { fireToast, toastProps } = useToastHost();
 
+  /* ---- dati sempre aggiornati (altre postazioni / altre schede) ---- */
+  const live = useLiveFeed(session);
+  // cataloghi base del contesto: si ricaricano da soli quando cambiano altrove
+  useEffect(() => live.subscribe(({ events }) => {
+    const has = (re) => events.some((e) => re.test(e.type));
+    if (has(/^operator\./)) reload.operators().catch(() => {});
+    if (has(/^(service|category|package)\./)) { reload.services().catch(() => {}); reload.serviceCategories().catch(() => {}); }
+    if (has(/^client_category\./)) reload.clientCategories().catch(() => {});
+    if (has(/^settings\./)) reload.salon().catch(() => {});
+  }), [live, reload]);
+
   /* ---- cross-section UI state ---- */
   const [search, setSearch] = useState('');
   const [selClient, setSelClient] = useState(null);   // client id for the Clienti profile
   const [deepLink, setDeepLink] = useState(null);     // e.g. 'log-today' (agenda cash-up → activity log)
+  // slot scelto in agenda mentre il drawer "nuova prenotazione" è aperto:
+  // { operatorId, start, date, nonce } — il drawer lo applica al volo.
+  const [agendaPick, setAgendaPickRaw] = useState(null);
+  const pickSeq = useRef(0);
+  const setAgendaPick = useCallback((p) => setAgendaPickRaw(p ? { ...p, nonce: ++pickSeq.current } : null), []);
   const [showRevenue, setShowRevenueRaw] = useState(() => {
     try { return localStorage.getItem('dk-show-revenue') !== '0'; } catch { return true; }
   });
@@ -106,9 +247,11 @@ export function DashboardProvider({ children }) {
     openModal, closeModal, modal,
     drawer, setDrawer,
     fireToast, toastProps,
+    live,
     search, setSearch,
     selClient, setSelClient,
     deepLink, setDeepLink,
+    agendaPick, setAgendaPick,
     showRevenue, setShowRevenue,
     opColors, setOpColor, opPalette: OP_FALLBACK_PALETTE,
   };

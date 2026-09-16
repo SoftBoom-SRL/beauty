@@ -7,7 +7,7 @@ import { useDash } from '../../ctx.jsx';
 import { DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin } from './lib.js';
 
 export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onNewAppt }) {
-  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings } = useDash();
+  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live } = useDash();
   const canWrite = hasScope('agenda');
   const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
@@ -24,6 +24,11 @@ export default function WeekView({ weekStart, operators, colorOf, onOpenDay, onN
       .then((rows) => setDays(rows))
       .catch((err) => toastErr(err, t, fireToast))
   ), [weekStart, t, fireToast]);
+
+  // live: modifiche dalle altre postazioni → ricarica la settimana senza skeleton
+  useEffect(() => live.subscribe(({ events }) => {
+    if (events.some((e) => /^(appointment|pause|waitlist|slot|visit)\./.test(e.type))) refetchWeek();
+  }), [live, refetchWeek]);
 
   useEffect(() => {
     let alive = true;

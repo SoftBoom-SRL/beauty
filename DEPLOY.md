@@ -248,6 +248,18 @@ Per svuotarli serve un job schedulato (Coolify → *Scheduled Tasks* sulla risor
 
 ## Note
 
+- **Aggiornamenti in tempo reale** fra postazioni: ogni dashboard aperta tiene UNA
+  connessione Server-Sent Events su `GET /api/core/activity/stream` (HTTP normale,
+  passa da Traefik senza configurazione; niente websocket, Redis o worker ASGI).
+  Per questo il Dockerfile del backend usa `gunicorn --worker-class gthread
+  --threads 24`: una connessione aperta occupa un thread, non un processo. Con
+  3 worker × 24 thread si servono ~70 postazioni contemporanee; per salire basta
+  alzare `--threads`. Se lo stream cade la dashboard ripiega su un polling ogni
+  3 secondi e riprova. Il server chiude e fa riaprire ogni connessione dopo 20
+  minuti per riciclare i thread. Ogni stream aperto tiene una connessione
+  Postgres (`conn_max_age=600`): con decine di postazioni contemporanee
+  controllare `max_connections` del database (default 100).
+
 - Cambiare `VITE_API_URL` richiede un **redeploy con rebuild** del frontend
   interessato: è una costante compilata nel bundle.
 - `/media/` è servito da Django (`config/urls.py`). Va benissimo per logo e foto di

@@ -1,5 +1,5 @@
 // primitives.jsx — shared UI primitives ported from prototype components.jsx + shared.jsx
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Icon } from './Icon.jsx';
 
 /* ============================== AVATAR ============================== */
@@ -54,9 +54,15 @@ export function Toggle({ on, onChange }) {
 
 /* ============================== BOTTOM SHEET ============================== */
 export function Sheet({ open, onClose, children, title, full = false, dark = false }) {
+  // chiude solo se il gesto inizia E finisce sullo sfondo (una selezione di
+  // testo che parte dentro il foglio e rilascia fuori non deve chiuderlo)
+  const downOnScrim = useRef(false);
   if (!open) return null;
   return (
-    <div onClick={onClose} style={{
+    <div
+      onPointerDown={(e) => { downOnScrim.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (downOnScrim.current && e.target === e.currentTarget) onClose?.(); downOnScrim.current = false; }}
+      style={{
       position: 'absolute', inset: 0, zIndex: 200, display: 'flex', flexDirection: 'column',
       justifyContent: 'flex-end', background: 'rgba(33,28,24,0.42)', backdropFilter: 'blur(3px)',
       animation: 'fadeIn 200ms var(--ease)',

@@ -62,3 +62,59 @@ cd frontend && npm run dev:client
 # E2E backend ripetibile (DB usa-e-getta, non tocca db.sqlite3)
 backend/scripts/run_e2e.sh
 ```
+
+## Passata UX/UI di settembre 2026 (feedback utenti)
+- **Dati sempre aggiornati fra postazioni** (non "notifiche": chi guarda lo schermo vede lo stato
+  reale). Push dal server con **Server-Sent Events**: `POST /api/core/activity/stream-ticket` (Bearer)
+  → `GET /api/core/activity/stream?ticket=…&after=<id>` (vista Django in `core/views.py`, fan-out via
+  tabella `ActivityLog` interrogata ogni secondo: nessun Redis/ASGI). Riserva: polling di
+  `GET /api/core/activity/feed?after=<id>` (3 s senza stream, 30 s con stream). In `ctx.jsx` il hook
+  `useLive(prefissi, fn)` ricarica in silenzio la sezione; i cataloghi base del contesto (operatrici,
+  servizi, categorie, impostazioni) si ricaricano da soli. Agganciate: agenda giorno/settimana, clienti
+  (lista, profilo, storico), servizi, magazzino, comunicazioni, automazioni. Le pause loggano anche
+  `pause.updated` / `pause.deleted`. **Docker**: gunicorn passa a `--worker-class gthread --threads 24`
+  perché ogni stream aperto occupa un thread (vedi Dockerfile e DEPLOY.md). Il pannello campanella
+  resta come "attività del team", senza badge.
+- **Nuova prenotazione unificata**: un solo drawer (`newappt`) da topbar, slot, lista d'attesa, slot
+  liberato, scheda cliente. Cliente con creazione rapida inline (`ClientPicker`, riusato anche dal
+  gruppo). Orario richiesto dall'agenda: esito esplicito (disponibile / motivo del rifiuto: fuori
+  turno, occupata fino alle…, in pausa, non esegue il servizio, orario passato) + alternative vicine.
+  Mentre il drawer è aperto l'agenda è in "pick mode". Pulsante finale mai muto: elenca cosa manca.
+- **Agenda**: drag con traccia dell'origine, colonna target evidenziata, badge orario+esito calcolato
+  lato client (`explainSlot` in `agenda/lib.js`, stesse regole di `agenda/services.py`); un rilascio
+  non valido non chiama il server. Corretto il bug per cui dopo un trascinamento si apriva la scheda
+  dell'appuntamento (click post-drop). Indicatore slot al passaggio del mouse; etichette "Fuori turno";
+  velo sul passato; menu slot con stato; permessi mancanti → toast, mai silenzio. Tasto `N` = prenota.
+- **Chip selezionabili** `.dk-pill*`: stato on inequivocabile (agenda, prenotazione, servizi, staff).
+- **Modali/drawer/sheet**: chiusura solo se il gesto inizia E finisce sullo scrim (prima una
+  selezione di testo rilasciata fuori chiudeva la finestra — segnalato su modifica servizio).
+- **Servizi**: lista compatta a righe raggruppata per categoria (collassabile) al posto delle card.
+- **Staff**: servizi abilitati raggruppati per categoria, seleziona tutti/nessuno, creazione servizio
+  inline (scope `pricing`) subito abilitato per l'operatrice.
+- **Favicon**: SVG + PNG in `public/` di entrambe le app; l'app cliente usa logo/colore del salone.
+
+## Clienti (settembre 2026, secondo giro di feedback)
+- **Genere** (`gender`: female | male | other | "") e **compleanno con anno facoltativo**: l'API accetta e
+  restituisce `birthday` come `YYYY-MM-DD` oppure `--MM-DD` (ISO 8601 senza anno; nel DB anno segnaposto
+  1904 + `birthday_year_known=false`), più `age` calcolata quando l'anno c'è. Selettori: `ui/GenderPicker`,
+  `clienti/components.BirthdayInput`. Il genere si chiede anche nella creazione rapida in agenda.
+- **Modifica cliente esplicita**: `newclient` è ora crea+modifica (`client` prop); pulsante "Modifica" in
+  testa al profilo e card "Anagrafica" con i campi e "+ aggiungi" sui vuoti.
+- **Storico unificato**: `GET /api/clients/{id}/history` → timeline visite (servizi, operatrici, stato,
+  incasso, nota appuntamento, note di trattamento con allegati, schede tecniche) + vendite al banco +
+  note/schede libere; `upcoming` per i futuri. `StoricoTab` la rende con azioni per visita
+  (nota/foto di trattamento, scheda tecnica).
+- **Note con allegati**: `ClientNote.appointment` (nota di trattamento legata alla visita) e
+  `ClientNoteAttachment` (foto/PDF/Word, max 15 MB, sotto `MEDIA_ROOT/client_notes/`). Endpoint:
+  `POST /notes/upload` (multipart, `files[]`), `PUT /notes/{id}`, `POST /notes/{id}/attachments`,
+  `DELETE /notes/{id}/attachments/{aid}`. Foto scheda tecnica: `POST /sheets/{id}/photo`.
+  Componenti condivisi in `clienti/NoteBits.jsx` (NoteComposer, NoteCard, AttachmentGrid).
+- **Import CSV in tre passi** (`BulkImportModal`): rilevamento separatore/intestazione/codifica, parser
+  RFC 4180, mappatura colonne → campi con suggerimenti da titoli e contenuto, normalizzazione (telefono,
+  genere in più lingue, date in vari formati anche senza anno, etichette separate da , ; |), verifica con
+  avvisi per riga, `update_existing`. Backend `import_rows`: match telefono tollerante (`phone_key`),
+  etichette create al volo, nota privata, `skipped` + `errors` per riga.
+- **Orari di apertura del centro**: `SalonSettings.opening_hours_week` ({"0".."6": [["HH:MM","HH:MM"]]},
+  0 = lunedì) validato in `core.services.normalize_opening_hours_week`; il testo `opening_hours` per l'app
+  cliente viene generato da lì. Editor in Impostazioni → Salone → Orari di apertura (`HoursDrawer`),
+  chip "Centro 9–13 · 14–19" nella barra dell'agenda (deepLink `hours`).
