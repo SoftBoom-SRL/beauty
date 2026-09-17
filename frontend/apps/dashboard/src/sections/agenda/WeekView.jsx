@@ -31,7 +31,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
   const [days, setDays] = useState(null); // null = loading
   const [opTip, setOpTip] = useState(null); // { name, x, y }
   const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop }: il blocco resta dove è stato lasciato durante la POST
-  const [forceAsk, setForceAsk] = useState(null); // popover dopo un 409: { id, body, where, client, detail, x, y, busy }
   const [, force] = useState(0);            // re-render on drag ghost changes
   const scrollRef = useRef(null);
   const drag = useRef(null);                // active drag { id, obj, ns, nop, dayIdx, moved, ... }
@@ -60,7 +59,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
   }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
-  // Esc annulla il drag (o chiude il popover); pointerup/pointercancel su window:
+  // Esc annulla il drag; pointerup/pointercancel su window:
   // se la capture non è supportata o il rilascio avviene fuori dall'area, il drag
   // non resta mai "appeso".
   useEffect(() => {
@@ -68,7 +67,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       if (drag.current) cancel();
-      else setForceAsk(null);
     };
     const onWinUp = () => { if (drag.current) onUpRef.current?.(); };
     const onWinCancel = () => { if (drag.current) cancel(); };
@@ -200,42 +198,43 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     return `${day ? `${t(DOW_IT[dayIdx], DOW_EN[dayIdx])} ${parseISO(day.date).getDate()} · ` : ''}${op ? op.first_name + ' · ' : ''}${timeLabel(ns)}`;
   }
 
-  async function commitMove(d) {
+  /* Uno spostamento su un orario occupato o fuori turno NON si ferma a chiedere
+   * conferma: chi usa l'agenda tutti i giorni sa quando sta incastrando una
+   * cliente. Si sposta forzando e lo si dice nell'avviso, con «Annulla» per
+   * rimettere tutto dov'era. Stessa regola della vista giorno. */
+  async function commitMove(d, opts = {}) {
     const day = dayData[d.dayIdx];
     if (!day) return;
     const body = { start: isoAtMin(day.date, d.ns) };
     if (d.nop != null && d.nop !== d.origOp) body.operator_id = d.nop;
+    if (opts.force) body.force = true;
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
       await api.post(`/api/agenda/appointments/${d.id}/move`, body);
+      if (opts.undo !== false) {
+        const back = {
+          id: d.id, obj: d.obj, dayIdx: d.origDayIdx, ns: d.orig, nop: d.origOp,
+          orig: d.ns, origOp: d.nop, origDayIdx: d.dayIdx,
+        };
+        fireToast({
+          msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns) + (opts.warn ? ' · ' + opts.warn : ''),
+          icon: opts.warn ? 'alert' : 'calendar',
+          undo: t('Annulla', 'Undo'),
+          undoFn: () => commitMove(back, { undo: false }),
+        });
+      }
       await refetchWeek();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
+        await commitMove(d, { ...opts, force: true, warn: t('forzato: occupato o fuori turno', 'forced: busy or off shift') });
+        return;
+      }
       setPending(null);        // il blocco torna al suo posto
       await refetchWeek();
-      if (err instanceof ApiError && err.status === 409) {
-        // occupato o fuori turno: si può forzare come nella vista giorno → popover al punto di rilascio
-        setForceAsk({
-          id: d.id, body, client: d.obj.client_name, detail: err.message,
-          where: whereLabel(d.dayIdx, d.nop, d.ns),
-          x: Math.max(12, Math.min(d.cx + 8, window.innerWidth - 300)),
-          y: Math.max(12, Math.min(d.cy + 8, window.innerHeight - 190)),
-        });
-      } else toastErr(err, t, fireToast);
+      toastErr(err, t, fireToast);
     } finally {
       setPending(null);
     }
-  }
-
-  async function forceMove() {
-    const fa = forceAsk;
-    if (!fa || fa.busy) return;
-    setForceAsk({ ...fa, busy: true });
-    try {
-      await api.post(`/api/agenda/appointments/${fa.id}/move`, { ...fa.body, force: true });
-      fireToast({ msg: t('Spostato forzando le regole', 'Moved overriding the rules'), icon: 'check' });
-    } catch (err) { toastErr(err, t, fireToast); }
-    setForceAsk(null);
-    await refetchWeek();
   }
 
   async function openDetail(appt) {
@@ -393,25 +392,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
         );
       })()}
       {/* 409 allo spostamento: conferma per forzare (stesse regole della vista giorno) */}
-      {forceAsk && (
-        <React.Fragment>
-          <div onClick={() => !forceAsk.busy && setForceAsk(null)} style={{ position: 'fixed', inset: 0, zIndex: 96 }} />
-          <div className="dk-card" role="dialog" style={{ position: 'fixed', top: forceAsk.y, left: forceAsk.x, zIndex: 97, width: 288, padding: 14, boxSizing: 'border-box', boxShadow: 'var(--sh-pop)' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-              <Icon name="alert" size={18} color="var(--warn)" stroke={2.2} style={{ marginTop: 1 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', lineHeight: 1.3 }}>{t('Orario occupato o fuori turno. Spostare comunque?', 'Slot busy or off shift. Move anyway?')}</div>
-                <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{forceAsk.client} → <span className="tabnum">{forceAsk.where}</span></div>
-                {forceAsk.detail && <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 2, fontSize: 11.5 }}>{forceAsk.detail}</div>}
-              </div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-              <button className="dk-btn dk-btn--soft" disabled={forceAsk.busy} onClick={() => setForceAsk(null)} style={{ height: 34, padding: '0 13px', fontSize: 12.5, border: 'none' }}>{t('Annulla', 'Cancel')}</button>
-              <button className="dk-btn dk-btn--primary" aria-disabled={forceAsk.busy ? 'true' : undefined} onClick={forceMove} style={{ height: 34, padding: '0 13px', fontSize: 12.5, border: 'none' }}>{forceAsk.busy ? '…' : t('Sposta comunque', 'Move anyway')}</button>
-            </div>
-          </div>
-        </React.Fragment>
-      )}
     </div>
   );
 }

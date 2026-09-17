@@ -155,53 +155,140 @@ export default function AgendaSection() {
   /* ---- mutations (drag & drop, pauses) ---- */
   const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
   /* Forzatura: lo staff può andare oltre le regole (fuori turno, centro chiuso,
-   * sovrapposizione). Un rilascio non valido o un 409 non viene più solo
-   * rifiutato: compare una conferma «Sposta comunque» che ripete l'azione con
-   * force=true. `forceAsk` = { title, detail, run(force) }. */
+   * sovrapposizione). Chi lavora qui tutti i giorni SA quando sta incastrando
+   * una cliente: chiedergli conferma ogni volta è una finestra da chiudere, non
+   * una protezione. Quindi si sposta e basta, con force=true, e l'avviso arriva
+   * dopo — con «Annulla» per rimettere tutto com'era. La conferma resta solo
+   * dove l'azione non è un semplice spostamento reversibile. */
   const [forceAsk, setForceAsk] = useState(null);
+  // Trascinamento in corso in vista giorno: accende i giorni in alto come
+  // bersaglio, altrimenti nessuno immagina di poterci lasciare sopra un blocco.
+  const [dragOn, setDragOn] = useState(false);
 
   const moveAppt = async (a, startMin, opId, opts = {}) => {
-    if (startMin === undefined || (startMin === aMin(a.start) && opId === a.operator_id)) return;
+    const fromMin = aMin(a.start);
+    const fromOp = a.operator_id;
+    if (startMin === undefined || (startMin === fromMin && opId === fromOp)) return;
     setPending({ kind: 'appt', id: a.id, startMin, opId });
     try {
       await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(date, startMin), operator_id: opId, force: !!opts.force });
-      const reassigned = opId !== a.operator_id;
+      const reassigned = opId !== fromOp;
       const opName = firstName((operators.find((o) => o.id === opId) || {}).first_name || '');
+      const where = reassigned
+        ? t(`Spostato a ${opName}, ${timeLabel(startMin)}`, `Moved to ${opName}, ${timeLabel(startMin)}`)
+        : t('Spostato alle ' + timeLabel(startMin), 'Moved to ' + timeLabel(startMin));
       fireToast({
-        msg: (reassigned
-          ? t(`Spostato a ${opName}, ${timeLabel(startMin)}`, `Moved to ${opName}, ${timeLabel(startMin)}`)
-          : t('Spostato alle ' + timeLabel(startMin), 'Moved to ' + timeLabel(startMin))) + (opts.force ? t(' · forzato', ' · forced') : ''),
-        icon: 'calendar',
+        msg: where + (opts.warn ? ' · ' + opts.warn : ''),
+        icon: opts.warn ? 'alert' : 'calendar',
+        undo: opts.undo === false ? undefined : t('Annulla', 'Undo'),
+        undoFn: opts.undo === false ? undefined : () => moveAppt(a, fromMin, fromOp, { undo: false }),
       });
       await fetchDay();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
-        setForceAsk({
-          title: t('Orario occupato o fuori turno', 'Time busy or off shift'),
-          detail: t(`Spostare comunque ${firstName(a.client?.full_name)} alle ${timeLabel(startMin)}? L’appuntamento resterà segnato come forzato.`, `Move ${firstName(a.client?.full_name)} to ${timeLabel(startMin)} anyway? The appointment will be marked as forced.`),
-          run: () => moveAppt(a, startMin, opId, { force: true }),
+        // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
+        await moveAppt(a, startMin, opId, {
+          ...opts,
+          force: true,
+          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
         });
-      } else if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
+        return;
+      }
+      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
       else toastErr(err, t, fireToast);
       await fetchDay().catch(() => {}); // revert to server truth
     } finally { setPending(null); }
   };
 
-  /* rilascio giudicato non valido dal client (DayGrid non chiama il server): offri la forzatura */
+  /* Stacco col trascinamento: il servizio esce dalla visita e diventa un
+   * appuntamento a sé allo slot dove è stato lasciato. Come per lo spostamento,
+   * uno slot occupato non ferma nessuno: si forza e lo si scrive nell'avviso.
+   * Ma si prova PRIMA senza forzare, altrimenti ogni stacco su un orario libero
+   * resterebbe marcato «forzato» in agenda senza motivo. */
+  const splitItem = async (appt, item, startMin, opId, opts = {}) => {
+    if (!canWrite) { noWrite(); return; }
+    setPending({ kind: 'appt', id: appt.id, startMin: aMin(appt.start), opId: appt.operator_id });
+    try {
+      await api.post(`/api/agenda/appointments/${appt.id}/split`, {
+        item_id: item.id,
+        start: isoAtMin(date, startMin),
+        operator_id: opId && opId !== item.operator_id ? opId : null,
+        force: !!opts.force,
+      });
+      fireToast({
+        msg: t(`${item.service_name} staccato alle ${timeLabel(startMin)}`, `${item.service_name} detached at ${timeLabel(startMin)}`)
+          + (opts.warn ? ' · ' + opts.warn : ''),
+        icon: opts.warn ? 'alert' : 'scissors',
+      });
+      await fetchDay();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+        await splitItem(appt, item, startMin, opId, {
+          force: true,
+          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
+        });
+        return;
+      }
+      toastErr(err, t, fireToast);
+      await fetchDay().catch(() => {});
+    } finally { setPending(null); }
+  };
+
+  /* Rilascio sopra un giorno della striscia: stesso orario, giorno nuovo. */
+  const moveApptToDate = async (a, iso, startMin, opts = {}) => {
+    if (!canWrite) { noWrite(); return; }
+    if (iso === date) { moveAppt(a, startMin, a.operator_id); return; }
+    const fromIso = date;
+    const fromMin = aMin(a.start);
+    try {
+      // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
+      // libero non lascia l'appuntamento marcato «forzato» senza motivo.
+      await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(iso, startMin), force: !!opts.force });
+      const d = parseISO(iso);
+      fireToast({
+        msg: t(`Spostato a ${DOW_IT[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`, `Moved to ${DOW_EN[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`)
+          + (opts.warn ? ' · ' + opts.warn : ''),
+        icon: opts.warn ? 'alert' : 'calendar',
+        undo: t('Annulla', 'Undo'),
+        undoFn: async () => {
+          // Si torna al posto di prima senza forzare; si forza solo se nel
+          // frattempo qualcuno ha occupato quello slot.
+          const back = { start: isoAtMin(fromIso, fromMin) };
+          try {
+            await api.post(`/api/agenda/appointments/${a.id}/move`, back);
+          } catch {
+            await api.post(`/api/agenda/appointments/${a.id}/move`, { ...back, force: true }).catch(() => {});
+          }
+          refetchAll();
+        },
+      });
+      refetchAll();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+        await moveApptToDate(a, iso, startMin, {
+          force: true,
+          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
+        });
+        return;
+      }
+      toastErr(err, t, fireToast);
+      refetchAll();
+    }
+  };
+
+  /* rilascio giudicato non valido dal client (DayGrid non chiama il server):
+   * si esegue lo stesso, forzando, e lo si dice nell'avviso. */
   const onInvalidDrop = (verdict, d, intent) => {
     const label = t('Non spostato · ', 'Not moved · ') + verdict.label + (verdict.detail ? ' · ' + verdict.detail : '');
     if (!canWrite || !intent) { fireToast({ msg: label, icon: 'alert' }); return; }
     if (intent.kind === 'appt') {
-      setForceAsk({
-        title: verdict.label,
-        detail: t(`Inserire comunque ${firstName(intent.appt.client?.full_name)} alle ${timeLabel(intent.newApptStart)}? Utile per straordinari o quando sai di poter incastrare la cliente.`, `Move ${firstName(intent.appt.client?.full_name)} to ${timeLabel(intent.newApptStart)} anyway? Useful for overtime or when you know you can fit the client in.`),
-        run: () => moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force: true }),
+      moveAppt(intent.appt, intent.newApptStart, intent.opArg, {
+        force: true,
+        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
       });
     } else if (intent.kind === 'pause') {
-      setForceAsk({
-        title: verdict.label,
-        detail: t(`Spostare comunque la pausa alle ${timeLabel(intent.startMin)}?`, `Move the break to ${timeLabel(intent.startMin)} anyway?`),
-        run: () => movePause(intent.pause, intent.startMin, intent.opId),
+      movePause(intent.pause, intent.startMin, intent.opId, {
+        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
       });
     } else fireToast({ msg: label, icon: 'alert' });
   };
@@ -223,10 +310,20 @@ export default function AgendaSection() {
     }
   };
 
-  const movePause = async (p, startMin, opId) => {
+  const movePause = async (p, startMin, opId, opts = {}) => {
+    const fromMin = aMin(p.start);
+    const fromOp = p.operator_id;
     setPending({ kind: 'pause', id: p.id, startMin, opId });
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
+      if (opts.undo !== false) {
+        fireToast({
+          msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)) + (opts.warn ? ' · ' + opts.warn : ''),
+          icon: opts.warn ? 'alert' : 'clock',
+          undo: t('Annulla', 'Undo'),
+          undoFn: () => movePause(p, fromMin, fromOp, { undo: false }),
+        });
+      }
       await fetchDay();
     } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
@@ -338,12 +435,21 @@ export default function AgendaSection() {
                 {jumpOpen && <JumpPopover t={t} MONTHS={MONTHS} curM={cur.getMonth()} curY={cur.getFullYear()} onClose={() => setJumpOpen(false)} onMonth={jumpToMonth} onDate={jumpToDate} />}
               </div>
               {/* week day strip — real dates */}
-              <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 14, padding: 4 }}>
+              {/* Durante un trascinamento la striscia diventa un bersaglio: si può
+                  lasciare un appuntamento su un giorno per spostarlo lì. */}
+              <div style={{ display: 'flex', gap: 4, background: dragOn ? 'var(--clay-tint)' : 'var(--surface)', border: '1px solid ' + (dragOn ? 'var(--clay)' : 'var(--hair)'), borderRadius: 14, padding: 4, transition: 'background 150ms, border-color 150ms' }}>
                 {weekDays.map((d, i) => {
                   const iso = toDateStr(d);
                   const sel = iso === date;
+                  const dropTarget = dragOn && !sel;
                   return (
-                    <button key={i} onClick={() => setDate(iso)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '6px 13px', borderRadius: 10, cursor: 'pointer', background: sel ? 'var(--ink)' : 'transparent', color: sel ? '#fff' : 'var(--ink)', border: 'none', transition: 'all 150ms' }}>
+                    <button key={i} onClick={() => setDate(iso)} data-daydrop={iso}
+                      title={dragOn ? t('Lascia qui per spostare a questo giorno', 'Drop here to move to this day') : undefined}
+                      // L'evidenza NON deve usare il bordo: aggiungerlo allarga le
+                      // pillole, la striscia si sposta sotto il cursore e il
+                      // rilascio finisce nel vuoto fra una e l'altra. `outline`
+                      // non occupa spazio.
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '6px 13px', borderRadius: 10, cursor: 'pointer', background: sel ? 'var(--ink)' : dropTarget ? 'var(--surface)' : 'transparent', color: sel ? '#fff' : 'var(--ink)', border: 'none', outline: dropTarget ? '1.5px dashed var(--clay)' : 'none', outlineOffset: -2, transition: 'background 150ms' }}>
                       <span style={{ fontSize: 10.5, fontWeight: 600, opacity: sel ? 0.7 : 0.5 }}>{t(DOW_IT[i], DOW_EN[i])}</span>
                       <span className="t-num" style={{ fontSize: 17, color: sel ? '#fff' : 'var(--ink)' }}>{d.getDate()}</span>
                     </button>
@@ -440,6 +546,9 @@ export default function AgendaSection() {
                 onLeave={() => setHover(null)}
                 onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll })}
                 onInvalidDrop={onInvalidDrop}
+                onDropOnDate={moveApptToDate}
+                onDragChange={setDragOn}
+                onSplitItem={splitItem}
                 onSlotMenu={(opId, startMin, x, y, verdict) => {
                   if (!canWrite) { noWrite(); return; }
                   if (pickMode) { setAgendaPick({ operatorId: opId, start: isoAtMin(date, startMin), date }); return; }
