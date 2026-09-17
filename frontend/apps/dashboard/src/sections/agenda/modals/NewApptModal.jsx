@@ -524,6 +524,16 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{reqStatus.alternatives.map((s) => <SlotChip key={s.start} s={s} />)}</div>
                     </div>
                   )}
+                  {/* L'orario chiesto resta una scelta possibile: è quello che si
+                      voleva. Prima il pannello elencava tutto TRANNE quello —
+                      alternative, altra operatrice, tutti gli orari — e per
+                      incastrare una cliente sopra un'altra bisognava scoprire da
+                      soli il campo «Orario a mano» più in basso e riscrivere la
+                      stessa ora. */}
+                  <button type="button" className="dk-btn dk-btn--soft" style={{ height: 34, fontSize: 12.5, marginTop: 10 }}
+                    onClick={() => { setSelStart(isoAtMin(date, req.startMin)); setForceCreate(true); setShowAll(false); setConflict(null); }}>
+                    <Icon name="plus" size={14} />{t(`Inserisci comunque alle ${timeLabel(req.startMin)}`, `Insert anyway at ${timeLabel(req.startMin)}`)}
+                  </button>
                   <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
                     {reqOp && <button type="button" onClick={() => { setReq((r) => ({ ...r, operatorId: null })); setItems((l) => l.map((it) => ({ ...it, operator_id: null }))); }} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{t('Chiunque sia libera a quest’ora', 'Anyone free at this time')}</button>}
                     <button type="button" onClick={() => setShowAll(true)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{t('Tutti gli orari del giorno', 'All times today')}</button>

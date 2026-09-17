@@ -14,7 +14,7 @@ import { Avatar, Icon, fmtDur, timeLabel, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   DK_START, DK_END, PXM, COLW, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
-  initialsOf, firstName, lastName, opDisplay, itemBlocks, explainSlot, GRID_LINE_STYLE, gridMarks,
+  initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
 } from './lib.js';
 
 export default function DayGrid({
@@ -388,20 +388,46 @@ export default function DayGrid({
                     <span style={{ fontWeight: 600, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>· {hv.ok && pickMode ? t('Usa questo orario', 'Use this time') : hv.label}</span>
                   </div>
                 )}
-                {/* service blocks (each in its operator's column) */}
-                {allBlocks.filter((b) => itemPos(b).opId === o.id).map((b) => {
-                  const pos = itemPos(b);
-                  return (
-                    <ItemBlock
-                      key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
-                      dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
-                      color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
-                      onDown={(e) => onItemDown(e, b)}
-                      onResizeDown={(e) => onItemResizeDown(e, b)}
-                      onHover={dragging ? null : onHover} onLeave={onLeave}
-                    />
+                {/* Corsie: due appuntamenti sovrapposti (un incastro forzato) devono
+                    stare AFFIANCATI. Disegnati a tutta larghezza, il secondo copriva
+                    il primo e l'incastro diventava impossibile da leggere. */}
+                {(() => {
+                  const placed = laneLayout(
+                    allBlocks.filter((b) => itemPos(b).opId === o.id).map((b) => ({ b, pos: itemPos(b) })),
                   );
-                })}
+                  return (
+                    <React.Fragment>
+                      {/* Spina della visita: una barra sul bordo sinistro che copre tutti
+                          i servizi dello stesso appuntamento in questa colonna. Sta qui e
+                          non dentro le card perché ogni servizio ha il colore della sua
+                          categoria — due barre diverse non legano niente — e perché i
+                          3 px di stacco fra le card la spezzerebbero. */}
+                      {visitSpines(placed).map((sp) => (
+                        <div key={'sp' + sp.apptId} title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi`, `One visit for ${sp.client}: ${sp.count} services`)}
+                          style={{
+                            position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 5),
+                            top: (sp.startMin - DK_START) * PXM + 1.5,
+                            height: (sp.endMin - sp.startMin) * PXM - 3,
+                            background: 'rgba(17,24,39,0.55)', borderRadius: '12px 0 0 12px',
+                            pointerEvents: 'none', zIndex: 4,
+                          }} />
+                      ))}
+                      {/* service blocks (each in its operator's column) */}
+                      {placed.map(({ b, pos, lane, laneCount }) => (
+                        <ItemBlock
+                          key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
+                          lane={lane} laneCount={laneCount}
+                          dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
+                          color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
+                          onDown={(e) => onItemDown(e, b)}
+                          onResizeDown={(e) => onItemResizeDown(e, b)}
+                          onHover={dragging ? null : onHover} onLeave={onLeave}
+                          onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows }))}
+                        />
+                      ))}
+                    </React.Fragment>
+                  );
+                })()}
                 {/* pauses */}
                 {allPauses.filter((p) => pausePos(p).opId === o.id).map((p) => {
                   const pos = pausePos(p);
@@ -464,12 +490,18 @@ function closedIntervals(windows) {
 const TONE_BORDER = { ok: 'var(--ok)', bad: 'var(--danger)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, activeMin, soakMin, dragging, tone, color, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave }) {
-  const { item, appt, isFirst } = block;
+function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+  const { item, appt, isFirst, isLast, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
   const h = (active + soak) * PXM;
   const compact = h < 50;
+  const narrow = laneCount > 1;
+  // Visita con più servizi: senza un segno che li lega, in agenda si vedono
+  // due riquadri identici a due appuntamenti diversi della stessa cliente, e
+  // non si capisce né che sono una cosa sola né che si possono staccare.
+  const total = (appt.items || []).length;
+  const grouped = total > 1;
   const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
@@ -477,9 +509,25 @@ function ItemBlock({ block, startMin, activeMin, soakMin, dragging, tone, color,
   return (
     <div
       onPointerDown={(e) => onDown(e)}
+      onContextMenu={(e) => {
+        // Sopra un appuntamento il clic sinistro apre quello esistente, quindi
+        // non c'era modo di dire «qui»: il tasto destro apre il menu dello slot
+        // a quell'ora, da cui si incastra una cliente sopra un'altra.
+        if (!onSlotMenu) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onSlotMenu(startMin, e.clientX, e.clientY);
+      }}
+      title={grouped
+        ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare tutta la visita, o aprila per staccare questo servizio`,
+            `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move the whole visit, or open it to detach this service`)
+        : undefined}
       onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * PXM + 1.5, height: h - 3, left: 4, right: 4,
+        position: 'absolute', top: (startMin - DK_START) * PXM + 1.5, height: h - 3,
+        // Mentre si trascina il blocco torna a tutta larghezza: deve restare
+        // leggibile sopra gli altri.
+        ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
         boxShadow: dragging ? 'var(--sh-pop)' : '0 1px 3px rgba(17,24,39,0.12)', padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', zIndex: dragging ? 20 : 2, transform: dragging ? 'scale(1.03)' : 'none',
@@ -502,6 +550,9 @@ function ItemBlock({ block, startMin, activeMin, soakMin, dragging, tone, color,
       <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 1, flexShrink: 0 }}>
         {showStatusDot && <span title={sm.label} style={{ width: 7, height: 7, borderRadius: 99, background: sm.color, flexShrink: 0 }} />}
         <span className="tabnum" style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{dragging ? '–' + timeLabel(startMin + active + soak) : ''}</span>
+        {grouped && (
+          <span className="tabnum" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.02em', color: 'var(--ink-2)', background: 'rgba(255,255,255,0.62)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>{index + 1}/{total}</span>
+        )}
       </div>
       {!compact && <div style={{ ...textZ, color: 'var(--muted)', fontSize: 11, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{appt.client?.full_name}</div>}
       {canWrite && !dragging && (

@@ -1,0 +1,90 @@
+// Corsie e spine dell'agenda. Il caso che conta: un appuntamento inserito sopra
+// un altro (l'incastro che lo staff forza a mano) deve restare LEGGIBILE —
+// prima i due riquadri finivano l'uno sull'altro e di quello sotto si vedeva
+// solo il nome della cliente che spuntava da sotto.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { laneCss, laneLayout, visitSpines } from '../src/sections/agenda/lanes.js';
+
+/** blocco finto: un servizio di `apptId`, dalle `start` per `dur` minuti */
+const blk = (apptId, start, dur, { items = 1, soak = 0, itemId = null, client = 'Aisha' } = {}) => ({
+  b: {
+    apptId,
+    item: { id: itemId ?? apptId * 100 + start },
+    appt: { items: Array.from({ length: items }, (_, i) => ({ id: i })), client: { full_name: client } },
+    activeMin: dur,
+    soakMin: soak,
+  },
+  pos: { startMin: start, activeMin: dur, soakMin: soak },
+});
+
+const laneOf = (out, apptId) => out.find((x) => x.b.apptId === apptId);
+
+test('appuntamenti che non si toccano stanno tutti a tutta larghezza', () => {
+  const out = laneLayout([blk(1, 600, 60), blk(2, 720, 30)]);
+  for (const x of out) {
+    assert.equal(x.lane, 0);
+    assert.equal(x.laneCount, 1);
+  }
+});
+
+test('due appuntamenti sovrapposti finiscono in due corsie affiancate', () => {
+  const out = laneLayout([blk(1, 600, 60), blk(2, 600, 30)]);
+  assert.equal(laneOf(out, 1).laneCount, 2);
+  assert.equal(laneOf(out, 2).laneCount, 2);
+  assert.notEqual(laneOf(out, 1).lane, laneOf(out, 2).lane);
+});
+
+test('i servizi della stessa visita restano nella stessa corsia', () => {
+  // Una visita di due servizi in fila, più un incastro sopra il primo.
+  const out = laneLayout([
+    blk(1, 600, 60, { items: 2, itemId: 11 }),
+    blk(1, 660, 45, { items: 2, itemId: 12 }),
+    blk(2, 600, 30),
+  ]);
+  const visita = out.filter((x) => x.b.apptId === 1);
+  assert.equal(visita.length, 2);
+  assert.equal(visita[0].lane, visita[1].lane, 'la visita non deve spezzarsi fra due corsie');
+  assert.notEqual(visita[0].lane, laneOf(out, 2).lane);
+});
+
+test('un terzo sovrapposto porta a tre corsie, un quarto separato no', () => {
+  const out = laneLayout([blk(1, 600, 60), blk(2, 600, 60), blk(3, 610, 20), blk(4, 800, 30)]);
+  assert.equal(laneOf(out, 1).laneCount, 3);
+  assert.equal(laneOf(out, 4).laneCount, 1);
+  assert.equal(new Set([laneOf(out, 1).lane, laneOf(out, 2).lane, laneOf(out, 3).lane]).size, 3);
+});
+
+test('la posa conta nell’ingombro: due visite si sovrappongono solo per la posa', () => {
+  // 30 minuti di lavoro + 60 di posa: la cliente occupa la poltrona fino alle 11:30.
+  const out = laneLayout([blk(1, 600, 30, { soak: 60 }), blk(2, 660, 30)]);
+  assert.equal(laneOf(out, 1).laneCount, 2, 'la posa deve contare come occupazione');
+});
+
+test('laneCss: colonna intera contro colonna divisa', () => {
+  assert.deepEqual(laneCss(0, 1), { left: 4, right: 4 });
+  const seconda = laneCss(1, 2);
+  assert.match(seconda.left, /calc\(4px \+ 1 \* \(\(100% - 8px\) \/ 2\)\)/);
+  assert.match(seconda.width, /calc\(\(\(100% - 8px\) \/ 2\) - 3px\)/);
+});
+
+test('la spina copre tutta la visita e solo le visite multi-servizio', () => {
+  const placed = laneLayout([
+    blk(1, 600, 60, { items: 2, itemId: 11 }),
+    blk(1, 660, 45, { items: 2, itemId: 12 }),
+    blk(2, 780, 30),
+  ]);
+  const spine = visitSpines(placed);
+  assert.equal(spine.length, 1, 'una sola spina: l’appuntamento singolo non ne ha');
+  assert.equal(spine[0].apptId, 1);
+  assert.equal(spine[0].startMin, 600);
+  assert.equal(spine[0].endMin, 705);
+  assert.equal(spine[0].count, 2);
+});
+
+test('nessuna spina se della visita in questa colonna c’è un solo servizio', () => {
+  // L’altro servizio lo fa un’altra operatrice: in questa colonna non c’è nulla da legare.
+  const placed = laneLayout([blk(1, 600, 60, { items: 2, itemId: 11 })]);
+  assert.deepEqual(visitSpines(placed), []);
+});

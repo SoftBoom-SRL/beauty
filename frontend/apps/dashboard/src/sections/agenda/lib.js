@@ -364,3 +364,7 @@ export function opSegments(a) {
   });
   return segs;
 }
+
+// Geometria delle corsie e delle spine: sta in lanes.js, senza import, per
+// poterla provare da sola (vedi apps/dashboard/test/lanes.test.js).
+export { laneLayout, laneCss, visitSpines } from './lanes.js';

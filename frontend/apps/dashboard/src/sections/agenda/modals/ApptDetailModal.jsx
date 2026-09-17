@@ -433,6 +433,18 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             </div>
           ) : (
             <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
+              {/* Con più servizi la visita è una sola cosa in agenda: va detto
+                  qui, insieme al modo per dividerla. Senza questa riga l'unico
+                  indizio era un'icona muta accanto al servizio. */}
+              {(appt.items || []).length > 1 && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, padding: '8px 10px', borderRadius: 10, background: 'var(--surface)', border: '1px dashed var(--hair)' }}>
+                  <Icon name="calendar" size={14} color="var(--muted)" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.35 }}>
+                    <b>{t(`${(appt.items || []).length} servizi in un'unica visita`, `${(appt.items || []).length} services in one visit`)}</b>{' — '}
+                    {t('trascinandola in agenda si spostano tutti insieme. Per spostarne uno solo, usa «Stacca».', 'dragging it in the agenda moves them together. To move just one, use “Detach”.')}
+                  </div>
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {editItems.map((it) => {
                   const s = svcOf(it.service_id);
@@ -448,8 +460,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           {(appt.gifts || []).some((g) => g.service_id === it.service_id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
                         </span>
                         {!isNew && (appt.items || []).length > 1 && (
-                          <button className="dk-iconbtn" title={t('Stacca questo servizio e spostalo in un altro orario o giorno', 'Detach this service and move it to another time or day')} onClick={() => { const orig = (appt.items || []).find((x) => x.id === it.id); if (orig) { setSplitItem(orig); setFlow('split'); } }} style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }}>
-                            <Icon name="calendar" size={14} />
+                          <button className="dk-btn dk-btn--ghost" title={t('Stacca questo servizio e spostalo in un altro orario o giorno', 'Detach this service and move it to another time or day')} onClick={() => { const orig = (appt.items || []).find((x) => x.id === it.id); if (orig) { setSplitItem(orig); setFlow('split'); } }} style={{ height: 28, padding: '0 8px', borderRadius: 8, flexShrink: 0, fontSize: 12, fontWeight: 700, gap: 5 }}>
+                            <Icon name="calendar" size={13} />{t('Stacca', 'Detach')}
                           </button>
                         )}
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
