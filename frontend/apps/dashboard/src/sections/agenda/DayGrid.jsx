@@ -641,7 +641,8 @@ function PauseBlock({ p, startMin, dur, dragging, tone, t, canWrite, onDown, onR
     <div
       onPointerDown={(e) => onDown(e)}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * PXM + 1.5, height: bh - 3, left: 4, right: 4,
+        position: 'absolute', top: (startMin - DK_START) * PXM + 1.5, height: bh - 3,
+        ...(dragging ? { left: 4, right: 4 } : laneCss(0, 1)),
         borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : '1.5px dashed var(--pewter-300, #B6B4BB)',
         background: 'repeating-linear-gradient(135deg, rgba(120,120,128,0.13) 0 7px, rgba(120,120,128,0.04) 7px 14px)',
         boxShadow: dragging ? 'var(--sh-pop)' : 'none', padding: bCompact ? '3px 9px' : '7px 11px', overflow: 'hidden',
@@ -669,7 +670,7 @@ function PauseBlock({ p, startMin, dur, dragging, tone, t, canWrite, onDown, onR
 }
 
 /* ---------- appointment hover card ---------- */
-export function ApptHoverCard({ hover, t, lang, operators, colorOf }) {
+export function ApptHoverCard({ hover, t, lang, operators, colorOf, hints = 'day' }) {
   const { a, x, y, side } = hover;
   const o = operators.find((op) => op.id === a.operator_id);
   const opName = o ? o.first_name + ' ' + o.last_name : ((a.items || [])[0]?.operator_name || '');
@@ -707,7 +708,12 @@ export function ApptHoverCard({ hover, t, lang, operators, colorOf }) {
             <span className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.4 }}>{a.note}</span>
           </div>
         )}
-        <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 2, fontSize: 11.5 }}>{t('Clic: dettaglio · Trascina: sposta · Bordo inferiore: durata', 'Click: details · Drag: move · Bottom edge: duration')}</div>
+        {/* In settimana non si ridimensiona: prometterlo sarebbe una bugia. */}
+        <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 2, fontSize: 11.5 }}>
+          {hints === 'week'
+            ? t('Clic: dettaglio · Trascina: sposta, anche su un altro giorno', 'Click: details · Drag: move, to another day too')
+            : t('Clic: dettaglio · Trascina: sposta · Bordo inferiore: durata', 'Click: details · Drag: move · Bottom edge: duration')}
+        </div>
       </div>
     </div>
   );

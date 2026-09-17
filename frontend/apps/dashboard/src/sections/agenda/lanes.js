@@ -61,12 +61,23 @@ export function laneLayout(placed) {
   }));
 }
 
-/** left/width di una corsia dentro la colonna (4 px di margine, 3 px fra corsie). */
+/** Striscia sempre libera sul lato destro di ogni colonna.
+ *
+ *  Un appuntamento disegnato da bordo a bordo non lascia un pixel su cui
+ *  passare il mouse: per aggiungerne un altro alla stessa ora non c'era dove
+ *  cliccare. Questo corridoio resta scoperto, mostra l'indicatore dell'orario
+ *  al passaggio e apre il menu dello slot al clic.
+ */
+export const COL_GUTTER = 22;
+
+/** left/width di una corsia dentro la colonna (4 px di margine, 3 px fra corsie,
+ *  più il corridoio libero a destra). */
 export function laneCss(lane = 0, laneCount = 1, fixedWidth = null) {
+  const right = 4 + COL_GUTTER;
   if (laneCount <= 1) {
-    return fixedWidth ? { left: 4, width: fixedWidth } : { left: 4, right: 4 };
+    return fixedWidth ? { left: 4, width: fixedWidth } : { left: 4, right };
   }
-  const slot = `((100% - 8px) / ${laneCount})`;
+  const slot = `((100% - ${4 + right}px) / ${laneCount})`;
   const left = `calc(4px + ${lane} * ${slot})`;
   return fixedWidth ? { left, width: fixedWidth } : { left, width: `calc(${slot} - 3px)` };
 }

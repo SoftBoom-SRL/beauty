@@ -368,7 +368,7 @@ def agenda_week(request, start: str, location_id: int = None):
         )
         .exclude(status=Appointment.Status.CANCELLED)
         .select_related("client")
-        .prefetch_related("items")
+        .prefetch_related("items__service")
         .order_by("start")
     )
     if location_id:
@@ -396,6 +396,7 @@ def agenda_week(request, start: str, location_id: int = None):
                         "id": a.id,
                         "start": a.start,
                         "client_name": a.client.full_name,
+                        "client_phone": a.client.phone,
                         "operator_id": a.operator_id,
                         "status": a.status,
                         "duration_min": a.total_duration_min,
@@ -404,7 +405,15 @@ def agenda_week(request, start: str, location_id: int = None):
                         "deposit_status": a.deposit_status,
                         "gifts": _gifts_out(a, gifts),
                         "items": [
-                            {"operator_id": it.operator_id, "duration_min": it.duration_min, "soak_min": it.soak_min}
+                            {
+                                "operator_id": it.operator_id,
+                                "duration_min": it.duration_min,
+                                "soak_min": it.soak_min,
+                                # Il nome del servizio serve all'anteprima al
+                                # passaggio del mouse e a far vedere che la visita
+                                # è composta da più servizi.
+                                "service_name": it.service.name_it,
+                            }
                             for it in a.items.all()
                         ],
                     }

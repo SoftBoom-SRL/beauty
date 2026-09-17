@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
+import { ApptHoverCard } from './DayGrid.jsx';
 import {
   DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
   GRID_LINE_STYLE, gridMarks, opSegments,
@@ -32,6 +33,9 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
   const [opTip, setOpTip] = useState(null); // { name, x, y }
   const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop }: il blocco resta dove è stato lasciato durante la POST
   const [, force] = useState(0);            // re-render on drag ghost changes
+  // Anteprima al passaggio del mouse, come nella vista giorno: in settimana i
+  // blocchi sono stretti e il solo `title` del browser arriva tardi e dice poco.
+  const [hover, setHover] = useState(null);
   const scrollRef = useRef(null);
   const drag = useRef(null);                // active drag { id, obj, ns, nop, dayIdx, moved, ... }
   const justDragged = useRef(false);        // suppress the click that follows a drop
@@ -168,7 +172,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     d.nop = d.multi || opId == null ? d.origOp : opId;
     const wasMoved = d.moved;
     d.moved = d.moved || Math.abs(dy) > 4 || Math.abs(dx) > 4;
-    if (d.moved && !wasMoved) document.body.classList.add('dk-dragging');
+    if (d.moved && !wasMoved) { document.body.classList.add('dk-dragging'); setHover(null); }
     force((x) => x + 1);
   }
 
@@ -258,6 +262,27 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
   // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
   const movingObj = dragging ? { ...dg.obj, operator_id: dg.nop, startMin: dg.ns, endMin: dg.ns + (dg.obj.endMin - dg.obj.startMin) } : null;
   const blockTitle = (a, o) => `${a.client_name} · ${timeLabel(a.startMin)}${o ? ' · ' + o.first_name : ''}${a.forced ? ' · ' + t('Inserito forzando le regole', 'Booked overriding the rules') : ''}`;
+
+  /* Il payload della settimana è più compatto di quello del giorno: qui si
+   * riporta alla forma che la scheda di anteprima già sa leggere, così la
+   * scheda resta una sola per le due viste. */
+  const hoverShape = (a) => ({
+    ...a,
+    client: { full_name: a.client_name, phone: a.client_phone },
+    total_duration_min: a.duration_min,
+  });
+  const openHover = (a, el) => {
+    if (drag.current) return;
+    const r = el.getBoundingClientRect();
+    const right = r.right + 320 < window.innerWidth;
+    setHover({
+      a: hoverShape(a),
+      x: right ? r.right + 10 : r.left - 10,
+      y: Math.min(r.top, window.innerHeight - 280),
+      side: right ? 'right' : 'left',
+    });
+  };
+  const closeHover = () => setHover(null);
 
   return (
     <div
@@ -364,6 +389,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
                           title={blockTitle(a, o)}
                           left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
                           onDown={(e) => onBlockDown(e, a, i)}
+                          onHover={openHover} onLeave={closeHover}
                         />
                       );
                     })}
@@ -376,6 +402,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
           );
         })}
       </div>
+      {hover && <ApptHoverCard hover={hover} t={t} lang={lang} operators={operators} colorOf={colorOf} hints="week" />}
       {opTip && <div style={{ position: 'fixed', top: opTip.y, left: opTip.x, transform: 'translateX(-50%)', zIndex: 90, background: 'var(--ink)', color: '#fff', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: 'var(--sh-pop)' }}>{opTip.name}</div>}
       {/* badge che segue il cursore: giorno + operatrice + orario di arrivo */}
       {dragging && (() => {
@@ -401,17 +428,21 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
  * operatrice se la visita è multi-servizio), sfondo derivato dal colore ma più
  * chiaro, indicatori forced / caparra dovuta / gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, t, title, onDown }) {
+function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, t, title, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * PXM;
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
   const segs = opSegments(a);
+  const nServices = (a.items || []).length;
+  const multi = nServices > 1;
   const gifts = (a.gifts || []).length;   // il payload settimana può non avere `gifts`
   const depositDue = a.deposit_status === 'required';
   const flags = !!(a.forced || depositDue || gifts);
   return (
     <div
       onPointerDown={onDown}
+      onMouseEnter={(e) => onHover && onHover(a, e.currentTarget)}
+      onMouseLeave={() => onLeave && onLeave()}
       title={title}
       style={{
         position: 'absolute', top: (a.startMin - DK_START) * PXM + 1, height: h - 2, left, width, boxSizing: 'border-box',
@@ -425,9 +456,14 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, 
         pointerEvents: moving ? 'none' : 'auto', zIndex: moving ? 20 : 2,
       }}
     >
-      {/* striscia operatrice: segmenti in proporzione alla durata dei servizi */}
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
-        {segs.map((s, k) => <div key={k} style={{ flex: s.w, background: colorOf(s.opId) }} />)}
+      {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi.
+          Con più servizi i segmenti sono separati da una riga chiara e il blocco
+          porta il conteggio: in settimana la visita è UN riquadro, e non si
+          vedeva che dentro ci fossero due o tre servizi. */}
+      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
+        {segs.map((s, k) => (
+          <div key={k} style={{ flex: s.w, background: colorOf(s.opId), borderTop: multi && k > 0 ? '1.5px solid var(--surface)' : 'none' }} />
+        ))}
       </div>
       {flags && (
         <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 1 }}>
@@ -438,7 +474,24 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, 
       )}
       <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
       {last && h > 30 && lc < 3 && <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
-      {h > 44 && <div className="tabnum" style={{ fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap' }}>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</div>}
+      {h > 44 && (
+        <div className="tabnum" style={{ fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</span>
+          {multi && (
+            <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
+              style={{ fontWeight: 800, fontSize: 9, letterSpacing: '0.02em', color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px' }}>
+              ×{nServices}
+            </span>
+          )}
+        </div>
+      )}
+      {/* blocco troppo basso per la riga dell'orario: il conteggio va comunque detto */}
+      {multi && h <= 44 && (
+        <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
+          style={{ position: 'absolute', bottom: 2, right: 3, fontWeight: 800, fontSize: 9, color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px', pointerEvents: 'none' }}>
+          ×{nServices}
+        </span>
+      )}
     </div>
   );
 }

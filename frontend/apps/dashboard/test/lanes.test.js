@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { laneCss, laneLayout, visitSpines } from '../src/sections/agenda/lanes.js';
+import { COL_GUTTER, laneCss, laneLayout, visitSpines } from '../src/sections/agenda/lanes.js';
 
 /** blocco finto: un servizio di `apptId`, dalle `start` per `dur` minuti */
 const blk = (apptId, start, dur, { items = 1, soak = 0, itemId = null, client = 'Aisha' } = {}) => ({
@@ -62,11 +62,18 @@ test('la posa conta nell’ingombro: due visite si sovrappongono solo per la pos
   assert.equal(laneOf(out, 1).laneCount, 2, 'la posa deve contare come occupazione');
 });
 
-test('laneCss: colonna intera contro colonna divisa', () => {
-  assert.deepEqual(laneCss(0, 1), { left: 4, right: 4 });
+test('laneCss lascia sempre libero il corridoio a destra', () => {
+  // Il corridoio è l'unico punto su cui passare il mouse quando un appuntamento
+  // occupa la colonna: senza, non c'è dove cliccare per aggiungerne un altro.
+  const intera = laneCss(0, 1);
+  assert.equal(intera.left, 4);
+  assert.equal(intera.right, 4 + COL_GUTTER);
+
   const seconda = laneCss(1, 2);
-  assert.match(seconda.left, /calc\(4px \+ 1 \* \(\(100% - 8px\) \/ 2\)\)/);
-  assert.match(seconda.width, /calc\(\(\(100% - 8px\) \/ 2\) - 3px\)/);
+  assert.ok(seconda.left.includes(`${4 + 4 + COL_GUTTER}px`), seconda.left);
+  assert.ok(seconda.width.includes('/ 2'), seconda.width);
+  // anche divisa in corsie, la larghezza tolta alla colonna comprende il corridoio
+  assert.ok(seconda.width.includes(`${4 + 4 + COL_GUTTER}px`), seconda.width);
 });
 
 test('la spina copre tutta la visita e solo le visite multi-servizio', () => {
