@@ -1,7 +1,7 @@
 // ctx.jsx — DashboardProvider: session, base catalogs from the API, navigation,
 // modal/drawer/toast plumbing, live feed. Section agents CONSUME this via useDash().
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { api, API_URL, staffAuth, useT, useToastHost } from '@youty/shared';
+import { api, API_URL, setSalonTz, staffAuth, useT, useToastHost } from '@youty/shared';
 
 const DashCtx = createContext(null);
 export const useDash = () => useContext(DashCtx);
@@ -68,6 +68,10 @@ function useLiveFeed(session) {
    * un ticket nuovo; nel frattempo il polling di riserva accelera. */
   useEffect(() => {
     let es = null, alive = true, retry = 3000, timer = null;
+    // Un po' di scarto casuale sul ritentativo: quando il server rifiuta gli
+    // stream perché ha raggiunto il tetto di connessioni, tutte le postazioni
+    // riproverebbero nello stesso istante e lo riempirebbero di nuovo insieme.
+    const wait = () => retry + Math.floor(Math.random() * 1500);
     const connect = async () => {
       if (!alive || document.visibilityState !== 'visible') { timer = setTimeout(connect, 2000); return; }
       try {
@@ -86,11 +90,11 @@ function useLiveFeed(session) {
         es.onerror = () => {
           streamOkRef.current = false; setStreamOk(false);
           es?.close(); es = null;
-          if (alive) { timer = setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); }
+          if (alive) { timer = setTimeout(connect, wait()); retry = Math.min(retry * 2, 30000); }
         };
       } catch {
         streamOkRef.current = false; setStreamOk(false);
-        if (alive) { timer = setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); }
+        if (alive) { timer = setTimeout(connect, wait()); retry = Math.min(retry * 2, 30000); }
       }
     };
     connect();
@@ -147,7 +151,12 @@ export function DashboardProvider({ children }) {
   const [bootError, setBootError] = useState(null);
 
   const reload = useMemo(() => ({
-    salon: () => api.get('/api/core/salon').then(setSalon),
+    // Il fuso arriva dal server: l'agenda deve mostrare l'orologio della
+    // reception anche da una postazione impostata su un altro fuso.
+    salon: () => api.get('/api/core/salon').then((s) => {
+      setSalonTz(s?.settings?.timezone);
+      setSalon(s);
+    }),
     operators: () => api.get('/api/staff/').then(setOperators),
     services: () => api.get('/api/catalog/services').then(setServices),
     serviceCategories: () => api.get('/api/catalog/categories').then(setServiceCategories),
@@ -226,7 +235,29 @@ export function DashboardProvider({ children }) {
     try { localStorage.setItem('dk-show-revenue', v ? '1' : '0'); } catch { /* ignore */ }
   }, []);
 
-  /* ---- operator colours: API color, overridable in state ---- */
+  /* ---- sede attiva: contesto operativo, non solo un'etichetta ----
+   * Vive qui (non nella sidebar) così agenda, disponibilità e creazione
+   * appuntamenti la passano come `location_id`. Persistita per postazione;
+   * se la sede salvata non esiste più si torna a quella predefinita. */
+  const [locationIdRaw, setLocationIdRaw] = useState(() => {
+    try { const v = localStorage.getItem('dk-location'); return v ? Number(v) : null; } catch { return null; }
+  });
+  const locationId = useMemo(() => {
+    if (!locations.length) return null;
+    if (locationIdRaw && locations.some((l) => l.id === locationIdRaw)) return locationIdRaw;
+    return (locations.find((l) => l.is_default) || locations[0]).id;
+  }, [locations, locationIdRaw]);
+  const location = useMemo(() => locations.find((l) => l.id === locationId) || null, [locations, locationId]);
+  const setLocationId = useCallback((id) => {
+    setLocationIdRaw(id);
+    try { localStorage.setItem('dk-location', String(id)); } catch { /* ignore */ }
+  }, []);
+
+  /* ---- colori operatrice: dal server, condivisi fra le postazioni ----
+   * Il colore scelto in agenda viene salvato (PATCH /api/staff/{id}/color): prima
+   * viveva solo nello stato locale e ogni pc vedeva il suo. L'override locale
+   * serve solo come feedback immediato finché il server non conferma; le altre
+   * postazioni ricevono `operator.updated` dal feed live e ricaricano. */
   const [opColorOverrides, setOpColorOverrides] = useState({});
   const opColors = useMemo(() => {
     const m = {};
@@ -235,12 +266,32 @@ export function DashboardProvider({ children }) {
     });
     return m;
   }, [operators, opColorOverrides]);
-  const setOpColor = useCallback((id, c) => setOpColorOverrides((m) => ({ ...m, [id]: c })), []);
+  /* Il selettore colore nativo emette un evento a ogni movimento del cursore:
+   * salvare a ogni evento voleva dire decine di PATCH, altrettanti ricarichi
+   * dell'elenco operatrici e un evento live a tutte le postazioni per un solo
+   * colore scelto. L'anteprima resta immediata, la scrittura parte a mano ferma. */
+  const colorTimers = useRef({});
+  useEffect(() => () => { Object.values(colorTimers.current).forEach(clearTimeout); }, []);
+  const setOpColor = useCallback((id, c) => {
+    setOpColorOverrides((m) => ({ ...m, [id]: c }));
+    clearTimeout(colorTimers.current[id]);
+    colorTimers.current[id] = setTimeout(() => {
+      delete colorTimers.current[id];
+      api.patch(`/api/staff/${id}/color`, { color: c })
+        .then(() => reload.operators().catch(() => {}))
+        .then(() => setOpColorOverrides((m) => { const next = { ...m }; delete next[id]; return next; }))
+        .catch(() => {
+          setOpColorOverrides((m) => { const next = { ...m }; delete next[id]; return next; });
+          fireToast({ msg: t('Colore non salvato: riprova', 'Colour not saved: try again'), icon: 'alert' });
+        });
+    }, 400);
+  }, [reload, fireToast, t]);
 
   const ctx = {
     t, lang, setLang,
     session, hasScope,
     salon, settings, locations,
+    locationId, setLocationId, location,
     operators, services, serviceCategories, clientCategories,
     reload,
     tab, setTab, subTab, setSubTab,

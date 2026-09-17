@@ -1,0 +1,70 @@
+Creating test database for alias 'default'...
+/Users/faustopagliara/beauty/backend/.venv/lib/python3.12/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 23 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+  return self._jws.encode(
+/Users/faustopagliara/beauty/backend/.venv/lib/python3.12/site-packages/django/core/handlers/base.py:61: UserWarning: No directory at: /Users/faustopagliara/beauty/backend/staticfiles/
+  mw_instance = middleware(adapted_handler)
+.WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+WARNING django.request: Unauthorized: /api/auth/staff/login
+..INFO youty.events: outbox event appointment.cancelled (#1)
+INFO youty.events: outbox event slot.freed (#2)
+INFO youty.events: outbox event appointment.moved (#3)
+INFO youty.events: outbox event slot.freed (#4)
+....INFO youty.events: outbox event deposit.payment_link (#1)
+INFO youty.events: outbox event deposit.payment_link (#2)
+INFO youty.events: outbox event deposit.paid (#3)
+./Users/faustopagliara/beauty/backend/.venv/lib/python3.12/site-packages/jwt/api_jwt.py:370: InsecureKeyLengthWarning: The HMAC key is 23 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+  decoded = self.decode_complete(
+WARNING django.request: Conflict: /api/agenda/client/appointments
+.WARNING django.request: Conflict: /api/agenda/client/appointments/1/move
+.INFO youty.events: outbox event loyalty.reward (#1)
+..WARNING django.request: Conflict: /api/agenda/client/appointments
+..
+----------------------------------------------------------------------
+Ran 14 tests in 0.106s
+
+OK
+Destroying test database for alias 'default'...
+Found 14 test(s).
+System check identified no issues (0 silenced).
+PROBE 01: empty password accepted; login with empty password returns 200
+PROBE 02: 30 wrong passwords all return 401, next valid login returns 200; no throttle
+PROBE 03: requested TTL 3600s becomes 300s; interleaved hits both pass limit=1, stored count=1
+PROBE 04: request snapshot loaded before cancellation can move and resurrect cancelled appointment
+PROBE 05: same order received from two prior snapshots: stock=20, receipt line=10
+PROBE 06: refund EUR10 of EUR30 marks entire deposit refunded; remaining EUR20 no longer deducted
+PROBE 07: refund.created status=pending already marks deposit refunded
+PROBE 08: second distinct successful deposit payment ignored without refund/reconciliation
+PROBE 09: public availability offers secondary-location operator; booking same slot at default location returns 409
+PROBE 10: 60m existing booking offered 17:30 with 18:00 closing because catalog now says 30m; move returns 409
+PROBE 11: loyalty free service reward becomes EUR0 coupon, without service association
+PROBE 12: Stripe asked to charge EUR70, API and activity log declare EUR100
+PROBE 13: 17:30 offered for 30m work + 60m soak despite 18:00 closing; booking returns 409
+PROBE 14: insights shift capacity for ONE operator and 30 days executes 63 SQL queries

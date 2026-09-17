@@ -23,6 +23,11 @@ from .models import Payment, Sale, SaleLine
 
 TWO_PLACES = Decimal("0.01")
 PAYMENT_TOLERANCE = Decimal("0.01")
+# Tetti di sanità su una riga di vendita: un errore di battitura (o una
+# richiesta costruita a mano) non deve poter scrivere a registro una cifra
+# che poi va corretta a mano in tutti i conteggi.
+MAX_QTY = 999
+MAX_UNIT_PRICE = Decimal("100000.00")
 
 
 def line_amount(qty, unit_price, discount_pct: int = 0, is_gift: bool = False) -> Decimal:
@@ -51,8 +56,28 @@ def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
                 unit_price = raw["value"]
             if unit_price is None:
                 raise HttpError(422, "Prezzo mancante su una riga di vendita")
+            if Decimal(str(unit_price)) < 0:
+                raise HttpError(422, "Prezzo negativo su una riga di vendita")
+            if Decimal(str(unit_price)) > MAX_UNIT_PRICE:
+                raise HttpError(422, "Prezzo fuori scala su una riga di vendita")
             qty = int(raw.get("qty") or 1)
+            if not 1 <= qty <= MAX_QTY:
+                raise HttpError(422, "Quantità non valida su una riga di vendita")
             discount_pct = int(raw.get("discount_pct") or 0)
+            if not 0 <= discount_pct <= 100:
+                raise HttpError(422, "Sconto non valido su una riga di vendita")
+            # Una riga prodotto senza prodotto veniva incassata senza scaricare
+            # il magazzino: il pezzo usciva dal negozio e restava a giacenza.
+            if line_type == SaleLine.LineType.PRODUCT and not raw.get("product_id"):
+                raise HttpError(422, "Riga prodotto senza prodotto selezionato")
+            # Su una gift card il prezzo È il valore caricato sulla carta: uno
+            # sconto emetteva una carta da 100 € incassandone 80, regalando la
+            # differenza. Una promozione si fa abbassando il valore.
+            if line_type == SaleLine.LineType.GIFT_CARD and discount_pct:
+                raise HttpError(
+                    422,
+                    "Sconto non applicabile a una gift card: indica direttamente il valore",
+                )
             is_gift = bool(raw.get("is_gift"))
             amount = line_amount(qty, unit_price, discount_pct, is_gift)
             prepared.append(
@@ -71,6 +96,29 @@ def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
             )
             total += amount
     return prepared, total
+
+
+def _validate_references(salon, prepared: list[dict]) -> None:
+    """Servizi, prodotti e operatrici delle righe devono appartenere al salone.
+
+    Senza questo controllo una vendita registrata dal salone A poteva scaricare
+    il magazzino di B (e mostrarne i nomi prodotto) indicando gli id giusti.
+    """
+    from apps.catalog.models import Service  # lazy
+    from apps.inventory.models import Product  # lazy
+    from apps.staff.models import Operator  # lazy
+
+    checks = (
+        (Service, {d["service_id"] for d in prepared if d.get("service_id")}, "Servizio non trovato"),
+        (Product, {d["product_id"] for d in prepared if d.get("product_id")}, "Prodotto non trovato"),
+        (Operator, {d["operator_id"] for d in prepared if d.get("operator_id")}, "Operatrice non trovata"),
+    )
+    for model, ids, message in checks:
+        if not ids:
+            continue
+        found = set(model.objects.filter(salon=salon, id__in=ids).values_list("id", flat=True))
+        if ids - found:
+            raise HttpError(404, message)
 
 
 def finalize_sale(
@@ -92,14 +140,19 @@ def finalize_sale(
     payments = [{"method": cash|card|other|gift_card, "amount": Decimal, "gift_card_code"?: str}]
     """
     deposit_deducted = Decimal(str(deposit_deducted or 0)).quantize(TWO_PLACES)
+    if deposit_deducted < 0:
+        raise HttpError(422, "Acconto detratto non valido")
 
     prepared, total = _prepare_lines(blocks)
     if not prepared:
         raise HttpError(422, "Nessuna riga di vendita")
+    _validate_references(salon, prepared)
 
     for payment in payments:
         if payment.get("method") not in Payment.Method.values:
             raise HttpError(422, "Metodo di pagamento non valido")
+        if Decimal(str(payment.get("amount") or 0)) < 0:
+            raise HttpError(422, "Importo di pagamento negativo")
 
     paid_total = sum(
         (Decimal(str(p.get("amount") or 0)) for p in payments), Decimal("0.00")
@@ -198,15 +251,78 @@ def finalize_sale(
     return sale
 
 
+def record_gift_card_cashed(salon, card, *, method: str, actor=None):
+    """Registra a cassa l'incasso di una gift card venduta fuori dal punto vendita.
+
+    Le carte comprate dall'app cliente nascono «da pagare» e il salone le
+    incassa dalla sezione Fedeltà. Senza una vendita corrispondente quel denaro
+    non compariva da nessuna parte: né nei ricavi, né nel riepilogo di giornata,
+    né nelle analisi — ma il saldo diventava spendibile e al riscatto veniva
+    scalato dall'incasso. Risultato: la carta faceva SPARIRE il suo valore dai
+    conti invece di aggiungerlo.
+
+    Ritorna la Sale creata, o None se la carta risulta già collegata a una.
+    """
+    if SaleLine.objects.filter(gift_card=card).exists():
+        return None  # già venduta al banco: sarebbe un doppio conteggio
+    amount = Decimal(str(card.initial_value)).quantize(TWO_PLACES)
+    if amount <= 0:
+        return None
+    if method not in Payment.Method.values:
+        method = Payment.Method.OTHER
+    with transaction.atomic():
+        sale = Sale.objects.create(
+            salon=salon,
+            kind=Sale.Kind.POS,
+            client=card.buyer_client,
+            total=amount,
+            created_by=actor,
+        )
+        SaleLine.objects.create(
+            sale=sale,
+            line_type=SaleLine.LineType.GIFT_CARD,
+            qty=1,
+            unit_price=amount,
+            amount=amount,
+            gift_card=card,
+        )
+        Payment.objects.create(sale=sale, method=method, amount=amount)
+    return sale
+
+
 def today_summary(salon) -> dict:
-    """{total, count, checkout_total, pos_total} degli incassi di oggi (box agenda)."""
+    """Incassi di oggi (box agenda): {total, count, checkout_total, pos_total,
+    gift_card_sold, gift_card_redeemed, cash_in}.
+
+    `total` è il venduto (righe di vendita, gift card emesse incluse);
+    `gift_card_redeemed` è la parte saldata con gift card e `deposit_used` la
+    parte coperta da caparre versate in precedenza: sono denaro già incassato in
+    un altro giorno. `cash_in` è quello entrato davvero oggi:
+    total − gift_card_redeemed − deposit_used. Così né un regalo né un anticipo
+    vengono contati due volte.
+    """
     zero = Decimal("0.00")
-    qs = Sale.objects.filter(salon=salon, created_at__date=timezone.localdate())
+    today = timezone.localdate()
+    qs = Sale.objects.filter(salon=salon, created_at__date=today)
     agg = qs.aggregate(total=Sum("total"), count=Count("id"))
     by_kind = dict(qs.values_list("kind").annotate(t=Sum("total")))
+    gift_sold = (
+        SaleLine.objects.filter(sale__in=qs, line_type=SaleLine.LineType.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
+        or zero
+    )
+    gift_redeemed = (
+        Payment.objects.filter(sale__in=qs, method=Payment.Method.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
+        or zero
+    )
+    total = agg["total"] or zero
+    deposit_used = qs.aggregate(t=Sum("deposit_deducted"))["t"] or zero
     return {
-        "total": agg["total"] or zero,
+        "total": total,
         "count": agg["count"] or 0,
         "checkout_total": by_kind.get(Sale.Kind.CHECKOUT.value) or zero,
         "pos_total": by_kind.get(Sale.Kind.POS.value) or zero,
+        "gift_card_sold": gift_sold,
+        "gift_card_redeemed": gift_redeemed,
+        "deposit_used": deposit_used,
+        "cash_in": total - gift_redeemed - deposit_used,
     }

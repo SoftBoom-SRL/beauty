@@ -5,6 +5,7 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity
+from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
@@ -172,6 +173,12 @@ def events_catalog(request):
 
 # ---- Webhook esterno (Yourang → youty), nessuna autenticazione -------------
 
+# Attivazioni accettate per automazione in un'ora e dimensione massima del corpo.
+HOOK_MAX_PER_WINDOW = 120
+HOOK_WINDOW_SECONDS = 3600
+MAX_HOOK_BODY_BYTES = 64 * 1024
+
+
 
 @router.post("/hook/{webhook_token}", response=WebhookTriggerOut)
 def trigger_webhook(request, webhook_token: str):
@@ -183,9 +190,27 @@ def trigger_webhook(request, webhook_token: str):
     automation = Automation.objects.filter(webhook_token=token).select_related("salon").first()
     if automation is None:
         raise HttpError(404, "Automazione non trovata")
+    # Spegnere un'automazione dalla dashboard deve spegnerla davvero: finora il
+    # webhook la faceva partire lo stesso, e il titolare non aveva modo di
+    # fermare una sequenza di messaggi già avviata.
+    if not automation.active:
+        raise HttpError(409, "Automazione disattivata")
 
+    # L'endpoint è pubblico (il token nell'URL è l'unica credenziale): senza
+    # tetto, chi lo intercetta può far partire messaggi a raffica a spese del
+    # salone, e ogni chiamata scrive una riga nel registro attività.
+    if not ratelimit.hit(
+        f"automation-hook:{automation.id}", HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS
+    ):
+        raise HttpError(429, "Troppe attivazioni: riprova tra qualche minuto")
+
+    body = request.body or b""
+    # Il corpo finisce nel registro attività e nell'outbox: un payload enorme
+    # gonfierebbe il database a ogni chiamata.
+    if len(body) > MAX_HOOK_BODY_BYTES:
+        raise HttpError(413, "Payload troppo grande")
     try:
-        payload = json.loads(request.body) if request.body else {}
+        payload = json.loads(body) if body else {}
     except (json.JSONDecodeError, UnicodeDecodeError):
         payload = {}
 

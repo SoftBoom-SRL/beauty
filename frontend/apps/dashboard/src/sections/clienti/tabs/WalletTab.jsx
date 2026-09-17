@@ -26,8 +26,9 @@ export default function WalletTab({ c }) {
       .then((res) => { if (!dead) setCoupons((res.items || []).filter((x) => x.client_id === c.id)); })
       .catch(() => { if (!dead) setCoupons([]); });
 
-    api.get('/api/marketing/gift-cards', { params: { q: word || undefined } })
-      .then((res) => { if (!dead) setGifts((res.items || []).filter((g) => g.buyer_client_id === c.id || g.recipient_client_id === c.id)); })
+    // filtro lato server: la cliente come acquirente o destinataria
+    api.get('/api/marketing/gift-cards', { params: { client_id: c.id } })
+      .then((res) => { if (!dead) setGifts(res.items || []); })
       .catch(() => { if (!dead) setGifts([]); });
 
     api.get('/api/marketing/loyalty-programs', { params: { active: true } })

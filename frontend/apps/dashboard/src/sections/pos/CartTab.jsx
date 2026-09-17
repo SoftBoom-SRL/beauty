@@ -1,11 +1,12 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
 import DkModal from '../../ui/DkModal.jsx';
+import useProductCatalog from './useProductCatalog.js';
 import {
   emptyPayments, lineAmount, methodLabel, money, opName, paymentsError, resolvePayments, round2,
 } from './lib.js';
@@ -20,20 +21,11 @@ export default function CartTab({ onGoHistory }) {
   const { t, lang, operators, opColors, fireToast, hasScope } = useDash();
   const canSell = hasScope('sales');
 
-  /* ---- products ---- */
-  const [products, setProducts] = useState(null); // null = loading
+  /* ---- products: prima pagina + ricerca lato server oltre la pagina ---- */
   const [q, setQ] = useState('');
-  useEffect(() => {
-    let dead = false;
-    api.get('/api/inventory/products', { params: { limit: 100 } })
-      .then((r) => { if (!dead) setProducts((r.items || []).filter((p) => Number(p.sale_price) > 0)); })
-      .catch((err) => {
-        if (dead) return;
-        setProducts([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-      });
-    return () => { dead = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { products, list: prodList, searching, refresh: refreshProducts } = useProductCatalog(q, {
+    onError: (err) => fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }),
+  });
 
   /* ---- cart ---- */
   // line: { key, line_type:'product'|'gift_card', product_id, name, unit_price, qty, is_gift, disc, stock, value, recipient_name }
@@ -47,15 +39,6 @@ export default function CartTab({ onGoHistory }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null); // SaleDetailOut after a successful sale
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
-
-  // ricerca per nome oppure SKU/codice a barre (lo scanner digita il codice) — filtro live
-  const prodList = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return products || [];
-    return (products || []).filter(
-      (p) => p.name.toLowerCase().includes(needle) || (p.sku || '').toLowerCase().includes(needle),
-    );
-  }, [products, q]);
 
   const addProduct = (p) => {
     setCart((c) => {
@@ -124,6 +107,7 @@ export default function CartTab({ onGoHistory }) {
         payments: resolvePayments(pay, total),
       });
       setDone(sale);
+      refreshProducts();  // le giacenze sono cambiate: il banco deve vederlo subito
       fireToast({ msg: t(`Vendita registrata · ${money(sale.total, lang)}`, `Sale recorded · ${money(sale.total, lang)}`), icon: 'check' });
     } catch (err) {
       setConfirmOpen(false);
@@ -210,7 +194,7 @@ export default function CartTab({ onGoHistory }) {
                 </button>
               );
             })}
-            {!prodList.length && <div className="t-sm" style={{ color: 'var(--muted-2)', gridColumn: '1 / -1', textAlign: 'center', padding: 32 }}>{t('Nessun prodotto trovato', 'No products found')}</div>}
+            {!prodList.length && <div className="t-sm" style={{ color: 'var(--muted-2)', gridColumn: '1 / -1', textAlign: 'center', padding: 32 }}>{searching ? t('Ricerca nel catalogo…', 'Searching the catalogue…') : t('Nessun prodotto trovato', 'No products found')}</div>}
           </div>
         )}
 

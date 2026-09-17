@@ -118,11 +118,17 @@ export default function ServiziSection() {
       if (!active) {
         await api.del(`/api/catalog/services/${s.id}`);
       } else {
+        // PUT = sostituzione completa (ServiceIn ha i default): i campi omessi
+        // venivano azzerati, quindi riattivare un servizio ne cancellava
+        // descrizione e tempo di posa.
         await api.put(`/api/catalog/services/${s.id}`, {
           category_id: s.category_id,
           name_it: s.name_it,
           name_en: s.name_en,
+          description_it: s.description_it || '',
+          description_en: s.description_en || '',
           duration_min: s.duration_min,
+          soak_min: s.soak_min || 0,
           price: s.price,
           product_cost: s.product_cost,
           supplier_cost: s.supplier_cost,

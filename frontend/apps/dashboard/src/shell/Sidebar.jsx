@@ -79,13 +79,12 @@ function NavItem({ n, active, onClick, subtabs, subTab, onSub }) {
 }
 
 /* Location (sede) switcher — driven by GET /api/core/salon locations.
- * Display + pick only for now. TODO: add/edit locations via
- * POST/PUT /api/core/locations (owner) — Impostazioni's job later. */
+ * La sede scelta vive nel contesto (ctx.locationId): agenda, disponibilità e
+ * creazione appuntamenti la usano come `location_id`, quindi cambiare sede
+ * cambia davvero i dati mostrati, non solo l'etichetta. */
 function LocationSwitcher() {
-  const { t, salon, locations, fireToast } = useDash();
+  const { t, salon, locations, fireToast, locationId, setLocationId, location: active } = useDash();
   const [open, setOpen] = useState(false);
-  const defaultLoc = locations.find((l) => l.is_default) || locations[0] || null;
-  const [locId, setLocId] = useState(defaultLoc?.id ?? null);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -96,12 +95,12 @@ function LocationSwitcher() {
   }, [open]);
 
   if (!salon) return null;
-  const active = locations.find((l) => l.id === locId) || defaultLoc;
   const monogram = (salon.name || '?').charAt(0).toUpperCase();
 
   const pick = (l) => {
-    setLocId(l.id);
     setOpen(false);
+    if (l.id === locationId) return;
+    setLocationId(l.id);
     fireToast({ msg: t('Sede attiva: ', 'Active location: ') + l.name, icon: 'mapPin' });
   };
 

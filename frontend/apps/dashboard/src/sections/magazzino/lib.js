@@ -1,5 +1,5 @@
 // lib.js — Magazzino: API-enum metadata + pure helpers shared by the sub-tabs.
-import { ApiError } from '@youty/shared';
+import { ApiError, fmtTime, salonTzOpts } from '@youty/shared';
 
 /* ---- stock_state (server-computed: low / warning / ok) ---- */
 export const STOCK_META = {
@@ -62,10 +62,10 @@ export function orderLineMath(qty, cost, vatRate) {
 export function fmtWhen(iso, lang) {
   if (!iso) return '';
   const d = new Date(iso);
-  const day = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short' });
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${day} · ${hh}:${mm}`;
+  // Giorno e ora del salone: un movimento di magazzino delle 23:40 non deve
+  // comparire il giorno dopo su una postazione con un altro fuso.
+  const day = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts({ day: 'numeric', month: 'short' }));
+  return `${day} · ${fmtTime(iso)}`;
 }
 
 /** ApiError → toast message */

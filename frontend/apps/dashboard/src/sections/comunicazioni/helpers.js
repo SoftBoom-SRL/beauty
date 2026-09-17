@@ -2,6 +2,7 @@
 // Local to this section (no shared statusMeta equivalent exists for the marketing
 // `Communication.status` enum, which is draft|scheduled|sent — unrelated to
 // appointment/deposit statuses in @youty/shared).
+import { dateTimeLocalToIso, fmtTime, salonDateParts, toDateTimeLocal } from '@youty/shared';
 
 export const COM_STATUS_KEYS = ['draft', 'scheduled', 'sent'];
 
@@ -21,27 +22,19 @@ const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'
 /** ISO datetime -> "1 lug 2026 · 10:00" (local time, bilingual months). */
 export function comWhenLabel(iso, lang) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const p = salonDateParts(iso);
   const mon = lang === 'en' ? MONTHS_EN : MONTHS_IT;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getDate()} ${mon[d.getMonth()]} ${d.getFullYear()} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${p.day} ${mon[p.month - 1]} ${p.year} · ${fmtTime(iso)}`;
 }
 
-/** API ISO datetime -> value for <input type="datetime-local"> (local time, no offset). */
-export function isoToDtLocal(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+/** API ISO datetime -> valore per <input type="datetime-local">, ora del SALONE.
+ *  L'invio programmato di una comunicazione si legge e si scrive sull'orologio
+ *  del salone: da una postazione su un altro fuso, «lunedì alle 9» partiva a
+ *  un'ora diversa da quella scritta nel campo. */
+export const isoToDtLocal = toDateTimeLocal;
 
-/** <input type="datetime-local"> value -> full ISO8601 with offset (UTC), or null. */
-export function dtLocalToIso(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
+/** Valore di <input type="datetime-local"> -> ISO dell'istante (ora del salone). */
+export const dtLocalToIso = dateTimeLocalToIso;
 
 /** Human summary of a communication's audience, given the salon's client categories. */
 export function audienceSummary(comm, clientCategories, t) {

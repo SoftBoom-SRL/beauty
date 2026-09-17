@@ -1,13 +1,12 @@
 import re
 
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import path, re_path
-from django.views.static import serve as media_serve
 
 from apps.core.views import activity_stream
+from common.media import serve_media
 from config.api import api
 
 
@@ -25,15 +24,15 @@ urlpatterns = [
     path("api/", api.urls),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-elif settings.SERVE_MEDIA:
-    # `static()` è un no-op con DEBUG=False: senza questa rotta gli upload
-    # (logo salone, foto schede tecniche, immagini comunicazioni) darebbero 404.
+if settings.DEBUG or settings.SERVE_MEDIA:
+    # Gli upload (logo salone, foto schede tecniche, allegati note, immagini
+    # comunicazioni) li serve Django: whitenoise indicizza i file all'avvio e
+    # non li vedrebbe. La vista è la stessa in sviluppo e in produzione, così i
+    # percorsi riservati richiedono il token firmato in entrambi i casi
+    # (`static()` di Django li avrebbe serviti a chiunque con DEBUG=1).
     urlpatterns += [
         re_path(
             r"^%s(?P<path>.*)$" % re.escape(settings.MEDIA_URL.lstrip("/")),
-            media_serve,
-            {"document_root": settings.MEDIA_ROOT},
+            serve_media,
         )
     ]

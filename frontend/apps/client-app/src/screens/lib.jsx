@@ -1,7 +1,7 @@
 // lib.jsx — shared helpers/components for the client-app screens (ported from
 // prototype screen-cliente.jsx). Lives inside screens/ per folder ownership.
 import React from 'react';
-import { ApiError, Icon, api, parseISO, timeLabel, minutesOfDay, toDateStr, addDays } from '@youty/shared';
+import { ApiError, Icon, api, fmtEur, parseISO, timeLabel, minutesOfDay, toDateStr, todayStr, addDays, salonTzOpts } from '@youty/shared';
 import { headFont } from '../theme.js';
 
 /* ============================== UI bits ============================== */
@@ -37,6 +37,64 @@ export function DetailRow({ icon, label, value }) {
       <Icon name={icon} size={17} color="var(--brand)" />
       <span className="t-sm" style={{ color: 'var(--muted)', width: 90, flexShrink: 0 }}>{label}</span>
       <span style={{ fontWeight: 700, fontSize: 14.5, flex: 1, textAlign: 'right' }}>{value}</span>
+    </div>
+  );
+}
+
+/** Caparra da versare: importo, scadenza e pulsante di pagamento.
+ *  Il link arriva già con l'appuntamento (`deposit_payment_link`); se manca lo
+ *  si chiede al volo. 503 = il salone non ha i pagamenti online: si paga in sede. */
+export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
+  const [busy, setBusy] = React.useState(false);
+  if (!appt || appt.deposit_status !== 'required') return null;
+  const amount = Number(appt.deposit_amount || 0);
+  const due = appt.deposit_due_at ? new Date(appt.deposit_due_at) : null;
+  const locale = lang === 'en' ? 'en-GB' : 'it-IT';
+  // La sola ora basta se la scadenza è oggi. Se cade domani — e con una tenuta
+  // di qualche ora succede spesso — «entro le 09:30» si legge come stamattina.
+  const sameDay = due && due.toDateString() === new Date().toDateString();
+  const dueLabel = due
+    ? (sameDay
+      ? due.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+      : due.toLocaleString(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))
+    : null;
+
+  const pay = async () => {
+    if (busy) return;
+    // Link già disponibile: si apre subito, dentro il gesto dell'utente.
+    if (appt.deposit_payment_link) { window.open(appt.deposit_payment_link, '_blank', 'noopener'); return; }
+    setBusy(true);
+    try {
+      const res = await api.post(`/api/sales/client/appointments/${appt.id}/deposit-link`, {});
+      // Dopo l'attesa il gesto è scaduto e Safari su iPhone blocca la finestra
+      // nuova: il pulsante sembrava non fare niente. Si naviga nella stessa
+      // scheda, e Stripe riporta qui a pagamento concluso.
+      if (res?.url) window.location.assign(res.url);
+      else fireToast?.({ msg: t('Link di pagamento non disponibile: contatta il salone.', 'Payment link unavailable: please contact the salon.'), icon: 'alert' });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        fireToast?.({ msg: t('Il salone non accetta pagamenti online: potrai pagare in sede.', 'The salon does not take online payments: you can pay on site.'), icon: 'info' });
+      } else errToast(err, fireToast, t);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: compact ? '10px 12px' : '13px 15px', borderRadius: 'var(--r-md)', background: 'var(--warn-tint, #FDF2E3)', marginTop: 12 }}>
+      <Icon name="coupon" size={18} color="var(--warn, #B4761F)" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>
+          {t(`Caparra di ${fmtEur(amount, lang)} da pagare`, `${fmtEur(amount, lang)} deposit to pay`)}
+        </div>
+        {dueLabel && (
+          <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.4 }}>
+            {t(`Entro le ${dueLabel}, poi l'orario torna disponibile.`, `By ${dueLabel}, then the slot is released.`)}
+          </div>
+        )}
+      </div>
+      <button className="press" onClick={pay} disabled={busy}
+        style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 'var(--r-pill)', background: 'var(--brand)', color: 'var(--brand-on)', fontWeight: 700, fontSize: 13, opacity: busy ? 0.6 : 1 }}>
+        {busy ? t('Attendi…', 'Wait…') : t('Paga ora', 'Pay now')}
+      </button>
     </div>
   );
 }
@@ -127,6 +185,28 @@ export function nextDays(n = 14) {
   return Array.from({ length: n }, (_, i) => addDays(today, i));
 }
 
+/** La data di oggi come 'YYYY-MM-DD', che cambia da sola a mezzanotte.
+ *
+ * Le schermate di prenotazione calcolavano la striscia dei giorni una volta
+ * sola: un'app lasciata aperta la sera proponeva ancora ieri come primo giorno.
+ * Si controlla anche al ritorno in primo piano, perché sul telefono i timer si
+ * fermano quando l'app è in secondo piano. */
+export function useTodayKey() {
+  const [key, setKey] = React.useState(() => toDateStr(new Date()));
+  React.useEffect(() => {
+    const tick = () => setKey((k) => { const now = toDateStr(new Date()); return now === k ? k : now; });
+    const id = setInterval(tick, 60000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
+    };
+  }, []);
+  return key;
+}
+
 /** Short strip label parts, e.g. { wd: 'Gio', num: '14' }. */
 export function dayStripLabel(date, lang) {
   const wd = date.toLocaleDateString(locale(lang), { weekday: 'short' }).replace('.', '');
@@ -136,21 +216,27 @@ export function dayStripLabel(date, lang) {
 /** "Gio 14 nov" style medium label. */
 export function fmtDayMed(dateish, lang) {
   const d = parseISO(dateish);
-  const s = d.toLocaleDateString(locale(lang), { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '');
+  const opts = { weekday: 'short', day: 'numeric', month: 'short' };
+  // Un istante si legge sul calendario del salone; una data pura è già un giorno.
+  const s = d.toLocaleDateString(
+    locale(lang),
+    typeof dateish === 'string' && !dateish.includes('T') ? opts : salonTzOpts(opts),
+  ).replace(/\./g, '');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Big relative label for the next appointment: "Oggi alle 15:30" / "Domani alle 10:00" / "Gio 14 nov · 10:00". */
 export function relLabel(iso, lang, t) {
   const d = parseISO(iso);
-  const now = new Date();
-  const midnight = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((midnight(d) - midnight(now)) / 86400000);
+  // «Oggi» e «domani» si contano sul calendario del SALONE: dall'estero la
+  // cliente leggeva l'ora del proprio telefono, e a cavallo della mezzanotte
+  // anche il giorno sbagliato.
+  const days = Math.round((parseISO(toDateStr(iso)) - parseISO(todayStr())) / 86400000);
   const hm = timeLabel(minutesOfDay(iso));
   if (days === 0) return t('Oggi alle ', 'Today at ') + hm;
   if (days === 1) return t('Domani alle ', 'Tomorrow at ') + hm;
   if (days > 1 && days < 7) {
-    const wd = d.toLocaleDateString(locale(lang), { weekday: 'long' });
+    const wd = d.toLocaleDateString(locale(lang), salonTzOpts({ weekday: 'long' }));
     return wd.charAt(0).toUpperCase() + wd.slice(1) + t(' alle ', ' at ') + hm;
   }
   return fmtDayMed(d, lang) + ' · ' + hm;
@@ -183,8 +269,11 @@ export function mapsUrl(brand) {
 
 /** Build an .ics data URL for an appointment (client-side add-to-calendar). */
 export function icsDataUrl(appt, brandName) {
+  // Orari in UTC (la Z finale): un .ics con l'ora "fluttuante" veniva
+  // interpretato dal calendario nel fuso del telefono, e un appuntamento preso
+  // dall'estero finiva in agenda all'ora sbagliata.
   const pad = (n) => String(n).padStart(2, '0');
-  const fmt = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+  const fmt = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
   const start = parseISO(appt.start);
   const end = appt.end ? parseISO(appt.end) : new Date(start.getTime() + apptDur(appt) * 60000);
   const summary = (apptServiceNames(appt) || 'Appuntamento') + (brandName ? ' — ' + brandName : '');

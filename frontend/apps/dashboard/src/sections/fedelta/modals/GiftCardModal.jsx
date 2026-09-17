@@ -33,13 +33,14 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [buyer, setBuyer] = useState(null);          // {id, full_name} | null
   const [recipient, setRecipient] = useState(null);  // {id, full_name} | null
   const [recipientName, setRecipientName] = useState('');
+  const [byName, setByName] = useState(false);   // destinataria come testo libero, senza scheda cliente
   const [paid, setPaid] = useState(true);
   const [paidMethod, setPaidMethod] = useState('card');
   const [scheduled, setScheduled] = useState(false);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
-  const canSave = (type === 'service' ? !!service : value > 0) && (recipient || recipientName.trim());
+  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient);
 
   const save = async () => {
     if (!canSave || saving) return;
@@ -128,24 +129,43 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         </React.Fragment>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        <div>
-          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Acquirente (chi paga)', 'Buyer (who pays)')}</div>
-          <ClientPicker client={buyer} onChange={setBuyer} placeholder={t('Cerca una cliente…', 'Search a client…')} t={t} />
+      {/* Acquirente e destinataria su righe separate: i due ClientPicker aprono un
+        * menu assoluto e affiancati in una griglia si sovrapponevano, con le
+        * colonne di altezza diversa. */}
+      <div style={{ marginBottom: 14 }}>
+        <div className="t-meta" style={{ marginBottom: 6 }}>{t('Acquirente (chi paga)', 'Buyer (who pays)')}</div>
+        <ClientPicker client={buyer} onChange={setBuyer} placeholder={t('Cerca una cliente…', 'Search a client…')} t={t} />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div className="t-meta" style={{ marginBottom: 6 }}>{t('Destinataria (chi riceve il credito)', 'Recipient (who gets the credit)')}</div>
+        {/* Il credito segue la SCHEDA cliente: solo così la destinataria lo vede
+          * nella sua app e compare in agenda quando prenota quel trattamento.
+          * Il nome scritto a mano resta possibile (regalo da consegnare), ma va
+          * detto che in quel caso vale solo il codice sulla card. */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          <button style={segBtn(!byName)} onClick={() => { setByName(false); setRecipientName(''); }}>{t('Una cliente', 'A client')}</button>
+          <button style={segBtn(byName)} onClick={() => { setByName(true); setRecipient(null); }}>{t('Solo un nome', 'Just a name')}</button>
         </div>
-        <div>
-          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Destinataria (chi riceve)', 'Recipient (who receives)')}</div>
-          {recipient ? (
-            <ClientPicker client={recipient} onChange={setRecipient} placeholder="" t={t} />
-          ) : (
-            <React.Fragment>
-              <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder={t('Nome destinataria', 'Recipient name')} style={inputCss} />
-              <div style={{ marginTop: 8 }}>
-                <ClientPicker client={null} onChange={(c) => { setRecipient(c); setRecipientName(''); }} placeholder={t('…o cerca una cliente', '…or search a client')} t={t} />
+        {byName ? (
+          <React.Fragment>
+            <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder={t('Nome di chi riceve', 'Name of the recipient')} style={inputCss} />
+            <div style={{ display: 'flex', gap: 9, marginTop: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+              <Icon name="alert" size={15} color="var(--warn)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.45 }}>
+                {t('Senza scheda cliente il credito non comparirà in nessuna app: vale il codice stampato sulla card, da usare in salone. Collega una cliente per farglielo trovare nel suo portafoglio e in agenda.',
+                   'Without a client profile the credit shows in no app: only the printed code counts, to be used in the salon. Link a client so she finds it in her wallet and in the agenda.')}
               </div>
-            </React.Fragment>
-          )}
-        </div>
+            </div>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <ClientPicker client={recipient} onChange={setRecipient} placeholder={t('Cerca o crea la cliente…', 'Search or create the client…')} t={t} />
+            <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
+              {t('Vedrà il credito nel suo portafoglio; se è un trattamento, comparirà accanto al servizio quando prenota.', 'She will see the credit in her wallet; if it is a treatment, it shows next to the service when she books.')}
+            </div>
+          </React.Fragment>
+        )}
       </div>
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamento', 'Payment')}</div>

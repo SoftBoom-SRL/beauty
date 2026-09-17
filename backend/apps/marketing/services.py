@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from django.apps import apps as django_apps
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -36,6 +37,7 @@ def create_gift_card(
     *,
     gift_service=None,
     buyer_client=None,
+    recipient_client=None,
     recipient_name="",
     paid=False,
     paid_method="",
@@ -56,6 +58,7 @@ def create_gift_card(
         balance=value,
         gift_service=gift_service,
         buyer_client=buyer_client,
+        recipient_client=recipient_client,
         recipient_name=recipient_name,
         payment_status=GiftCard.PaymentStatus.PAID if paid else GiftCard.PaymentStatus.UNPAID,
         paid_at=timezone.now() if paid else None,
@@ -105,6 +108,10 @@ def redeem_gift_card(salon, code, amount):
             card.status = GiftCard.Status.EXPIRED
             card.save(update_fields=["status"])
             error = HttpError(422, "Gift card scaduta")
+        elif card.payment_status != GiftCard.PaymentStatus.PAID:
+            # Le carte comprate dall'app nascono "da pagare": finché il salone
+            # non incassa, il saldo non è spendibile.
+            error = HttpError(422, "Gift card non ancora pagata: incassala prima di usarla")
         elif card.balance < amount:
             error = HttpError(422, f"Saldo gift card insufficiente (residuo €{card.balance})")
     if error is not None:
@@ -134,6 +141,88 @@ def redeem_gift_card(salon, code, amount):
 # ---- Fedeltà -----------------------------------------------------------------
 
 
+def _issue_reward(program, client):
+    """Emette il premio del programma. Ritorna None se non è emettibile.
+
+    Ogni tipo di premio offerto dall'interfaccia ha qui la sua emissione:
+    - buono € e sconto %: un Coupon, come prima;
+    - servizio omaggio: una gift card legata a quel servizio, del suo prezzo —
+      è il meccanismo che il banco sa già riscattare. Prima diventava un coupon
+      da 0 €, perché la maschera manda reward_value=0 per questo tipo: la
+      cliente raggiungeva la soglia, perdeva i punti e riceveva un buono che
+      non scontava niente;
+    - gift card: una carta del valore configurato.
+    """
+    salon = program.salon
+    reward_type = program.reward_type
+    value = Decimal(str(program.reward_value or 0))
+
+    if reward_type in (
+        LoyaltyProgram.RewardType.COUPON_AMOUNT,
+        LoyaltyProgram.RewardType.DISCOUNT_PCT,
+    ):
+        if value <= 0:
+            return None
+        kind = (
+            Coupon.Kind.PERCENT
+            if reward_type == LoyaltyProgram.RewardType.DISCOUNT_PCT
+            else Coupon.Kind.AMOUNT
+        )
+        coupon = Coupon.objects.create(
+            salon=salon,
+            client=client,
+            code=unique_code(Coupon, salon, 8),
+            kind=kind,
+            value=value,
+            origin=Coupon.Origin.LOYALTY,
+        )
+        suffix = "%" if kind == Coupon.Kind.PERCENT else "€"
+        return {
+            "label": f"coupon {coupon.code} ({value}{suffix})",
+            "event": {"coupon_id": coupon.id, "coupon_code": coupon.code},
+        }
+
+    if reward_type == LoyaltyProgram.RewardType.FREE_SERVICE:
+        service = program.reward_service
+        if service is None:
+            return None
+        card = create_gift_card(
+            salon,
+            Decimal(str(service.price)),
+            gift_service=service,
+            recipient_client=client,
+            recipient_name=client.full_name,
+            paid=True,
+            paid_method="loyalty",
+        )
+        return {
+            "label": f"servizio omaggio {service.name_it} (carta {card.code})",
+            "event": {
+                "gift_card_id": card.id,
+                "gift_card_code": card.code,
+                "service_id": service.id,
+            },
+        }
+
+    if reward_type == LoyaltyProgram.RewardType.GIFT_CARD:
+        if value <= 0:
+            return None
+        card = create_gift_card(
+            salon,
+            value,
+            recipient_client=client,
+            recipient_name=client.full_name,
+            paid=True,
+            paid_method="loyalty",
+        )
+        return {
+            "label": f"gift card {card.code} (€{value})",
+            "event": {"gift_card_id": card.id, "gift_card_code": card.code},
+        }
+
+    return None
+
+
 def accrue_loyalty(sale):
     """Accredita punti per la vendita su ogni programma attivo; alla soglia genera
     un Coupon origin=loyalty ed emette `loyalty.reward`. No-op se la vendita è anonima."""
@@ -149,7 +238,14 @@ def accrue_loyalty(sale):
             account = LoyaltyAccount.objects.create(program=program, client=client)
 
         if program.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-            earned = math.floor(Decimal(sale.total) * program.earn_ratio)
+            # Le gift card vendute non danno punti: li darà la spesa fatta con
+            # la carta. Contarle qui significava pagare due volte lo stesso
+            # denaro, una all'acquisto e una al riscatto.
+            gift_card_sold = sale.lines.filter(line_type="gift_card").aggregate(
+                total=Sum("amount")
+            )["total"] or Decimal("0")
+            base = Decimal(sale.total) - Decimal(gift_card_sold)
+            earned = math.floor(base * program.earn_ratio) if base > 0 else 0
         elif program.earn_metric == LoyaltyProgram.EarnMetric.PER_VISIT:
             earned = math.floor(program.earn_ratio)
         else:  # per_service
@@ -160,20 +256,19 @@ def accrue_loyalty(sale):
 
         account.points += earned
         while program.threshold > 0 and account.points >= program.threshold:
+            reward = _issue_reward(program, client)
+            if reward is None:
+                # Premio non emettibile (servizio omaggio senza servizio
+                # scelto, valore a zero): i punti NON si consumano, altrimenti
+                # la cliente pagherebbe la soglia per niente.
+                log_activity(
+                    salon,
+                    "loyalty.reward_misconfigured",
+                    f"Premio fedeltà «{program.name}» non emesso: configurazione incompleta",
+                    payload={"client_id": client.id, "program_id": program.id},
+                )
+                break
             account.points -= program.threshold
-            kind = (
-                Coupon.Kind.PERCENT
-                if program.reward_type == LoyaltyProgram.RewardType.DISCOUNT_PCT
-                else Coupon.Kind.AMOUNT
-            )
-            coupon = Coupon.objects.create(
-                salon=salon,
-                client=client,
-                code=unique_code(Coupon, salon, 8),
-                kind=kind,
-                value=program.reward_value,
-                origin=Coupon.Origin.LOYALTY,
-            )
             emit_event(
                 salon,
                 "loyalty.reward",
@@ -184,19 +279,18 @@ def accrue_loyalty(sale):
                     "lang": client.lang,
                     "program_id": program.id,
                     "program": program.name,
-                    "coupon_id": coupon.id,
-                    "coupon_code": coupon.code,
+                    **reward["event"],
                 },
             )
             log_activity(
                 salon,
                 "loyalty.reward",
-                f"Premio fedeltà «{program.name}» per {client.full_name}: coupon {coupon.code}",
+                f"Premio fedeltà «{program.name}» per {client.full_name}: {reward['label']}",
                 payload={
                     "client_id": client.id,
                     "program_id": program.id,
-                    "coupon_id": coupon.id,
                     "sale_id": sale.id,
+                    **reward["event"],
                 },
             )
         account.save(update_fields=["points"])

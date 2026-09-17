@@ -42,7 +42,9 @@ export const REWARD_TYPES = [
   { k: 'coupon_amount', it: 'Buono €', en: '€ coupon', suffix: '€' },
   { k: 'discount_pct', it: 'Sconto %', en: '% discount', suffix: '%' },
   { k: 'free_service', it: 'Servizio omaggio', en: 'Free service', suffix: '' },
-  { k: 'free_product', it: 'Prodotto omaggio', en: 'Free product', suffix: '' },
+  // «Prodotto omaggio» non c'è: non esiste un buono legato a un articolo di
+  // magazzino, e il banco non saprebbe riscattarlo. Offrirlo qui faceva
+  // promettere alla cliente un premio che nessuna cassa poteva onorare.
   { k: 'gift_card', it: 'Gift card', en: 'Gift card', suffix: '€' },
 ];
 

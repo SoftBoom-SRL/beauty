@@ -1,18 +1,27 @@
-// RightRail — cash-up (sales/today-summary), AI opportunities placeholder, waitlist top-3
+// RightRail — cash-up (sales/today-summary), «da richiamare» (slot liberati per
+// caparra non pagata), AI opportunities placeholder, waitlist top-3
 import React from 'react';
-import { Avatar, Icon } from '@youty/shared';
+import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { fmtMoney, initialsOf, prefLabel } from './lib.js';
+import { fmtMoney, initialsOf, prefLabel, firstName } from './lib.js';
 
-export default function RightRail({ summary, waitlist, onOpenLog, onOpenWaitlist, onOpenOpportunity }) {
-  const { t, lang, showRevenue } = useDash();
+export default function RightRail({ summary, waitlist, released, onRestore, onRebook, onOpenAppt, onOpenLog, onOpenWaitlist, onOpenOpportunity }) {
+  const { t, lang, showRevenue, hasScope } = useDash();
   const active = (waitlist || []).filter((w) => w.status === 'active' || w.status === 'contacted');
   return (
     <React.Fragment>
       {showRevenue && <DailyCashUp t={t} lang={lang} summary={summary} onOpenLog={onOpenLog} />}
 
+      {/* slot liberati automaticamente: la cliente non ha pagato la caparra in tempo.
+          Resta la traccia perché l'operatrice richiami e decida. */}
+      {(released || []).length > 0 && (
+        <div style={{ marginTop: showRevenue ? 20 : 0, paddingTop: showRevenue ? 20 : 0, borderTop: showRevenue ? '4px solid var(--surface-2)' : 'none' }}>
+          <ReleasedRail t={t} lang={lang} released={released} canWrite={hasScope('agenda')} onRestore={onRestore} onRebook={onRebook} onOpenAppt={onOpenAppt} />
+        </div>
+      )}
+
       {/* opportunità — AI engine arrives in phase 2, static placeholder */}
-      <div style={{ marginTop: showRevenue ? 20 : 0, paddingTop: showRevenue ? 20 : 0, borderTop: showRevenue ? '4px solid var(--surface-2)' : 'none' }}>
+      <div style={{ marginTop: showRevenue || (released || []).length ? 20 : 0, paddingTop: showRevenue || (released || []).length ? 20 : 0, borderTop: showRevenue || (released || []).length ? '4px solid var(--surface-2)' : 'none' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
           <div className="t-meta">{t('Opportunità di oggi', 'Today’s opportunities')}</div>
         </div>
@@ -75,9 +84,75 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
             <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>
               {t('Appuntamenti', 'Appointments')} {fmtMoney(checkout, lang)} · {t('Banco', 'Counter')} {fmtMoney(pos, lang)}
             </div>
+            {Number(summary.gift_card_redeemed || 0) > 0 && (
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 3 }} title={t('La parte saldata con gift card era già stata incassata alla vendita della carta', 'The part settled with gift cards was already collected when the card was sold')}>
+                {t('Incassato oggi', 'Cash in today')} <b style={{ color: '#fff' }}>{fmtMoney(summary.cash_in, lang)}</b> · {t('gift card usate', 'gift cards used')} {fmtMoney(summary.gift_card_redeemed, lang)}
+              </div>
+            )}
           </React.Fragment>
         )}
       </button>
+    </div>
+  );
+}
+
+/* ---- da richiamare: appuntamenti liberati per caparra non pagata ---- */
+function ReleasedRail({ t, lang, released, canWrite, onRestore, onRebook, onOpenAppt }) {
+  const [open, setOpen] = React.useState(true);
+  const list = open ? released : released.slice(0, 2);
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <Icon name="phone" size={15} color="var(--warn)" />
+        <div className="t-meta" style={{ flex: 1 }}>{t('Da richiamare · caparra non pagata', 'To call back · unpaid deposit')}</div>
+        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>{released.length}</span>
+      </div>
+      <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 10, lineHeight: 1.4 }}>
+        {t('Lo slot è stato liberato allo scadere del tempo per pagare. La cliente resta qui finché non decidi: una telefonata di cortesia, il ripristino o una nuova prenotazione.', 'The slot was freed when the payment window ran out. The client stays here until you decide: a courtesy call, a restore or a new booking.')}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {list.map((a) => {
+          const future = new Date(a.start).getTime() > Date.now();
+          return (
+            <div key={a.id} className="dk-card" style={{ padding: '10px 11px', boxShadow: 'none', border: '1px solid var(--hair)', borderLeft: '3px solid var(--warn)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <Avatar initials={initialsOf(a.client?.full_name)} size={30} color="var(--warn-tint)" />
+                <button onClick={() => onOpenAppt && onOpenAppt(a)} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.client?.full_name}</div>
+                  <div className="t-sm tabnum" style={{ color: 'var(--muted)', fontSize: 11.5 }}>
+                    {fmtDateIt(String(a.start).slice(0, 10), { weekday: false })} · {timeLabel(minutesOfDay(a.start))} · {(a.items || []).map((i) => i.service_name).join(' + ')}
+                  </div>
+                </button>
+                {a.client?.phone && (
+                  <a href={'tel:' + a.client.phone} className="dk-iconbtn" title={t('Chiama', 'Call') + ' ' + a.client.phone} style={{ width: 30, height: 30, borderRadius: 9, display: 'grid', placeItems: 'center' }}>
+                    <Icon name="phone" size={14} />
+                  </a>
+                )}
+              </div>
+              <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 700, marginTop: 6, fontSize: 11.5 }}>
+                {t('Caparra', 'Deposit')} {fmtMoney(a.deposit_amount, lang)} {t('non versata', 'not paid')}
+              </div>
+              {canWrite && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  {future && (
+                    <button className="dk-btn dk-btn--soft" style={{ height: 30, fontSize: 12, flex: 1, padding: '0 8px' }} onClick={() => onRestore && onRestore(a)} title={t('Rimetti in agenda nello stesso orario, se ancora libero', 'Put it back at the same time, if still free')}>
+                      <Icon name="refresh" size={13} />{t('Ripristina', 'Restore')}
+                    </button>
+                  )}
+                  <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12, flex: 1, padding: '0 8px' }} onClick={() => onRebook && onRebook(a)}>
+                    <Icon name="calendar" size={13} />{t('Riprenota', 'Rebook')}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {released.length > 2 && (
+          <button onClick={() => setOpen((o) => !o)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none', textAlign: 'left', padding: '2px 0' }}>
+            {open ? t('Mostra meno', 'Show less') : t(`Mostra tutte (${released.length})`, `Show all (${released.length})`)}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

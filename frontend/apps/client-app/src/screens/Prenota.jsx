@@ -4,12 +4,12 @@
 //        (GET /api/staff/public/operators) → 2 review
 //        → POST /api/agenda/client/appointments → success (deposit messaging).
 import React from 'react';
-import { ApiError, Icon, api, clientAuth, fmtEur, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, api, clientAuth, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, DetailRow, StickyCta, usePublicServices, usePublicOperators, svcLangName, catIcon,
-  nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast,
+  ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
+  nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
@@ -42,9 +42,27 @@ export default function Prenota() {
   const [ident, setIdent] = React.useState({ first_name: '', last_name: '', phone: '' });
   const [otp, setOtp] = React.useState('');
   const [otpErr, setOtpErr] = React.useState(null);
-  const days = React.useMemo(() => nextDays(14), []);
+  const todayKey = useTodayKey();
+  // ricalcolata quando cambia il giorno: vedi useTodayKey
+  const days = React.useMemo(() => nextDays(14), [todayKey]);
 
   React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Gift card «a trattamento» già pagate: il servizio regalato si prenota senza
+   * pagare nulla, e va detto prima di scegliere, non alla cassa. */
+  const [giftCards, setGiftCards] = React.useState([]);
+  React.useEffect(() => {
+    if (!session) { setGiftCards([]); return undefined; }
+    let alive = true;
+    api.get('/api/marketing/client/wallet')
+      // `received`: la carta che ho COMPRATO per un'altra persona non è un mio
+      // regalo — prometterebbe un prezzo sbagliato a chi prenota.
+      .then((w) => { if (alive) setGiftCards((w.gift_cards || []).filter((g) => g.gift_service_id && g.payment_status === 'paid' && g.received)); })
+      .catch(() => { if (alive) setGiftCards([]); });
+    return () => { alive = false; };
+  }, [session]);
+  const giftFor = (serviceId) => giftCards.find((g) => g.gift_service_id === serviceId) || null;
+  const giftedSelected = serviceIds.map(giftFor).filter(Boolean);
 
   const allSvcs = React.useMemo(
     () => (cats || []).flatMap((c) => c.services.map((s) => ({ ...s, catName: c.name_it }))),
@@ -66,8 +84,13 @@ export default function Prenota() {
   }, [operators, serviceIds]);
   const selectedOperator = eligibleOperators.find((op) => op.id === operatorId) || null;
 
-  /* ---- availability fetch (step 1) ---- */
+  /* ---- availability fetch (step 1) ----
+   * Ogni richiesta ha un numero di sequenza: se l'utente cambia giorno prima
+   * che la risposta arrivi, la risposta superata viene ignorata (altrimenti
+   * con due risposte fuori ordine comparivano gli orari del giorno precedente). */
+  const slotsReq = React.useRef(0);
   const loadSlots = React.useCallback(async (dIdx) => {
+    const seq = ++slotsReq.current;
     setSlots(null);
     setSlot(null);
     try {
@@ -75,8 +98,10 @@ export default function Prenota() {
         params: { salon: SALON_SLUG, date: toDateStr(days[dIdx]), items },
         auth: false,
       });
+      if (seq !== slotsReq.current) return;
       setSlots(list);
     } catch (err) {
+      if (seq !== slotsReq.current) return;
       setSlots([]);
       errToast(err, fireToast, t);
     }
@@ -108,7 +133,10 @@ export default function Prenota() {
   const sendBookingOtp = async () => {
     setOtpErr(null);
     const phone = ident.phone.trim();
-    if (!ident.first_name.trim() || !ident.last_name.trim() || !phone) return;
+    if (!ident.first_name.trim() || !ident.last_name.trim() || !isPlausiblePhone(phone)) {
+      setOtpErr(t('Controlla il numero di telefono', 'Check the phone number'));
+      return;
+    }
     setBooking(true);
     try {
       try {
@@ -135,9 +163,11 @@ export default function Prenota() {
     setOtpErr(null);
     if (otp.length !== 6 || booking) return;
     setBooking(true);
-    // 1) verifica OTP → crea la sessione
+    // 1) verifica OTP → crea la sessione. Il codice è monouso: se la sessione
+    // c'è già (prenotazione fallita al primo tentativo) non si riverifica,
+    // altrimenti il secondo tocco direbbe «codice non valido».
     try {
-      await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
+      if (!session) await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
       else if (err instanceof ApiError && err.status === 429) setOtpErr(t('Troppi tentativi. Riprova tra qualche minuto.', 'Too many attempts. Try again in a few minutes.'));
@@ -194,12 +224,16 @@ export default function Prenota() {
             `Appointment confirmed for ${fmtDayMed(booked.start, lang)} at ${timeLabel(minutesOfDay(booked.start))}. We've sent your confirmation on WhatsApp 💫`)}
         </div>
         {depRequired && (
-          <div style={{ display: 'flex', gap: 12, padding: 15, background: 'var(--brand-tint)', borderRadius: 'var(--r-md)', marginTop: 18, textAlign: 'left', maxWidth: 320 }}>
-            <Icon name="coupon" size={20} color="var(--brand-ink)" />
-            <div style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-              {t(`Ti chiederemo la caparra di ${fmtEur(dep, lang)} per confermare l'appuntamento (scalata dal totale).`,
-                `We'll ask for a ${fmtEur(dep, lang)} deposit to confirm your appointment (deducted from the total).`)}
+          <div style={{ maxWidth: 340, width: '100%', textAlign: 'left' }}>
+            <div style={{ display: 'flex', gap: 12, padding: 15, background: 'var(--brand-tint)', borderRadius: 'var(--r-md)', marginTop: 18 }}>
+              <Icon name="coupon" size={20} color="var(--brand-ink)" />
+              <div style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                {t(`Per confermare serve una caparra di ${fmtEur(dep, lang)}, che verrà scalata dal totale.`,
+                  `To confirm we need a ${fmtEur(dep, lang)} deposit, which is deducted from the total.`)}
+              </div>
             </div>
+            {/* pagamento subito: il link è già pronto se il salone incassa online */}
+            <DepositDue appt={booked} t={t} lang={lang} fireToast={fireToast} />
           </div>
         )}
         {booked.deposit_status === 'paid' && dep > 0 && (
@@ -292,8 +326,20 @@ export default function Prenota() {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{svcLangName(sv, lang)}</div>
+                        {/* descrizione dal listino: due righe, poi taglia */}
+                        {(lang === 'en' && sv.description_en ? sv.description_en : sv.description_it) && (
+                          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                            {lang === 'en' && sv.description_en ? sv.description_en : sv.description_it}
+                          </div>
+                        )}
                         <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(sv.duration_min, lang)}</span>
+                          {giftFor(sv.id) && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
+                              <Icon name="gift" size={12} color="var(--brand-ink)" />
+                              {giftFor(sv.id).buyer_name ? t(`Regalo di ${giftFor(sv.id).buyer_name}`, `A gift from ${giftFor(sv.id).buyer_name}`) : t('Hai un regalo', 'You have a gift')}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <span className="t-num" style={{ fontSize: 17, color: 'var(--brand-ink)', flexShrink: 0 }}>{fmtEur(Number(sv.price), lang)}</span>
@@ -437,8 +483,7 @@ export default function Prenota() {
             value={ident.first_name} onChange={(e) => setIdent((v) => ({ ...v, first_name: e.target.value }))} />
           <input className="ca-input" placeholder={t('Cognome', 'Last name')} autoComplete="family-name"
             value={ident.last_name} onChange={(e) => setIdent((v) => ({ ...v, last_name: e.target.value }))} />
-          <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
-            value={ident.phone} onChange={(e) => setIdent((v) => ({ ...v, phone: e.target.value }))} />
+          <PhoneInput variant="client" lang={lang} value={ident.phone} onChange={(v) => setIdent((s) => ({ ...s, phone: v }))} ariaLabel={t('Numero di telefono', 'Phone number')} />
         </div>
         <div style={{ flex: 1 }} />
         <StickyCta>
@@ -513,6 +558,20 @@ export default function Prenota() {
             <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>
             <span className="t-num" style={{ fontSize: 22, color: 'var(--brand-ink)' }}>{fmtEur(price, lang)}</span>
           </div>
+          {/* trattamenti già regalati: si vedono qui, non alla cassa */}
+          {giftedSelected.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)' }}>
+              <Icon name="gift" size={17} color="var(--brand-ink)" />
+              <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--ink-2)' }}>
+                <b style={{ color: 'var(--brand-ink)' }}>{t('Coperto da gift card', 'Covered by a gift card')}</b>
+                {': '}
+                {giftedSelected.map((g) => g.gift_service_name).join(', ')}
+                {giftedSelected[0].buyer_name ? t(` · regalo di ${giftedSelected[0].buyer_name}`, ` · a gift from ${giftedSelected[0].buyer_name}`) : ''}
+                {'. '}
+                {t('In salone non pagherai questa parte.', 'You will not pay this part in the salon.')}
+              </div>
+            </div>
+          )}
         </div>
         <div className="t-sm" style={{ color: 'var(--muted)', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
           <Icon name="check" size={14} color="var(--ok)" stroke={2.4} />

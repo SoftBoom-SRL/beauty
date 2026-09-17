@@ -322,7 +322,8 @@ class PublicHookTests(TestCase):
     def test_lead_lands_in_the_address_book(self):
         self._with_privacy_policy()
         self.assertEqual(self._post().status_code, 200)
-        client = Client.objects.get(salon=self.salon, phone="3331234567")
+        # il numero viene salvato in E.164: «3331234567» e «+39 333 1234567» sono lo stesso cliente
+        client = Client.objects.get(salon=self.salon, phone="+393331234567")
         self.assertEqual(client.origin, "hook")
         self.assertTrue(client.consents["privacy"])
         self.assertTrue(client.consents["privacy_at"])  # senza data non è dimostrabile
@@ -516,6 +517,54 @@ class NoteAttachmentsApiTests(TestCase):
         notes = self.client.get(f"/api/clients/{self.client_obj.id}/notes", **self.auth).json()
         self.assertEqual(len(notes[0]["attachments"]), 1)
 
+    def test_private_attachment_requires_signed_url(self):
+        content = b"\x89PNG\r\n\x1a\n" + b"7" * 64
+        png = SimpleUploadedFile("riservata.png", content, content_type="image/png")
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "Riservata", "visibility": "private", "files": [png]},
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        url = res.json()["attachments"][0]["url"]
+        path, _, query = url.partition("?")
+        self.assertTrue(path.startswith("/media/client_notes/"))
+        self.assertTrue(query.startswith("t="))
+        # chi conosce solo il percorso non scarica nulla
+        self.assertEqual(self.client.get(path).status_code, 403)
+        # token manomesso: negato
+        self.assertEqual(self.client.get(f"{path}?t={query[2:-3]}xyz").status_code, 403)
+        # URL firmato restituito dall'API: il file
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(b"".join(res.streaming_content), content)
+
+    def test_private_attachment_cannot_be_reached_with_a_disguised_path(self):
+        """Il controllo della firma non si aggira riscrivendo il percorso.
+
+        `django.views.static.serve` normalizza il percorso dopo di noi: senza
+        normalizzare prima, `/media/./client_notes/…` e `/media/x/../client_notes/…`
+        (anche codificati) scaricavano il file senza token.
+        """
+        content = b"\x89PNG\r\n\x1a\n" + b"9" * 64
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "Riservata", "visibility": "private",
+                  "files": [SimpleUploadedFile("nascosta.png", content, content_type="image/png")]},
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        path = res.json()["attachments"][0]["url"].split("?")[0]   # /media/client_notes/…
+        rel = path[len("/media/"):]
+        for disguised in (
+            f"/media/./{rel}",
+            f"/media/pub/../{rel}",
+            f"/media/a/%2e%2e/{rel}",
+            f"/media/%2e/{rel}",
+            f"/media/client_notes/../{rel}",
+        ):
+            self.assertEqual(self.client.get(disguised).status_code, 403, disguised)
+
     def test_unsupported_type_rejected(self):
         zipf = SimpleUploadedFile("x.zip", b"PK\x03\x04", content_type="application/zip")
         res = self.client.post(
@@ -577,3 +626,120 @@ class ClientHistoryApiTests(TestCase):
         foreign = Client.objects.create(salon=other, first_name="X", phone="+39999")
         res = self.client.get(f"/api/clients/{foreign.id}/history", **self.auth)
         self.assertEqual(res.status_code, 404)
+
+
+class PhoneNormalizationTests(ClientsTestCase):
+    """Lo stesso numero scritto in modi diversi è lo stesso cliente."""
+
+    def test_same_number_written_differently_is_one_client(self):
+        created = create_client(
+            self.request, ClientIn(first_name="Sofia", last_name="Ricci", phone="+39 333 1234567")
+        )
+        self.assertEqual(created.phone, "+393331234567")
+        with self.assertRaises(HttpError) as caught:
+            create_client(self.request, ClientIn(first_name="Sofia", last_name="Bis", phone="3331234567"))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_lookup_finds_legacy_spellings(self):
+        from common.phone import find_client_by_phone
+
+        legacy = self.make_client(phone="+39 333 987 6543")  # salvato prima della normalizzazione
+        self.assertEqual(find_client_by_phone(self.salon, "3339876543"), legacy)
+        self.assertEqual(find_client_by_phone(self.salon, "0039 333 9876543"), legacy)
+        self.assertIsNone(find_client_by_phone(self.salon, "3330000000"))
+        other = Salon.objects.create(name="Altro", slug="altro")
+        self.assertIsNone(find_client_by_phone(other, "3339876543"))  # mai fuori dal salone
+
+
+class ImportRobustnessTests(ClientsTestCase):
+    """L'import non deve fermarsi a metà lasciando dati scritti e conteggi falsi."""
+
+    def test_a_row_the_database_refuses_does_not_stop_the_import(self):
+        # Due righe con lo stesso telefono: la seconda viola il vincolo di
+        # unicità (salone, telefono). Prima l'eccezione usciva da import_rows e
+        # l'utente vedeva un errore 500 con metà file già importato.
+        rows = [
+            {"first_name": "Prima", "phone": "+393330001111", "email": ""},
+            {"first_name": "Doppia", "phone": "+39 333 000 1111", "email": ""},
+            {"first_name": "Terza", "phone": "+393330002222", "email": ""},
+        ]
+        result = import_rows(self.salon, rows, update_existing=False)
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(
+            sorted(Client.objects.filter(salon=self.salon).values_list("first_name", flat=True)),
+            ["Prima", "Terza"],
+        )
+
+    def test_counters_match_what_was_actually_written(self):
+        rows = [{"first_name": "Solo", "phone": "+393330003333", "email": ""}]
+        result = import_rows(self.salon, rows)
+        written = Client.objects.filter(salon=self.salon).count()
+        self.assertEqual(result["created"] + result["updated"], written)
+
+
+class SensitiveReadsNeedTheClientsScopeTests(TestCase):
+    """Storico, note e schede tecniche sono i dati più delicati del gestionale:
+    leggerli richiede il permesso «clienti», non il solo accesso allo staff."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        no_scope = StaffContext(
+            user=None, salon=self.salon, membership=None, scopes=set(), is_owner=False
+        )
+        self.request = SimpleNamespace(auth=no_scope)
+
+    def test_history_notes_and_sheets_are_refused(self):
+        from .api import client_history
+
+        for view in (client_history, list_notes, list_sheets):
+            with self.assertRaises(HttpError) as caught:
+                view(self.request, self.client_obj.id)
+            self.assertEqual(caught.exception.status_code, 403, view.__name__)
+
+    def test_the_owner_still_reads_everything(self):
+        from .api import client_history
+
+        owner = SimpleNamespace(
+            auth=StaffContext(
+                user=None, salon=self.salon, membership=None, scopes=set(), is_owner=True
+            )
+        )
+        self.assertEqual(list_notes(owner, self.client_obj.id), [])
+        self.assertEqual(list(list_sheets(owner, self.client_obj.id)), [])
+        self.assertIn("entries", client_history(owner, self.client_obj.id))
+
+
+class PhoneLookupTests(ClientsTestCase):
+    """La ricerca per numero usa una colonna indicizzata, non una scansione."""
+
+    def test_a_client_is_found_however_the_number_was_written(self):
+        from common.phone import find_client_by_phone
+
+        client = self.make_client(phone="+393331234567")
+        for written in ("+393331234567", "333 123 4567", "00393331234567", "3331234567"):
+            self.assertEqual(find_client_by_phone(self.salon, written), client, written)
+
+    def test_the_key_is_kept_in_sync_when_the_number_changes(self):
+        client = self.make_client(phone="+393331234567")
+        self.assertEqual(client.phone_key, "393331234567")
+        client.phone = "+447911123456"
+        client.save(update_fields=["phone"])
+        client.refresh_from_db()
+        self.assertEqual(client.phone_key, "447911123456")
+
+    def test_the_search_does_not_read_the_whole_address_book(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from common.phone import find_client_by_phone
+
+        for n in range(30):
+            self.make_client(phone=f"+39333100{n:04d}", first_name=f"C{n}")
+        target = self.make_client(phone="+393339999999", first_name="Target")
+        with CaptureQueriesContext(connection) as queries:
+            found = find_client_by_phone(self.salon, "333 999 9999")
+        self.assertEqual(found, target)
+        self.assertLessEqual(len(queries), 3, [q["sql"] for q in queries])

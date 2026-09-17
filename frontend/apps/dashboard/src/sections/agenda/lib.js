@@ -1,5 +1,5 @@
 // lib.js — agenda section helpers (grid math, ISO building, waitlist ranking)
-import { ApiError, fmtEur, minutesOfDay, parseISO, timeLabel, toDateStr } from '@youty/shared';
+import { ApiError, fmtEur, isoAtMin, minutesOfDay, parseISO, timeLabel, toDateStr } from '@youty/shared';
 
 export const DK_START = 8 * 60;   // grid 08:00
 export const DK_END = 20 * 60;    // grid 20:00
@@ -55,16 +55,11 @@ export function itemBlocks(appt) {
   });
 }
 
-/** "YYYY-MM-DD" + minutes-of-day → local ISO8601 with offset ("2026-07-06T10:30:00+02:00") */
-export function isoAtMin(dateStr, minutes) {
-  const d = parseISO(dateStr);
-  d.setHours(0, minutes, 0, 0);
-  const pad = (n) => String(n).padStart(2, '0');
-  const off = -d.getTimezoneOffset();
-  const sign = off >= 0 ? '+' : '-';
-  const abs = Math.abs(off);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
-}
+/** "YYYY-MM-DD" + minuti → ISO8601 dell'istante, nel fuso del SALONE.
+ *  Riesportato da @youty/shared: costruirlo con lo scarto del dispositivo
+ *  faceva creare appuntamenti spostati di ore da una postazione su un altro
+ *  fuso — si sceglievano le 10:00 e ne arrivavano al server altre. */
+export { isoAtMin };
 
 /** Monday (Date) of the week containing the given date/ISO string */
 export function mondayOf(date) {
@@ -221,7 +216,9 @@ export function cancelSteps(appt, late, matchCount, t, lang) {
   } else if (late) {
     dep = { n: 2, title: t('Caparra trattenuta', 'Deposit forfeited'), detail: _depEur(appt, lang), tone: 'danger' };
   } else {
-    dep = { n: 2, title: t('Caparra rimborsata', 'Deposit refunded'), detail: _depEur(appt, lang), tone: 'ok' };
+    // Il rimborso avviene su Stripe se la caparra è stata pagata online; altrimenti
+    // resta «da rimborsare» finché lo staff non lo conferma dal dettaglio.
+    dep = { n: 2, title: t('Caparra da rimborsare', 'Deposit to refund'), detail: _depEur(appt, lang), tone: 'default' };
   }
   return [
     { n: 1, title: t('Cancellazione confermata', 'Cancellation confirmed'), tone: 'danger' },
@@ -239,14 +236,20 @@ export function cancelSteps(appt, late, matchCount, t, lang) {
  *
  * row      : { operator, windows, appointments, pauses }   (una riga del giorno)
  * startMin : inizio richiesto (minuti da mezzanotte), durMin: durata totale
- * opts     : { excludeApptId, nowMin (solo se la data è oggi), t }
+ * opts     : { excludeApptId, nowMin (solo se la data è oggi), t, rows }
+ *
+ * `rows` = tutte le righe del giorno. Serve perché un appuntamento è elencato
+ * nella riga dell'operatrice PRINCIPALE, ma i suoi servizi possono essere
+ * eseguiti da altre: senza guardare anche le altre righe, un orario in cui
+ * l'operatrice sta lavorando dentro la visita di una collega risultava
+ * «Disponibile», e il server rispondeva 409 dopo il clic.
  *
  * Ritorna { ok, code, label, detail } con code ∈
  *   ok | past | off | closed | pause | busy | soak
  * `soak` è ok=true con avviso: sovrapposizione alla posa altrui (ammessa a mano).
  */
 export function explainSlot(row, startMin, durMin, opts = {}) {
-  const { excludeApptId = null, excludePauseId = null, nowMin = null, t = (it) => it } = opts;
+  const { excludeApptId = null, excludePauseId = null, nowMin = null, t = (it) => it, rows = null } = opts;
   const endMin = startMin + Math.max(durMin || 0, 1);
   const win = (row?.windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const winLabel = win.map(([a, b]) => `${timeLabel(a)}–${timeLabel(b)}`).join(' · ');
@@ -277,7 +280,18 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
     }
   }
   let soakHit = null;
-  for (const a of row.appointments || []) {
+  // Gli appuntamenti di TUTTE le righe, non solo di questa: un servizio di
+  // questa operatrice può vivere dentro la visita di una collega.
+  const seen = new Set();
+  const candidates = [];
+  for (const source of (rows && rows.length ? rows : [row])) {
+    for (const a of source?.appointments || []) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      candidates.push(a);
+    }
+  }
+  for (const a of candidates) {
     if (excludeApptId != null && a.id === excludeApptId) continue;
     if (a.status === 'cancelled' || a.status === 'no_show') continue;
     for (const b of itemBlocks(a)) {
@@ -310,4 +324,43 @@ export function nextFreeSlots(row, fromMin, durMin, step, n = 4, opts = {}) {
     if (explainSlot(row, m, durMin, opts).ok) out.push(m);
   }
   return out;
+}
+
+/* ---- Righe orarie delle griglie (vista giorno e settimana) -------------------
+ * Il titolare vuole leggere l'ora «a colpo d'occhio»: ora piena marcata,
+ * mezz'ora tratteggiata più chiara, quarti appena percettibili e SOLO se il
+ * passo dell'agenda è 15' (con passo 30/60 sarebbero rumore). Le righe vanno
+ * sempre sotto i blocchi (z-index basso) e non intercettano il puntatore, così
+ * non interferiscono con drag e click sugli spazi vuoti. */
+export const GRID_LINE_STYLE = {
+  hour: { height: 1, background: 'color-mix(in srgb, var(--ink) 14%, transparent)' },
+  half: { height: 0, borderTop: '1px dashed color-mix(in srgb, var(--ink) 10%, transparent)' },
+  quarter: { height: 1, background: 'color-mix(in srgb, var(--ink) 4%, transparent)' },
+};
+
+/** Segni orari da disegnare: [{ m, kind }] con kind ∈ hour | half | quarter. */
+export function gridMarks(step) {
+  const out = [];
+  for (let m = DK_START; m <= DK_END; m += 15) {
+    if (m % 60 === 0) out.push({ m, kind: 'hour' });
+    else if (m % 30 === 0) out.push({ m, kind: 'half' });
+    else if (step === 15) out.push({ m, kind: 'quarter' });
+  }
+  return out;
+}
+
+/** Segmenti della striscia colorata di un blocco settimanale: uno per operatrice,
+ *  in proporzione alla durata (attiva + posa), fondendo i consecutivi della stessa
+ *  operatrice. Senza `items` (payload vecchio) → un solo segmento dell'operatrice. */
+export function opSegments(a) {
+  const items = (a.items || []).filter((it) => it && it.operator_id != null);
+  if (!items.length) return [{ opId: a.operator_id, w: 1 }];
+  const segs = [];
+  items.forEach((it) => {
+    const w = Math.max(1, (it.duration_min || 0) + (it.soak_min || 0));
+    const last = segs[segs.length - 1];
+    if (last && last.opId === it.operator_id) last.w += w;
+    else segs.push({ opId: it.operator_id, w });
+  });
+  return segs;
 }

@@ -69,7 +69,10 @@ def client_facts(client: Client) -> dict:
 import datetime as dt
 import re
 
+from django.db import DataError, IntegrityError, transaction
 from ninja.errors import HttpError
+
+from common.phone import canonical_phone, phone_key as _phone_key
 
 
 # ---- Compleanno: con o senza anno ----------------------------------------------
@@ -113,17 +116,12 @@ def normalize_gender(value: str) -> str:
 
 
 def phone_key(phone: str) -> str:
-    """Chiave di confronto fra numeri scritti in modi diversi.
+    """Chiave di confronto fra numeri scritti in modi diversi (vedi common.phone).
 
-    Solo cifre; prefisso internazionale italiano (+39 / 0039) rimosso, così
-    "+39 348 221 0094", "3482210094" e "0039348-2210094" coincidono.
+    "+39 348 221 0094", "3482210094" e "0039348-2210094" coincidono: è la stessa
+    normalizzazione usata da login OTP, registrazione, form pubblico e sync Yourang.
     """
-    digits = re.sub(r"\D", "", phone or "")
-    if digits.startswith("0039"):
-        digits = digits[4:]
-    elif digits.startswith("39") and len(digits) > 10:
-        digits = digits[2:]
-    return digits
+    return _phone_key(phone)
 
 
 def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=None) -> dict:
@@ -135,6 +133,12 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
     update_existing=False i clienti già presenti non vengono toccati.
     Campi facoltativi: gender, birthday ('YYYY-MM-DD' | '--MM-DD'), origin,
     lang, note (nota privata), categories (nomi etichetta, create se mancanti).
+
+    Ogni riga è scritta dentro il proprio savepoint: se il database la rifiuta
+    (per esempio due righe dello stesso file con lo stesso telefono) viene
+    annullata da sola e finisce fra gli errori. Senza, il primo rifiuto
+    interrompeva l'import a metà lasciando scritto quello che era già passato e
+    un conteggio che non corrispondeva a niente.
     """
     from .models import ClientCategory, ClientNote
 
@@ -156,79 +160,95 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
         return category_cache[key]
 
     for index, row in enumerate(rows):
-        phone = (row.get("phone") or "").strip()
-        email = (row.get("email") or "").strip()
-        first_name = (row.get("first_name") or "").strip()
-        last_name = (row.get("last_name") or "").strip()
+        # savepoint per riga: una riga rifiutata dal database non porta
+        # via con sé quelle già importate. I contatori e le cache di
+        # deduplicazione vengono riportati indietro insieme ai dati, altrimenti
+        # il riepilogo conterebbe una riga che non è stata scritta.
+        counters = (created, updated, skipped)
+        phones_before, emails_before = set(by_phone), set(by_email)
         try:
-            gender = normalize_gender(row.get("gender") or "")
-            birthday, year_known = parse_birthday(row.get("birthday") or "")
-        except HttpError as exc:
-            errors.append({"row": index, "reason": exc.message})
-            skipped += 1
-            continue
-        lang = (row.get("lang") or "").strip().lower()
-        lang = lang if lang in ("it", "en") else ""
-        origin = (row.get("origin") or "").strip()[:60]
-        note = (row.get("note") or "").strip()
-        categories = [c for c in (row.get("categories") or []) if str(c).strip()]
+            with transaction.atomic():
+                phone = (row.get("phone") or "").strip()
+                email = (row.get("email") or "").strip()
+                first_name = (row.get("first_name") or "").strip()
+                last_name = (row.get("last_name") or "").strip()
+                try:
+                    gender = normalize_gender(row.get("gender") or "")
+                    birthday, year_known = parse_birthday(row.get("birthday") or "")
+                except HttpError as exc:
+                    errors.append({"row": index, "reason": exc.message})
+                    skipped += 1
+                    continue
+                lang = (row.get("lang") or "").strip().lower()
+                lang = lang if lang in ("it", "en") else ""
+                origin = (row.get("origin") or "").strip()[:60]
+                note = (row.get("note") or "").strip()
+                categories = [c for c in (row.get("categories") or []) if str(c).strip()]
 
-        client = by_phone.get(phone_key(phone)) if phone else None
-        if client is None and email:
-            client = by_email.get(email.lower())
+                client = by_phone.get(phone_key(phone)) if phone else None
+                if client is None and email:
+                    client = by_email.get(email.lower())
 
-        if client is not None:
-            if not update_existing:
-                skipped += 1
-                continue
-            client = Client.objects.get(pk=client.pk)  # istanza completa
-            if first_name:
-                client.first_name = first_name
-            if last_name:
-                client.last_name = last_name
-            if email:
-                client.email = email
-            if phone and phone_key(phone) not in by_phone:
-                client.phone = phone
-            if gender:
-                client.gender = gender
-            if birthday:
-                client.birthday, client.birthday_year_known = birthday, year_known
-            if lang:
-                client.lang = lang
-            if origin and not client.origin:
-                client.origin = origin
-            client.save()
-            updated += 1
-        elif phone:
-            if not first_name:
-                errors.append({"row": index, "reason": "Nome mancante"})
-                skipped += 1
-                continue
-            client = Client.objects.create(
-                salon=salon,
-                first_name=first_name,
-                last_name=last_name,
-                email=email,
-                phone=phone,
-                gender=gender,
-                birthday=birthday,
-                birthday_year_known=year_known,
-                lang=lang or Client.Lang.IT,
-                origin=origin or "Import",
-            )
-            by_phone[phone_key(phone)] = client
-            if email:
-                by_email[email.lower()] = client
-            created += 1
-        else:
-            errors.append({"row": index, "reason": "Telefono mancante e nessuna corrispondenza per email"})
-            skipped += 1
-            continue
+                if client is not None:
+                    if not update_existing:
+                        skipped += 1
+                        continue
+                    client = Client.objects.get(pk=client.pk)  # istanza completa
+                    if first_name:
+                        client.first_name = first_name
+                    if last_name:
+                        client.last_name = last_name
+                    if email:
+                        client.email = email
+                    if phone and phone_key(phone) not in by_phone:
+                        client.phone = canonical_phone(phone)
+                    if gender:
+                        client.gender = gender
+                    if birthday:
+                        client.birthday, client.birthday_year_known = birthday, year_known
+                    if lang:
+                        client.lang = lang
+                    if origin and not client.origin:
+                        client.origin = origin
+                    client.save()
+                    updated += 1
+                elif phone:
+                    if not first_name:
+                        errors.append({"row": index, "reason": "Nome mancante"})
+                        skipped += 1
+                        continue
+                    client = Client.objects.create(
+                        salon=salon,
+                        first_name=first_name,
+                        last_name=last_name,
+                        email=email,
+                        phone=canonical_phone(phone),
+                        gender=gender,
+                        birthday=birthday,
+                        birthday_year_known=year_known,
+                        lang=lang or Client.Lang.IT,
+                        origin=origin or "Import",
+                    )
+                    by_phone[phone_key(phone)] = client
+                    if email:
+                        by_email[email.lower()] = client
+                    created += 1
+                else:
+                    errors.append({"row": index, "reason": "Telefono mancante e nessuna corrispondenza per email"})
+                    skipped += 1
+                    continue
 
-        if categories:
-            client.categories.add(*[category_for(name) for name in categories])
-        if note:
-            ClientNote.objects.create(client=client, text=note, author=actor)
+                if categories:
+                    client.categories.add(*[category_for(name) for name in categories])
+                if note:
+                    ClientNote.objects.create(client=client, text=note, author=actor)
+        except (IntegrityError, DataError) as exc:
+            created, updated, _ = counters
+            for key in set(by_phone) - phones_before:
+                by_phone.pop(key, None)
+            for key in set(by_email) - emails_before:
+                by_email.pop(key, None)
+            errors.append({"row": index, "reason": f"Riga rifiutata dal database: {exc}"})
+            skipped = counters[2] + 1
 
     return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}

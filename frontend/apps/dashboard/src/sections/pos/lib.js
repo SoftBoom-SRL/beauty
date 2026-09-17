@@ -1,5 +1,5 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { fmtEur } from '@youty/shared';
+import { fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 
 export const round2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 
@@ -84,16 +84,18 @@ export function paymentsError(v, due, t) {
 export function saleDateLabel(iso, lang) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  const day0 = new Date(d); day0.setHours(0, 0, 0, 0);
-  const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-  const diff = Math.round((t0 - day0) / 86400000);
+  // «Oggi» è oggi in salone: a cavallo della mezzanotte una postazione con un
+  // altro fuso datava lo scontrino al giorno sbagliato.
+  const hm = fmtTime(iso);
+  const day0 = toDateStr(iso);
+  const diff = Math.round((parseISO(todayStr()) - parseISO(day0)) / 86400000);
   if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
+  const p = salonDateParts(iso);
   const months = lang === 'en'
     ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + hm;
+  return p.day + ' ' + months[p.month - 1] + ' ' + p.year + ' · ' + hm;
 }
 
 export const inputCss = {

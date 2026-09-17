@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, Icon, Avatar } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote, CopyField } from './lib.jsx';
 
@@ -47,12 +48,21 @@ export default function TeamDrawer({ onClose, onRoles }) {
     } catch (err) { toastErr(err, fireToast, t); }
   };
 
-  const removeMember = async (m) => {
+  // Rimuovere una persona dal team le toglie l'accesso al gestionale: si chiede
+  // prima, perché l'azione partiva al primo clic e non si annulla.
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [removing, setRemoving] = useState(false);
+  const removeMember = async () => {
+    const m = confirmRemove;
+    if (!m || removing) return;
+    setRemoving(true);
     try {
       await api.del(`/api/auth/members/${m.id}`);
       setMembers((l) => l.filter((x) => x.id !== m.id));
       fireToast({ msg: t('Membro rimosso', 'Member removed'), icon: 'x' });
+      setConfirmRemove(null);
     } catch (err) { toastErr(err, fireToast, t); } // 400 if owner
+    finally { setRemoving(false); }
   };
 
   const sendInvite = async () => {
@@ -114,7 +124,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
                         {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                       </select>
                       {m.user.id !== session?.user?.id && (
-                        <button className="dk-iconbtn" title={t('Rimuovi membro', 'Remove member')} onClick={() => removeMember(m)} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name="x" size={14} color="var(--danger)" /></button>
+                        <button className="dk-iconbtn" title={t('Rimuovi membro', 'Remove member')} onClick={() => setConfirmRemove(m)} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name="x" size={14} color="var(--danger)" /></button>
                       )}
                     </React.Fragment>
                   )}
@@ -173,6 +183,21 @@ export default function TeamDrawer({ onClose, onRoles }) {
           </React.Fragment>
         )}
       </div>
+      <DkConfirm
+        open={!!confirmRemove}
+        busy={removing}
+        onClose={() => setConfirmRemove(null)}
+        onConfirm={removeMember}
+        title={t('Rimuovere dal team?', 'Remove from the team?')}
+        message={t(
+          `${confirmRemove?.user?.full_name || confirmRemove?.user?.email || ''} perderà l'accesso al gestionale.`,
+          `${confirmRemove?.user?.full_name || confirmRemove?.user?.email || ''} will lose access to the app.`,
+        )}
+        detail={t('Gli appuntamenti e le vendite già registrate restano. Per riammetterla servirà un nuovo invito.',
+          'Past appointments and sales stay. Re-admitting them needs a new invitation.')}
+        confirmLabel={t('Rimuovi', 'Remove')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
     </DkDrawer>
   );
 }

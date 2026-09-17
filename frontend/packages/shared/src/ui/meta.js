@@ -25,14 +25,16 @@ export function statusMeta(status, t) {
   }
 }
 
-/** Deposit status ∈ none | required | paid | refunded | forfeited.
+/** Deposit status ∈ none | required | paid | refund_due | refunding | refunded | forfeited.
  *  Returns { label, color, dot } or null for "none". */
 export function depositMeta(dep, t) {
   const d = dep === 'req' ? 'required' : dep;
   switch (d) {
-    case 'paid':      return { label: t('Deposito versato', 'Deposit paid'),       color: 'var(--ok)',     dot: 'var(--ok)' };
-    case 'required':  return { label: t('Deposito richiesto', 'Deposit due'),      color: 'var(--warn)',   dot: 'var(--warn)' };
-    case 'refunded':  return { label: t('Deposito rimborsato', 'Deposit refunded'), color: 'var(--info)',   dot: 'var(--info)' };
+    case 'paid':       return { label: t('Deposito versato', 'Deposit paid'),       color: 'var(--ok)',     dot: 'var(--ok)' };
+    case 'required':   return { label: t('Deposito richiesto', 'Deposit due'),      color: 'var(--warn)',   dot: 'var(--warn)' };
+    case 'refund_due': return { label: t('Deposito da rimborsare', 'Deposit to refund'), color: 'var(--warn)', dot: 'var(--warn)' };
+    case 'refunding':  return { label: t('Rimborso in corso', 'Refund in progress'), color: 'var(--info)', dot: 'var(--info)' };
+    case 'refunded':   return { label: t('Deposito rimborsato', 'Deposit refunded'), color: 'var(--info)',   dot: 'var(--info)' };
     case 'forfeited': return { label: t('Deposito trattenuto', 'Deposit forfeited'), color: 'var(--danger)', dot: 'var(--danger)' };
     default:          return null; // 'none'
   }

@@ -89,7 +89,7 @@ export default function Pacchetti() {
                     {off > 0 && <span className="t-sm" style={{ color: 'var(--ok)', fontWeight: 700 }}>{t(`Risparmi ${fmtEur(orig - price, lang)}`, `Save ${fmtEur(orig - price, lang)}`)}</span>}
                   </div>
 
-                  <a href="tel:" style={{ textDecoration: 'none' }}>
+                  <a href={brand.phone ? `tel:${brand.phone}` : undefined} style={{ textDecoration: 'none' }}>
                     <div className="btn btn--brand btn--block press">
                       <Icon name="phone" size={17} color="var(--brand-on)" />{t('Chiama per prenotare', 'Call to book')}
                     </div>

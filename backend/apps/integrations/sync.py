@@ -36,50 +36,11 @@ _EVENT_STATUS = {
 }
 
 
-# Lo 0 subito dopo il country code è il prefisso interurbano e quasi ovunque va
-# tolto: +44 020 7946 0958 e +44 20 7946 0958 sono lo stesso numero di Londra.
-# L'Italia è l'eccezione — lo 0 di distretto fa parte del numero nazionale e
-# resta: +39 02 1234567 è giusto, +39 2 1234567 non esiste.
-#
-# La distinzione conta perché il telefono è la chiave naturale dei contatti
-# Yourang: sbagliarla da un lato o dall'altro fa chiudere lo stesso numero su
-# due chiavi diverse, cioè due contatti nella stessa organizzazione.
-TRUNK_ZERO_KEPT = {"39"}
-
-# Per togliere quello 0 bisogna sapere dove finisce il country code, e i CC
-# hanno lunghezza variabile. La tabella è volutamente corta (i paesi da cui
-# arrivano davvero le clienti) e un CC che non c'è lascia il numero intatto:
-# accorciare senza sapere dove finisce il prefisso è peggio che non toccare.
-COUNTRY_CODES = ("39", "44", "49", "33", "34", "41", "43", "32", "31", "30", "351", "353", "420")
-
-
-def _drop_trunk_zero(digits: str) -> str:
-    """Toglie l'eventuale 0 interurbano dopo il country code, dove serve."""
-    for cc in sorted(COUNTRY_CODES, key=len, reverse=True):
-        if not digits.startswith(cc):
-            continue
-        rest = digits[len(cc):]
-        if cc in TRUNK_ZERO_KEPT or not rest.startswith("0"):
-            return digits
-        return cc + rest[1:]
-    return digits
-
-
-def normalize_phone(raw: str, default_cc: str = "39") -> str | None:
-    """Porta un numero a testo libero in E.164 (`+39...`). None se non normalizzabile."""
-    if not raw:
-        return None
-    s = re.sub(r"[^\d+]", "", raw.strip())
-    if s.startswith("+"):
-        digits = s[1:]
-    elif s.startswith("00"):
-        digits = s[2:]
-    else:
-        digits = default_cc + s
-    digits = _drop_trunk_zero(digits)
-    if not re.fullmatch(r"[1-9]\d{6,14}", digits):
-        return None
-    return "+" + digits
+# La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
+# common.phone: è la stessa usata da login, registrazione, form pubblico e
+# import CSV, così il telefono che è la chiave naturale dei contatti Yourang
+# coincide con quello con cui il cliente accede all'app.
+from common.phone import COUNTRY_CODES, TRUNK_ZERO_KEPT, _drop_trunk_zero, normalize_phone  # noqa: E402,F401
 
 
 def _split_name(full: str) -> tuple[str, str]:
@@ -338,15 +299,23 @@ def import_event(conn: YourangConnection, event_id: str) -> Appointment | None:
     # ponytail: nessun mapping affidabile Evento→Servizio locale → una riga
     # segnaposto "Prenotazione Yourang" con la durata reale dell'evento, così
     # l'appuntamento è visibile in agenda (la durata deriva dagli items).
-    if not appt.items.exists():
+    duration_min = _event_duration_min(data, start)
+    items = list(appt.items.all())
+    if not items:
         AppointmentService.objects.create(
             appointment=appt,
             service=_yourang_service(salon),
             operator=operator,
-            duration_min=_event_duration_min(data, start),
+            duration_min=duration_min,
             soak_min=0,
             price=0,
         )
+    elif len(items) == 1 and items[0].duration_min != duration_min:
+        # L'evento è stato allungato o accorciato su Yourang: la riga segnaposto
+        # segue, altrimenti l'agenda mostrerebbe ancora la durata della prima
+        # importazione.
+        items[0].duration_min = duration_min
+        items[0].save(update_fields=["duration_min"])
     return appt
 
 

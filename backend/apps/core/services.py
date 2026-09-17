@@ -31,7 +31,9 @@ def emit_event(salon, event_type: str, payload: dict | None = None):
     event = OutboxEvent.objects.create(
         salon=salon, event_type=event_type, payload=payload or {}
     )
-    logger.info("outbox event %s: %s", event_type, payload)
+    # Solo tipo e id: il payload può contenere dati personali e codici OTP,
+    # che non devono finire nei log.
+    logger.info("outbox event %s (#%s)", event_type, event.id)
     return event
 
 

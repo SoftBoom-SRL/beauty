@@ -1,12 +1,14 @@
 // Sposta.jsx — reschedule an upcoming appointment: day strip + availability
-// with the SAME service items, then POST /api/agenda/client/appointments/{id}/move.
+// with the SAME service items AND the same operators (the move keeps them), the
+// appointment itself excluded from the busy map, then
+// POST /api/agenda/client/appointments/{id}/move.
 // The 24h-policy 400 error is surfaced inline (banner) + toast.
 import React from 'react';
 import { ApiError, Icon, api, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, Meta, StickyCta, nextDays, dayStripLabel, fmtDayMed, toDateStr,
+  ClientSubHead, Meta, StickyCta, nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr,
   fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
 } from './lib.jsx';
 
@@ -19,11 +21,20 @@ export default function Sposta() {
   const [moving, setMoving] = React.useState(false);
   const [policyErr, setPolicyErr] = React.useState(null);
   const [done, setDone] = React.useState(null); // new start ISO on success
-  const days = React.useMemo(() => nextDays(14), []);
+  const todayKey = useTodayKey();
+  // ricalcolata quando cambia il giorno: vedi useTodayKey
+  const days = React.useMemo(() => nextDays(14), [todayKey]);
 
+  // Stesse operatrici dell'appuntamento: lo spostamento le conserva, quindi la
+  // disponibilità deve cercarle esplicitamente (uno slot libero per un'altra
+  // operatrice verrebbe poi rifiutato con 409).
   const items = React.useMemo(
-    () => (appt?.services || []).map((s) => ({ service_id: s.service_id })),
+    () => (appt?.services || []).map((s) => ({ service_id: s.service_id, operator_id: s.operator_id ?? appt?.operator?.id ?? null })),
     [appt],
+  );
+  const availabilityParams = React.useCallback(
+    (d) => ({ date: toDateStr(d), items, exclude_appointment_id: appt?.id }),
+    [items, appt],
   );
 
   React.useEffect(() => {
@@ -31,7 +42,7 @@ export default function Sposta() {
     let alive = true;
     setSlots(null);
     setSlot(null);
-    api.get('/api/agenda/client/availability', { params: { date: toDateStr(days[dayIdx]), items } })
+    api.get('/api/agenda/client/availability', { params: availabilityParams(days[dayIdx]) })
       .then((list) => { if (alive) setSlots(list); })
       .catch((err) => { if (alive) { setSlots([]); errToast(err, fireToast, t); } });
     return () => { alive = false; };
@@ -80,7 +91,7 @@ export default function Sposta() {
         fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
         setSlot(null);
         setSlots(null);
-        api.get('/api/agenda/client/availability', { params: { date: toDateStr(days[dayIdx]), items } })
+        api.get('/api/agenda/client/availability', { params: availabilityParams(days[dayIdx]) })
           .then(setSlots).catch(() => setSlots([]));
       } else {
         errToast(err, fireToast, t);

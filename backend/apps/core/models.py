@@ -60,8 +60,10 @@ class SalonSettings(TimeStampedModel):
     # Orari del centro per giorno: {"0": [["09:00","13:00"],["14:00","19:00"]], …, "6": []}
     # (0 = lunedì; lista vuota = chiuso). Fonte unica per agenda, app cliente e impostazioni.
     opening_hours_week = models.JSONField(default=dict, blank=True)
+    # "max_revenue" (default): la disponibilità proposta alle clienti evita i buchi
+    # invendibili (slot adiacenti a prenotazioni e bordi turno); "free": tutti gli orari.
     agenda_fill = models.CharField(
-        max_length=20, choices=AgendaFill.choices, default=AgendaFill.FREE
+        max_length=20, choices=AgendaFill.choices, default=AgendaFill.MAX_REVENUE
     )
     slot_recovery = models.CharField(
         max_length=20, choices=SlotRecovery.choices, default=SlotRecovery.NOTIFY
@@ -78,6 +80,19 @@ class SalonSettings(TimeStampedModel):
     flexible_enabled = models.BooleanField(default=True)
     flexible_window_min = models.PositiveSmallIntegerField(default=30)
     flexible_reward_pct = models.PositiveSmallIntegerField(default=10)
+    # Caparra con scadenza: minuti dalla prenotazione entro cui la caparra va
+    # pagata, poi lo slot viene liberato (0 = mai). Il sollecito parte dopo
+    # `deposit_reminder_minutes` (0 = nessun sollecito). Scelta del titolare.
+    deposit_hold_minutes = models.PositiveSmallIntegerField(default=0)
+    deposit_reminder_minutes = models.PositiveSmallIntegerField(default=0)
+    # Motivazioni di annullamento / no-show personalizzate dal titolare
+    # (lista di stringhe; vuota = quelle predefinite della dashboard).
+    cancel_reasons = models.JSONField(default=list, blank=True)
+    no_show_reasons = models.JSONField(default=list, blank=True)
+    # Stripe Connect: account del salone collegato dal titolare. Le caparre
+    # online e gli addebiti no-show passano su questo account.
+    stripe_account_id = models.CharField(max_length=64, blank=True, default="")
+    stripe_connected_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Impostazioni · {self.salon.name}"
@@ -138,6 +153,7 @@ class OutboxEvent(models.Model):
 
     class Status(models.TextChoices):
         PENDING = "pending"
+        SENDING = "sending"  # preso in carico da un worker
         SENT = "sent"
         FAILED = "failed"
 
@@ -149,10 +165,46 @@ class OutboxEvent(models.Model):
     last_error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)
+    # Prima di questo istante l'evento non viene ritentato: l'attesa raddoppia a
+    # ogni tentativo. Senza, un worker con intervallo di 5 secondi bruciava tutti
+    # e otto i tentativi in quaranta secondi di disservizio e marcava come persi
+    # messaggi che sarebbero arrivati benissimo un minuto dopo.
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    # Istante in cui un worker ha preso in carico l'evento: serve a recuperare
+    # quelli rimasti appesi perché il processo è morto durante l'invio.
+    claimed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["created_at"]
-        indexes = [models.Index(fields=["status", "created_at"])]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["status", "next_attempt_at"]),
+        ]
 
     def __str__(self):
         return f"{self.event_type} ({self.status})"
+
+
+class RateLimitCounter(models.Model):
+    """Contatore delle finestre di rate limit.
+
+    Sta su una tabella propria e non sulla cache: `DatabaseCache.incr()` eredita
+    da `BaseCache` la sequenza leggi-poi-scrivi, quindi due richieste simultanee
+    leggono lo stesso valore e ne scrivono lo stesso incremento — un limite di 5
+    ne lascia passare molti di più, che è esattamente il caso da fermare. La
+    stessa scrittura riporta inoltre la scadenza al TIMEOUT predefinito (300
+    secondi), perciò una finestra chiesta di un'ora durava cinque minuti.
+
+    Qui l'incremento è una singola UPDATE ... SET count = count + 1, eseguita dal
+    database, e la scadenza è un campo nostro che nessuno riscrive per sbaglio.
+    """
+
+    key = models.CharField(max_length=200, primary_key=True)
+    count = models.PositiveIntegerField(default=0)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["expires_at"])]
+
+    def __str__(self):
+        return f"{self.key} = {self.count}"

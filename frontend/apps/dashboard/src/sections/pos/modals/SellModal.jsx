@@ -5,11 +5,12 @@
 // amount due (the API enforces Σ payments == total − deposit ±0.01, else 422).
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
+import useProductCatalog from '../useProductCatalog.js';
 import {
   emptyPayments, inputCss, lineAmount, methodLabel, money, opName, paymentsError,
   resolvePayments, round2, svcLabel,
@@ -42,24 +43,48 @@ export default function SellModal({ appointment, onDone, onClose }) {
     return m;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ---- products for the per-block picker ---- */
-  const [products, setProducts] = useState(null);
-  useEffect(() => {
-    let dead = false;
-    api.get('/api/inventory/products', { params: { limit: 100 } })
-      .then((r) => { if (!dead) setProducts((r.items || []).filter((p) => Number(p.sale_price) > 0)); })
-      .catch(() => { if (!dead) setProducts([]); });
-    return () => { dead = true; };
-  }, []);
-
   /* ---- UI state ---- */
   const [pick, setPick] = useState(null);       // { opId, type: 'product' | 'service' }
   const [pickQ, setPickQ] = useState('');
+
+  /* ---- products for the per-block picker: prima pagina + ricerca lato server ---- */
+  const { products, list: productMatches, searching: productSearching } = useProductCatalog(pick?.type === 'product' ? pickQ : '');
   const [giftForm, setGiftForm] = useState(null); // { opId, amt, name }
   const [pay, setPay] = useState(emptyPayments());
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);   // CheckoutOut { sale, breakdown }
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
+
+  /* Gift card «a trattamento» della cliente che coprono servizi di questa visita
+   * (AppointmentOut.gifts): il pagamento parte già impostato con la gift card
+   * per l'importo coperto e il resto in contanti, così l'operatrice non deve
+   * ricordarsi del regalo né cercare il codice. */
+  const gifts = appt?.gifts || [];
+  const giftPrefilled = useRef(false);
+  useEffect(() => {
+    if (giftPrefilled.current || !gifts.length || !appt) return;
+    // Il residuo parte da quanto resta DOPO la caparra già incassata. Prima la
+    // gift card veniva messa al suo valore pieno: con un regalo da 50 € su un
+    // servizio da 50 € e 30 € di caparra, il precompilato chiedeva 50 € su un
+    // dovuto di 20 € e il pulsante «Incassa» restava spento senza spiegazioni.
+    // deposit_credit, non deposit_amount: dopo un rimborso parziale la quota
+    // ancora in cassa è più bassa, e detrarre l'intera caparra regalerebbe alla
+    // cliente soldi che il salone le ha già restituito.
+    const paidDeposit = Number(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
+    let remaining = round2(
+      (appt.items || []).reduce((sum, it) => sum + Number(it.price || 0), 0) - paidDeposit
+    );
+    const rows = [];
+    gifts.forEach((g) => {
+      const item = (appt.items || []).find((it) => it.service_id === g.service_id);
+      const amt = round2(Math.min(Number(g.balance || 0), Number(item?.price || 0), Math.max(0, remaining)));
+      if (amt > 0) { rows.push({ method: 'gift_card', amt, code: g.code }); remaining = round2(remaining - amt); }
+    });
+    if (!rows.length) return;
+    giftPrefilled.current = true;
+    if (remaining > 0) rows.push({ method: 'cash', amt: remaining, code: '' });
+    setPay({ split: true, method: 'cash', giftCode: '', rows });
+  }, [appt, gifts]);
 
   if (!appt) return null;
 
@@ -106,7 +131,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   /* ---- totals & deposit rule ---- */
   const opSubtotal = (opId) => round2(linesOf(opId).reduce((s, l) => s + lineAmount(l), 0));
   const gross = round2(blockIds.reduce((s, oid) => s + opSubtotal(oid), 0));
-  const deposit = appt.deposit_status === 'paid' ? round2(appt.deposit_amount) : 0;
+  const deposit = round2(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
   const due = round2(gross - deposit);
   const dueOk = due >= 0;
   const payErr = paymentsError(pay, due, t);
@@ -184,7 +209,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
   /* ---- pickers ---- */
   const pickerList = pick?.type === 'product'
-    ? (products || []).filter((p) => !pickQ || p.name.toLowerCase().includes(pickQ.toLowerCase()))
+    ? productMatches
     : pick
       ? services.filter((s) => s.active !== false && (!pickQ || svcLabel(s, lang).toLowerCase().includes(pickQ.toLowerCase())))
       : [];
@@ -213,7 +238,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
         ))}
         {!pickerList.length && (pick.type !== 'product' || products !== null) && (
           <div className="t-sm" style={{ color: 'var(--muted-2)', padding: 12, textAlign: 'center' }}>
-            {pick.type === 'product' ? t('Nessun prodotto', 'No products') : t('Nessun servizio', 'No services')}
+            {pick.type === 'product' ? (productSearching ? t('Ricerca nel catalogo…', 'Searching the catalogue…') : t('Nessun prodotto', 'No products')) : t('Nessun servizio', 'No services')}
           </div>
         )}
       </div>
@@ -331,6 +356,15 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
         {/* RIGHT — single shared payment */}
         <div>
+          {gifts.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--clay-tint)', marginBottom: 10 }}>
+              <Icon name="gift" size={16} color="var(--clay-ink)" />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                <b>{t('Regalo', 'Gift')}</b> · {gifts.map((g) => `${g.service_name} (${g.code}${g.from_name ? ' · ' + t('da', 'from') + ' ' + g.from_name : ''})`).join(', ')}
+                <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2 }}>{t('Il pagamento è già impostato con la gift card per la parte coperta.', 'The payment is already set with the gift card for the covered part.')}</div>
+              </div>
+            </div>
+          )}
           <PaymentsPanel value={pay} onChange={setPay} due={Math.max(0, due)} t={t} lang={lang} compact />
 
           {/* totals — per operator + deposit + grand */}

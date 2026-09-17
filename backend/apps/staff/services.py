@@ -18,30 +18,95 @@ from django.utils import timezone
 
 
 def _current_absence(operator, on_date: date_cls):
-    return (
-        operator.absences.filter(date_from__lte=on_date, date_to__gte=on_date)
-        .order_by("date_from")
-        .first()
-    )
+    # `.all()` + filtro in Python: così un `prefetch_related("absences")` a monte
+    # (vista mese: 40 giorni × N operatrici) evita una query per chiamata.
+    absences = [a for a in operator.absences.all() if a.date_from <= on_date <= a.date_to]
+    absences.sort(key=lambda a: a.date_from)
+    return absences[0] if absences else None
+
+
+def _hm_to_min(value: str) -> int:
+    hours, minutes = str(value).split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def opening_windows(salon, date: date_cls) -> list[tuple[int, int]] | None:
+    """Fasce di apertura del salone per quella data, o None se gli orari non sono configurati.
+
+    Fonte: SalonSettings.opening_hours_week ({"0": [["09:00","13:00"], …]}, 0 = lunedì).
+    Lista vuota = giorno di chiusura.
+    """
+    salon_settings = getattr(salon, "settings", None)
+    week = getattr(salon_settings, "opening_hours_week", None) or {}
+    if not week:
+        return None
+    ranges = week.get(str(date.weekday()), []) or []
+    return [(_hm_to_min(a), _hm_to_min(b)) for a, b in ranges]
+
+
+def _intersect(windows: list[tuple[int, int]], bounds: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    result = []
+    for w_start, w_end in windows:
+        for b_start, b_end in bounds:
+            start, end = max(w_start, b_start), min(w_end, b_end)
+            if start < end:
+                result.append((start, end))
+    result.sort()
+    return result
+
+
+def _week_index(date: date_cls, cycle_weeks: int) -> int:
+    """Indice della settimana dentro il ciclo dei turni.
+
+    Si contano le settimane trascorse, non il numero di settimana ISO: ISO
+    riparte da 1 ogni anno, e negli anni da 53 settimane (2026 lo è) la 53ª e la
+    1ª successiva ricadono sullo stesso indice. Da quel capodanno in poi un
+    ciclo di due settimane resta invertito per sempre. L'ordinale 1 cade di
+    lunedì, quindi il conto cambia esattamente al cambio di settimana.
+    """
+    return ((date.toordinal() - 1) // 7) % max(cycle_weeks, 1)
+
+
+def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Unisce le finestre che si toccano o si sovrappongono.
+
+    Due righe di turno contigue (9–13 e 13–18) sono lo stesso turno diviso in
+    due: lasciandole separate un servizio che attraversa le 13 non entrerebbe
+    per intero in nessuna delle due e l'orario non verrebbe mai proposto.
+    """
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(windows):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     """Finestre lavorabili (minuti da mezzanotte) per l'operatrice in quella data.
 
-    week_index = numero di settimana ISO % `operator.cycle_weeks`; per ciascuna riga
+    week_index = settimane trascorse % `operator.cycle_weeks`; per ciascuna riga
     di turno del weekday corrispondente si ritaglia l'eventuale pausa (che può
     spezzare la finestra in due). Ritorna [] se la data è coperta da un'`Absence`
     o se l'operatrice non ha turno per quel weekday/week_index.
+
+    Se il salone ha configurato gli orari di apertura (Impostazioni), le finestre
+    vengono intersecate con le fasce del giorno: fuori orario — o nei giorni di
+    chiusura — non si prenota, qualunque sia il turno. Senza orari configurati
+    contano solo i turni.
     """
     if _current_absence(operator, date) is not None:
         return []
 
     cycle_weeks = operator.cycle_weeks or 1
-    week_index = date.isocalendar()[1] % cycle_weeks
+    week_index = _week_index(date, cycle_weeks)
     weekday = date.weekday()  # 0 = lunedì
 
     windows: list[tuple[int, int]] = []
-    for shift in operator.shifts.filter(week_index=week_index, weekday=weekday):
+    for shift in operator.shifts.all():
+        if shift.week_index != week_index or shift.weekday != weekday:
+            continue
         start, end = shift.start_min, shift.end_min
         if shift.break_start_min is not None and shift.break_end_min is not None:
             break_start = max(shift.break_start_min, start)
@@ -52,7 +117,10 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
                 windows.append((break_end, end))
         else:
             windows.append((start, end))
-    return windows
+    bounds = opening_windows(operator.salon, date)
+    if bounds is not None:
+        windows = _intersect(windows, bounds)
+    return _merge_windows(windows)
 
 
 def today_status(operator, on_date: date_cls | None = None) -> dict:

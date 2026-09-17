@@ -133,6 +133,9 @@ class ClientOTP(models.Model):
     code = models.CharField(max_length=6)
     expires_at = models.DateTimeField(default=default_otp_expiry)
     used = models.BooleanField(default=False)
+    # Tentativi di verifica sbagliati mentre il codice era attivo: alla soglia
+    # (services.MAX_OTP_ATTEMPTS) il codice viene invalidato.
+    attempts = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

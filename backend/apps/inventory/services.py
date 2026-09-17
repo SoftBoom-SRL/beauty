@@ -129,10 +129,18 @@ def receive_order(order, lines_data, author=None):
     Stato finale: received se tutte le righe combaciano, altrimenti partial.
     Ritorna (order, discrepancies).
     """
-    if order.status in (PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.PARTIAL):
-        raise HttpError(400, "Ordine già ricevuto")
     received_by_id = {int(row["id"]): Decimal(str(row["qty_received"])) for row in lines_data}
     with transaction.atomic():
+        # Il controllo «già ricevuto» si fa sulla riga bloccata e RILETTA dentro
+        # la transazione. Farlo sull'istanza arrivata con la richiesta lasciava
+        # passare due volte la stessa ricezione — ogni carico prendeva il lock
+        # sul prodotto, quindi la giacenza saliva di dieci due volte — e la riga
+        # d'ordine restava a dieci: venti pezzi a magazzino, dieci sui documenti.
+        if PurchaseOrder.objects.select_for_update().filter(pk=order.pk).first() is None:
+            raise HttpError(404, "Ordine non trovato")
+        order.refresh_from_db()
+        if order.status in (PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.PARTIAL):
+            raise HttpError(400, "Ordine già ricevuto")
         lines = list(order.lines.select_related("product"))
         for line in lines:
             qty = received_by_id.get(line.id)

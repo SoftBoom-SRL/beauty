@@ -2,13 +2,14 @@
 // Reads: any staff. Writes: owner-only (lock state otherwise).
 // Deleting the only location → 400 from the API, surfaced as toast.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon } from '@youty/shared';
+import { api, Icon, PhoneInput } from '@youty/shared';
 import DkModal from '../../ui/DkModal.jsx';
+import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote } from './lib.jsx';
 
 export default function LocationsPage({ onBack }) {
-  const { t, session, reload, fireToast } = useDash();
+  const { t, lang, session, reload, fireToast } = useDash();
   const isOwner = !!session?.is_owner;
   const [list, setList] = useState(null); // null = loading
   const [edit, setEdit] = useState(null); // draft {id?, name, address, phone, is_default}
@@ -35,13 +36,22 @@ export default function LocationsPage({ onBack }) {
     finally { setSaving(false); }
   };
 
-  const del = async (id) => {
+  // Eliminare una sede tocca operatrici e appuntamenti collegati: si chiede
+  // prima, perché partiva al primo clic e non si torna indietro.
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const del = async () => {
+    const target = confirmDel;
+    if (!target || deleting) return;
+    setDeleting(true);
     try {
-      await api.del(`/api/core/locations/${id}`);
+      await api.del(`/api/core/locations/${target.id}`);
       await Promise.all([load(), reload.salon()]);
       setEdit(null);
+      setConfirmDel(null);
       fireToast({ msg: t('Sede eliminata', 'Location deleted'), icon: 'x' });
     } catch (err) { toastErr(err, fireToast, t); } // 400 "only one" → toast
+    finally { setDeleting(false); }
   };
 
   return (
@@ -91,7 +101,7 @@ export default function LocationsPage({ onBack }) {
         <DkModal open onClose={() => setEdit(null)} width={440}
           title={edit.id ? t('Modifica sede', 'Edit location') : t('Nuova sede', 'New location')}
           foot={<React.Fragment>
-            {edit.id && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={() => del(edit.id)}><Icon name="x" size={16} color="var(--danger)" />{t('Elimina', 'Delete')}</button>}
+            {edit.id && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={() => setConfirmDel(edit)}><Icon name="x" size={16} color="var(--danger)" />{t('Elimina', 'Delete')}</button>}
             <button className="dk-btn dk-btn--ghost" onClick={() => setEdit(null)}>{t('Annulla', 'Cancel')}</button>
             <button className="dk-btn dk-btn--clay" disabled={!edit.name.trim() || saving} onClick={save}><Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}</button>
           </React.Fragment>}>
@@ -100,13 +110,27 @@ export default function LocationsPage({ onBack }) {
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Indirizzo', 'Address')}</div>
           <input value={edit.address || ''} onChange={(e) => setEdit((d) => ({ ...d, address: e.target.value }))} placeholder={t('Via, numero, città', 'Street, number, city')} style={{ ...inputCss, width: '100%', boxSizing: 'border-box', marginBottom: 14 }} />
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Telefono', 'Phone')}</div>
-          <input value={edit.phone || ''} onChange={(e) => setEdit((d) => ({ ...d, phone: e.target.value }))} placeholder="+39 …" style={{ ...inputCss, width: '100%', boxSizing: 'border-box', marginBottom: 16 }} />
+          <div style={{ marginBottom: 16 }}>
+            <PhoneInput value={edit.phone || ''} onChange={(v) => setEdit((d) => ({ ...d, phone: v }))} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
+          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '11px 13px', background: 'var(--surface-2)', borderRadius: 11 }}>
             <input type="checkbox" checked={!!edit.is_default} onChange={(e) => setEdit((d) => ({ ...d, is_default: e.target.checked }))} />
             <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Sede predefinita', 'Default location')}</span>
           </label>
         </DkModal>
       )}
+      <DkConfirm
+        open={!!confirmDel}
+        busy={deleting}
+        onClose={() => setConfirmDel(null)}
+        onConfirm={del}
+        title={t('Eliminare la sede?', 'Delete this location?')}
+        message={t(`«${confirmDel?.name || ''}» verrà eliminata.`, `“${confirmDel?.name || ''}” will be deleted.`)}
+        detail={t('Le operatrici assegnate e gli appuntamenti di questa sede resteranno senza sede.',
+          'Stylists assigned here and this location’s appointments will be left without a location.')}
+        confirmLabel={t('Elimina', 'Delete')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
     </div>
   );
 }

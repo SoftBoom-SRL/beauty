@@ -5,7 +5,7 @@ import React from 'react';
 import { Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import {
-  ClientSubHead, Meta, DashedEmpty, useClientAppointments,
+  ClientSubHead, Meta, DashedEmpty, DepositDue, useClientAppointments,
   fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
 } from './lib.jsx';
 
@@ -18,7 +18,7 @@ function StatusChip({ status, t }) {
   );
 }
 
-function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla }) {
+function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast }) {
   const dm = depositMeta(appt.deposit_status, t);
   const depAmt = Number(appt.deposit_amount || 0);
   return (
@@ -32,12 +32,21 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla }) {
         <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
         {appt.operator?.name && <Meta icon="user" text={appt.operator.name} />}
       </div>
+      {(appt.gifts || []).length > 0 && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, marginRight: 8, padding: '4px 10px', borderRadius: 99, background: 'var(--brand-tint)', fontWeight: 700, fontSize: 12, color: 'var(--brand-ink)' }}>
+          <Icon name="gift" size={13} color="var(--brand-ink)" />
+          {appt.gifts[0].from_name
+            ? t(`In regalo da ${appt.gifts[0].from_name}`, `A gift from ${appt.gifts[0].from_name}`)
+            : t('Coperto da gift card', 'Covered by a gift card')}
+        </div>
+      )}
       {dm && (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, padding: '4px 10px', borderRadius: 99, background: 'var(--paper-2)', fontWeight: 700, fontSize: 12, color: dm.color }}>
           <span style={{ width: 6, height: 6, borderRadius: 99, background: dm.dot }} />
           {dm.label}{depAmt > 0 ? ' · ' + fmtEur(depAmt, lang) : ''}
         </div>
       )}
+      {actions && <DepositDue appt={appt} t={t} lang={lang} fireToast={fireToast} compact />}
       {actions && (
         <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)' }}>
           <button className="press" onClick={onSposta}
@@ -76,7 +85,7 @@ export default function Prenotazioni() {
         ) : upcoming.length ? (
           <div className="stagger">
             {upcoming.map((appt) => (
-              <ApptRow key={appt.id} appt={appt} t={t} lang={lang} actions
+              <ApptRow key={appt.id} appt={appt} t={t} lang={lang} fireToast={fireToast} actions
                 onSposta={() => setView('sposta', { appt })}
                 onAnnulla={() => setView('annulla', { appt })} />
             ))}

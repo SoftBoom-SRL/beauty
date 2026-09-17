@@ -30,7 +30,9 @@ GRANULARITIES = {"day", "week", "month"}
 ZERO = Decimal("0.00")
 
 # Stati "prenotati" ai fini dell'occupazione e stati terminali usati dai KPI.
-_OCCUPIED_STATUSES = ("closed", "confirmed")
+# Check-in e trattamento in corso occupano la poltrona esattamente come un
+# confermato: escluderli faceva scendere l'occupazione al momento dell'arrivo.
+_OCCUPIED_STATUSES = ("confirmed", "checked_in", "in_progress", "closed")
 _CLOSED = "closed"
 _NO_SHOW = "no_show"
 _CANCELLED = "cancelled"
@@ -141,7 +143,14 @@ def _operator_shift_minutes(operator, d: date_cls) -> int:
 def _daily_shift_minutes(salon, days: list[date_cls]) -> dict[date_cls, int]:
     if not days:
         return {}
-    operators = list(Operator.objects.filter(salon=salon, active=True))
+    # Turni, assenze e impostazioni del salone caricati una volta sola: senza
+    # prefetch ogni giorno di ogni operatrice tornava a interrogare il database,
+    # e una sola operatrice su trenta giorni costava 63 query.
+    operators = list(
+        Operator.objects.filter(salon=salon, active=True)
+        .select_related("salon__settings")
+        .prefetch_related("shifts", "absences")
+    )
     if not operators:
         return {d: 0 for d in days}
     return {d: sum(_operator_shift_minutes(op, d) for op in operators) for d in days}
@@ -281,6 +290,26 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
         ).aggregate(total=Sum("amount"))["total"]
         or ZERO
     )
+    # Gift card: vendute (già nel ricavo) e riscattate (pagamenti con gift card,
+    # denaro incassato quando la carta fu venduta). cash_in = ricavo − riscatti,
+    # così un trattamento regalato non conta due volte.
+    gift_card_sold = (
+        SaleLine.objects.filter(
+            sale__salon=salon, sale__created_at__gte=start, sale__created_at__lt=end, line_type="gift_card"
+        ).aggregate(total=Sum("amount"))["total"]
+        or ZERO
+    )
+    from apps.sales.models import Payment  # lazy: evita import inutili a modulo
+
+    gift_card_redeemed = (
+        Payment.objects.filter(
+            sale__salon=salon, sale__created_at__gte=start, sale__created_at__lt=end, method="gift_card"
+        ).aggregate(total=Sum("amount"))["total"]
+        or ZERO
+    )
+    # Caparre versate prima e detratte al checkout: denaro incassato in un altro
+    # periodo, da non sommare di nuovo qui.
+    deposit_used = sales_qs.aggregate(total=Sum("deposit_deducted"))["total"] or ZERO
 
     # --- appuntamenti ----------------------------------------------------
     appts_qs = Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end)
@@ -334,6 +363,10 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
 
     return {
         "revenue": revenue,
+        "gift_card_sold": gift_card_sold,
+        "gift_card_redeemed": gift_card_redeemed,
+        "deposit_used": deposit_used,
+        "cash_in": revenue - gift_card_redeemed - deposit_used,
         "sales_count": sales_count,
         "avg_ticket": avg_ticket,
         "retail_revenue": retail_revenue,

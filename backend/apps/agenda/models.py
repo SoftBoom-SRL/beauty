@@ -25,6 +25,15 @@ class Appointment(TimeStampedModel):
         NONE = "none", "Nessuno"
         REQUIRED = "required", "Richiesto"
         PAID = "paid", "Pagato"
+        # Annullamento in tempo: la caparra va restituita ma il rimborso non è
+        # (ancora) avvenuto — Stripe non configurato, caparra incassata in
+        # salone o rimborso fallito. «Rimborsato» si scrive solo a rimborso fatto.
+        REFUND_DUE = "refund_due", "Da rimborsare"
+        # Rimborso partito ma non ancora riuscito: Stripe conferma i rimborsi in
+        # un secondo momento e può anche fallirli. «Rimborsato» si scrive solo a
+        # esito riuscito, altrimenti il gestionale dichiara restituito denaro
+        # che è ancora sul conto del salone.
+        REFUNDING = "refunding", "Rimborso in corso"
         REFUNDED = "refunded", "Rimborsato"
         FORFEITED = "forfeited", "Trattenuto"
 
@@ -69,6 +78,32 @@ class Appointment(TimeStampedModel):
     cancelled_late = models.BooleanField(default=False)
     # Evento Yourang collegato (prenotazione importata via webhook/sync).
     yourang_event_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    # PaymentIntent Stripe della caparra pagata online (serve per il rimborso) e
+    # dell'addebito no-show (un solo addebito per appuntamento).
+    deposit_payment_intent_id = models.CharField(max_length=64, blank=True, default="")
+    no_show_payment_intent_id = models.CharField(max_length=64, blank=True, default="")
+    # Rimborsi della caparra, uno per id Stripe: {"re_...": {"amount_cents": int,
+    # "status": "pending|succeeded|failed|canceled"}}. Tenerli per id rende
+    # l'elaborazione idempotente (lo stesso evento può arrivare più volte) e
+    # permette di riconciliare gli aggiornamenti di stato, che arrivano dopo.
+    deposit_refunds = models.JSONField(default=dict, blank=True)
+    # Somma dei rimborsi RIUSCITI, in euro. Un rimborso parziale non annulla la
+    # caparra: la quota ancora trattenuta resta detraibile al checkout.
+    deposit_refunded_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Caparra con scadenza (SalonSettings.deposit_hold_minutes): entro quando va
+    # pagata, quando è partito il sollecito, il link di pagamento inviato.
+    deposit_due_at = models.DateTimeField(null=True, blank=True)
+    deposit_reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    deposit_payment_link = models.URLField(max_length=500, blank=True, default="")
+    # Sessione Checkout dietro al link. Serve a chiuderla quando se ne crea una
+    # nuova: due link aperti sulla stessa caparra significano due pagamenti
+    # possibili, e il secondo arrivava senza che nessuno lo riconciliasse.
+    deposit_checkout_session_id = models.CharField(max_length=80, blank=True, default="")
+    # Slot liberato automaticamente per caparra non pagata: resta la traccia
+    # (l'operatrice richiama la cliente e decide) e si può ripristinare.
+    auto_released = models.BooleanField(default=False)
+    # Inserito dallo staff forzando le regole (fuori orario, sovrapposizione).
+    forced = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["start"]
@@ -99,6 +134,22 @@ class Appointment(TimeStampedModel):
     @property
     def total_price(self):
         return sum((item.price for item in self.items.all()), start=0)
+
+    @property
+    def deposit_credit(self):
+        """Quota di caparra ancora in cassa, quindi detraibile al checkout.
+
+        È `deposit_amount` meno i rimborsi già riusciti, e solo se la caparra
+        risulta pagata. Prima si detraeva sempre l'intero importo: dopo un
+        rimborso parziale di dieci euro su trenta, la cliente si vedeva scontare
+        trenta euro che il salone non aveva più.
+        """
+        from decimal import Decimal
+
+        if self.deposit_status != self.DepositStatus.PAID:
+            return Decimal("0.00")
+        left = Decimal(self.deposit_amount or 0) - Decimal(self.deposit_refunded_amount or 0)
+        return max(left, Decimal("0.00")).quantize(Decimal("0.01"))
 
 
 class AppointmentService(models.Model):

@@ -33,8 +33,11 @@ fi
 echo "[run_e2e] DB throwaway: $E2E_DB (ricreato da zero)"
 rm -f "$E2E_DB"
 
-echo "[run_e2e] migrate..."
-"$PY" "$BACKEND_DIR/manage.py" migrate --noinput >"$SERVER_LOG" 2>&1
+echo "[run_e2e] migrate + createcachetable..."
+# Come l'entrypoint del container: la cache su database (rate limit OTP e form
+# pubblico, ticket SSE) richiede la tabella django_cache, che migrate non crea.
+"$PY" "$BACKEND_DIR/manage.py" migrate --noinput >"$SERVER_LOG" 2>&1 \
+  && "$PY" "$BACKEND_DIR/manage.py" createcachetable >>"$SERVER_LOG" 2>&1
 if [ $? -ne 0 ]; then
   echo "[run_e2e] migrate fallita — vedi $SERVER_LOG" >&2
   tail -20 "$SERVER_LOG" >&2

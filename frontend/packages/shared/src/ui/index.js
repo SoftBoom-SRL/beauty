@@ -5,5 +5,6 @@ export {
   SectionLabel, EmptyState, SubHeader,
 } from './primitives.jsx';
 export { NumInput } from './NumInput.jsx';
+export { PhoneInput } from './PhoneInput.jsx';
 export { useToastHost } from './useToastHost.js';
 export { statusMeta, depositMeta, segMeta } from './meta.js';

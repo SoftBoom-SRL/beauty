@@ -5,19 +5,54 @@ import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, f
 import DkModal from '../../../ui/DkModal.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps } from '../lib.js';
+import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
 
+// Motivazioni predefinite: il titolare può sostituirle dalle Impostazioni
+// (settings.no_show_reasons / cancel_reasons); qui restano come fallback.
 const NOSHOW_REASONS = [['cliente', 'Mancata presenza', 'No-show'], ['salute', 'Malattia / imprevisto', 'Illness / emergency'], ['altro', 'Altro', 'Other']];
 const CANCEL_REASONS = [['cliente', 'Richiesta cliente', 'Client request'], ['salute', 'Malattia', 'Illness'], ['agenda', 'Sovrapposizione', 'Schedule clash'], ['altro', 'Altro', 'Other']];
+const customReasons = (list, fallback) => (Array.isArray(list) && list.length ? list.map((r, i) => ['c' + i, r, r]) : fallback);
 
 export default function ApptDetailModal({ appointment, onMutate, onClose }) {
-  const { t, lang, operators, opColors, services, serviceCategories, settings, fireToast, openModal, setTab, setSelClient, hasScope } = useDash();
+  const { t, lang, operators, opColors, services, serviceCategories, settings, session, fireToast, openModal, setTab, setDeepLink, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
   const [appt, setAppt] = useState(appointment);
-  const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel'
+  const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel' | 'split'
+  const [splitItem, setSplitItem] = useState(null); // item da staccare (flow 'split')
   const [reason, setReason] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const noShowReasons = customReasons(settings?.no_show_reasons, NOSHOW_REASONS);
+  const cancelReasons = customReasons(settings?.cancel_reasons, CANCEL_REASONS);
+  const [linkBusy, setLinkBusy] = useState(false);
+
+  /* link di pagamento della caparra: crea (o rimanda come sollecito) e copia */
+  async function sendDepositLink() {
+    if (linkBusy) return;
+    setLinkBusy(true);
+    try {
+      const res = await api.post(`/api/sales/appointments/${appt.id}/deposit-link`, {});
+      setAppt((a) => ({ ...a, deposit_payment_link: res.url, deposit_due_at: res.due_at || a.deposit_due_at }));
+      fireToast({ msg: appt.deposit_payment_link ? t('Sollecito inviato alla cliente', 'Reminder sent to the client') : t('Link di pagamento inviato alla cliente', 'Payment link sent to the client'), icon: 'check' });
+      onMutate?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) fireToast({ msg: t('Pagamenti online non configurati: collega Stripe in Impostazioni → Pagamenti', 'Online payments not configured: connect Stripe in Settings → Payments'), icon: 'alert' });
+      else toastErr(err, t, fireToast);
+    } finally { setLinkBusy(false); }
+  }
+  async function restoreReleased(force = false) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await api.post(`/api/agenda/appointments/${appt.id}/restore`, { force });
+      setAppt(res);
+      fireToast({ msg: t('Appuntamento ripristinato', 'Appointment restored'), icon: 'check' });
+      onMutate?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && !force) fireToast({ msg: t('Lo slot non è più libero: usa «Ripristina comunque»', 'The slot is no longer free: use “Restore anyway”'), icon: 'alert' });
+      else toastErr(err, t, fireToast);
+    } finally { setBusy(false); }
+  }
 
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
   const [matchCount, setMatchCount] = useState(null);
@@ -147,7 +182,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 
   /* cancel / no-show → then offer the freed slot to matching waitlist entries */
   async function destroy(kind) {
-    const reasons = kind === 'no-show' ? NOSHOW_REASONS : CANCEL_REASONS;
+    const reasons = kind === 'no-show' ? noShowReasons : cancelReasons;
     const label = (reasons.find((r) => r[0] === reason) || [])[1] || '';
     const fullReason = [label, reasonNote].filter(Boolean).join(' — ');
     const ok = await lifecycle(
@@ -167,7 +202,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   /* ---- reason picker (shared by no-show + cancel) ---- */
   const ReasonPicker = ({ reasons }) => (
     <div>
-      <div className="t-meta" style={{ marginBottom: 9 }}>{t('Motivazione (per le statistiche)', 'Reason (for statistics)')}</div>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 9 }}>
+        <div className="t-meta">{t('Motivazione (per le statistiche)', 'Reason (for statistics)')}</div>
+        {session?.is_owner && (
+          <button type="button" onClick={() => { onClose?.(); setDeepLink?.('reasons'); setTab('impostazioni'); }} style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}>{t('Personalizza', 'Customise')}</button>
+        )}
+      </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
         {reasons.map(([k, it, en]) => {
           const on = reason === k;
@@ -188,6 +228,15 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
     );
   }
 
+  /* ---- SPLIT flow: stacca un servizio e lo sposta (anche in un altro giorno) ---- */
+  if (flow === 'split' && splitItem) {
+    return (
+      <SplitFlow appt={appt} item={splitItem} t={t} lang={lang} fireToast={fireToast} operators={operators}
+        onBack={() => { setFlow(null); setSplitItem(null); }} onClose={onClose}
+        onDone={(res) => { setAppt(res.original); setFlow(null); setSplitItem(null); onMutate?.(); }} />
+    );
+  }
+
   /* ---- NO-SHOW flow ---- */
   if (flow === 'noshow') {
     return (
@@ -204,7 +253,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
           <FlowSteps steps={noShowSteps(appt, matchCount, t, lang)} />
         </div>
-        <ReasonPicker reasons={NOSHOW_REASONS} />
+        <ReasonPicker reasons={noShowReasons} />
       </DkModal>
     );
   }
@@ -225,7 +274,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
           <FlowSteps steps={cancelSteps(appt, lateCancel, matchCount, t, lang)} />
         </div>
-        <ReasonPicker reasons={CANCEL_REASONS} />
+        <ReasonPicker reasons={cancelReasons} />
       </DkModal>
     );
   }
@@ -239,6 +288,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: sm.color, background: sm.tint, padding: '3px 9px', borderRadius: 99 }}>{sm.label}</span>
+            {appt.forced && <span title={t('Inserito o spostato forzando le regole (fuori turno o sovrapposizione)', 'Inserted or moved overriding the rules (off shift or overlap)')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="alert" size={11} color="var(--warn)" />{t('Forzato', 'Forced')}</span>}
+            {(appt.gifts || []).length > 0 && <span title={(appt.gifts || []).map((g) => `${g.service_name} · ${g.code}${g.from_name ? ' · ' + t('da', 'from') + ' ' + g.from_name : ''}`).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="gift" size={11} color="var(--clay-ink)" />{t('Regalo', 'Gift')}{(appt.gifts || [])[0]?.from_name ? ' · ' + t('da', 'from') + ' ' + appt.gifts[0].from_name : ''}</span>}
             {(clientDetail?.categories || []).slice(0, 2).map((c) => (
               <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
             ))}
@@ -275,8 +326,50 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 13.5, color: dm.color }}>{dm.label}</div>
-                <div className="t-sm" style={{ color: 'var(--ink-2)' }}>{fmtEur(Number(appt.deposit_amount), lang)}</div>
+                <div className="t-sm" style={{ color: 'var(--ink-2)' }}>
+                  {fmtEur(Number(appt.deposit_amount), lang)}
+                  {/* Rimborso parziale: in cassa resta meno di quanto la cliente
+                      ha versato, e al checkout si detrae quel meno. Scrivere solo
+                      l'importo versato faceva leggere all'operatrice una cifra
+                      che il salone non ha più. */}
+                  {Number(appt.deposit_refunded_amount || 0) > 0 && (
+                    <span> · {t('rimborsati', 'refunded')} <b className="tabnum">{fmtEur(Number(appt.deposit_refunded_amount), lang)}</b>
+                      {appt.deposit_status === 'paid' && <>, {t('in cassa', 'in the till')} <b className="tabnum">{fmtEur(Number(appt.deposit_credit), lang)}</b></>}
+                    </span>
+                  )}
+                  {appt.deposit_status === 'required' && appt.deposit_due_at && !terminal && (
+                    <span> · {t('entro le', 'by')} <b className="tabnum">{new Date(appt.deposit_due_at).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>{t(', poi lo slot si libera', ', then the slot is freed')}</span>
+                  )}
+                </div>
+                {appt.deposit_status === 'required' && !terminal && hasScope('sales') && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    <button className="dk-btn dk-btn--soft" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={sendDepositLink} title={t('Crea il link di pagamento Stripe e lo manda alla cliente (WhatsApp via Yourang)', 'Creates the Stripe payment link and sends it to the client (WhatsApp via Yourang)')}>
+                      <Icon name="send" size={13} />{appt.deposit_payment_link ? t('Sollecita', 'Remind') : t('Invia link di pagamento', 'Send payment link')}
+                    </button>
+                    {appt.deposit_payment_link && (
+                      <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12 }} onClick={() => { navigator.clipboard?.writeText(appt.deposit_payment_link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); }}>
+                        <Icon name="copy" size={13} />{t('Copia link', 'Copy link')}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
+              {appt.deposit_status === 'refund_due' && hasScope('sales') && (
+                <button className="dk-btn dk-btn--soft" disabled={busy} style={{ height: 32, fontSize: 12.5, flexShrink: 0 }}
+                  title={t('Conferma di aver restituito la caparra alla cliente', 'Confirm you have returned the deposit to the client')}
+                  onClick={async () => {
+                    if (busy) return;
+                    setBusy(true);
+                    try {
+                      const res = await api.post(`/api/agenda/appointments/${appt.id}/deposit-refunded`, {});
+                      setAppt(res);
+                      fireToast({ msg: t('Caparra segnata come rimborsata', 'Deposit marked as refunded'), icon: 'check' });
+                    } catch (err) { toastErr(err, t, fireToast); }
+                    finally { setBusy(false); }
+                  }}>
+                  <Icon name="check" size={14} />{t('Segna rimborsata', 'Mark refunded')}
+                </button>
+              )}
             </div>
           )}
 
@@ -323,12 +416,15 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
           {/* services — read-only when terminal / no write scope, editable otherwise */}
           {!itemsEditable ? (
             <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
-              {(appt.items || []).map((it) => (
-                <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{it.service_name}</span>
-                  <span className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(it.duration_min, lang)} · {fmtEur(Number(it.price), lang)}</span>
-                </div>
-              ))}
+              {(appt.items || []).map((it) => {
+                const gift = (appt.gifts || []).find((g) => g.service_id === it.service_id);
+                return (
+                  <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0' }}>
+                    <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={`${t('Gift card', 'Gift card')} ${gift.code}`} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name="gift" size={10} color="var(--clay-ink)" />{t('Regalo', 'Gift')}</span>}</span>
+                    <span className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(it.duration_min, lang)} · {fmtEur(Number(it.price), lang)}</span>
+                  </div>
+                );
+              })}
               <div className="hr" style={{ margin: '8px 0' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
                 <span>{t('Totale', 'Total')}</span>
@@ -347,7 +443,15 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                     <div key={it.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
-                        <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcDisplayName(it)}</span>
+                        <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {svcDisplayName(it)}
+                          {(appt.gifts || []).some((g) => g.service_id === it.service_id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
+                        </span>
+                        {!isNew && (appt.items || []).length > 1 && (
+                          <button className="dk-iconbtn" title={t('Stacca questo servizio e spostalo in un altro orario o giorno', 'Detach this service and move it to another time or day')} onClick={() => { const orig = (appt.items || []).find((x) => x.id === it.id); if (orig) { setSplitItem(orig); setFlow('split'); } }} style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }}>
+                            <Icon name="calendar" size={14} />
+                          </button>
+                        )}
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
                           <NumInput integer min={5} value={it.duration_min} emptyValue=""
                             onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
@@ -439,10 +543,19 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             </div>
           )}
           {terminal && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 13px', borderRadius: 12, background: sm.tint }}>
-              <Icon name={sm.icon} size={16} color={sm.color} />
-              <span style={{ fontWeight: 700, fontSize: 13.5, color: sm.color }}>{sm.label}</span>
-              {appt.cancel_reason && <span className="t-sm" style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{appt.cancel_reason}</span>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 13px', borderRadius: 12, background: appt.auto_released ? 'var(--warn-tint)' : sm.tint }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <Icon name={appt.auto_released ? 'alert' : sm.icon} size={16} color={appt.auto_released ? 'var(--warn)' : sm.color} />
+                <span style={{ fontWeight: 700, fontSize: 13.5, color: appt.auto_released ? 'var(--warn)' : sm.color }}>{appt.auto_released ? t('Slot liberato: caparra non pagata in tempo', 'Slot freed: deposit not paid in time') : sm.label}</span>
+                {appt.cancel_reason && !appt.auto_released && <span className="t-sm" style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{appt.cancel_reason}</span>}
+              </div>
+              {appt.auto_released && canWrite && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button className="dk-btn dk-btn--soft" disabled={busy} style={{ height: 32, fontSize: 12.5 }} onClick={() => restoreReleased(false)}><Icon name="refresh" size={14} />{t('Ripristina', 'Restore')}</button>
+                  <button className="dk-btn dk-btn--ghost" disabled={busy} style={{ height: 32, fontSize: 12.5 }} onClick={() => restoreReleased(true)} title={t('Anche se lo slot è stato occupato (sovrapposizione)', 'Even if the slot has been taken (overlap)')}>{t('Ripristina comunque', 'Restore anyway')}</button>
+                  {appt.client?.phone && <a href={'tel:' + appt.client.phone} className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5, textDecoration: 'none' }}><Icon name="phone" size={14} />{t('Chiama', 'Call')}</a>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -451,7 +564,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
       {/* downgraded destructive actions */}
       {!terminal && canWrite && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, paddingTop: 14, marginTop: 14, borderTop: '1px solid var(--hair)' }}>
-          <button onClick={() => { setFlow('noshow'); setReason(NOSHOW_REASONS[0][0]); setReasonNote(''); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 8px' }}>
+          <button onClick={() => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 8px' }}>
             <Icon name="alert" size={15} color="var(--muted)" />No-show
           </button>
           <span style={{ width: 1, height: 16, background: 'var(--hair)' }} />
@@ -466,6 +579,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 
 /* ---- Riprogramma: pick a new slot via availability, then POST /move ---- */
 function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone }) {
+  const [manual, setManual] = useState('');
+  const [needForce, setNeedForce] = useState(false); // orario fuori dagli slot liberi o 409
   const [date, setDate] = useState(appt.start.slice(0, 10) >= todayStr() ? appt.start.slice(0, 10) : todayStr());
   const [slots, setSlots] = useState(null);
   const [selStart, setSelStart] = useState(null);
@@ -474,35 +589,43 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
   useEffect(() => {
     let alive = true;
     setSlots(null); setSelStart(null);
-    api.get('/api/agenda/availability', { params: { date, items } })
+    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id } })
       .then((res) => { if (alive) setSlots(res); })
       .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
     return () => { alive = false; };
   }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function move() {
+  async function move(force = false) {
     if (!selStart || busy) return;
     setBusy(true);
     try {
-      await api.post(`/api/agenda/appointments/${appt.id}/move`, { start: selStart });
-      fireToast({ msg: t('Appuntamento riprogrammato alle ' + timeLabel(minutesOfDay(selStart)), 'Rescheduled to ' + timeLabel(minutesOfDay(selStart))), icon: 'calendar' });
+      await api.post(`/api/agenda/appointments/${appt.id}/move`, { start: selStart, force: force || needForce });
+      fireToast({ msg: t('Appuntamento riprogrammato alle ' + timeLabel(minutesOfDay(selStart)), 'Rescheduled to ' + timeLabel(minutesOfDay(selStart))) + (force || needForce ? t(' · forzato', ' · forced') : ''), icon: 'calendar' });
       onDone();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        fireToast({ msg: t('Orario non più disponibile', 'Time no longer available'), icon: 'alert' });
-        setSelStart(null);
-        api.get('/api/agenda/availability', { params: { date, items } }).then(setSlots).catch(() => {});
+        // lo staff decide: altro orario o forzatura (straordinario, incastro)
+        setNeedForce(true);
+        fireToast({ msg: t('Orario occupato o fuori turno: puoi forzare con «Sposta comunque»', 'Time busy or off shift: you can override with “Move anyway”'), icon: 'alert' });
       } else toastErr(err, t, fireToast);
     } finally { setBusy(false); }
   }
+  const applyManual = () => {
+    if (!manual) return;
+    const minutes = hmToMin(manual);
+    const exact = (slots || []).find((s) => minutesOfDay(s.start) === minutes);
+    setSelStart(exact ? exact.start : isoAtMin(date, minutes));
+    setNeedForce(!exact);
+  };
+  const anyRecommended = (slots || []).some((s) => s.recommended) && (slots || []).some((s) => s.recommended === false);
 
   return (
     <DkModal open onClose={onClose} title={t('Riprogramma', 'Reschedule')} sub={`${appt.client?.full_name} · ${t('attuale', 'currently')} ${fmtDateIt(appt.start.slice(0, 10), { weekday: false })} ${timeLabel(aStartMin(appt))}`} width={560}
       foot={
         <React.Fragment>
           <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
-          <button className="dk-btn dk-btn--clay" disabled={!selStart || busy} onClick={move}>
-            <Icon name="calendar" size={16} color="#fff" />{t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
+          <button className={'dk-btn ' + (needForce ? 'dk-btn--soft' : 'dk-btn--clay')} disabled={!selStart || busy} onClick={() => move(false)} style={needForce ? { border: '1px solid var(--warn)' } : undefined}>
+            <Icon name={needForce ? 'alert' : 'calendar'} size={16} color={needForce ? 'var(--warn)' : '#fff'} />{needForce ? t('Sposta comunque', 'Move anyway') : t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
           </button>
         </React.Fragment>
       }>
@@ -523,8 +646,9 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {slots.map((s) => {
             const sel = s.start === selStart;
+            const meh = s.recommended === false;
             return (
-              <button key={s.start} onClick={() => setSelStart(s.start)} className="tabnum" style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1.5px solid ' + (sel ? 'var(--ink)' : 'var(--hair)'), background: sel ? 'var(--ink)' : 'var(--surface)', color: sel ? '#fff' : 'var(--ink)' }}>
+              <button key={s.start} onClick={() => { setSelStart(s.start); setNeedForce(false); }} className="tabnum" title={meh ? t('Lascerebbe un buco troppo corto per un altro servizio', 'Would leave a gap too short for another service') : ''} style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1.5px solid ' + (sel ? 'var(--ink)' : 'var(--hair)'), background: sel ? 'var(--ink)' : 'var(--surface)', color: sel ? '#fff' : 'var(--ink)', opacity: meh && !sel ? 0.55 : 1 }}>
                 {timeLabel(minutesOfDay(s.start))}
               </button>
             );
@@ -533,6 +657,115 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
       ) : (
         <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>{t('Nessuno slot libero in questa data', 'No free slot on this date')}</div>
       )}
+      {anyRecommended && <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5, marginTop: 8 }}>{t('Gli orari attenuati lascerebbero buchi invendibili.', 'Dimmed times would leave unsellable gaps.')}</div>}
+      {/* orario a mano: anche fuori turno o sopra un'altra prenotazione (forzato) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, border: '1px dashed var(--line-strong)', marginTop: 14, flexWrap: 'wrap' }}>
+        <Icon name="clock" size={16} color="var(--muted)" />
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{t('Orario a mano', 'Type a time')}</div>
+          <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Fuori turno o sovrapposto: si sposta forzando.', 'Off shift or overlapping: moved with override.')}</div>
+        </div>
+        <input type="time" value={manual} onChange={(e) => setManual(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyManual(); } }} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--mono, monospace)', fontWeight: 700, outline: 'none', width: 110 }} />
+        <button className="dk-btn dk-btn--soft" disabled={!manual} style={{ height: 34, fontSize: 12.5 }} onClick={applyManual}>{t('Usa', 'Use')}</button>
+      </div>
+      {needForce && selStart && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px', borderRadius: 12, background: 'var(--warn-tint)', marginTop: 10 }}>
+          <Icon name="alert" size={15} color="var(--warn)" />
+          <span className="t-sm" style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{t(`Le ${timeLabel(minutesOfDay(selStart))} non sono fra gli orari liberi: l’appuntamento verrà spostato comunque e segnato come forzato.`, `${timeLabel(minutesOfDay(selStart))} is not a free time: the appointment will be moved anyway and marked as forced.`)}</span>
+        </div>
+      )}
+    </DkModal>
+  );
+}
+
+/* ---- stacca un servizio: nuovo appuntamento della stessa cliente, altro orario/giorno ---- */
+function SplitFlow({ appt, item, t, lang, fireToast, operators, onBack, onClose, onDone }) {
+  const [date, setDate] = useState(appt.start.slice(0, 10));
+  const [slots, setSlots] = useState(null);
+  const [selStart, setSelStart] = useState(null);
+  const [manual, setManual] = useState('');
+  const [needForce, setNeedForce] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const items = [{ service_id: item.service_id, operator_id: item.operator_id }];
+  const op = operators.find((o) => o.id === item.operator_id);
+
+  useEffect(() => {
+    let alive = true;
+    setSlots(null); setSelStart(null); setNeedForce(false);
+    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id } })
+      .then((res) => { if (alive) setSlots(res); })
+      .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
+    return () => { alive = false; };
+  }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyManual = () => {
+    if (!manual) return;
+    const minutes = hmToMin(manual);
+    const exact = (slots || []).find((s) => minutesOfDay(s.start) === minutes);
+    setSelStart(exact ? exact.start : isoAtMin(date, minutes));
+    setNeedForce(!exact);
+  };
+
+  async function split() {
+    if (!selStart || busy) return;
+    setBusy(true);
+    try {
+      const res = await api.post(`/api/agenda/appointments/${appt.id}/split`, { item_id: item.id, start: selStart, force: needForce });
+      fireToast({ msg: t(`${item.service_name} spostato: ${fmtDateIt(selStart.slice(0, 10), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`, `${item.service_name} moved: ${fmtDateIt(selStart.slice(0, 10), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`), icon: 'calendar' });
+      onDone(res);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) { setNeedForce(true); fireToast({ msg: t('Orario occupato o fuori turno: puoi forzare con «Sposta comunque»', 'Time busy or off shift: you can override with “Move anyway”'), icon: 'alert' }); }
+      else toastErr(err, t, fireToast);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <DkModal open onClose={onClose} title={t('Stacca e sposta', 'Detach & move')} sub={`${item.service_name} · ${fmtDur(item.duration_min, lang)} · ${op ? op.first_name : ''}`} width={560}
+      foot={
+        <React.Fragment>
+          <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
+          <button className={'dk-btn ' + (needForce ? 'dk-btn--soft' : 'dk-btn--clay')} disabled={!selStart || busy} onClick={split} style={needForce ? { border: '1px solid var(--warn)' } : undefined}>
+            <Icon name={needForce ? 'alert' : 'calendar'} size={16} color={needForce ? 'var(--warn)' : '#fff'} />{needForce ? t('Sposta comunque', 'Move anyway') : t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
+          </button>
+        </React.Fragment>
+      }>
+      <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12, lineHeight: 1.45 }}>
+        {t('Il servizio diventa un appuntamento a sé della stessa cliente; gli altri servizi restano all’orario attuale. La caparra resta sull’appuntamento originale.', 'The service becomes its own appointment for the same client; the other services stay at the current time. The deposit stays on the original appointment.')}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '11px 14px', borderRadius: 12, border: '1px solid var(--hair)', background: 'var(--surface)' }}>
+        <Icon name="calendar" size={17} color="var(--clay-ink)" />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Nuova data', 'New date')}</div>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmtDateIt(date)}</div>
+        </div>
+        <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
+      </div>
+      <div className="t-meta" style={{ marginBottom: 9 }}>{t('Orari liberi per', 'Free times for')} {op ? op.first_name : t('l’operatrice', 'the stylist')}</div>
+      {slots === null ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{[...Array(10)].map((_, i) => <div key={i} className="skel" style={{ width: 56, height: 30, borderRadius: 8 }} />)}</div>
+      ) : slots.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {slots.map((s) => {
+            const sel = s.start === selStart;
+            return (
+              <button key={s.start} onClick={() => { setSelStart(s.start); setNeedForce(false); }} className="tabnum" style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1.5px solid ' + (sel ? 'var(--ink)' : 'var(--hair)'), background: sel ? 'var(--ink)' : 'var(--surface)', color: sel ? '#fff' : 'var(--ink)', opacity: s.recommended === false && !sel ? 0.55 : 1 }}>
+                {timeLabel(minutesOfDay(s.start))}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>{t('Nessuno slot libero in questa data', 'No free slot on this date')}</div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, border: '1px dashed var(--line-strong)', marginTop: 14, flexWrap: 'wrap' }}>
+        <Icon name="clock" size={16} color="var(--muted)" />
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{t('Orario a mano', 'Type a time')}</div>
+          <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Fuori turno o sovrapposto: si sposta forzando.', 'Off shift or overlapping: moved with override.')}</div>
+        </div>
+        <input type="time" value={manual} onChange={(e) => setManual(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyManual(); } }} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--mono, monospace)', fontWeight: 700, outline: 'none', width: 110 }} />
+        <button className="dk-btn dk-btn--soft" disabled={!manual} style={{ height: 34, fontSize: 12.5 }} onClick={applyManual}>{t('Usa', 'Use')}</button>
+      </div>
     </DkModal>
   );
 }

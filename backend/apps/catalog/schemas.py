@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from ninja import Schema
+from pydantic import Field
 
 
 # ---- Categorie --------------------------------------------------------------
@@ -33,6 +34,8 @@ class ServiceOut(Schema):
     category_id: int
     name_it: str
     name_en: str
+    description_it: str = ""
+    description_en: str = ""
     duration_min: int
     soak_min: int = 0
     price: Decimal
@@ -46,11 +49,13 @@ class ServiceIn(Schema):
     category_id: int
     name_it: str
     name_en: str = ""
-    duration_min: int
-    soak_min: int = 0
-    price: Decimal
-    product_cost: Decimal = Decimal("0")
-    supplier_cost: Decimal = Decimal("0")
+    description_it: str = Field("", max_length=600)
+    description_en: str = Field("", max_length=600)
+    duration_min: int = Field(..., ge=1, le=24 * 60)  # un servizio da zero minuti non esiste
+    soak_min: int = Field(0, ge=0, le=24 * 60)
+    price: Decimal = Field(..., ge=0)
+    product_cost: Decimal = Field(Decimal("0"), ge=0)
+    supplier_cost: Decimal = Field(Decimal("0"), ge=0)
     active: bool = True
     order: int = 0
 
@@ -60,7 +65,7 @@ class ServiceIn(Schema):
 
 class PackageItemIn(Schema):
     service_id: int
-    qty: int = 1
+    qty: int = Field(1, ge=1)
 
 
 class PackageItemOut(Schema):
@@ -72,7 +77,7 @@ class PackageItemOut(Schema):
 class PackageIn(Schema):
     name: str
     description: str = ""
-    price: Decimal
+    price: Decimal = Field(..., ge=0)
     active: bool = True
     items: list[PackageItemIn] = []
 
@@ -93,6 +98,8 @@ class PublicServiceOut(Schema):
     id: int
     name_it: str
     name_en: str
+    description_it: str = ""
+    description_en: str = ""
     duration_min: int
     price: Decimal
 

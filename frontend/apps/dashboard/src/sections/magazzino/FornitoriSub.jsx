@@ -1,7 +1,7 @@
 // FornitoriSub.jsx — supplier directory: CRUD on /api/inventory/suppliers.
 // DELETE returns 400 when the supplier still has products/orders attached → toast.
 import React, { useState } from 'react';
-import { api, EmptyState, Icon } from '@youty/shared';
+import { api, EmptyState, Icon, PhoneInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ORDER_METHODS, errMsg } from './lib.js';
 import { inputCss } from './bits.jsx';
@@ -30,7 +30,7 @@ function SupplierForm({ draft, setDraft, t, lang }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
         <div style={{ gridColumn: '1 / -1' }}><div className="t-meta" style={{ marginBottom: 5 }}>{t('Nome', 'Name')}</div><input value={draft.name} onChange={(e) => set({ name: e.target.value })} style={inputCss} /></div>
         <div><div className="t-meta" style={{ marginBottom: 5 }}>Email</div><input value={draft.email} onChange={(e) => set({ email: e.target.value })} placeholder="ordini@fornitore.it" style={inputCss} /></div>
-        <div><div className="t-meta" style={{ marginBottom: 5 }}>{t('Telefono', 'Phone')}</div><input value={draft.phone} onChange={(e) => set({ phone: e.target.value })} placeholder="+39 …" style={inputCss} /></div>
+        <div><div className="t-meta" style={{ marginBottom: 5 }}>{t('Telefono', 'Phone')}</div><PhoneInput value={draft.phone} onChange={(v) => set({ phone: v })} lang={lang} ariaLabel={t('Telefono', 'Phone')} /></div>
         <div style={{ gridColumn: '1 / -1' }}><div className="t-meta" style={{ marginBottom: 5 }}>{t('Indirizzo', 'Address')}</div><input value={draft.address} onChange={(e) => set({ address: e.target.value })} placeholder={t('Via, civico, città, CAP', 'Street, city, ZIP')} style={inputCss} /></div>
         <div><div className="t-meta" style={{ marginBottom: 5 }}>{t('Partita IVA', 'VAT no.')}</div><input value={draft.vat_number} onChange={(e) => set({ vat_number: e.target.value })} placeholder="IT01234567890" style={inputCss} /></div>
         <div><div className="t-meta" style={{ marginBottom: 5 }}>{t('Codice SDI / PEC', 'SDI code / PEC')}</div><input value={draft.sdi_pec} onChange={(e) => set({ sdi_pec: e.target.value })} placeholder="es. ABCDEFG" style={inputCss} /></div>

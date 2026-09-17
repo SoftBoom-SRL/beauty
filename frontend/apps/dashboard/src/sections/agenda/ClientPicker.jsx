@@ -3,24 +3,37 @@
 // componente, stessa UX. Tastiera: ↑/↓ scorrono, Invio seleziona, Esc chiude.
 // "Nuovo cliente" apre un mini-form (nome, cognome, telefono) precompilato con
 // quanto digitato: si crea e si seleziona senza uscire dalla prenotazione.
+// «Scheda completa» espande lo STESSO riquadro con tutto ciò che c'è in
+// anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
+// chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, PhoneInput, Toggle } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { initialsOf } from './lib.js';
 import { GenderPicker } from '../../ui/index.js';
+import { BirthdayInput } from '../clienti/components.jsx';
+
+// stesse origini proposte dalla scheda anagrafica completa
+const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
+const EMPTY_DRAFT = {
+  first_name: '', last_name: '', phone: '', gender: '',
+  email: '', birthday: '', lang: 'it', origin: '', tags: [], note: '',
+  privacy: true, marketing: false, whatsapp: true,
+};
 
 const looksLikePhone = (s) => /^[+\d][\d\s./-]{4,}$/.test(String(s || '').trim());
 
 export default function ClientPicker({ value, onChange, autoFocus = false, placeholder }) {
-  const { t, fireToast, hasScope } = useDash();
+  const { t, lang, fireToast, hasScope, clientCategories } = useDash();
   const canCreate = hasScope('clients');
+  const [full, setFull] = useState(false);   // scheda completa aperta
 
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState(null); // null = caricamento
   const [hi, setHi] = useState(0);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState({ first_name: '', last_name: '', phone: '', gender: '' });
+  const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef(null);
@@ -46,20 +59,35 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
 
   const startCreate = () => {
     const raw = q.trim();
-    const d = { first_name: '', last_name: '', phone: '', gender: '' };
+    const d = { ...EMPTY_DRAFT };
     if (looksLikePhone(raw)) d.phone = raw;
     else { const [first, ...rest] = raw.split(/\s+/).filter(Boolean); d.first_name = first || ''; d.last_name = rest.join(' '); }
-    setDraft(d); setErr(''); setCreating(true); setOpen(false);
+    setDraft(d); setErr(''); setCreating(true); setFull(false); setOpen(false);
     requestAnimationFrame(() => (d.first_name ? null : firstRef.current)?.focus?.());
   };
+  const setD = (patch) => setDraft((d) => ({ ...d, ...patch }));
 
   const create = async () => {
+    if (saving) return;   // niente doppia creazione da doppio Invio/clic
     const first = draft.first_name.trim(), last = draft.last_name.trim(), phone = draft.phone.trim();
     if (!first) { setErr(t('Il nome è obbligatorio', 'First name is required')); return; }
     if (!phone) { setErr(t('Il telefono è obbligatorio', 'Phone is required')); return; }
     setSaving(true); setErr('');
     try {
-      const c = await api.post('/api/clients/', { first_name: first, last_name: last, phone, gender: draft.gender || '' });
+      // stessi campi della scheda anagrafica: ciò che non viene compilato resta vuoto
+      const c = await api.post('/api/clients/', {
+        first_name: first, last_name: last, phone, gender: draft.gender || '',
+        email: draft.email.trim(), lang: draft.lang, category_ids: draft.tags,
+        birthday: draft.birthday || null,
+        origin: draft.origin.trim() || t('Inserimento manuale', 'Manual entry'),
+        whatsapp_reminders: draft.whatsapp,
+        consents: { privacy: draft.privacy, marketing: draft.marketing, card_charge: false },
+      });
+      if (draft.note.trim()) {
+        // la cliente esiste già: una nota non riuscita non deve bloccare la prenotazione
+        try { await api.post(`/api/clients/${c.id}/notes`, { text: draft.note.trim(), visibility: 'private' }); }
+        catch { /* ignora */ }
+      }
       fireToast({ msg: t(`Cliente creato: ${c.full_name}`, `Client created: ${c.full_name}`), icon: 'check' });
       pick(c);
     } catch (e) {
@@ -98,27 +126,102 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     );
   }
 
-  /* ---- creazione rapida ---- */
+  /* ---- creazione rapida (+ scheda completa a richiesta) ---- */
   if (creating) {
+    const Label = ({ children }) => <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 5 }}>{children}</div>;
     return (
       <div style={{ border: '1.5px solid var(--clay)', borderRadius: 12, padding: 12, background: 'var(--surface)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center' }}><Icon name="user" size={15} color="var(--clay-ink)" /></div>
           <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{t('Nuovo cliente', 'New client')}</div>
-          <button type="button" onClick={() => { setCreating(false); setOpen(true); setTimeout(() => inputRef.current?.focus(), 30); }} className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} aria-label={t('Annulla', 'Cancel')}><Icon name="x" size={14} /></button>
+          <button type="button" onClick={() => { setCreating(false); setFull(false); setOpen(true); setTimeout(() => inputRef.current?.focus(), 30); }} className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} aria-label={t('Annulla', 'Cancel')}><Icon name="x" size={14} /></button>
         </div>
+
+        {/* essenziale: nome, cognome, telefono, genere */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-          <input ref={firstRef} autoFocus={!draft.first_name} value={draft.first_name} onChange={(e) => setDraft((d) => ({ ...d, first_name: e.target.value }))} placeholder={t('Nome *', 'First name *')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
-          <input value={draft.last_name} onChange={(e) => setDraft((d) => ({ ...d, last_name: e.target.value }))} placeholder={t('Cognome', 'Last name')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
+          <input ref={firstRef} autoFocus={!draft.first_name} value={draft.first_name} onChange={(e) => setD({ first_name: e.target.value })} placeholder={t('Nome *', 'First name *')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
+          <input value={draft.last_name} onChange={(e) => setD({ last_name: e.target.value })} placeholder={t('Cognome', 'Last name')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
         </div>
-        <input value={draft.phone} inputMode="tel" onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))} placeholder={t('Telefono * (es. 333 1234567)', 'Phone * (e.g. 333 1234567)')} style={{ ...inputCss, marginBottom: 8 }} onKeyDown={(e) => e.key === 'Enter' && create()} autoFocus={!!draft.first_name} />
+        <div style={{ marginBottom: 8 }}>
+          <PhoneInput value={draft.phone} onChange={(v) => setD({ phone: v })} lang={lang} autoFocus={!!draft.first_name} onEnter={create} ariaLabel={t('Telefono', 'Phone')} />
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: 12 }}>{t('Genere', 'Gender')}</span>
-          <GenderPicker value={draft.gender} onChange={(g) => setDraft((d) => ({ ...d, gender: g }))} t={t} compact />
+          <GenderPicker value={draft.gender} onChange={(g) => setD({ gender: g })} t={t} compact />
         </div>
+
+        {/* scheda completa: tutto il resto dell'anagrafica, senza uscire da qui */}
+        {full && (
+          <div style={{ borderTop: '1px solid var(--hair)', paddingTop: 10, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div>
+              <Label>Email</Label>
+              <input type="email" value={draft.email} onChange={(e) => setD({ email: e.target.value })} placeholder="nome@email.it" style={inputCss} />
+            </div>
+            <div>
+              <Label>{t('Compleanno', 'Birthday')}</Label>
+              <BirthdayInput value={draft.birthday} onChange={(v) => setD({ birthday: v })} t={t} lang={lang} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <Label>{t('Lingua', 'Language')}</Label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[['it', 'Italiano'], ['en', 'English']].map(([k, l]) => (
+                    <button key={k} type="button" onClick={() => setD({ lang: k })} className={'dk-pill' + (draft.lang === k ? ' dk-pill--on' : '')} style={{ padding: '5px 11px', fontSize: 12 }}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label>{t('Come ci ha conosciuto', 'How they found us')}</Label>
+                <input list="dk-origins" value={draft.origin} onChange={(e) => setD({ origin: e.target.value })} placeholder={t('es. Passaparola', 'e.g. Word of mouth')} style={inputCss} />
+                <datalist id="dk-origins">{ORIGINS.map((o) => <option key={o} value={o} />)}</datalist>
+              </div>
+            </div>
+            {(clientCategories || []).length > 0 && (
+              <div>
+                <Label>{t('Etichette', 'Labels')}</Label>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {clientCategories.map((cat) => {
+                    const on = draft.tags.includes(cat.id);
+                    return (
+                      <button key={cat.id} type="button" onClick={() => setD({ tags: on ? draft.tags.filter((x) => x !== cat.id) : [...draft.tags, cat.id] })} className={'dk-pill' + (on ? ' dk-pill--on' : '')} style={{ padding: '4px 10px 4px 8px', fontSize: 12 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 99, background: cat.color }} />{cat.name}{on && <Icon name="check" size={11} stroke={2.6} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div>
+              <Label>{t('Nota iniziale (privata)', 'First note (private)')}</Label>
+              <textarea value={draft.note} onChange={(e) => setD({ note: e.target.value })} rows={2} placeholder={t('es. allergica alla resina, preferisce il pomeriggio…', 'e.g. allergic to resin, prefers afternoons…')} style={{ ...inputCss, resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 10 }}>
+              {[
+                ['privacy', t('Consenso privacy', 'Privacy consent'), t('Obbligatorio per trattare i dati', 'Required to process personal data')],
+                ['marketing', t('Consenso marketing', 'Marketing consent'), t('Promozioni e comunicazioni', 'Promotions and campaigns')],
+                ['whatsapp', t('Promemoria WhatsApp', 'WhatsApp reminders'), t('Conferme e promemoria appuntamento', 'Booking confirmations and reminders')],
+              ].map(([k, label, sub]) => (
+                <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12.5 }}>{label}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11 }}>{sub}</div>
+                  </div>
+                  <Toggle on={draft[k]} onChange={(v) => setD({ [k]: v })} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {err && <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}><Icon name="alert" size={14} color="var(--danger)" />{err}</div>}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className="t-sm" style={{ color: 'var(--muted-2)', flex: 1 }}>{t('Il resto della scheda si completa dopo.', 'You can complete the profile later.')}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => setFull((v) => !v)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', padding: 0 }}>
+            <Icon name="chevD" size={13} color="var(--clay-ink)" style={{ transform: full ? 'rotate(180deg)' : 'none', transition: 'transform 140ms' }} />
+            {full ? t('Solo l’essenziale', 'Essentials only') : t('Scheda completa', 'Full profile')}
+          </button>
+          <span className="t-sm" style={{ color: 'var(--muted-2)', flex: 1, minWidth: 90, fontSize: 11.5 }}>
+            {full ? t('Tutto quello che c’è in anagrafica.', 'Everything the client profile holds.') : t('Il resto si completa dopo.', 'You can complete it later.')}
+          </span>
           <button type="button" className="dk-btn dk-btn--clay" style={{ height: 36, fontSize: 13 }} onClick={create} disabled={saving}>
             <Icon name="check" size={15} color="#fff" />{saving ? t('Creazione…', 'Creating…') : t('Crea e seleziona', 'Create & select')}
           </button>
