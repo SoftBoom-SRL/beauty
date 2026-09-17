@@ -246,6 +246,37 @@ stesso, ma Yourang non spinge eventi: il sync resta quello iniziale.
 Per svuotarli serve un job schedulato (Coolify → *Scheduled Tasks* sulla risorsa
 `beauty-api`), comando `python manage.py flush_outbox`.
 
+## Deploy automatico
+
+Ogni push su `main` fa partire il deploy dei tre servizi (`beauty-api`,
+`beauty-dashboard`, `beauty-client`). Il tramite è un **webhook del repository**,
+non la GitHub App: l'installazione `foodsoftboom` sull'organizzazione è a
+repository selezionati e non comprende `beauty`, quindi i suoi eventi non
+arrivavano e la coda di Coolify restava vuota dopo ogni merge.
+
+- Webhook: `SoftBoom-SRL/beauty` → Settings → Webhooks →
+  `https://coolify.softboom.it/webhooks/source/github/events/manual`,
+  content type `application/json`, solo l'evento `push`, secret condiviso.
+- Lo stesso secret sta su tutte e tre le applicazioni Coolify, nel campo
+  `manual_webhook_secret_github`: Coolify cerca le applicazioni per repository e
+  branch, e per ciascuna verifica la firma `X-Hub-Signature-256` con il PROPRIO
+  secret. Se i tre valori divergono, si deploya solo quella che combacia.
+- Nessun `watch_paths` impostato: ogni push su `main` ricostruisce tutti e tre.
+  Se un giorno diventasse un problema, si restringono da Coolify (per esempio
+  `backend/*` sull'api) invece di creare webhook separati.
+
+Per rimettere tutto sulla GitHub App servirebbe che un Organization Owner
+aggiunga `beauty` ai repository dell'installazione `foodsoftboom`; a quel punto
+questo webhook si può togliere.
+
+Verifica rapida dopo un push:
+
+```bash
+ssh root@91.99.117.151 'docker exec coolify-db psql -U coolify -d coolify -At \
+  -c "select application_id, status, created_at from application_deployment_queues \
+      order by id desc limit 3"'
+```
+
 ## HTTPS e cookie
 
 I cookie di sessione e CSRF (quelli dell'admin Django) viaggiano solo su HTTPS
