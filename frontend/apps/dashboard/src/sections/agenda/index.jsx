@@ -281,7 +281,14 @@ export default function AgendaSection() {
   const onInvalidDrop = (verdict, d, intent) => {
     const label = t('Non spostato · ', 'Not moved · ') + verdict.label + (verdict.detail ? ' · ' + verdict.detail : '');
     if (!canWrite || !intent) { fireToast({ msg: label, icon: 'alert' }); return; }
-    if (intent.kind === 'appt') {
+    if (intent.kind === 'split') {
+      // Senza questo ramo lo stacco su uno slot non valido non faceva NULLA: il
+      // blocco tornava al suo posto e non succedeva niente.
+      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, {
+        force: true,
+        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
+      });
+    } else if (intent.kind === 'appt') {
       moveAppt(intent.appt, intent.newApptStart, intent.opArg, {
         force: true,
         warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),

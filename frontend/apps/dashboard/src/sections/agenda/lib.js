@@ -249,7 +249,10 @@ export function cancelSteps(appt, late, matchCount, t, lang) {
  * `soak` è ok=true con avviso: sovrapposizione alla posa altrui (ammessa a mano).
  */
 export function explainSlot(row, startMin, durMin, opts = {}) {
-  const { excludeApptId = null, excludePauseId = null, nowMin = null, t = (it) => it, rows = null } = opts;
+  // `excludeItemId`: serve allo stacco, dove si muove UN servizio solo. Gli
+  // altri della stessa visita restano dov'erano e occupano davvero quel tempo,
+  // quindi non si può escludere l'intero appuntamento come in uno spostamento.
+  const { excludeApptId = null, excludeItemId = null, excludePauseId = null, nowMin = null, t = (it) => it, rows = null } = opts;
   const endMin = startMin + Math.max(durMin || 0, 1);
   const win = (row?.windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const winLabel = win.map(([a, b]) => `${timeLabel(a)}–${timeLabel(b)}`).join(' · ');
@@ -295,6 +298,7 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
     if (excludeApptId != null && a.id === excludeApptId) continue;
     if (a.status === 'cancelled' || a.status === 'no_show') continue;
     for (const b of itemBlocks(a)) {
+      if (excludeItemId != null && b.item.id === excludeItemId) continue;
       if (b.opId !== row.operator?.id) continue;
       const activeEnd = b.startMin + b.activeMin;
       if (b.startMin < endMin && activeEnd > startMin) {

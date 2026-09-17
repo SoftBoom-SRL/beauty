@@ -136,6 +136,16 @@ export default function DayGrid({
     }
     const appt = d.block.appt;
     const multi = (appt.items || []).length > 1;
+    if (d.detach) {
+      // Si muove solo questo servizio: validarlo come se si spostasse tutta la
+      // visita dava un verdetto su uno spostamento che non sta avvenendo, e lo
+      // stacco veniva rifiutato senza che succedesse niente.
+      const row = rowOf(d.nop);
+      if (!row) return null;
+      return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
+        excludeItemId: d.itemId, nowMin, t, rows,
+      });
+    }
     const delta = d.ns - d.orig;
     let warn = null;
     for (const b of itemBlocks(appt)) {
