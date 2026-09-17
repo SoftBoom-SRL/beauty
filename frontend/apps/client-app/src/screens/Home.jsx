@@ -7,7 +7,7 @@ import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
   Meta, useClientAppointments, relLabel, fmtApptDate, apptTime, apptDur,
-  apptServiceNames, mapsUrl, downloadIcs, errToast,
+  apptServiceNames, mapsUrl, downloadIcs, errToast, DepositDue,
 } from './lib.jsx';
 
 /* cover with monogram (prototype Cover, data from brand) */
@@ -131,6 +131,8 @@ function HomeLogged() {
                 <Meta icon="clock" text={apptTime(next.start) + ' · ' + fmtDur(apptDur(next), lang)} />
                 {next.operator?.name && <Meta icon="user" text={next.operator.name} />}
               </div>
+              {/* caparra da versare: l'orario resta bloccato solo fino alla scadenza */}
+              <DepositDue appt={next} t={t} lang={lang} fireToast={fireToast} />
               {/* primary card action — Sposta */}
               <button className="press" onClick={() => setView('sposta', { appt: next })}
                 style={{ width: '100%', minHeight: 50, marginTop: 18, borderRadius: 'var(--r-pill)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'transparent', border: '1.5px solid var(--brand)', color: 'var(--brand-ink)', fontWeight: 700, fontSize: 15 }}>

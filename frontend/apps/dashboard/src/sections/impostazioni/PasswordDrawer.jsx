@@ -10,6 +10,25 @@ import { inputCss, toastErr } from './lib.jsx';
 
 const MIN_LEN = 8;
 
+/* Definito FUORI dal componente: una funzione creata a ogni render è un tipo di
+ * componente nuovo a ogni render, quindi React smontava e rimontava l'input a
+ * ogni carattere e il campo perdeva il cursore. */
+function Field({ label, value, onChange, autoComplete, err, show }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div className="t-meta" style={{ marginBottom: 8 }}>{label}</div>
+      <input
+        type={show ? 'text' : 'password'}
+        value={value}
+        autoComplete={autoComplete}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ ...inputCss, width: '100%', boxSizing: 'border-box' }}
+      />
+      {err && <div className="t-sm" style={{ color: 'var(--danger)', marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+
 export default function PasswordDrawer({ onClose }) {
   const { t, session, fireToast } = useDash();
   const [cur, setCur] = useState('');
@@ -38,20 +57,6 @@ export default function PasswordDrawer({ onClose }) {
     finally { setSaving(false); }
   };
 
-  const Field = ({ label, value, onChange, autoComplete, err }) => (
-    <div style={{ marginBottom: 14 }}>
-      <div className="t-meta" style={{ marginBottom: 8 }}>{label}</div>
-      <input
-        type={show ? 'text' : 'password'}
-        value={value}
-        autoComplete={autoComplete}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ ...inputCss, width: '100%', boxSizing: 'border-box' }}
-      />
-      {err && <div className="t-sm" style={{ color: 'var(--danger)', marginTop: 6 }}>{err}</div>}
-    </div>
-  );
-
   return (
     <DkDrawer open onClose={onClose}>
       <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -63,11 +68,11 @@ export default function PasswordDrawer({ onClose }) {
       </div>
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 30px' }}>
-        <Field label={t('Password attuale', 'Current password')} value={cur} onChange={setCur} autoComplete="current-password" />
-        <Field label={t('Nuova password', 'New password')} value={next} onChange={setNext} autoComplete="new-password"
+        <Field show={show} label={t('Password attuale', 'Current password')} value={cur} onChange={setCur} autoComplete="current-password" />
+        <Field show={show} label={t('Nuova password', 'New password')} value={next} onChange={setNext} autoComplete="new-password"
           err={tooShort ? t(`Almeno ${MIN_LEN} caratteri`, `At least ${MIN_LEN} characters`)
              : same ? t('Deve essere diversa da quella attuale', 'Must differ from the current one') : null} />
-        <Field label={t('Ripeti la nuova password', 'Repeat new password')} value={conf} onChange={setConf} autoComplete="new-password"
+        <Field show={show} label={t('Ripeti la nuova password', 'Repeat new password')} value={conf} onChange={setConf} autoComplete="new-password"
           err={mismatch ? t('Le due password non coincidono', 'The two passwords do not match') : null} />
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 20, cursor: 'pointer' }}>

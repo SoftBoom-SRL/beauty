@@ -2,6 +2,8 @@ import json
 from datetime import timedelta
 from decimal import Decimal
 
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.utils import timezone
 from ninja.errors import HttpError
@@ -40,6 +42,16 @@ class GiftCardTests(TestCase):
         self.assertEqual(len(card.code), 12)
         self.assertEqual(card.balance, Decimal("100"))
         self.assertEqual(card.payment_status, GiftCard.PaymentStatus.UNPAID)
+        self.assertEqual(card.status, GiftCard.Status.ACTIVE)
+
+    def test_redeem_unpaid_card_is_refused(self):
+        card = create_gift_card(self.salon, Decimal("50"))  # dall'app: nasce «da pagare»
+        with self.assertRaises(HttpError) as caught:
+            redeem_gift_card(self.salon, card.code, Decimal("50"))
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertIn("non ancora pagata", str(caught.exception))
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("50"))
         self.assertEqual(card.status, GiftCard.Status.ACTIVE)
 
     def test_redeem_scales_balance_and_blocks_over_balance(self):
@@ -351,3 +363,241 @@ class CommunicationTests(TestCase):
         event = OutboxEvent.objects.get(salon=self.salon, event_type="communication.send")
         self.assertEqual(event.payload["scheduled_at"], when.isoformat())
         self.assertEqual(event.payload["client_ids"], [client.id])
+
+
+class GiftCardFlowTests(TestCase):
+    """Flusso completo del regalo: chi la compra, chi riceve il credito, dove si
+    vede (portafoglio cliente, agenda, scheda) e come entra nei conteggi."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, User
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        owner = User.objects.create_user(email="owner@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        self.buyer = _make_client(self.salon, first_name="Anna", phone="+393330001111")
+        self.recipient = _make_client(self.salon, first_name="Sofia", phone="+393330002222")
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
+        self.service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Piega", duration_min=60, price=Decimal("40.00")
+        )
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="B")
+        self.operator.services.add(self.service)
+
+    def _post(self, url, body, auth=None):
+        return self.client.post(url, data=json.dumps(body), content_type="application/json", **(auth or self.auth))
+
+    def _client_auth(self, client_obj):
+        from common.auth import create_client_tokens
+
+        return {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(client_obj)['access']}"}
+
+    def test_gifted_treatment_reaches_the_recipient_end_to_end(self):
+        # 1) il salone vende una gift card «a trattamento», pagata subito
+        res = self._post("/api/marketing/gift-cards", {
+            "value": "0", "gift_service_id": self.service.id,
+            "buyer_client_id": self.buyer.id, "recipient_client_id": self.recipient.id,
+            "recipient_name": self.recipient.full_name, "paid": True, "paid_method": "card",
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        card = res.json()
+        # il valore è il prezzo del servizio, non quello inviato
+        self.assertEqual(Decimal(card["initial_value"]), Decimal("40.00"))
+        self.assertEqual(card["gift_service_name"], "Piega")
+        self.assertEqual(card["buyer_name"], self.buyer.full_name)
+        self.assertEqual(card["payment_status"], "paid")
+
+        # 2) la destinataria vede il credito nel suo portafoglio, con il trattamento e da chi
+        wallet = self.client.get("/api/marketing/client/wallet", **self._client_auth(self.recipient)).json()
+        self.assertEqual(len(wallet["gift_cards"]), 1)
+        mine = wallet["gift_cards"][0]
+        self.assertEqual(Decimal(mine["balance"]), Decimal("40.00"))
+        self.assertEqual(mine["gift_service_name"], "Piega")
+        self.assertEqual(mine["buyer_name"], self.buyer.full_name)
+        self.assertTrue(mine["received"])
+        # anche l'acquirente la vede, ma come carta comprata
+        bought = self.client.get("/api/marketing/client/wallet", **self._client_auth(self.buyer)).json()["gift_cards"][0]
+        self.assertFalse(bought["received"])
+
+        # 3) la destinataria prenota quel trattamento: l'agenda mostra il regalo
+        from apps.agenda.services import create_appointment
+        from django.utils import timezone
+        import datetime as dt
+
+        day = timezone.localdate() + dt.timedelta(days=3)
+        start = timezone.make_aware(dt.datetime.combine(day, dt.time(10, 0)))
+        with patch("apps.staff.services.shift_windows", return_value=[(9 * 60, 18 * 60)]):
+            appointment = create_appointment(
+                self.salon, self.recipient,
+                [{"service_id": self.service.id, "operator_id": self.operator.id}], start, via="app",
+            )
+            day_view = self.client.get("/api/agenda/day", {"date": day.isoformat()}, **self.auth).json()
+        out = next(a for row in day_view for a in row["appointments"] if a["id"] == appointment.id)
+        self.assertEqual([g["code"] for g in out["gifts"]], [card["code"]])
+        self.assertEqual(out["gifts"][0]["service_name"], "Piega")
+        self.assertEqual(out["gifts"][0]["from_name"], self.buyer.full_name)
+
+        # 4) checkout con la gift card: saldo azzerato, carta esaurita
+        res = self._post(f"/api/sales/checkout/{appointment.id}", {
+            "blocks": [{"operator_id": self.operator.id, "lines": [
+                {"line_type": "service", "service_id": self.service.id, "qty": 1, "unit_price": "40.00"},
+            ]}],
+            "payments": [{"method": "gift_card", "amount": "40.00", "gift_card_code": card["code"]}],
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        gc = GiftCard.objects.get(code=card["code"])
+        self.assertEqual(gc.balance, Decimal("0.00"))
+        self.assertEqual(gc.status, GiftCard.Status.REDEEMED)
+
+        # 5) conteggi: incassato oggi ≠ venduto, il regalo non conta due volte
+        summary = self.client.get("/api/sales/today-summary", **self.auth).json()
+        self.assertEqual(Decimal(summary["total"]), Decimal("40.00"))
+        self.assertEqual(Decimal(summary["gift_card_redeemed"]), Decimal("40.00"))
+        self.assertEqual(Decimal(summary["cash_in"]), Decimal("0.00"))
+
+        # 6) la scheda cliente dello staff trova la carta per client_id (acquirente o destinataria)
+        listing = self.client.get("/api/marketing/gift-cards", {"client_id": self.recipient.id}, **self.auth).json()
+        self.assertEqual([g["code"] for g in listing["items"]], [card["code"]])
+        self.assertEqual(
+            self.client.get("/api/marketing/gift-cards", {"client_id": self.buyer.id}, **self.auth).json()["items"][0]["code"],
+            card["code"],
+        )
+
+    def test_unpaid_card_is_not_spendable_and_not_offered_in_the_agenda(self):
+        from apps.agenda.api import gift_index
+
+        res = self._post("/api/marketing/gift-cards", {
+            "value": "0", "gift_service_id": self.service.id,
+            "recipient_client_id": self.recipient.id, "recipient_name": self.recipient.full_name, "paid": False,
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        code = res.json()["code"]
+        # non spendibile finché non è incassata
+        with self.assertRaises(HttpError) as caught:
+            redeem_gift_card(self.salon, code, Decimal("10"))
+        self.assertEqual(caught.exception.status_code, 422)
+        # e non compare come regalo in agenda
+        self.assertEqual(gift_index(self.salon, [self.recipient.id]), {})
+        # una volta incassata, entrambe le cose funzionano
+        card = GiftCard.objects.get(code=code)
+        res = self._post(f"/api/marketing/gift-cards/{card.id}/mark-paid", {"method": "cash"})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(len(gift_index(self.salon, [self.recipient.id])[self.recipient.id]), 1)
+        redeem_gift_card(self.salon, code, Decimal("10"))
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("30.00"))
+
+    def test_card_without_a_client_stays_code_only(self):
+        """Regalo consegnato a mano (solo il nome): nessun portafoglio, vale il codice."""
+        from apps.agenda.api import gift_index
+
+        res = self._post("/api/marketing/gift-cards", {
+            "value": "50", "buyer_client_id": self.buyer.id, "recipient_name": "Zia Carla", "paid": True, "paid_method": "cash",
+        })
+        self.assertEqual(res.status_code, 200, res.content)
+        code = res.json()["code"]
+        # l'acquirente la vede (l'ha comprata), ma non è un regalo «a trattamento»
+        wallet = self.client.get("/api/marketing/client/wallet", **self._client_auth(self.buyer)).json()
+        self.assertEqual([g["code"] for g in wallet["gift_cards"]], [code])
+        self.assertIsNone(wallet["gift_cards"][0]["gift_service_id"])
+        self.assertEqual(gift_index(self.salon, [self.buyer.id, self.recipient.id]), {})
+        # il codice però vale in cassa
+        redeem_gift_card(self.salon, code, Decimal("50"))
+        self.assertEqual(GiftCard.objects.get(code=code).balance, Decimal("0.00"))
+
+
+class LoyaltyRewardIssueTests(TestCase):
+    """Ogni tipo di premio offerto dall'interfaccia deve essere emettibile.
+
+    Il «servizio omaggio» diventava un coupon da 0 €, senza traccia del servizio:
+    la cliente raggiungeva la soglia, perdeva i punti e riceveva un buono che non
+    scontava niente.
+    """
+
+    def setUp(self):
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.clients.models import Client
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        self.service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Manicure",
+            duration_min=30, price=Decimal("30.00"),
+        )
+
+    def _sell(self):
+        from apps.sales.services import finalize_sale
+
+        return finalize_sale(
+            self.salon,
+            kind="pos",
+            client=self.client_obj,
+            blocks=[{"lines": [
+                {"line_type": "service", "service_id": self.service.id,
+                 "unit_price": "30.00", "qty": 1},
+            ]}],
+            payments=[{"method": "cash", "amount": "30.00"}],
+        )
+
+    def _program(self, **fields):
+        return LoyaltyProgram.objects.create(
+            salon=self.salon, name="Fedeltà", threshold=1,
+            earn_metric="per_visit", earn_ratio=1, **fields,
+        )
+
+    def test_a_free_service_reward_issues_a_card_for_that_service(self):
+        self._program(reward_type="free_service", reward_service=self.service, reward_value=0)
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.gift_service_id, self.service.id)
+        self.assertEqual(card.initial_value, Decimal("30.00"))
+        self.assertEqual(card.balance, Decimal("30.00"))
+        self.assertEqual(card.recipient_client_id, self.client_obj.id)
+        # Pagata: è un premio, non una carta venduta da incassare.
+        self.assertEqual(card.payment_status, GiftCard.PaymentStatus.PAID)
+        self.assertFalse(Coupon.objects.filter(salon=self.salon).exists())
+
+    def test_a_gift_card_reward_issues_a_card_of_that_value(self):
+        self._program(reward_type="gift_card", reward_value=Decimal("20.00"))
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.initial_value, Decimal("20.00"))
+        self.assertIsNone(card.gift_service_id)
+
+    def test_a_coupon_reward_still_issues_a_coupon(self):
+        self._program(reward_type="coupon_amount", reward_value=Decimal("15.00"))
+        self._sell()
+        coupon = Coupon.objects.get(salon=self.salon)
+        self.assertEqual(coupon.kind, Coupon.Kind.AMOUNT)
+        self.assertEqual(coupon.value, Decimal("15.00"))
+
+    def test_a_reward_that_cannot_be_issued_does_not_burn_the_points(self):
+        program = self._program(reward_type="free_service", reward_service=None, reward_value=0)
+        self._sell()
+        self.assertFalse(GiftCard.objects.filter(salon=self.salon).exists())
+        self.assertFalse(Coupon.objects.filter(salon=self.salon).exists())
+        account = LoyaltyAccount.objects.get(program=program, client=self.client_obj)
+        self.assertEqual(account.points, 1)  # il punto resta alla cliente
+
+    def test_the_api_refuses_a_reward_the_till_cannot_honour(self):
+        from apps.accounts.models import Membership, User
+
+        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        token = create_staff_tokens(user, self.salon)["access"]
+        response = self.client.post(
+            "/api/marketing/loyalty-programs",
+            json.dumps({
+                "name": "Prodotto omaggio", "threshold": 5,
+                "reward_type": "free_product", "reward_value": "0",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 422, response.content)

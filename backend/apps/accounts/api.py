@@ -1,5 +1,7 @@
 """Endpoint /api/auth — login staff, team & ruoli, inviti, login OTP clienti."""
 
+import logging
+
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -16,7 +18,9 @@ from common.auth import (
     decode_token,
     staff_auth,
 )
+from common import ratelimit
 from common.permissions import SCOPES, require_scope
+from common.phone import canonical_phone, find_client_by_phone
 from common.utils import salon_get
 
 from .models import Invitation, Membership, Role, User
@@ -42,6 +46,8 @@ from .schemas import (
     StaffLoginIn,
 )
 from .services import issue_otp, verify_otp
+
+logger = logging.getLogger(__name__)
 
 router = Router(tags=["accounts"])
 
@@ -99,9 +105,8 @@ def _salon_by_slug(slug: str) -> Salon:
 
 
 def _client_by_phone(salon, phone: str):
-    from apps.clients.models import Client  # lazy: evita cicli in fase di load
-
-    client = Client.objects.filter(salon=salon, phone=phone.strip(), is_active=True).first()
+    """Cliente attivo con quel numero, comunque scritto («+39 333…», «333…», «0039…»)."""
+    client = find_client_by_phone(salon, phone, active_only=True)
     if client is None:
         raise HttpError(404, "Numero non registrato")
     return client
@@ -128,11 +133,35 @@ def _validate_scopes(scopes: list[str]) -> None:
 # ---- Staff: login e sessione -------------------------------------------------
 
 
+# Tentativi di accesso staff. Le due chiavi servono a scopi diversi: quella per
+# account ferma chi prova mille password su una casella conosciuta, quella per IP
+# ferma chi prova la stessa password su mille caselle. Nessun blocco permanente:
+# la finestra scade da sola, altrimenti basterebbe sbagliare apposta la password
+# di una collega per tenerla fuori dal gestionale. Un accesso riuscito azzera il
+# contatore dell'account, così chi conosce la propria password non paga i
+# tentativi di altri.
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_PER_ACCOUNT = 10
+LOGIN_MAX_PER_IP = 50
+
+
 @router.post("/staff/login", response=StaffAuthOut)
 def staff_login(request, data: StaffLoginIn):
-    user = User.objects.filter(email__iexact=data.email.strip()).first()
+    email = data.email.strip()
+    account_key = f"login-account:{email.lower()}"
+    # Si contano tutti i tentativi, non solo quelli falliti: contare dopo aver
+    # verificato la password lascerebbe una finestra fra lettura e incremento.
+    ip_ok = ratelimit.hit(
+        f"login-ip:{ratelimit.client_ip(request)}", LOGIN_MAX_PER_IP, LOGIN_WINDOW_SECONDS
+    )
+    account_ok = ratelimit.hit(account_key, LOGIN_MAX_PER_ACCOUNT, LOGIN_WINDOW_SECONDS)
+    if not (ip_ok and account_ok):
+        raise HttpError(429, "Troppi tentativi di accesso: riprova tra qualche minuto")
+
+    user = User.objects.filter(email__iexact=email).first()
     if user is None or not user.is_active or not user.check_password(data.password):
         raise HttpError(401, "Credenziali non valide")
+    ratelimit.reset(account_key)
     membership = _first_membership(user)
     if membership is None:
         raise HttpError(403, "Nessun salone associato a questo utente")
@@ -377,6 +406,17 @@ def accept_invitation(request, data: InvitationAcceptIn):
         raise HttpError(400, "Invito scaduto")
     if User.objects.filter(email__iexact=invitation.email).exists():
         raise HttpError(400, "Esiste già un utente con questa email")
+    # Le stesse regole del cambio password: senza questo controllo l'invito
+    # creava account con password vuota, che poi funzionava al login. Si valida
+    # prima di toccare qualsiasi cosa, così un rifiuto lascia l'invito
+    # utilizzabile.
+    candidate = User(
+        email=invitation.email, first_name=data.first_name, last_name=data.last_name
+    )
+    try:
+        validate_password(data.password, candidate)
+    except ValidationError as exc:
+        raise HttpError(400, " ".join(exc.messages))
 
     with transaction.atomic():
         user = User.objects.create_user(
@@ -403,16 +443,38 @@ def accept_invitation(request, data: InvitationAcceptIn):
 
 # ---- Cliente (web app): registrazione e login OTP --------------------------------
 
+# Registrazioni accettate per finestra. Sono numeri generosi per una persona
+# vera (che si registra una volta) e stretti per uno script.
+REGISTER_WINDOW_SECONDS = 3600
+REGISTER_MAX_PER_IP = 5
+REGISTER_MAX_PER_SALON = 60
+
+
 
 @router.post("/client/register", response=OkOut)
 def client_register(request, data: ClientRegisterIn):
     salon = _salon_by_slug(data.salon_slug)
     from apps.clients.models import Client  # lazy: evita cicli in fase di load
 
-    phone = data.phone.strip()
+    phone = canonical_phone(data.phone)
     if not phone:
         raise HttpError(400, "Il numero di telefono è obbligatorio")
-    if Client.objects.filter(salon=salon, phone=phone).exists():
+
+    # L'endpoint è pubblico e ogni chiamata riuscita accoda un messaggio a spese
+    # del salone: senza tetto uno script crea schede a raffica e fa partire un
+    # SMS verso qualunque numero. Due limiti perché nessuno dei due basta da
+    # solo: quello per IP ferma il singolo chiamante, quello per salone ferma
+    # la botnet che li distribuisce.
+    ip = ratelimit.client_ip(request)
+    if not ratelimit.hit(f"register-ip:{ip}", REGISTER_MAX_PER_IP, REGISTER_WINDOW_SECONDS):
+        logger.warning("register: tetto per IP superato (salone=%s, ip=%s)", salon.slug, ip)
+        raise HttpError(429, "Troppe registrazioni: riprova tra qualche minuto")
+    if not ratelimit.hit(
+        f"register-salon:{salon.id}", REGISTER_MAX_PER_SALON, REGISTER_WINDOW_SECONDS
+    ):
+        logger.warning("register: tetto per salone superato (salone=%s)", salon.slug)
+        raise HttpError(429, "Troppe registrazioni: riprova tra qualche minuto")
+    if find_client_by_phone(salon, phone) is not None:
         raise HttpError(400, "Numero di telefono già registrato")
 
     client = Client.objects.create(

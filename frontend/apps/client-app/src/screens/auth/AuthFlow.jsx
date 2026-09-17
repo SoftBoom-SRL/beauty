@@ -1,7 +1,7 @@
 // AuthFlow.jsx — client login: phone → OTP (via SMS) → session.
 // Unknown number (404) → inline registration form → OTP.
 import React, { useState } from 'react';
-import { ApiError, Icon, clientAuth } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, clientAuth, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../../ctx.jsx';
 import { headFont } from '../../theme.js';
 
@@ -110,11 +110,9 @@ export default function AuthFlow({ onClose }) {
               {t('Ti invieremo un codice di accesso via SMS.', 'We will send you an access code by SMS.')}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
-            <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder="+39 333 000 0000"
-              value={phone} onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && phone.trim()) sendOtp(); }} />
-            <button className="btn btn--brand btn--block press" disabled={!phone.trim() || busy}
-              style={{ opacity: !phone.trim() || busy ? 0.5 : 1 }} onClick={sendOtp}>
+            <PhoneInput variant="client" lang={lang} value={phone} onChange={setPhone} onEnter={() => { if (phone.trim()) sendOtp(); }} ariaLabel={t('Numero di telefono', 'Phone number')} />
+            <button className="btn btn--brand btn--block press" disabled={!isPlausiblePhone(phone) || busy}
+              style={{ opacity: !isPlausiblePhone(phone) || busy ? 0.5 : 1 }} onClick={sendOtp}>
               {busy ? t('Invio…', 'Sending…') : t('Ricevi il codice', 'Get the code')}
             </button>
           </React.Fragment>
@@ -133,10 +131,10 @@ export default function AuthFlow({ onClose }) {
               value={reg.last_name} onChange={(e) => setReg((r) => ({ ...r, last_name: e.target.value }))} />
             <input className="ca-input" type="email" placeholder={t('Email (facoltativa)', 'Email (optional)')} autoComplete="email"
               value={reg.email} onChange={(e) => setReg((r) => ({ ...r, email: e.target.value }))} />
-            <input className="ca-input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            <PhoneInput variant="client" lang={lang} value={phone} onChange={setPhone} ariaLabel={t('Numero di telefono', 'Phone number')} />
             <button className="btn btn--brand btn--block press"
-              disabled={!reg.first_name.trim() || !reg.last_name.trim() || !phone.trim() || busy}
-              style={{ opacity: !reg.first_name.trim() || !reg.last_name.trim() || !phone.trim() || busy ? 0.5 : 1 }}
+              disabled={!reg.first_name.trim() || !reg.last_name.trim() || !isPlausiblePhone(phone) || busy}
+              style={{ opacity: !reg.first_name.trim() || !reg.last_name.trim() || !isPlausiblePhone(phone) || busy ? 0.5 : 1 }}
               onClick={doRegister}>
               {busy ? t('Creazione…', 'Creating…') : t('Crea profilo e ricevi il codice', 'Create profile & get the code')}
             </button>

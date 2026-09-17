@@ -199,6 +199,25 @@ class WalletGiftCardOut(Schema):
     balance: Decimal
     recipient_name: str
     expires_at: Optional[datetime] = None
+    payment_status: str = "paid"
+    # Carta "a trattamento": il servizio regalato (None = carta monetaria).
+    gift_service_id: Optional[int] = None
+    gift_service_name: Optional[str] = None
+    # Chi l'ha regalata / ricevuta, per mostrarlo nel wallet.
+    buyer_name: Optional[str] = None
+    received: bool = False
+
+    @staticmethod
+    def resolve_gift_service_name(obj):
+        return obj.gift_service.name_it if obj.gift_service_id else None
+
+    @staticmethod
+    def resolve_buyer_name(obj):
+        return obj.buyer_client.full_name if obj.buyer_client_id else None
+
+    @staticmethod
+    def resolve_received(obj):
+        return bool(getattr(obj, "_received", False))
 
 
 class WalletCouponOut(Schema):

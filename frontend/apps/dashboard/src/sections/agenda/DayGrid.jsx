@@ -14,7 +14,7 @@ import { Avatar, Icon, fmtDur, timeLabel, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   DK_START, DK_END, PXM, COLW, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
-  initialsOf, firstName, lastName, opDisplay, itemBlocks, explainSlot,
+  initialsOf, firstName, lastName, opDisplay, itemBlocks, explainSlot, GRID_LINE_STYLE, gridMarks,
 } from './lib.js';
 
 export default function DayGrid({
@@ -32,7 +32,7 @@ export default function DayGrid({
   const scrollRef = useRef(null);
 
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
-  const quarters = []; for (let m = DK_START; m <= DK_END; m += step) quarters.push(m);
+  const marks = gridMarks(step);                     // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (DK_END - DK_START) * PXM;
   const ops = rows.map((r) => r.operator);
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
@@ -51,13 +51,17 @@ export default function DayGrid({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  /* Operatrice sotto il puntatore, o null se si è usciti dalla griglia.
+   * Senza il null (prima si "agganciava" alla colonna di bordo) trascinare
+   * fuori per annullare riassegnava l'appuntamento alla prima o all'ultima
+   * operatrice, e il rilascio partiva davvero. */
   function colFromX(clientX) {
     const grid = scrollRef.current?.querySelector('.dk-tl-cols');
-    if (!grid) return null;
+    if (!grid || !ops.length) return null;
     const r = grid.getBoundingClientRect();
-    const colW = r.width / Math.max(1, ops.length);
-    let idx = Math.floor((clientX - r.left) / colW);
-    idx = Math.max(0, Math.min(ops.length - 1, idx));
+    if (clientX < r.left || clientX >= r.right) return null;
+    const colW = r.width / ops.length;
+    const idx = Math.max(0, Math.min(ops.length - 1, Math.floor((clientX - r.left) / colW)));
     return ops[idx].id;
   }
 
@@ -110,7 +114,7 @@ export default function DayGrid({
     if (!d || d.mode === 'resize') return null;
     if (d.kind === 'pause') {
       const row = rowOf(d.nop);
-      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t }) : null;
+      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows }) : null;
     }
     const appt = d.block.appt;
     const multi = (appt.items || []).length > 1;
@@ -120,7 +124,9 @@ export default function DayGrid({
       const opId = !multi && b.item.id === d.itemId ? d.nop : b.opId;
       const row = rowOf(opId);
       if (!row) continue;
-      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, t });
+      // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
+      // orario già passato mentre il menu sullo stesso slot lo vietava.
+      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows });
       if (!r.ok) return r;
       if (r.code === 'soak') warn = r;
     }
@@ -179,21 +185,27 @@ export default function DayGrid({
     justDragged.current = true;
     setTimeout(() => { justDragged.current = false; }, 0);
     if (d.ns === d.orig && d.nop === d.origOp) return;
-    const verdict = validateDrag(d);
-    if (verdict && !verdict.ok) {
-      onInvalidDrop && onInvalidDrop(verdict, d);
-      return; // il blocco torna al suo posto: nessuna chiamata al server
-    }
+    // Intenzione di spostamento, calcolata una volta sola: la usa il ramo valido
+    // e viene passata anche al rilascio non valido, così il padre può offrire
+    // «Sposta comunque» (POST con force) senza rifare i conti.
+    let intent;
     if (d.kind === 'item') {
       // la visita si sposta così che il servizio trascinato finisca dove lasciato
       const appt = d.block.appt;
       const newApptStart = d.apptStart + (d.ns - d.orig);
       const multi = (appt.items || []).length > 1;
       const opArg = multi ? appt.operator_id : d.nop; // riassegnazione operatrice solo su visita mono-servizio
-      onMoveAppt(appt, newApptStart, opArg);
+      intent = { kind: 'appt', appt, newApptStart, opArg };
     } else {
-      onMovePause(d.obj, d.ns, d.nop);
+      intent = { kind: 'pause', pause: d.obj, startMin: d.ns, opId: d.nop };
     }
+    const verdict = validateDrag(d);
+    if (verdict && !verdict.ok) {
+      onInvalidDrop && onInvalidDrop(verdict, d, intent); // i primi due argomenti restano quelli di prima
+      return; // il blocco torna al suo posto: nessuna chiamata al server
+    }
+    if (intent.kind === 'appt') onMoveAppt(intent.appt, intent.newApptStart, intent.opArg);
+    else onMovePause(intent.pause, intent.startMin, intent.opId);
   }
 
   /* posizione: ghost del drag attivo > override ottimistico (pending) > valore server */
@@ -304,16 +316,20 @@ export default function DayGrid({
       <div style={{ display: 'flex', position: 'relative', height: gridH }}>
         {/* hour gutter (sticky left) */}
         <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
+          {/* etichette in grassetto centrate sulla riga (line-height 14 → -7) + tacca che la prolunga nel gutter */}
           {hours.map((h) => (
             <React.Fragment key={h}>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * PXM - 7, right: 10, fontSize: 11, fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
-              {h < 20 && <div style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * PXM - 6, right: 10, fontSize: 9.5, fontWeight: 600, color: 'var(--faint)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
+              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * PXM - 7, right: 10, fontSize: 11, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
+              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * PXM, right: 0, width: 6, ...GRID_LINE_STYLE.hour }} />
+              {h < 20 && <div style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * PXM - 6, right: 10, fontSize: 9.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
             </React.Fragment>
           ))}
         </div>
         {/* columns */}
         <div className="dk-tl-cols" style={{ flex: 1, display: 'flex', position: 'relative', gap: 6, paddingRight: 4 }}>
-          {quarters.map((m) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * PXM, height: 1, background: m % 60 === 0 ? 'var(--hair-2)' : 'color-mix(in srgb, var(--hair-2) 45%, transparent)' }} />)}
+          {/* righe orarie: z-index 1 = sopra lo sfondo opaco delle colonne (prima le copriva),
+              sotto i blocchi (z 2); pointer-events none per non disturbare drag e click */}
+          {marks.map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * PXM, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
           {/* passato (solo oggi): velo leggero — non si prenota indietro nel tempo */}
           {nowMin != null && nowMin > DK_START && (
             <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, DK_END) - DK_START) * PXM, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
@@ -330,7 +346,7 @@ export default function DayGrid({
             const isTarget = dragging && d.nop === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
             const h = hint && hint.opId === o.id ? hint : null;
-            const hv = h ? explainSlot(row, h.m, step, { nowMin, t }) : null;
+            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows }) : null;
             return (
               <div
                 key={o.id}
@@ -344,7 +360,7 @@ export default function DayGrid({
                   const rect = e.currentTarget.getBoundingClientRect();
                   const raw = DK_START + (e.clientY - rect.top) / PXM;
                   const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
-                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t }));
+                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows }));
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >

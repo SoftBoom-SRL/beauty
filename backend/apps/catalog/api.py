@@ -7,6 +7,7 @@ del login per mostrare listino e pacchetti del salone (solo elementi attivi).
 
 from typing import Optional
 
+from django.db import transaction
 from django.db.models import Prefetch
 from django.db.models.deletion import ProtectedError
 from ninja import Router
@@ -220,11 +221,17 @@ def _package_out(package: Package) -> dict:
 
 
 def _sync_package_items(ctx, package: Package, items: list[dict]) -> None:
-    """Ricrea integralmente gli items del pacchetto (spec: ricreati a ogni update)."""
+    """Ricrea integralmente gli items del pacchetto (spec: ricreati a ogni update).
+
+    Prima si risolvono TUTTI i servizi (404 se uno non è del salone), poi si
+    cancella e ricrea: un id sbagliato non deve lasciare il pacchetto senza righe.
+    """
+    resolved = [
+        (salon_get(Service, ctx, item["service_id"]), item.get("qty", 1)) for item in items
+    ]
     package.items.all().delete()
-    for item in items:
-        service = salon_get(Service, ctx, item["service_id"])
-        PackageItem.objects.create(package=package, service=service, qty=item.get("qty", 1))
+    for service, qty in resolved:
+        PackageItem.objects.create(package=package, service=service, qty=qty)
 
 
 @router.get("/packages", auth=staff_auth, response=list[PackageOut])
@@ -235,6 +242,7 @@ def list_packages(request):
 
 
 @router.post("/packages", auth=staff_auth, response=PackageOut)
+@transaction.atomic
 def create_package(request, data: PackageIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
@@ -253,16 +261,19 @@ def create_package(request, data: PackageIn):
 
 
 @router.put("/packages/{int:package_id}", auth=staff_auth, response=PackageOut)
+@transaction.atomic
 def update_package(request, package_id: int, data: PackageIn):
+    """Tutto o niente: se un servizio non esiste il pacchetto resta com'era
+    (righe e prezzo compresi), invece di restare svuotato a metà."""
     ctx = request.auth
     require_scope(ctx, "pricing")
     package = salon_get(Package, ctx, package_id)
     payload = data.dict()
     items = payload.pop("items")
+    _sync_package_items(ctx, package, items)
     for name, value in payload.items():
         setattr(package, name, value)
     package.save()
-    _sync_package_items(ctx, package, items)
     log_activity(
         ctx.salon,
         "package.updated",

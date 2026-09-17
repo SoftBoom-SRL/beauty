@@ -185,3 +185,26 @@ class ImportEventIdempotencyTests(TestCase):
             import_event(self.conn, "evt-1")
 
         self.assertEqual(Appointment.objects.filter(yourang_event_id="evt-1").count(), 1)
+
+    def test_changed_duration_updates_the_local_item(self):
+        from apps.agenda.models import Appointment
+
+        base = {
+            "id": "evt-2",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "ending_date": "2026-08-01T11:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=base):
+            import_event(self.conn, "evt-2")
+        appt = Appointment.objects.get(yourang_event_id="evt-2")
+        self.assertEqual(appt.total_duration_min, 60)
+
+        longer = {**base, "ending_date": "2026-08-01T12:00:00+02:00"}
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=longer):
+            import_event(self.conn, "evt-2")
+        appt.refresh_from_db()
+        self.assertEqual(appt.items.count(), 1)
+        self.assertEqual(appt.total_duration_min, 120)

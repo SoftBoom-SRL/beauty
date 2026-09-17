@@ -26,6 +26,10 @@ class OperatorIn(Schema):
     order: int = 0
 
 
+class OperatorColorIn(Schema):
+    color: str
+
+
 class OperatorOut(Schema):
     id: int
     first_name: str

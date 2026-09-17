@@ -67,7 +67,7 @@ export default function Topbar() {
         <button className="dk-iconbtn" aria-label={t('Notifiche', 'Notifications')} onClick={() => { setNotifOpen((o) => !o); live?.markRead?.(); }} style={{ position: 'relative', background: notifOpen ? 'var(--surface-2)' : 'var(--surface)', borderColor: notifOpen ? 'var(--line-strong)' : 'var(--hair)' }}>
           <Icon name="bell" size={19} />
         </button>
-        {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} t={t} lang={lang} events={live?.events || []} myId={session?.user?.id} />}
+        {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} t={t} lang={lang} events={live?.events || []} myId={session?.user?.id} streamOk={!!live?.streamOk} />}
       </div>
 
       {/* "Nuova" quick-create menu */}
@@ -120,14 +120,17 @@ function relTime(iso, lang) {
   if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
   return new Date(iso).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short' });
 }
-function NotifPanel({ onClose, t, lang, events, myId }) {
+/* `streamOk` arriva come prop: il pannello non ha accesso al contesto `live`
+ * della Topbar e leggerlo direttamente faceva crollare il rendering
+ * (ReferenceError) alla prima apertura della campanella. */
+function NotifPanel({ onClose, t, lang, events, myId, streamOk }) {
   return (
     <React.Fragment>
       <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, width: 360, padding: 8, boxShadow: 'var(--sh-pop)', zIndex: 61, maxHeight: 'min(520px, 70vh)', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px 8px' }}>
           <span className="t-meta">{t('Attività del team', 'Team activity')}</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: live?.streamOk ? 'var(--ok)' : 'var(--warn)' }} title={live?.streamOk ? t('Connessione live attiva: le viste si aggiornano appena qualcuno modifica i dati', 'Live connection on: views refresh as soon as someone changes data') : t('Connessione live in riconnessione: aggiornamento ogni pochi secondi', 'Live connection reconnecting: refreshing every few seconds')}>
-            <span style={{ width: 7, height: 7, borderRadius: 99, background: live?.streamOk ? 'var(--ok)' : 'var(--warn)', boxShadow: `0 0 0 3px ${live?.streamOk ? 'var(--ok-tint)' : 'var(--warn-tint)'}` }} />{live?.streamOk ? t('Live', 'Live') : t('Riconnessione…', 'Reconnecting…')}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: streamOk ? 'var(--ok)' : 'var(--warn)' }} title={streamOk ? t('Connessione live attiva: le viste si aggiornano appena qualcuno modifica i dati', 'Live connection on: views refresh as soon as someone changes data') : t('Connessione live in riconnessione: aggiornamento ogni pochi secondi', 'Live connection reconnecting: refreshing every few seconds')}>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: streamOk ? 'var(--ok)' : 'var(--warn)', boxShadow: `0 0 0 3px ${streamOk ? 'var(--ok-tint)' : 'var(--warn-tint)'}` }} />{streamOk ? t('Live', 'Live') : t('Riconnessione…', 'Reconnecting…')}
           </span>
         </div>
         {!events.length ? (

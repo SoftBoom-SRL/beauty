@@ -33,6 +33,8 @@ SALON_SLUG = "the-parlour"
 OWNER_EMAIL = "sole@theparlour.it"
 OWNER_PASSWORD = "theparlour"
 APP_CLIENT_PHONE = "+39 333 000 0001"
+# Il backend salva e restituisce i numeri in E.164: il confronto va fatto sulle cifre.
+_phone_digits = lambda value: "".join(ch for ch in str(value or "") if ch.isdigit())  # noqa: E731
 
 BOOK_SERVICE_NAME = "Semipermanente"     # 60 min, 35 €, operatrici sole+giulia
 QUICK_SERVICE_NAME = "Manicure express"  # 25 min, 18 €, tre operatrici (slot facili)
@@ -300,7 +302,7 @@ def step_04_client_register_otp(api, ctx, args):
         raise StepFail(f"register: HTTP {status} — {short(resp)}")
 
     otp = read_latest_outbox(args, "client.otp")
-    if not otp or otp.get("phone") != APP_CLIENT_PHONE or not otp.get("code"):
+    if not otp or _phone_digits(otp.get("phone")) != _phone_digits(APP_CLIENT_PHONE) or not otp.get("code"):
         raise StepFail(f"OTP non trovato in OutboxEvent (client.otp): {short(otp)}")
     _, auth = api.post("/api/auth/client/verify-otp",
                        body={"salon_slug": SALON_SLUG, "phone": APP_CLIENT_PHONE,
@@ -312,7 +314,7 @@ def step_04_client_register_otp(api, ctx, args):
     ctx["app_client_id"] = auth["client"]["id"]
     _, me = api.get("/api/auth/client/me", token=ctx["client_token"],
                     label="GET /api/auth/client/me")
-    if me.get("phone") != APP_CLIENT_PHONE:
+    if _phone_digits(me.get("phone")) != _phone_digits(APP_CLIENT_PHONE):
         raise StepFail(f"client/me telefono inatteso: {short(me)}")
     return (f"{'registrazione' if registered else 'request-otp (cliente già presente)'} → "
             f"OTP {otp['code']} letto da OutboxEvent → verify-otp → token cliente, "

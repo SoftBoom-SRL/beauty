@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, ApiError, Icon, PhoneInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 
 /** Client search-picker (predictive) with inline "new client" creation.
@@ -7,7 +7,7 @@ import { useDash } from '../../ctx.jsx';
  * and CouponEditModal. Debounced search on GET /api/clients/?q=; new clients via
  * POST /api/clients/ (gated on the `clients` scope) without leaving the flow. */
 export default function ClientPicker({ client, onChange, placeholder, t }) {
-  const { hasScope, fireToast } = useDash();
+  const { hasScope, fireToast, lang } = useDash();
   const canCreate = hasScope('clients');
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -89,7 +89,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
                   <input autoFocus value={nf.first_name} onChange={(e) => setNf((f) => ({ ...f, first_name: e.target.value }))} placeholder={t('Nome', 'First name')} style={nfInput} />
                   <input value={nf.last_name} onChange={(e) => setNf((f) => ({ ...f, last_name: e.target.value }))} placeholder={t('Cognome', 'Last name')} style={nfInput} />
                 </div>
-                <input value={nf.phone} onChange={(e) => setNf((f) => ({ ...f, phone: e.target.value }))} placeholder={t('Telefono', 'Phone')} style={nfInput} />
+                <PhoneInput value={nf.phone} onChange={(v) => setNf((f) => ({ ...f, phone: v }))} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 2 }}>
                   <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={() => setAdding(false)}>{t('Indietro', 'Back')}</button>
                   <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5 }} disabled={creating || !nf.first_name.trim() || !nf.phone.trim()} onClick={createClient}>

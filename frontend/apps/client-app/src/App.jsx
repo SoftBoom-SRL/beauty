@@ -24,7 +24,22 @@ export default function App() {
 }
 
 function Root() {
-  const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView } = useApp();
+  const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView, fireToast } = useApp();
+
+  /* Ritorno dal pagamento della caparra (Stripe Checkout rimanda a
+   * /<slug>?deposit=paid|cancelled): si avvisa una volta sola e si ripulisce
+   * la query, così un refresh non ripete il messaggio. */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('deposit');
+    if (!outcome) return;
+    if (outcome === 'paid') fireToast({ msg: t('Caparra ricevuta, grazie! Ci vediamo in salone.', 'Deposit received, thank you! See you at the salon.'), icon: 'check' });
+    else fireToast({ msg: t('Pagamento non completato: puoi riprovare dalle tue prenotazioni.', 'Payment not completed: you can try again from your bookings.'), icon: 'info' });
+    params.delete('deposit');
+    params.delete('appointment');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'waitlist-new', 'sposta', 'annulla', 'giftcard'];
   const gated = !session && PERSONAL_VIEWS.includes(view);

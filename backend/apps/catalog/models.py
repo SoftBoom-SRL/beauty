@@ -33,6 +33,9 @@ class Service(models.Model):
     )
     name_it = models.CharField(max_length=120)
     name_en = models.CharField(max_length=120, blank=True)
+    # Breve descrizione mostrata nell'app cliente (e nel listino pubblico).
+    description_it = models.TextField(blank=True, default="")
+    description_en = models.TextField(blank=True, default="")
     # minuti di lavoro ATTIVO dell'operatrice (l'operatrice è impegnata)
     duration_min = models.PositiveIntegerField()
     # minuti di POSA/attesa dopo il lavoro attivo: il cliente è occupato ma

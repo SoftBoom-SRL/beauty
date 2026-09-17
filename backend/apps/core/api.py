@@ -1,5 +1,6 @@
 from django.conf import settings as django_settings
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 from ninja import File, Router
 from ninja.errors import HttpError
@@ -13,6 +14,7 @@ from common.utils import salon_get
 from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
 from .schemas import (
     ActivityFeedOut,
+    OutboxStatusOut,
     ActivityLogOut,
     DepositRuleIn,
     DepositRuleOut,
@@ -50,6 +52,16 @@ def _settings_out(s: SalonSettings) -> dict:
         "flexible_reward_pct": s.flexible_reward_pct,
         "privacy_policy_url": s.privacy_policy_url,
         "cancel_min_hours": django_settings.CLIENT_MOVE_CANCEL_MIN_HOURS,
+        "timezone": django_settings.TIME_ZONE,
+        "deposit_hold_minutes": s.deposit_hold_minutes,
+        "deposit_reminder_minutes": s.deposit_reminder_minutes,
+        "cancel_reasons": [str(x) for x in (s.cancel_reasons or [])],
+        "no_show_reasons": [str(x) for x in (s.no_show_reasons or [])],
+        "stripe_connected": bool(s.stripe_account_id),
+        "stripe_connect_available": bool(
+            django_settings.STRIPE_SECRET_KEY and django_settings.STRIPE_CONNECT_CLIENT_ID
+        ),
+        "stripe_account_id": s.stripe_account_id,
     }
 
 
@@ -81,6 +93,21 @@ def update_settings(request, data: SettingsIn):
         raise HttpError(400, "Lingua non valida (it o en)")
     if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
         raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
+    for key in ("deposit_hold_minutes", "deposit_reminder_minutes"):
+        if key in payload and not 0 <= int(payload[key]) <= 7 * 24 * 60:
+            raise HttpError(400, "Minuti non validi (0–10080)")
+    if (
+        payload.get("deposit_hold_minutes") or s.deposit_hold_minutes
+    ) and "deposit_reminder_minutes" in payload:
+        hold = payload.get("deposit_hold_minutes", s.deposit_hold_minutes)
+        if hold and payload["deposit_reminder_minutes"] >= hold:
+            raise HttpError(400, "Il sollecito deve precedere la scadenza della caparra")
+    for key in ("cancel_reasons", "no_show_reasons"):
+        if key in payload:
+            cleaned = [str(x).strip()[:80] for x in (payload[key] or []) if str(x).strip()]
+            if len(cleaned) > 30:
+                raise HttpError(400, "Troppe motivazioni (max 30)")
+            payload[key] = cleaned
     if "opening_hours_week" in payload:
         try:
             payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
@@ -221,15 +248,11 @@ def list_activity(
     return qs
 
 
-# Prefissi di evento che alimentano il feed live della dashboard (aggiornamenti
-# in tempo reale fra postazioni + notifiche). Esclusi di proposito team/user/
-# settings: sono amministrativi e non riguardano il lavoro condiviso in sala.
-LIVE_FEED_PREFIXES = (
-    "appointment.", "pause.", "waitlist.", "slot.", "visit.",
-    "client.", "sale.", "service.", "package.", "category.",
-    "operator.", "product.", "stock.", "order.", "supplier.",
-    "coupon.", "giftcard.", "loyalty.", "communication.", "automation.",
-)
+# I prefissi di evento del feed live sono definiti UNA volta in core.views
+# (stream SSE) e riusati qui dal polling di riserva: due elenchi separati
+# avevano perso `settings.` e `client_category.` solo lato HTTP.
+from .views import LIVE_FEED_PREFIXES  # noqa: E402
+
 LIVE_FEED_LIMIT = 50
 
 
@@ -280,6 +303,40 @@ def activity_feed(request, after: int | None = None):
     }
 
 
+@router.get("/outbox/status", auth=staff_auth, response=OutboxStatusOut)
+def outbox_status(request):
+    """Diagnostica della consegna messaggi: perché un OTP «non arriva».
+
+    Gli eventi (OTP, conferme, promemoria, link caparra) vengono accodati in
+    `OutboxEvent` e consegnati da `flush_outbox` a `YOURANG_API_URL`. Senza
+    quell'URL — o senza il comando schedulato — restano in coda: è la causa più
+    comune, e va detta al titolare invece di lasciarlo aspettare un SMS.
+    """
+    from datetime import timedelta
+
+    from .models import OutboxEvent
+
+    ctx = request.auth
+    require_owner(ctx)
+    qs = OutboxEvent.objects.filter(salon=ctx.salon)
+    # `sending` = preso in carico da un worker in questo momento: per chi guarda
+    # la diagnostica è ancora un messaggio che non è arrivato.
+    pending = qs.filter(
+        status__in=(OutboxEvent.Status.PENDING, OutboxEvent.Status.SENDING)
+    )
+    sent = qs.filter(status=OutboxEvent.Status.SENT)
+    day_ago = timezone.now() - timedelta(hours=24)
+    return {
+        "configured": bool(django_settings.YOURANG_API_URL),
+        "pending": pending.count(),
+        "failed": qs.filter(status=OutboxEvent.Status.FAILED).count(),
+        "sent_24h": sent.filter(sent_at__gte=day_ago).count(),
+        "oldest_pending_at": pending.order_by("created_at").values_list("created_at", flat=True).first(),
+        "last_sent_at": sent.order_by("-sent_at").values_list("sent_at", flat=True).first(),
+        "pending_types": sorted(set(pending.order_by("-id").values_list("event_type", flat=True)[:50])),
+    }
+
+
 @router.post("/activity/stream-ticket", auth=staff_auth)
 def activity_stream_ticket(request):
     """Ticket effimero per aprire lo stream SSE (EventSource non manda header)."""
@@ -311,4 +368,5 @@ def public_branding(request, salon: str):
         "opening_hours": st.opening_hours,
         "opening_hours_week": st.opening_hours_week or {},
         "privacy_policy_url": st.privacy_policy_url,
+        "timezone": django_settings.TIME_ZONE,
     }

@@ -77,10 +77,31 @@ class Client(models.Model):
     whatsapp_reminders = models.BooleanField(default=True)
     stripe_customer_id = models.CharField(max_length=120, blank=True)
     stripe_payment_method_id = models.CharField(max_length=120, blank=True)
+    # Account Stripe a cui appartengono i due campi qui sopra ("" = account
+    # della piattaforma). Un cliente creato prima che il titolare collegasse il
+    # proprio account ha un codice che su quell'account non esiste: senza questo
+    # campo ogni pagamento dei clienti già in rubrica fallirebbe.
+    stripe_account_id = models.CharField(max_length=120, blank=True, default="")
+    # Forma confrontabile del telefono (E.164 senza '+', o le sole cifre):
+    # `common.phone.phone_key`. Esiste per cercare una cliente dal numero con un
+    # indice invece di scorrere tutta l'anagrafica in memoria a ogni richiesta —
+    # cosa che accadeva su endpoint pubblici e senza autenticazione.
+    phone_key = models.CharField(max_length=32, blank=True, default="", db_index=True)
     deposit_always = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     # Contatto Yourang collegato (sync). Vuoto = non ancora sincronizzato.
     yourang_contact_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
+    def save(self, *args, **kwargs):
+        from common.phone import phone_key as compute_phone_key  # lazy: evita cicli
+
+        new_key = compute_phone_key(self.phone)
+        if new_key != self.phone_key:
+            self.phone_key = new_key
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "phone_key" not in update_fields:
+                kwargs["update_fields"] = list(update_fields) + ["phone_key"]
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["first_name", "last_name", "id"]

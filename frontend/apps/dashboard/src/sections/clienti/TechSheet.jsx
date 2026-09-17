@@ -2,7 +2,7 @@
 // API, no update/delete route) and creation form. Shared by the profile tab
 // and the registry TechSheetModal. Prototype TECH_FIELDS mapped onto the
 // API's flat TechnicalSheet columns (see helpers.js).
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, mediaUrl } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { TECH_FIELDS, dateTimeLabel, initialsOf, inputCss, sheetVal } from './helpers.js';
@@ -80,6 +80,17 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
   const [values, setValues] = useState({});
   const [saving, setSaving] = useState(false);
   const [photo, setPhoto] = useState(null);
+  /* L'anteprima era creata dentro il JSX: una URL nuova a ogni render, quindi a
+   * ogni carattere battuto in un qualsiasi campo della scheda, e nessuna veniva
+   * mai rilasciata. Con una foto da qualche megabyte la memoria cresceva
+   * finché la scheda restava aperta. */
+  const [photoUrl, setPhotoUrl] = useState(null);
+  useEffect(() => {
+    if (!photo) { setPhotoUrl(null); return undefined; }
+    const url = URL.createObjectURL(photo);
+    setPhotoUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
   const photoRef = useRef(null);
   const setV = (k, v) => setValues((o) => ({ ...o, [k]: v }));
   const canSave = !!(values.treatment || '').trim() && !!category;
@@ -149,7 +160,7 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
       {/* foto facoltativa (prima/dopo, dettaglio del lavoro) */}
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', border: '1px dashed var(--line-strong)', borderRadius: 12 }}>
         <input ref={photoRef} type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} style={{ display: 'none' }} />
-        {photo ? <img src={URL.createObjectURL(photo)} alt="" style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8 }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: 'var(--surface-2)', display: 'grid', placeItems: 'center' }}><Icon name="camera" size={18} color="var(--muted-2)" /></div>}
+        {photo && photoUrl ? <img src={photoUrl} alt="" style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 8 }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: 'var(--surface-2)', display: 'grid', placeItems: 'center' }}><Icon name="camera" size={18} color="var(--muted-2)" /></div>}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Foto del lavoro', 'Photo of the work')} <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 500 }}>· {t('facoltativa', 'optional')}</span></div>
           <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{photo ? photo.name : t('Prima/dopo, tonalità, dettaglio: resta nello storico.', 'Before/after, shade, detail: kept in the history.')}</div>

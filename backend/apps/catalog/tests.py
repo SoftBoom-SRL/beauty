@@ -249,3 +249,55 @@ class PublicEndpointsTests(CatalogTestCase):
         with self.assertRaises(HttpError) as exc:
             public_packages(None, "salone-inesistente")
         self.assertEqual(exc.exception.status_code, 404)
+
+
+class PackageUpdateAtomicityTests(CatalogTestCase):
+    """Un aggiornamento con un servizio inesistente non deve lasciare il
+    pacchetto senza righe o con il prezzo già cambiato."""
+
+    def test_failed_update_keeps_items_and_price(self):
+        from django.http import Http404
+
+        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        service = create_service(
+            self.request,
+            ServiceIn(category_id=category.id, name_it="Manicure", duration_min=30, price=Decimal("20")),
+        )
+        created = create_package(
+            self.request,
+            PackageIn(name="Pack", price=Decimal("50"), items=[PackageItemIn(service_id=service.id, qty=2)]),
+        )
+        package = Package.objects.get(pk=created["id"])
+        with self.assertRaises(Http404):
+            update_package(
+                self.request,
+                package.id,
+                PackageIn(name="Pack", price=Decimal("10"), items=[PackageItemIn(service_id=999999)]),
+            )
+        package.refresh_from_db()
+        self.assertEqual(package.price, Decimal("50"))
+        self.assertEqual(list(package.items.values_list("service_id", "qty")), [(service.id, 2)])
+
+    def test_schema_rejects_zero_duration_and_negative_price(self):
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            ServiceIn(category_id=1, name_it="X", duration_min=0, price=Decimal("10"))
+        with self.assertRaises(ValidationError):
+            ServiceIn(category_id=1, name_it="X", duration_min=30, price=Decimal("-1"))
+        with self.assertRaises(ValidationError):
+            PackageItemIn(service_id=1, qty=0)
+
+
+class ServiceDescriptionTests(CatalogTestCase):
+    def test_description_is_stored_and_public(self):
+        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        create_service(
+            self.request,
+            ServiceIn(category_id=category.id, name_it="Manicure", description_it="Cura completa di mani e unghie",
+                      description_en="Full hand and nail care", duration_min=30, price=Decimal("20")),
+        )
+        listing = public_services(self.request, salon="the-parlour")
+        service = listing[0]["services"][0]
+        self.assertEqual(service.description_it, "Cura completa di mani e unghie")
+        self.assertEqual(service.description_en, "Full hand and nail care")

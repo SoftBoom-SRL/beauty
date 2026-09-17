@@ -16,6 +16,7 @@ from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 
+from apps.core.services import log_activity
 from common.auth import staff_auth
 from common.permissions import require_owner
 
@@ -192,7 +193,22 @@ def webhook(request):
             sync.cancel_event(conn, entity_id)
         elif event_type.startswith("event") and entity_id:
             sync.import_event(conn, entity_id)
-    except Exception:
+    except Exception as exc:
+        # Rispondere 200 a un'elaborazione fallita dice al mittente «ricevuto»:
+        # Yourang non riprova e la prenotazione importata sparisce senza che
+        # nessuno se ne accorga. Con un 503 la consegna viene ritentata, e la
+        # riga nel registro attività rende il problema visibile al titolare.
         logger.exception("Yourang webhook processing failed (%s)", event_type)
+        log_activity(
+            conn.salon,
+            "integration.webhook_failed",
+            f"Webhook Yourang non elaborato ({event_type or 'senza tipo'})",
+            payload={
+                "event_type": event_type,
+                "resource_id": entity_id,
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            },
+        )
+        raise HttpError(503, "Elaborazione non riuscita: riprova")
 
     return OkOut()

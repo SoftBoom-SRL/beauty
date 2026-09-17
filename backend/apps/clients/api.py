@@ -22,6 +22,8 @@ from apps.core.models import Salon, SalonSettings
 from apps.core.services import emit_event, log_activity
 from common.auth import staff_auth
 from common.permissions import require_scope
+from common.media import signed_media_url
+from common.phone import canonical_phone, find_client_by_phone
 from common.utils import salon_get
 
 from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
@@ -116,10 +118,8 @@ def _set_categories(client: Client, category_ids: list[int]) -> None:
 
 
 def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) -> None:
-    qs = Client.objects.filter(salon=ctx.salon, phone=phone)
-    if exclude_id is not None:
-        qs = qs.exclude(id=exclude_id)
-    if qs.exists():
+    """Il numero è unico per salone comunque sia scritto (+39 / spazi / 0039)."""
+    if find_client_by_phone(ctx.salon, phone, exclude_id=exclude_id) is not None:
         raise HttpError(400, "Telefono già registrato per un altro cliente")
 
 
@@ -157,7 +157,9 @@ def _client_payload(data: ClientIn) -> tuple[dict, list[int]]:
     """ClientIn → kwargs del modello: compleanno (con/senza anno) e genere validati."""
     payload = data.dict()
     category_ids = payload.pop("category_ids")
-    payload["phone"] = payload["phone"].strip()
+    # Salvato in E.164 quando riconoscibile: login OTP, import e sync Yourang
+    # confrontano lo stesso numero, comunque sia stato digitato.
+    payload["phone"] = canonical_phone(payload["phone"])
     payload["gender"] = normalize_gender(payload.get("gender") or "")
     birthday, year_known = parse_birthday(payload.pop("birthday", None))
     payload["birthday"] = birthday
@@ -303,14 +305,12 @@ def _note_out(note: ClientNote) -> dict:
 
 
 def _attachment_out(att: ClientNoteAttachment) -> dict:
-    try:
-        url = att.file.url
-    except ValueError:
-        url = ""
+    # URL firmato e a scadenza: gli allegati delle note sono riservati e il
+    # download sotto /media/ non passa dall'autenticazione delle API.
     return {
         "id": att.id,
         "name": att.name,
-        "url": url,
+        "url": signed_media_url(att.file),
         "content_type": att.content_type,
         "size": att.size,
         "is_image": att.is_image,
@@ -334,7 +334,7 @@ def _sheet_out(sheet: TechnicalSheet) -> dict:
         "advice": sheet.advice,
         "protocol": sheet.protocol,
         "next_step": sheet.next_step,
-        "photo": sheet.photo.url if sheet.photo else None,
+        "photo": signed_media_url(sheet.photo) if sheet.photo else None,
         "author_id": sheet.author_id,
         "author_name": (author.get_full_name() or author.email) if author else "",
         "created_at": sheet.created_at,
@@ -351,6 +351,9 @@ def client_history(request, client_id: int):
     visita. Gli appuntamenti futuri hanno `upcoming: true`.
     """
     ctx = request.auth
+    # Storico, note e schede sono i dati più sensibili che il gestionale
+    # conserva: leggerli richiede il permesso «clienti», come scriverli.
+    require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
 
     from apps.agenda.api import _appointment_out  # lazy: riuso serializzazione
@@ -457,6 +460,9 @@ def _attach_files(note: ClientNote, files: list[UploadedFile]) -> None:
 @router.get("/{int:client_id}/notes", auth=staff_auth, response=list[NoteOut])
 def list_notes(request, client_id: int):
     ctx = request.auth
+    # Storico, note e schede sono i dati più sensibili che il gestionale
+    # conserva: leggerli richiede il permesso «clienti», come scriverli.
+    require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     return [_note_out(n) for n in client.notes.select_related("author").prefetch_related("attachments")]
 
@@ -587,6 +593,9 @@ def delete_note(request, client_id: int, note_id: int):
 @router.get("/{int:client_id}/sheets", auth=staff_auth, response=list[TechnicalSheetOut])
 def list_sheets(request, client_id: int):
     ctx = request.auth
+    # Storico, note e schede sono i dati più sensibili che il gestionale
+    # conserva: leggerli richiede il permesso «clienti», come scriverli.
+    require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     return client.sheets.all()
 
@@ -679,7 +688,7 @@ def public_hook(request, data: HookLeadIn):
         raise HttpError(400, "Il consenso al trattamento dei dati è obbligatorio")
 
     first_name = data.first_name.strip()
-    phone = data.phone.strip()
+    phone = canonical_phone(data.phone)
     if not first_name or not phone:
         raise HttpError(400, "Nome e telefono sono obbligatori")
 
@@ -716,7 +725,7 @@ def public_hook(request, data: HookLeadIn):
     cache.set(key, hits + 1, HOOK_WINDOW_SECONDS)
 
     now = timezone.now().isoformat()
-    client = Client.objects.filter(salon=salon, phone=phone).first()
+    client = find_client_by_phone(salon, phone)
 
     if client is None:
         client = Client.objects.create(

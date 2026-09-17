@@ -2,12 +2,12 @@
 // Vive su /<slug>/hook: nessuna sessione, nessun OTP, solo lascia i tuoi dati.
 // Il branding (logo, colore) è quello del salone, già caricato da ctx.
 import React, { useState } from 'react';
-import { api, Icon } from '@youty/shared';
+import { api, Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 
 export default function Hook() {
-  const { t, brand } = useApp();
+  const { t, lang, brand } = useApp();
   const [f, setF] = useState({ first_name: '', last_name: '', phone: '', email: '' });
   const [marketing, setMarketing] = useState(false);
   const [privacy, setPrivacy] = useState(false);
@@ -17,7 +17,7 @@ export default function Hook() {
   const [done, setDone] = useState(false);
 
   const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
-  const canSend = f.first_name.trim() && f.phone.trim() && privacy && !busy;
+  const canSend = f.first_name.trim() && isPlausiblePhone(f.phone) && privacy && !busy;
 
   const submit = async () => {
     if (!canSend) return;
@@ -79,8 +79,7 @@ export default function Hook() {
               value={f.first_name} onChange={set('first_name')} />
             <input className="ca-input" placeholder={t('Cognome', 'Last name')} autoComplete="family-name"
               value={f.last_name} onChange={set('last_name')} />
-            <input className="ca-input" type="tel" inputMode="tel" autoComplete="tel" placeholder={t('Telefono', 'Phone')}
-              value={f.phone} onChange={set('phone')} />
+            <PhoneInput variant="client" lang={lang} value={f.phone} onChange={(v) => setF((s) => ({ ...s, phone: v }))} ariaLabel={t('Telefono', 'Phone')} />
             <input className="ca-input" type="email" inputMode="email" autoComplete="email" placeholder={t('Email', 'Email')}
               value={f.email} onChange={set('email')} />
 

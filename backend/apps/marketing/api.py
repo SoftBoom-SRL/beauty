@@ -253,10 +253,23 @@ def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     card = salon_get(GiftCard, ctx, card_id)
     if card.payment_status == GiftCard.PaymentStatus.PAID:
         raise HttpError(422, "Gift card già pagata")
+    # Una carta annullata o scaduta non si incassa: il salone prenderebbe soldi
+    # per un credito che non è più spendibile.
+    if card.status != GiftCard.Status.ACTIVE:
+        raise HttpError(422, "Gift card non attiva: non può essere incassata")
+    if card.expires_at and card.expires_at < timezone.now():
+        card.status = GiftCard.Status.EXPIRED
+        card.save(update_fields=["status"])
+        raise HttpError(422, "Gift card scaduta: non può essere incassata")
     card.payment_status = GiftCard.PaymentStatus.PAID
     card.paid_at = timezone.now()
     card.paid_method = data.method
     card.save(update_fields=["payment_status", "paid_at", "paid_method"])
+    # L'incasso diventa una vendita, altrimenti il denaro non entra nei ricavi
+    # e al riscatto viene addirittura sottratto.
+    from apps.sales.services import record_gift_card_cashed  # lazy
+
+    record_gift_card_cashed(ctx.salon, card, method=data.method, actor=ctx.user)
     log_activity(
         ctx.salon,
         "giftcard.paid",
@@ -278,7 +291,20 @@ def list_loyalty_programs(request, active: bool | None = None):
     return qs
 
 
+# Premi che il gestionale sa davvero emettere e il banco sa riscattare. Il
+# «prodotto omaggio» non c'è: non esiste un buono legato a un articolo di
+# magazzino, e accettarlo qui significherebbe promettere alla cliente un premio
+# che nessuna cassa può onorare.
+ISSUABLE_REWARDS = ("coupon_amount", "discount_pct", "free_service", "gift_card")
+
+
 def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
+    if data.reward_type not in ISSUABLE_REWARDS:
+        raise HttpError(422, "Tipo di premio non gestito: scegli buono, sconto, servizio omaggio o gift card")
+    if data.reward_type == "free_service" and not data.reward_service_id:
+        raise HttpError(422, "Scegli il servizio da regalare")
+    if data.reward_type != "free_service" and Decimal(str(data.reward_value or 0)) <= 0:
+        raise HttpError(422, "Indica il valore del premio")
     if data.reward_service_id:
         Service = django_apps.get_model("catalog", "Service")  # lazy
         program.reward_service = salon_get(Service, ctx, data.reward_service_id)
@@ -429,11 +455,14 @@ def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn
 def client_wallet(request):
     ctx = request.auth
     now = timezone.now()
-    cards = (
+    cards = list(
         GiftCard.objects.filter(salon=ctx.salon, status=GiftCard.Status.ACTIVE)
         .filter(Q(buyer_client=ctx.client) | Q(recipient_client=ctx.client))
+        .select_related("gift_service", "buyer_client")
         .order_by("-created_at")
     )
+    for card in cards:
+        card._received = card.recipient_client_id == ctx.client.id
     coupons = (
         Coupon.objects.filter(
             salon=ctx.salon, client=ctx.client, status=Coupon.Status.ACTIVE

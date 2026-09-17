@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from ninja import Schema
+from pydantic import Field
 
 # ---- Input -------------------------------------------------------------------
 
@@ -11,12 +12,12 @@ class SaleLineIn(Schema):
     line_type: str  # service | product | gift_card
     service_id: Optional[int] = None
     product_id: Optional[int] = None
-    qty: int = 1
-    unit_price: Optional[Decimal] = None
-    discount_pct: int = 0
+    qty: int = Field(1, ge=1)
+    unit_price: Optional[Decimal] = Field(None, ge=0)
+    discount_pct: int = Field(0, ge=0, le=100)
     is_gift: bool = False
     # vendita gift card (POS): valore della card + destinatario opzionale
-    value: Optional[Decimal] = None
+    value: Optional[Decimal] = Field(None, gt=0)
     recipient_name: str = ""
 
 
@@ -27,7 +28,7 @@ class BlockIn(Schema):
 
 class PaymentIn(Schema):
     method: str  # cash | card | other | gift_card
-    amount: Decimal
+    amount: Decimal = Field(..., ge=0)  # niente pagamenti negativi: un reso è un altro flusso
     gift_card_code: str = ""
 
 
@@ -111,6 +112,10 @@ class TodaySummaryOut(Schema):
     count: int
     checkout_total: Decimal
     pos_total: Decimal
+    gift_card_sold: Decimal = Decimal("0.00")
+    gift_card_redeemed: Decimal = Decimal("0.00")
+    deposit_used: Decimal = Decimal("0.00")
+    cash_in: Decimal = Decimal("0.00")
 
 
 class ChargeNoShowOut(Schema):
@@ -126,3 +131,26 @@ class SetupIntentOut(Schema):
 
 class OkOut(Schema):
     ok: bool = True
+
+
+class StripeConnectStatusOut(Schema):
+    available: bool           # la piattaforma ha STRIPE_CONNECT_CLIENT_ID
+    payments_enabled: bool    # si possono creare link di pagamento (chiave Stripe presente)
+    connected: bool
+    account_id: str = ""
+    connected_at: Optional[datetime] = None
+
+
+class StripeConnectStartOut(Schema):
+    url: str
+
+
+class StripeConnectCallbackIn(Schema):
+    code: str
+    state: str
+
+
+class DepositLinkOut(Schema):
+    url: str
+    amount: Decimal
+    due_at: Optional[datetime] = None

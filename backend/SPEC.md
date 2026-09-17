@@ -208,7 +208,8 @@ finestre lavorabili in minuti per quella data = turno del weekday
 - `Appointment`: salon FK, location FK null/blank, client FK "clients.Client",
   operator FK "staff.Operator" (principale), start DateTimeField,
   status TextChoices: confirmed / checked_in / in_progress / closed / no_show / cancelled,
-  deposit_status TextChoices: none / required / paid / refunded / forfeited,
+  deposit_status TextChoices: none / required / paid / refund_due / refunded / forfeited,
+  deposit_payment_intent_id / no_show_payment_intent_id (PaymentIntent Stripe, per rimborso e idempotenza),
   deposit_amount Decimal default 0, note text blank, flexible bool default False,
   created_via dashboard/app default dashboard, cancel_reason char blank,
   cancelled_late bool default False, created_at/updated_at.
@@ -257,7 +258,10 @@ finestre lavorabili in minuti per quella data = turno del weekday
   (L'addebito Stripe dell'intero importo è responsabilità di sales: qui solo evento+stato.)
 - POST `/appointments/{id}/cancel` {reason} (scope agenda) → status cancelled;
   cancelled_late = start − now < settings.CLIENT_MOVE_CANCEL_MIN_HOURS ore;
-  se late: deposit paid→forfeited, altrimenti paid→refunded. Log, emit, free_slot_event.
+  se late: deposit paid→forfeited, altrimenti paid→refund_due; fuori transazione si tenta il
+  rimborso Stripe (sales.stripe_service.refund_deposit) e solo se riesce → refunded, altrimenti
+  resta refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
+  Log, emit, free_slot_event.
 - PUT `/appointments/{id}` {items?, note?} (scope agenda) → modifica trattamenti (snapshot nuovi), log.
 - GET `/appointments/{id}/margin` → stima margine: revenue = Σ item.price;
   supplier_cost/product_cost da Service (snapshot corrente); labor = Σ(duration/60 × operator.hourly_cost);
@@ -326,9 +330,13 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total} di oggi
   (il box dell'agenda).
 - POST `/appointments/{appointment_id}/charge-no-show` (scope sales) → charge_full_amount, log.
+  Solo su appuntamenti no_show; un solo addebito per appuntamento (no_show_payment_intent_id +
+  idempotency key Stripe), il secondo tentativo → 409.
 - POST `/client/setup-intent` (client_auth) → create_setup_intent (salvataggio carta dall'app).
-- POST `/stripe/webhook` (no auth) → verifica firma se STRIPE_WEBHOOK_SECRET;
-  payment_intent.succeeded con metadata.appointment_id → deposit_status=paid + log;
+- POST `/stripe/webhook` (no auth) → firma OBBLIGATORIA (503 senza STRIPE_WEBHOOK_SECRET, 400 se non valida);
+  payment_intent.succeeded con metadata.appointment_id e metadata.kind=deposit → deposit_status
+  required→paid (una sola volta, importo ≥ caparra) + deposit_payment_intent_id + log;
+  kind=no_show non tocca la caparra (log sale.no_show_paid);
   setup_intent.succeeded → salva payment_method sul cliente.
 
 **Tests**: finalize_sale ok e mismatch pagamenti → errore; sconto/omaggio amounts;

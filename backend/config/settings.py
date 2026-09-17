@@ -150,6 +150,28 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
+# Cookie di sessione e CSRF solo su HTTPS fuori dallo sviluppo: sono i cookie
+# dell'admin Django, e in chiaro su una rete condivisa una sessione da titolare
+# si intercetta. In sviluppo (DEBUG=1) restano normali, altrimenti il login in
+# locale su http non funzionerebbe.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+
+# Redirect a HTTPS e HSTS: li decide chi installa, perché dipendono dal proxy
+# davanti all'applicazione. Con Traefik/Coolify che termina TLS bastano
+# SECURE_SSL_REDIRECT=1 e SECURE_HSTS_SECONDS=31536000 (vedi DEPLOY.md). HSTS
+# NON è attivo per default di proposito: una volta che i browser l'hanno
+# ricevuto, tornare su http non è più possibile per la durata dichiarata.
+SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "0") == "1"
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "0") == "1"
+SECURE_HSTS_PRELOAD = os.getenv("SECURE_HSTS_PRELOAD", "0") == "1"
+# Il controllo di liveness lo interroga il proxy in HTTP dentro la rete interna:
+# redirigerlo lo farebbe fallire e l'applicazione risulterebbe giù.
+SECURE_REDIRECT_EXEMPT = [r"^healthz/?$"]
+
 # Origini fidate per il POST di login all'admin (schema incluso: https://api.esempio.it)
 CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
@@ -180,6 +202,9 @@ JWT_REFRESH_TTL_DAYS = int(os.getenv("JWT_REFRESH_TTL_DAYS", "30"))
 # Stripe — opzionale: senza chiave gli endpoint pagamento rispondono 503
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Stripe Connect (Standard): client_id della piattaforma (ca_...) per far
+# collegare al titolare il proprio account Stripe dalle Impostazioni.
+STRIPE_CONNECT_CLIENT_ID = os.getenv("STRIPE_CONNECT_CLIENT_ID", "")
 
 # Yourang (piattaforma esterna: WhatsApp + esecuzione automazioni).
 # Gli eventi vengono accodati in core.OutboxEvent finché le API non sono disponibili.
@@ -198,10 +223,17 @@ YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+# Origine dell'app cliente (per le pagine di ritorno del pagamento caparra).
+CLIENT_APP_ORIGIN = os.getenv("CLIENT_APP_ORIGIN", "http://localhost:5174")
 
 # Policy prenotazioni lato cliente (ore minime prima dell'appuntamento)
 CLIENT_MOVE_CANCEL_MIN_HOURS = int(os.getenv("CLIENT_MOVE_CANCEL_MIN_HOURS", "24"))
 AGENDA_SLOT_STEP_MIN = 15
+# Stream live (SSE) accettati contemporaneamente da UN processo gunicorn. Ogni
+# stream tiene un thread e una connessione al database finché resta aperto:
+# vale circa la metà di `--threads`, così resta sempre spazio per le richieste
+# normali. Oltre il tetto la dashboard ripiega da sola sul polling.
+SSE_MAX_CONNECTIONS = int(os.getenv("SSE_MAX_CONNECTIONS", "40"))
 
 # ---------------------------------------------------------------------------
 # django-unfold — tema dell'admin

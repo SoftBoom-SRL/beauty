@@ -75,8 +75,27 @@ export default function Wallet() {
                   {cards.map((g) => {
                     const initial = Number(g.initial_value || 0);
                     const used = initial > 0 ? Math.round((1 - Number(g.balance) / initial) * 100) : 0;
+                    const gifted = g.gift_service_name;      // carta «a trattamento»
+                    const unpaid = g.payment_status === 'unpaid';
                     return (
                       <button key={g.id} className="card press" onClick={() => setView('giftcard')} style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', textAlign: 'left', width: '100%' }}>
+                        {(gifted || g.buyer_name || unpaid) && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                            {gifted && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 9px', borderRadius: 99 }}>
+                                <Icon name="gift" size={12} color="var(--brand-ink)" />{gifted}
+                              </span>
+                            )}
+                            {g.received && g.buyer_name && (
+                              <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t(`da ${g.buyer_name}`, `from ${g.buyer_name}`)}</span>
+                            )}
+                            {unpaid && (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--warn, #B4761F)', background: 'var(--warn-tint, #FDF2E3)', padding: '3px 9px', borderRadius: 99 }}>
+                                {t('Da pagare in salone', 'To pay in the salon')}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: used > 0 ? 10 : 0 }}>
                           <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
                             <Icon name="gift" size={19} color="var(--brand-ink)" />

@@ -1,4 +1,5 @@
 // helpers.js — clienti section utilities (pure functions, no React).
+import { fmtTime, salonDateParts } from '@youty/shared';
 
 /* Shared input style used across the section's forms (from the prototype). */
 export const inputCss = {
@@ -64,12 +65,12 @@ export function clientQueryWord(c) {
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
 export function dateTimeLabel(iso, lang) {
   if (!iso) return '';
-  const d = new Date(iso);
+  // Ora del salone, non del dispositivo (vedi shared/format.js).
+  const p = salonDateParts(iso);
   const months = lang === 'en'
     ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} · ${hm}`;
+  return `${p.day} ${months[p.month - 1]} ${p.year} · ${fmtTime(iso)}`;
 }
 
 /* "12 mar 2026" from an ISO date/datetime. */

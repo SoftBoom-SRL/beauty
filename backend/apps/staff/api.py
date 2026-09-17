@@ -18,6 +18,7 @@ from .schemas import (
     AbsenceIn,
     AbsenceOut,
     OkOut,
+    OperatorColorIn,
     OperatorDetailOut,
     OperatorIn,
     OperatorOut,
@@ -192,6 +193,34 @@ def update_operator(request, operator_id: int, data: OperatorIn):
         f"Operatrice aggiornata: {operator.first_name} {operator.last_name}",
         actor=ctx.user,
         payload={"operator_id": operator.id},
+    )
+    return _operator_out(operator)
+
+
+@router.patch("/{int:operator_id}/color", auth=staff_auth, response=OperatorOut)
+def set_operator_color(request, operator_id: int, data: OperatorColorIn):
+    """Colore dell'operatrice in agenda: condiviso fra tutte le postazioni.
+
+    Prima viveva solo nello stato locale della dashboard e ogni pc vedeva il
+    suo. Basta il permesso agenda: è una preferenza di lavoro in sala, non
+    un dato anagrafico. L'evento `operator.updated` fa ricaricare le altre.
+    """
+    import re
+
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    operator = salon_get(Operator, ctx, operator_id)
+    color = (data.color or "").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+    operator.color = color.upper()
+    operator.save(update_fields=["color"])
+    log_activity(
+        ctx.salon,
+        "operator.updated",
+        f"Colore in agenda di {operator.first_name} aggiornato",
+        actor=ctx.user,
+        payload={"operator_id": operator.id, "color": operator.color},
     )
     return _operator_out(operator)
 

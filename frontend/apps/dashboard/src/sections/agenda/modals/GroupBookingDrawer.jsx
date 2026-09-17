@@ -9,7 +9,7 @@ import { initialsOf, toastErr, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
-  const { t, lang, services, serviceCategories, operators, fireToast, hasScope } = useDash();
+  const { t, lang, services, serviceCategories, operators, fireToast, hasScope, locationId } = useDash();
   const canWrite = hasScope('agenda');
   const baseDate = date || todayStr();
 
@@ -28,6 +28,20 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
 
   const [rows, setRows] = useState(() => [newRow()]);
   const [batchRunning, setBatchRunning] = useState(false);
+
+  /* Esc chiude, come ogni altro drawer della dashboard (vedi DkDrawer). Questo
+   * pannello si disegna da sé e la scorciatoia mancava: l'unica via d'uscita
+   * era il pulsante. Durante la creazione non si chiude, per non lasciare a metà
+   * una serie di prenotazioni. */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || batchRunning) return;
+      e.preventDefault();
+      onClose?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, batchRunning]);
 
   const patchRow = (key, partial) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...(typeof partial === 'function' ? partial(r) : partial) } : r)));
@@ -53,6 +67,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
           client_id: row.client.id,
           items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
           start: row.selStart,
+          location_id: locationId,
         });
         patchRow(row.key, { status: 'done', created: res });
         onCreated?.(); // refresh the agenda behind so the next slot picks against updated availability
@@ -194,7 +209,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
  *  A single client row: client picker + services + time picker  *
  * ============================================================= */
 function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
-  const { t, lang, services, serviceCategories, operators, fireToast } = useDash();
+  const { t, lang, services, serviceCategories, operators, fireToast, locationId } = useDash();
   const itemSeq = useRef(1);
   const locked = busy || row.status === 'creating' || row.status === 'done';
 
@@ -219,7 +234,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
     if (!row.items.length || !row.date) { setSlots([]); return; }
     let alive = true;
     setSlots(null);
-    api.get('/api/agenda/availability', { params: { date: row.date, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
+    api.get('/api/agenda/availability', { params: { date: row.date, location_id: locationId, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
       .then((res) => {
         if (!alive) return;
         setSlots(res);
@@ -227,7 +242,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
       })
       .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
     return () => { alive = false; };
-  }, [row.date, itemsKey, row.reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [row.date, itemsKey, row.reloadKey, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- row header status ---- */
   const statusBadge = () => {

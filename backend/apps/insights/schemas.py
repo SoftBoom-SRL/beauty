@@ -11,6 +11,10 @@ class ClientCategoryCount(Schema):
 
 class KpisOut(Schema):
     revenue: Decimal
+    gift_card_sold: Decimal = Decimal("0.00")
+    gift_card_redeemed: Decimal = Decimal("0.00")
+    deposit_used: Decimal = Decimal("0.00")
+    cash_in: Decimal = Decimal("0.00")
     sales_count: int
     avg_ticket: Decimal
     retail_revenue: Decimal

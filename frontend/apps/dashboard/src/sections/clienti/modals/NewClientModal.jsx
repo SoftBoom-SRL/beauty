@@ -5,7 +5,7 @@
 // Alla creazione: nota iniziale + consensi; in modifica i consensi restano
 // nella scheda Consensi (hanno data di raccolta).
 import React, { useState } from 'react';
-import { api, ApiError, Icon, Toggle } from '@youty/shared';
+import { api, ApiError, Icon, PhoneInput, Toggle } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { BirthdayInput, Field, GenderPicker } from '../components.jsx';
@@ -32,6 +32,7 @@ export default function NewClientModal({ client, onClose, onSaved }) {
   const ready = !missing.length && !saving;
 
   const save = async () => {
+    if (saving) return;   // il doppio clic creava due schede: aria-disabled non blocca il click
     if (missing.length) { setErr(t('Manca: ', 'Missing: ') + missing.join(', ')); return; }
     setSaving(true); setErr('');
     try {
@@ -97,10 +98,7 @@ export default function NewClientModal({ client, onClose, onSaved }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, marginTop: 12, alignItems: 'end' }}>
         <Field label={t('Telefono', 'Phone') + ' *'}>
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', display: 'grid', placeItems: 'center' }}><Icon name="phone" size={15} color="var(--muted-2)" /></span>
-            <input value={f.phone} inputMode="tel" onChange={(e) => set('phone', e.target.value)} placeholder="+39 …" style={{ ...inputCss, paddingLeft: 34 }} />
-          </div>
+          <PhoneInput value={f.phone} onChange={(v) => set('phone', v)} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
         </Field>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 42 }}>
           <Icon name="whatsapp" size={16} color="#3F9D58" />

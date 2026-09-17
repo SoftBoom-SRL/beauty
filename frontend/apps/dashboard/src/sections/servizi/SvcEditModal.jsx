@@ -18,6 +18,8 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
   const [draft, setDraft] = useState(() => ({
     name_it: service?.name_it || '',
     name_en: service?.name_en || '',
+    description_it: service?.description_it || '',
+    description_en: service?.description_en || '',
     category_id: service?.category_id || categories[0]?.id || null,
     duration_min: service?.duration_min || 45,
     soak_min: service?.soak_min ?? 0,
@@ -56,6 +58,8 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
           category_id: draft.category_id,
           name_it: draft.name_it.trim(),
           name_en: draft.name_en.trim(),
+          description_it: draft.description_it.trim().slice(0, 600),
+          description_en: draft.description_en.trim().slice(0, 600),
           duration_min: Math.max(5, parseInt(draft.duration_min, 10) || 45),
           soak_min: Math.max(0, parseInt(draft.soak_min, 10) || 0),
           price: Number(draft.price || 0).toFixed(2),
@@ -97,6 +101,16 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
         <div>
           <div className="t-meta" style={{ marginBottom: 6 }}>{t('Nome (inglese)', 'Name (English)')}</div>
           <input value={draft.name_en} onChange={(e) => set({ name_en: e.target.value })} placeholder={t('Es. Gel polish', 'E.g. Gel polish')} style={inputCss} />
+        </div>
+        {/* descrizione breve: compare nell'app cliente sotto il nome del servizio */}
+        <div>
+          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Descrizione (italiano)', 'Description (Italian)')} <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--muted-2)' }}>· {t('nell’app cliente', 'in the client app')}</span></div>
+          <textarea value={draft.description_it} onChange={(e) => set({ description_it: e.target.value.slice(0, 600) })} rows={3} placeholder={t('Cosa include, per chi è, cosa aspettarsi…', 'What it includes, who it is for, what to expect…')} style={{ ...inputCss, resize: 'vertical', fontSize: 13.5, boxSizing: 'border-box' }} />
+          <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'right', fontSize: 11 }}>{draft.description_it.length}/600</div>
+        </div>
+        <div>
+          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Descrizione (inglese)', 'Description (English)')}</div>
+          <textarea value={draft.description_en} onChange={(e) => set({ description_en: e.target.value.slice(0, 600) })} rows={3} placeholder={t('Facoltativa: se manca, l’app usa l’italiano', 'Optional: the app falls back to Italian')} style={{ ...inputCss, resize: 'vertical', fontSize: 13.5, boxSizing: 'border-box' }} />
         </div>
       </div>
 

@@ -12,21 +12,55 @@ lo passa in query string. Il ticket vive pochi minuti e vale per un solo salone.
 """
 
 import json
+import logging
 import secrets
+import threading
 import time
 
+from django.conf import settings
 from django.core.cache import cache
 from django.db import close_old_connections
 from django.db.models import Q
-from django.http import HttpResponseForbidden, StreamingHttpResponse
+from django.http import HttpResponse, HttpResponseForbidden, StreamingHttpResponse
 from django.utils import timezone
 
 from .models import ActivityLog
+
+logger = logging.getLogger("youty.stream")
 
 STREAM_TICKET_TTL = 600           # secondi di validità del ticket
 STREAM_MAX_SECONDS = 20 * 60      # poi il server chiude: il client riapre (ricicla i thread)
 STREAM_POLL_SECONDS = 1.0
 STREAM_KEEPALIVE_SECONDS = 15
+# Connessioni live accettate contemporaneamente DA QUESTO PROCESSO. Ogni stream
+# aperto occupa un thread di gunicorn (`--worker-class gthread`) e una
+# connessione al database per tutta la sua durata: senza tetto, qualche centinaio
+# di schede aperte esaurisce il pool e l'intera applicazione smette di
+# rispondere, anche per chi non usa l'agenda. Oltre il tetto si risponde 503 e
+# la dashboard ripiega da sola sul polling ogni 3 secondi.
+STREAM_MAX_CONCURRENT = getattr(settings, "SSE_MAX_CONNECTIONS", 0) or 40
+_open_streams = 0
+_open_streams_lock = threading.Lock()
+
+
+def _reserve_stream_slot() -> bool:
+    global _open_streams
+    with _open_streams_lock:
+        if _open_streams >= STREAM_MAX_CONCURRENT:
+            return False
+        _open_streams += 1
+        return True
+
+
+def _release_stream_slot() -> None:
+    global _open_streams
+    with _open_streams_lock:
+        _open_streams = max(0, _open_streams - 1)
+
+
+def open_stream_count() -> int:
+    """Stream live aperti in questo processo (diagnostica e test)."""
+    return _open_streams
 LIVE_FEED_PREFIXES = (
     "appointment.", "pause.", "waitlist.", "slot.", "visit.",
     "client.", "client_category.", "sale.", "service.", "package.", "category.",
@@ -97,9 +131,25 @@ def activity_stream(request):
         after = int(request.headers.get("Last-Event-ID") or request.GET.get("after") or 0)
     except ValueError:
         after = 0
+    if not _reserve_stream_slot():
+        logger.warning(
+            "Stream live rifiutato: %s connessioni già aperte in questo processo",
+            STREAM_MAX_CONCURRENT,
+        )
+        # 503 e non 403: è temporaneo. Il client passa al polling e riprova.
+        response = HttpResponse(
+            "Troppe connessioni live aperte: aggiornamento via polling",
+            status=503,
+            content_type="text/plain; charset=utf-8",
+        )
+        response["Retry-After"] = "30"
+        return response
     response = StreamingHttpResponse(
         event_generator(info["salon_id"], after), content_type="text/event-stream"
     )
+    # Il posto si libera alla chiusura della risposta, che Django esegue sempre,
+    # anche se il generatore non è mai partito.
+    response._resource_closers.append(_release_stream_slot)
     response["Cache-Control"] = "no-cache, no-transform"
     response["X-Accel-Buffering"] = "no"   # nginx/traefik: niente buffering
     # niente "Connection: keep-alive": è hop-by-hop e wsgiref (runserver) lo rifiuta

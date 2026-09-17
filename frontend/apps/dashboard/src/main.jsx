@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { staffAuth, LangProvider } from '@youty/shared';
 import App from './App.jsx';
 import OAuthPopup from './oauth/OAuthPopup.jsx';
+import StripeConnectPopup from './oauth/StripeConnectPopup.jsx';
 import './styles/styles.css';
 import './styles/desktop.css';
 import './styles/app.css';
@@ -16,6 +17,8 @@ const popupPath = window.location.pathname;
 // OAuth popup pages render outside the dashboard shell (no session gate / boot load).
 if (popupPath === '/oauth-popup/start' || popupPath === '/oauth-popup/done') {
   root.render(<LangProvider><OAuthPopup path={popupPath} /></LangProvider>);
+} else if (popupPath === '/stripe-connect/start' || popupPath === '/stripe-connect/done') {
+  root.render(<LangProvider><StripeConnectPopup path={popupPath} /></LangProvider>);
 } else {
   root.render(<App />);
 }

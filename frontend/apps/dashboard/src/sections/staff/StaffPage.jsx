@@ -14,7 +14,7 @@ import ShiftPattern from './ShiftPattern.jsx';
 import AbsenceCalendar from './AbsenceCalendar.jsx';
 
 export default function StaffPage({ id, onBack }) {
-  const { t, lang, services, serviceCategories, reload, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
+  const { t, lang, services, serviceCategories, locations, reload, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
   const canTeam = hasScope('team');
   const canPricing = hasScope('pricing'); // creare servizi dal profilo operatrice
   const rev = (v) => (showRevenue ? eur(v, lang) : '•••');
@@ -216,6 +216,23 @@ export default function StaffPage({ id, onBack }) {
                 <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Ruolo', 'Role')}</div>
                 <input value={form.role_title} disabled={!canTeam} onChange={(e) => setForm((f) => ({ ...f, role_title: e.target.value }))} style={inputCss} />
               </label>
+              {locations.length > 1 && (
+                /* La sede si poteva solo ereditare alla creazione (sempre quella
+                 * predefinita) e non c'era modo di cambiarla: chi apriva una
+                 * seconda sede si trovava tutto il team sulla prima. */
+                <label style={{ display: 'block' }}>
+                  <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Sede', 'Location')}</div>
+                  <select
+                    value={form.location_id ?? ''}
+                    disabled={!canTeam}
+                    onChange={(e) => setForm((f) => ({ ...f, location_id: e.target.value ? Number(e.target.value) : null }))}
+                    style={{ ...inputCss, cursor: canTeam ? 'pointer' : 'default' }}
+                  >
+                    <option value="">{t('Tutte le sedi', 'All locations')}</option>
+                    {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </label>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <label style={{ display: 'block' }}>
                   <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Costo orario €', 'Hourly cost €')}</div>

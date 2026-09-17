@@ -9,7 +9,7 @@ from apps.staff.models import Operator
 from common.auth import StaffContext
 
 from .api import create_category, unload_product, update_category
-from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
+from .models import Product, ProductCategory, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
 from .schemas import CategoryIn, MovementOut, ProductUnloadIn
 from .services import apply_movement, generate_draft_orders, receive_order
 
@@ -215,3 +215,43 @@ class InventoryApiTests(TestCase):
         self.assertEqual(MovementOut.resolve_operator_name(movement), "")
         product.refresh_from_db()
         self.assertEqual(product.stock_qty, Decimal("4"))
+
+
+class ReceiveOrderConcurrencyTests(TestCase):
+    """La stessa ricezione non deve poter essere registrata due volte.
+
+    Il controllo «ordine già ricevuto» guardava l'istanza arrivata con la
+    richiesta e stava fuori dalla transazione: due schermate aperte sullo stesso
+    ordine caricavano dieci pezzi ciascuna, la giacenza saliva a venti e la riga
+    d'ordine ne dichiarava dieci.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.supplier = Supplier.objects.create(salon=self.salon, name="Fornitore")
+        self.product = Product.objects.create(
+            salon=self.salon, supplier=self.supplier, name="Shampoo", stock_qty=0
+        )
+        self.order = PurchaseOrder.objects.create(
+            salon=self.salon, supplier=self.supplier, status=PurchaseOrder.Status.SENT
+        )
+        self.line = PurchaseOrderLine.objects.create(
+            order=self.order, product=self.product, qty_ordered=10
+        )
+
+    def test_the_second_receipt_is_refused_and_changes_nothing(self):
+        stale = PurchaseOrder.objects.get(pk=self.order.pk)  # copia letta prima
+        receive_order(self.order, [{"id": self.line.pk, "qty_received": 10}])
+
+        with self.assertRaises(HttpError) as caught:
+            receive_order(stale, [{"id": self.line.pk, "qty_received": 10}])
+        self.assertEqual(caught.exception.status_code, 400)
+
+        self.product.refresh_from_db()
+        self.line.refresh_from_db()
+        self.assertEqual(self.product.stock_qty, 10)
+        self.assertEqual(self.line.qty_received, 10)
+        self.assertEqual(
+            StockMovement.objects.filter(product=self.product, kind=StockMovement.Kind.LOAD).count(),
+            1,
+        )

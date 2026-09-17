@@ -14,6 +14,8 @@ import HoursDrawer, { dayLabel, todayRanges } from './HoursDrawer.jsx';
 import TeamDrawer from './TeamDrawer.jsx';
 import RolesDrawer from './RolesDrawer.jsx';
 import PasswordDrawer from './PasswordDrawer.jsx';
+import PaymentsDrawer from './PaymentsDrawer.jsx';
+import ReasonsDrawer from './ReasonsDrawer.jsx';
 import { CopyField } from './lib.jsx';
 
 /* Host dell'app cliente: la dashboard non può dedurlo (è un altro dominio),
@@ -57,7 +59,10 @@ export default function ImpostazioniSection() {
   const [hoursOpen, setHoursOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [reasonsOpen, setReasonsOpen] = useState(false);
   const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
+  const [outbox, setOutbox] = useState(null);     // stato consegna messaggi (OTP, conferme, promemoria)
 
   // deep link from agenda cash-up → activity log filtered to today
   useEffect(() => {
@@ -67,6 +72,8 @@ export default function ImpostazioniSection() {
       setDeepLink(null);
     }
     if (deepLink === 'hours') { setHoursOpen(true); setDeepLink(null); }
+    if (deepLink === 'payments') { setPayOpen(true); setDeepLink(null); }
+    if (deepLink === 'reasons') { setReasonsOpen(true); setDeepLink(null); }
   }, [deepLink, setDeepLink]);
 
   // Yourang connection status + handshake from the OAuth popup.
@@ -74,6 +81,7 @@ export default function ImpostazioniSection() {
     if (!isOwner) return undefined;
     const load = () => api.get('/api/integrations/yourang/status').then(setYourang).catch(() => setYourang(null));
     load();
+    api.get('/api/core/outbox/status').then(setOutbox).catch(() => setOutbox(null));
     const onMsg = (e) => {
       if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
       if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
@@ -176,11 +184,27 @@ export default function ImpostazioniSection() {
         ))}
       </Group>
 
+      {/* PAGAMENTI & CAPARRE */}
+      <Group title={t('Pagamenti & caparre', 'Payments & deposits')}>
+        <Row first icon="wallet" label={t('Stripe del salone', 'Salon Stripe account')}
+          sub={settings?.stripe_connected ? t('Collegato: caparre e addebiti finiscono sul tuo conto Stripe', 'Connected: deposits and charges land on your Stripe account') : t('Collega il tuo account per incassare le caparre online', 'Connect your account to collect deposits online')}
+          value={settings?.stripe_connected ? t('Connesso', 'Connected') : t('Non connesso', 'Not connected')}
+          onClick={() => setPayOpen(true)} />
+        <Row icon="clock" label={t('Caparra con scadenza', 'Deposit deadline')}
+          sub={t('Libera lo slot se la caparra non viene pagata in tempo; la cliente resta fra i «da richiamare»', 'Frees the slot if the deposit is not paid in time; the client stays in “to call back”')}
+          value={settings?.deposit_hold_minutes ? `${settings.deposit_hold_minutes} min` : t('Off', 'Off')}
+          onClick={() => setPayOpen(true)} />
+      </Group>
+
       {/* GESTIONE */}
       <Group title={t('Gestione', 'Management')}>
         <Row first icon="user" label={t('Commissioni vendita', 'Sales commission')} tag={t('Fase 2', 'Phase 2')}
           sub={t('Le percentuali per membro arriveranno con la fase 2: per ora le vendite sono attribuite all’operatrice senza calcolo commissioni.', 'Per-member percentages ship with phase 2: for now sales are attributed to the operator without commission math.')} />
         <Row icon="tag" label={t('Categorie', 'Categories')} sub={t('Clienti, servizi e magazzino', 'Clients, services and inventory')} onClick={() => openModal('catsmgr', { kind: 'clienti' })} />
+        <Row icon="x" label={t('Motivazioni di annullamento e no-show', 'Cancellation & no-show reasons')}
+          sub={t('Le opzioni proposte nel dettaglio appuntamento', 'The options offered in the appointment detail')}
+          value={(settings?.cancel_reasons?.length || 0) + (settings?.no_show_reasons?.length || 0) ? t('Personalizzate', 'Custom') : t('Predefinite', 'Default')}
+          onClick={() => setReasonsOpen(true)} />
       </Group>
 
       {/* YOURANG — connessione OAuth + sync (titolare) */}
@@ -197,10 +221,35 @@ export default function ImpostazioniSection() {
         </Group>
       )}
 
-      {/* NOTIFICHE */}
+      {/* NOTIFICHE — con diagnostica: un OTP che «non arriva» si spiega qui */}
       <Group title={t('Notifiche & comunicazioni', 'Notifications & communications')}>
         <Row first icon="whatsapp" label={t('Notifiche WhatsApp e promemoria', 'WhatsApp notifications & reminders')} tag="Yourang"
           sub={t('Invii e promemoria sono gestiti da Yourang: configurali dalla piattaforma Yourang collegata.', 'Delivery and reminders are handled by Yourang: configure them from the connected Yourang platform.')} />
+        {isOwner && outbox && (
+          <div style={{ padding: '14px 16px', borderTop: '1px solid var(--hair)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: outbox.configured ? 'var(--ok)' : 'var(--warn)', flexShrink: 0 }} />
+              <div style={{ fontWeight: 600, fontSize: 14.5, flex: 1 }}>{t('Consegna messaggi', 'Message delivery')}</div>
+              <span className="t-sm" style={{ color: outbox.configured ? 'var(--ok)' : 'var(--warn)', fontWeight: 700 }}>
+                {outbox.configured ? t('Attiva', 'Active') : t('Non configurata', 'Not configured')}
+              </span>
+            </div>
+            <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.5 }}>
+              {outbox.configured
+                ? t(`${outbox.sent_24h} messaggi consegnati nelle ultime 24 ore · ${outbox.pending} in coda${outbox.failed ? ` · ${outbox.failed} non riusciti` : ''}.`,
+                    `${outbox.sent_24h} messages delivered in the last 24 hours · ${outbox.pending} queued${outbox.failed ? ` · ${outbox.failed} failed` : ''}.`)
+                : t(`Codici OTP, conferme e promemoria restano in coda (${outbox.pending} in attesa) e non vengono inviati: manca l’indirizzo di consegna verso Yourang (YOURANG_API_URL) sul server. È questo il motivo se una cliente non riceve il codice per accedere all’app. Nel frattempo il codice si legge nel registro dell’outbox dall’amministrazione.`,
+                    `OTP codes, confirmations and reminders stay queued (${outbox.pending} waiting) and are not sent: the delivery address to Yourang (YOURANG_API_URL) is missing on the server. That is why a client does not receive the code to sign in to the app. Meanwhile the code can be read in the outbox log from the admin.`)}
+            </div>
+            {outbox.pending > 0 && outbox.pending_types.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                {outbox.pending_types.slice(0, 6).map((k) => (
+                  <span key={k} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: 'var(--surface-2)', padding: '2px 8px', borderRadius: 99 }}>{k}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </Group>
 
       {/* ACCOUNT & TEAM */}
@@ -232,6 +281,8 @@ export default function ImpostazioniSection() {
       {teamOpen && <TeamDrawer onClose={() => setTeamOpen(false)} onRoles={() => { setTeamOpen(false); setRolesOpen(true); }} />}
       {rolesOpen && <RolesDrawer onClose={() => setRolesOpen(false)} />}
       {pwOpen && <PasswordDrawer onClose={() => setPwOpen(false)} />}
+      {payOpen && <PaymentsDrawer onClose={() => setPayOpen(false)} />}
+      {reasonsOpen && <ReasonsDrawer onClose={() => setReasonsOpen(false)} />}
     </div>
   );
 }

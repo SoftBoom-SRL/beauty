@@ -246,6 +246,37 @@ stesso, ma Yourang non spinge eventi: il sync resta quello iniziale.
 Per svuotarli serve un job schedulato (Coolify → *Scheduled Tasks* sulla risorsa
 `beauty-api`), comando `python manage.py flush_outbox`.
 
+## HTTPS e cookie
+
+I cookie di sessione e CSRF (quelli dell'admin Django) viaggiano solo su HTTPS
+appena `DEBUG=0`: non serve configurare niente. Il redirect a HTTPS e l'HSTS
+restano invece da accendere a mano, perché dipendono dal proxy davanti
+all'applicazione. Con Traefik/Coolify, che termina TLS e inoltra
+`X-Forwarded-Proto`, le variabili da mettere sulla risorsa `beauty-api` sono:
+
+| Variabile | Valore | Nota |
+|---|---|---|
+| `SECURE_SSL_REDIRECT` | `1` | `/healthz` resta esente, altrimenti il controllo interno del proxy fallirebbe |
+| `SECURE_HSTS_SECONDS` | `31536000` | **irreversibile per un anno**: da mettere solo a certificato funzionante |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS` | `1` | solo se TUTTI i sottodomini sono su HTTPS |
+| `SECURE_HSTS_PRELOAD` | `1` | solo se si vuole chiedere l'inserimento nella lista dei browser |
+
+Con queste quattro `python manage.py check --deploy` non segnala più nulla.
+
+## Job schedulati (Coolify → *Scheduled Tasks* sulla risorsa `beauty-api`)
+
+Due comandi vanno programmati. Senza di loro il gestionale continua a funzionare
+ma due funzioni restano ferme, e il sintomo non punta alla causa.
+
+| Comando | Cadenza | Cosa succede se manca |
+| --- | --- | --- |
+| `python manage.py flush_outbox` | ogni minuto | Nessun messaggio parte: gli OTP dell'app cliente «non arrivano» e la cliente non riesce a entrare. Con `--loop --interval 5` resta invece in esecuzione come worker. |
+| `python manage.py process_deposit_holds` | ogni 5 minuti | Le caparre scadute non liberano mai lo slot. In dashboard sembra funzionare, perché ogni apertura dell'agenda esegue il controllo sul salone visualizzato — ma solo su quello, e solo finché qualcuno guarda. |
+
+Lo stato della consegna messaggi è visibile al titolare in
+*Impostazioni → Notifiche*, che legge `GET /api/core/outbox/status`: dice se
+`YOURANG_API_URL` è configurato, quanti eventi sono in coda e da quando.
+
 ## Note
 
 - **Aggiornamenti in tempo reale** fra postazioni: ogni dashboard aperta tiene UNA
