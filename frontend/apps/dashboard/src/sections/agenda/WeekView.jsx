@@ -14,7 +14,7 @@ import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
   DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, opSegments,
+  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands,
 } from './lib.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
@@ -435,6 +435,7 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, 
   const segs = opSegments(a);
   const nServices = (a.items || []).length;
   const multi = nServices > 1;
+  const bands = serviceBands(a);
   const gifts = (a.gifts || []).length;   // il payload settimana può non avere `gifts`
   const depositDue = a.deposit_status === 'required';
   const flags = !!(a.forced || depositDue || gifts);
@@ -456,15 +457,23 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, 
         pointerEvents: moving ? 'none' : 'auto', zIndex: moving ? 20 : 2,
       }}
     >
-      {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi.
-          Con più servizi i segmenti sono separati da una riga chiara e il blocco
-          porta il conteggio: in settimana la visita è UN riquadro, e non si
-          vedeva che dentro ci fossero due o tre servizi. */}
+      {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi. */}
       <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
         {segs.map((s, k) => (
           <div key={k} style={{ flex: s.w, background: colorOf(s.opId), borderTop: multi && k > 0 ? '1.5px solid var(--surface)' : 'none' }} />
         ))}
       </div>
+      {/* La visita divisa nei suoi servizi: in settimana è UN riquadro, e due o
+          tre servizi dentro restavano un blocco unico. Una riga a ogni stacco,
+          in proporzione alla durata. I nomi no: la sottocolonna è larga quaranta
+          pixel e finirebbero sopra quello della cliente — stanno nell'anteprima
+          al passaggio del mouse. */}
+      {bands.slice(1).map((b, k) => (
+        <div key={k} style={{
+          position: 'absolute', left: multi ? 4 : 3, right: 0, top: `${b.fromPct}%`,
+          borderTop: '1px dashed rgba(17,24,39,0.45)', pointerEvents: 'none', zIndex: 1,
+        }} />
+      ))}
       {flags && (
         <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 1 }}>
           {a.forced && <span title={t('Inserito forzando le regole', 'Booked overriding the rules')} style={{ display: 'grid' }}><Icon name="alert" size={10} color="var(--warn)" stroke={2.6} /></span>}

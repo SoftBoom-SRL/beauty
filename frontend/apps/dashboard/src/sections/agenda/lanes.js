@@ -114,3 +114,33 @@ export function visitSpines(placed) {
   // della stessa visita: con uno solo non c'è niente da legare.
   return [...byAppt.values()].filter((sp) => sp.count > 1);
 }
+
+/** Bande di un blocco settimana, una per servizio della visita.
+ *
+ *  In vista settimana una visita è UN riquadro: due o tre servizi dentro non si
+ *  vedevano, e un contatore da solo non basta a farli leggere. Qui si ricavano
+ *  le fasce in percentuale sull'altezza del blocco, così il riquadro si può
+ *  dividere come nella vista giorno.
+ *
+ *  Ritorna [] quando i servizi sono meno di due: non c'è niente da dividere.
+ */
+export function serviceBands(appt) {
+  const items = (appt?.items || []).filter(Boolean);
+  if (items.length < 2) return [];
+  const spans = items.map((it) => Math.max(1, (it.duration_min || 0) + (it.soak_min || 0)));
+  const total = spans.reduce((s, x) => s + x, 0);
+  const bands = [];
+  let acc = 0;
+  items.forEach((it, i) => {
+    const from = (acc / total) * 100;
+    acc += spans[i];
+    bands.push({
+      name: it.service_name || '',
+      opId: it.operator_id ?? null,
+      fromPct: from,
+      toPct: (acc / total) * 100,
+      minutes: spans[i],
+    });
+  });
+  return bands;
+}

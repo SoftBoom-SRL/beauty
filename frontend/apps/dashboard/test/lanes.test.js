@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { COL_GUTTER, laneCss, laneLayout, visitSpines } from '../src/sections/agenda/lanes.js';
+import { COL_GUTTER, laneCss, laneLayout, serviceBands, visitSpines } from '../src/sections/agenda/lanes.js';
 
 /** blocco finto: un servizio di `apptId`, dalle `start` per `dur` minuti */
 const blk = (apptId, start, dur, { items = 1, soak = 0, itemId = null, client = 'Aisha' } = {}) => ({
@@ -94,4 +94,24 @@ test('nessuna spina se della visita in questa colonna c’è un solo servizio', 
   // L’altro servizio lo fa un’altra operatrice: in questa colonna non c’è nulla da legare.
   const placed = laneLayout([blk(1, 600, 60, { items: 2, itemId: 11 })]);
   assert.deepEqual(visitSpines(placed), []);
+});
+
+test('serviceBands divide la visita in proporzione alle durate', () => {
+  const visita = { items: [
+    { service_name: 'Colore', duration_min: 30, soak_min: 30, operator_id: 1 },
+    { service_name: 'Piega', duration_min: 60, soak_min: 0, operator_id: 1 },
+  ] };
+  const b = serviceBands(visita);
+  assert.equal(b.length, 2);
+  assert.equal(b[0].fromPct, 0);
+  assert.equal(b[0].toPct, 50);   // 60 minuti su 120, posa compresa
+  assert.equal(b[1].fromPct, 50);
+  assert.equal(b[1].toPct, 100);
+  assert.equal(b[0].name, 'Colore');
+});
+
+test('serviceBands non divide niente con un servizio solo', () => {
+  assert.deepEqual(serviceBands({ items: [{ service_name: 'Taglio', duration_min: 30 }] }), []);
+  assert.deepEqual(serviceBands({ items: [] }), []);
+  assert.deepEqual(serviceBands({}), []);
 });

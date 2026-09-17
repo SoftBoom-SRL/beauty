@@ -371,4 +371,4 @@ export function opSegments(a) {
 
 // Geometria delle corsie e delle spine: sta in lanes.js, senza import, per
 // poterla provare da sola (vedi apps/dashboard/test/lanes.test.js).
-export { laneLayout, laneCss, visitSpines } from './lanes.js';
+export { laneLayout, laneCss, visitSpines, serviceBands, COL_GUTTER } from './lanes.js';
