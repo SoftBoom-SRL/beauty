@@ -35,6 +35,8 @@ class PaymentIn(Schema):
 class CheckoutIn(Schema):
     blocks: list[BlockIn]
     payments: list[PaymentIn]
+    # Buono sconto presentato al banco: facoltativo. Vuoto = conto come prima.
+    coupon_code: str = ""
 
 
 class PosIn(CheckoutIn):
@@ -75,6 +77,7 @@ class SaleOut(Schema):
     client_name: str = ""
     location_id: Optional[int] = None
     total: Decimal
+    coupon_discount: Decimal = Decimal("0.00")
     deposit_deducted: Decimal
     created_at: datetime
 
@@ -115,6 +118,8 @@ class TodaySummaryOut(Schema):
     gift_card_sold: Decimal = Decimal("0.00")
     gift_card_redeemed: Decimal = Decimal("0.00")
     deposit_used: Decimal = Decimal("0.00")
+    # Caparre arrivate oggi: denaro in cassa, ma non venduto di oggi.
+    deposit_cashed: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
 
 

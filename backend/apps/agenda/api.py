@@ -17,7 +17,7 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from apps.core.models import Location, Salon
-from apps.core.services import log_activity
+from apps.core.services import emit_event, log_activity
 from common import ratelimit
 from common.auth import client_auth, staff_auth
 from common.permissions import require_scope
@@ -26,11 +26,13 @@ from common.utils import salon_get
 from . import services
 from .models import Appointment, Pause, WaitlistEntry
 from .schemas import (
+    MAX_ITEMS_PER_REQUEST,
     AppointmentCreateIn,
     AppointmentOut,
     AppointmentUpdateIn,
     ClientAppointmentCreateIn,
     ClientMoveIn,
+    DepositCashedIn,
     MarginOut,
     MoveIn,
     OkOut,
@@ -57,13 +59,6 @@ def _parse_day(value: str) -> dt.date:
     if day is None:
         raise HttpError(400, "Data non valida (atteso YYYY-MM-DD)")
     return day
-
-
-# Servizi per richiesta di disponibilità. La ricerca prova ogni slot della
-# giornata per ogni servizio: senza tetto una sola richiesta con qualche
-# centinaio di voci tiene occupato un worker e interroga il database migliaia di
-# volte. Nessuna visita vera ne ha più di una decina.
-MAX_ITEMS_PER_REQUEST = 12
 
 
 def _as_optional_id(value):
@@ -138,6 +133,11 @@ def gift_index(salon, client_ids) -> dict[int, list]:
     ids = {cid for cid in client_ids if cid}
     if not ids:
         return {}
+    # Lo stato EXPIRED lo scrive solo chi prova a riscattare: una carta scaduta
+    # da mesi resta «attiva» a database e compariva qui come regalo prenotabile,
+    # salvo poi essere rifiutata in cassa davanti alla cliente. La scadenza si
+    # verifica quindi in lettura, come fa il portafoglio dell'app cliente.
+    now = timezone.now()
     cards = (
         GiftCard.objects.filter(
             salon=salon,
@@ -146,6 +146,7 @@ def gift_index(salon, client_ids) -> dict[int, list]:
             gift_service__isnull=False,
             balance__gt=0,
         )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gte=now))
         .filter(
             Q(recipient_client_id__in=ids)
             | Q(recipient_client__isnull=True, recipient_name="", buyer_client_id__in=ids)
@@ -262,6 +263,7 @@ def _get_location(ctx, location_id) -> Location | None:
 def agenda_day(request, date: str, location_id: int = None):
     """Agenda del giorno: per ogni operatrice attiva turno, appuntamenti e pause."""
     ctx = request.auth
+    require_scope(ctx, "agenda")
     day = _parse_day(date)
     services.process_deposit_holds(ctx.salon)
 
@@ -358,6 +360,7 @@ def agenda_week(request, start: str, location_id: int = None):
     sedi.
     """
     ctx = request.auth
+    require_scope(ctx, "agenda")
     first_day = _parse_day(start)
     services.process_deposit_holds(ctx.salon)
     days = [first_day + dt.timedelta(days=offset) for offset in range(7)]
@@ -403,6 +406,10 @@ def agenda_week(request, start: str, location_id: int = None):
                         "total_price": a.total_price,
                         "forced": a.forced,
                         "deposit_status": a.deposit_status,
+                        # L'anteprima al passaggio del mouse è la stessa della
+                        # vista giorno: senza la nota il riquadro di avviso
+                        # («allergia alla tinta») spariva in settimana.
+                        "note": a.note,
                         "gifts": _gifts_out(a, gifts),
                         "items": [
                             {
@@ -430,8 +437,11 @@ def agenda_range(request, start: str, end: str, location_id: int = None):
     (minuti di turno), minuti prenotati, incasso atteso, stato per operatrice e
     appuntamenti compatti. Massimo 42 giorni (6 settimane)."""
     ctx = request.auth
+    require_scope(ctx, "agenda")
     first_day, last_day = _parse_day(start), _parse_day(end)
-    if last_day < first_day or (last_day - first_day).days > 42:
+    # Estremi inclusi: la differenza fra i due giorni è uno in meno dei giorni
+    # restituiti, e il tetto lasciava passare 43 giorni invece di 42.
+    if last_day < first_day or (last_day - first_day).days + 1 > 42:
         raise HttpError(400, "Intervallo non valido (massimo 42 giorni)")
     services.process_deposit_holds(ctx.salon)
 
@@ -627,8 +637,11 @@ def cancel_appointment(request, appointment_id: int, data: ReasonIn):
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
+    # Annulla il salone: nessuna penale alla cliente, la caparra torna indietro.
     return _appointment_out(
-        services.cancel_appointment(appointment, reason=data.reason, actor=ctx.user)
+        services.cancel_appointment(
+            appointment, reason=data.reason, actor=ctx.user, by_client=False
+        )
     )
 
 
@@ -639,46 +652,37 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
     `items` (se presente) è la lista COMPLETA dei servizi desiderati a partire
     da `appointment.start`: aggiungere un servizio = includere una voce senza
     `id`, rimuoverne uno = ometterlo. Ogni voce può forzare `duration_min`
-    (int positivo); se assente/0/negativo si usa la durata di listino. Prezzo e
-    idoneità operatrice restano dallo snapshot di listino. Il deposito NON viene
-    ricalcolato qui.
+    (int positivo); se assente/0/negativo vale la durata già sulla visita (o
+    quella di listino per le voci nuove). Prezzo e posa delle voci esistenti
+    restano quelli concordati con la cliente. Il deposito non si ricalcola: si
+    riduce soltanto se la visita è scesa sotto la caparra.
     """
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-    if appointment.status not in services.OPEN_STATUSES:
-        raise HttpError(400, "Appuntamento non modificabile nello stato attuale")
-
-    if data.note is not None:
-        appointment.note = data.note
-    with transaction.atomic():
-        if data.items is not None:
-            if not data.items:
-                raise HttpError(400, "Nessun servizio selezionato")
-            services.lock_salon(ctx.salon)
-            resolved = services.resolve_items_edit(
-                ctx.salon,
-                [item.dict() for item in data.items],
-                appointment.start,
-                exclude_appointment_id=appointment.id,
-                location=appointment.location,
-                # i servizi già sulla visita restano modificabili anche se nel
-                # frattempo sono usciti dal listino
-                keep_service_ids=set(appointment.items.values_list("service_id", flat=True)),
-            )
-            appointment.items.all().delete()
-            services.snapshot_items_edit(appointment, resolved)
-            appointment.operator = resolved[0][1]
-        appointment.save()
-
-    log_activity(
-        ctx.salon,
-        "appointment.updated",
-        f"Appuntamento di {appointment.client.full_name} aggiornato",
+    appointment = services.edit_appointment(
+        appointment,
+        items=[item.dict() for item in data.items] if data.items is not None else None,
+        note=data.note,
         actor=ctx.user,
-        payload={"appointment_id": appointment.id},
     )
     return _appointment_out(appointment)
+
+
+@router.post("/appointments/{int:appointment_id}/deposit-cashed", auth=staff_auth, response=AppointmentOut)
+def deposit_cashed(request, appointment_id: int, data: DepositCashedIn):
+    """La caparra è stata incassata in salone (contanti o POS al banco).
+
+    Senza questa via l'unico modo di registrarla era il pagamento online: dove
+    Stripe non è configurato — o quando la cliente paga al banco — il termine
+    scadeva lo stesso e il posto si liberava da solo.
+    """
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    appointment = salon_get(Appointment, ctx, appointment_id)
+    return _appointment_out(
+        services.mark_deposit_cashed(appointment, method=data.method, actor=ctx.user)
+    )
 
 
 @router.post("/appointments/{int:appointment_id}/deposit-refunded", auth=staff_auth, response=AppointmentOut)
@@ -694,6 +698,7 @@ def deposit_refunded(request, appointment_id: int):
 def appointment_margin(request, appointment_id: int):
     """Stima margine: ricavi meno costi fornitore/prodotto (listino corrente) e manodopera."""
     ctx = request.auth
+    require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
 
     revenue = supplier_cost = product_cost = labor_cost = Decimal("0")
@@ -725,6 +730,7 @@ def appointment_margin(request, appointment_id: int):
 @router.get("/appointments/{int:appointment_id}", auth=staff_auth, response=AppointmentOut)
 def get_appointment(request, appointment_id: int):
     ctx = request.auth
+    require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
     return _appointment_out(appointment)
 
@@ -734,10 +740,13 @@ def get_appointment(request, appointment_id: int):
 
 @router.get("/pauses", auth=staff_auth, response=list[PauseOut])
 def list_pauses(request, date: str = "", operator_id: int = None):
+    """Pause di una giornata. Senza `date` vale oggi: la vista è quella di un
+    giorno, e senza filtro l'endpoint restituiva ogni pausa mai creata dal
+    salone, senza paginazione."""
     ctx = request.auth
-    pauses = Pause.objects.filter(salon=ctx.salon).select_related("operator")
-    if date:
-        pauses = pauses.filter(start__date=_parse_day(date))
+    require_scope(ctx, "agenda")
+    day = _parse_day(date) if date else timezone.localdate()
+    pauses = Pause.objects.filter(salon=ctx.salon, start__date=day).select_related("operator")
     if operator_id:
         pauses = pauses.filter(operator_id=operator_id)
     return [_pause_out(p) for p in pauses.order_by("start")]
@@ -751,13 +760,18 @@ def create_pause(request, data: PauseIn):
     from apps.staff.models import Operator  # lazy
 
     operator = salon_get(Operator, ctx, data.operator_id)
-    pause = Pause.objects.create(
-        salon=ctx.salon,
-        operator=operator,
-        start=data.start,
-        duration_min=data.duration_min,
-        note=data.note,
-    )
+    # Una pausa blocca l'agenda esattamente come un appuntamento: si crea sotto
+    # lo stesso lock, altrimenti una prenotazione in corso su quello slot non la
+    # vede e le due scritture finiscono sovrapposte.
+    with transaction.atomic():
+        services.lock_salon(ctx.salon)
+        pause = Pause.objects.create(
+            salon=ctx.salon,
+            operator=operator,
+            start=data.start,
+            duration_min=data.duration_min,
+            note=data.note,
+        )
     log_activity(
         ctx.salon,
         "pause.created",
@@ -776,11 +790,14 @@ def update_pause(request, pause_id: int, data: PauseIn):
 
     from apps.staff.models import Operator  # lazy
 
-    pause.operator = salon_get(Operator, ctx, data.operator_id)
-    pause.start = data.start
-    pause.duration_min = data.duration_min
-    pause.note = data.note
-    pause.save()
+    operator = salon_get(Operator, ctx, data.operator_id)
+    with transaction.atomic():
+        services.lock_salon(ctx.salon)  # stesso lock delle prenotazioni
+        pause.operator = operator
+        pause.start = data.start
+        pause.duration_min = data.duration_min
+        pause.note = data.note
+        pause.save(update_fields=["operator", "start", "duration_min", "note", "updated_at"])
     log_activity(
         ctx.salon,
         "pause.updated",
@@ -847,6 +864,7 @@ def waitlist_contacted(request, entry_id: int):
 @router.get("/availability", auth=staff_auth, response=list[SlotOut])
 def availability(request, date: str, items: str, location_id: int = None):
     ctx = request.auth
+    require_scope(ctx, "agenda")
     return services.get_free_slots(
         ctx.salon,
         _parse_day(date),
@@ -1030,7 +1048,7 @@ def client_cancel_appointment(request, appointment_id: int):
     appointment = salon_get(Appointment, ctx, appointment_id, client=ctx.client)
     if not _client_policy_ok(appointment):
         raise HttpError(400, "Annullamento non consentito: contatta il salone")
-    return _appointment_out(services.cancel_appointment(appointment))
+    return _appointment_out(services.cancel_appointment(appointment, by_client=True))
 
 
 @router.get("/client/waitlist", auth=client_auth, response=list[WaitlistOut])
@@ -1087,5 +1105,19 @@ def client_create_waitlist(request, data: WaitlistIn):
 def client_delete_waitlist(request, entry_id: int):
     ctx = request.auth
     entry = salon_get(WaitlistEntry, ctx, entry_id, client=ctx.client)
+    service_name = entry.service.name_it
     entry.delete()
+    # L'iscrizione spariva senza lasciare traccia: l'operatrice che aveva appena
+    # visto la cliente in lista non capiva più perché non ci fosse.
+    log_activity(
+        ctx.salon,
+        "waitlist.deleted",
+        f"{ctx.client.full_name} si è tolta dalla lista d'attesa per {service_name}",
+        payload={"entry_id": entry_id, "client_id": ctx.client.id},
+    )
+    emit_event(
+        ctx.salon,
+        "waitlist.deleted",
+        {"entry_id": entry_id, "client_id": ctx.client.id, "service_name": service_name},
+    )
     return OkOut()

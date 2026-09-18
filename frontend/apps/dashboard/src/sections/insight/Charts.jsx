@@ -5,6 +5,10 @@
 import React from 'react';
 import { ProgressBar, fmtEur } from '@youty/shared';
 
+/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un ricavo a
+ *  zero in un grafico è «€0». */
+const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
+
 export const CATEGORY_PALETTE = [
   'var(--clay)', 'var(--op-mara)', 'var(--op-lina)', 'var(--op-asia)',
   'var(--op-giulia)', 'var(--info)', 'var(--ok)', 'var(--warn)',
@@ -66,7 +70,7 @@ export function CategoryBars({ rows, lang }) {
         <div key={r.category} style={{ marginTop: i ? 13 : 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
             <span style={{ fontWeight: 600, fontSize: 13.5 }}>{r.category}</span>
-            <span className="t-num" style={{ fontSize: 14 }}>{fmtEur(Number(r.revenue), lang)}</span>
+            <span className="t-num" style={{ fontSize: 14 }}>{eur0(r.revenue, lang)}</span>
           </div>
           <ProgressBar value={(Number(r.revenue) / max) * 100} color={CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]} />
         </div>

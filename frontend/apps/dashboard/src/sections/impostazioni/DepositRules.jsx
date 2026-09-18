@@ -130,23 +130,27 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
   const sentence = ruleSentence(draftConditions, fields, t, lang);
   const amtTxt = draft.amount_type === 'pct' ? draft.amount + '%' : '€' + draft.amount;
 
+  /* La PUT è a corpo completo e la risposta rigenera il draft (effetto su
+   * `rule`): mandando i valori del server, l'interruttore buttava via le
+   * modifiche non salvate — acconto riportato dal 50% al 30% e condizione
+   * aggiunta sparita, senza un avviso. Il corpo si costruisce sempre dal
+   * draft, che quando non è sporco è identico a ciò che c'è sul server. */
+  const payloadOf = (active) => ({
+    name: (draft.name || '').trim() || t('Regola deposito', 'Deposit rule'),
+    conditions: draftConditions,
+    amount_type: draft.amount_type,
+    amount: Number(draft.amount).toFixed(2),
+    priority: draft.priority,
+    active,
+  });
+
   const toggleActive = async (v) => {
-    const upd2 = await onSave({
-      name: rule.name, conditions: rule.conditions, amount_type: rule.amount_type,
-      amount: rule.amount, priority: rule.priority, active: v,
-    });
-    if (upd2) fireToast({ msg: v ? t('Regola attivata', 'Rule enabled') : t('Regola disattivata', 'Rule disabled'), icon: 'check' });
+    const upd2 = await onSave(payloadOf(v));
+    if (upd2) { setDirty(false); fireToast({ msg: v ? t('Regola attivata', 'Rule enabled') : t('Regola disattivata', 'Rule disabled'), icon: 'check' }); }
   };
 
   const saveDraft = async () => {
-    const upd2 = await onSave({
-      name: (draft.name || '').trim() || t('Regola deposito', 'Deposit rule'),
-      conditions: draftConditions,
-      amount_type: draft.amount_type,
-      amount: Number(draft.amount).toFixed(2),
-      priority: draft.priority,
-      active: rule.active,
-    });
+    const upd2 = await onSave(payloadOf(rule.active));
     if (upd2) { setDirty(false); fireToast({ msg: t('Regola salvata', 'Rule saved'), icon: 'check' }); }
   };
 

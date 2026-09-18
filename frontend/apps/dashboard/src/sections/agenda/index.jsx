@@ -52,10 +52,19 @@ export default function AgendaSection() {
    * (succedeva con i ricarichi live, e lo spostamento successivo finiva per
    * usare la data sbagliata). */
   const daySeq = useRef(0);
+  /* Il numero di sequenza da solo non basta: un ricarico partito DOPO il
+   * cambio giorno (l'attesa del POST di uno spostamento, per esempio) chiede
+   * la data vecchia e prende il numero più alto, quindi vince — l'intestazione
+   * diceva 19 settembre e la griglia mostrava il 18. Si confronta anche la
+   * data, letta da una ref perché le funzioni in volo hanno in mano quella di
+   * quando sono partite. */
+  const dateRef = useRef(date);
+  dateRef.current = date;
   const fetchDay = useCallback(async () => {
     const my = ++daySeq.current;
-    const rows = await api.get('/api/agenda/day', { params: { date, location_id: locationId } });
-    if (my === daySeq.current) setDayData(rows);
+    const forDate = date;
+    const rows = await api.get('/api/agenda/day', { params: { date: forDate, location_id: locationId } });
+    if (my === daySeq.current && forDate === dateRef.current) setDayData(rows);
   }, [date, locationId]);
   const fetchWaitlist = useCallback(() => api.get('/api/agenda/waitlist').then(setWaitlist).catch(() => {}), []);
   const fetchSummary = useCallback(() => api.get('/api/sales/today-summary').then(setSummary).catch(() => {}), []);
@@ -72,16 +81,24 @@ export default function AgendaSection() {
   useEffect(() => { fetchWaitlist(); fetchSummary(); fetchReleased(); }, [fetchWaitlist, fetchSummary, fetchReleased]);
 
   /* live: quando un'altra postazione tocca l'agenda, ricarica (debounce breve) */
+  /* Il cleanup NON deve annullare il debounce: `live` cambia identità a ogni
+   * evento ricevuto e la consegna aggiorna lo stato PRIMA di chiamare gli
+   * ascoltatori, quindi l'effetto si smontava subito dopo aver programmato il
+   * timer e lo cancellava — il ricarico non partiva MAI e la griglia restava
+   * ferma sui dati di quando si era aperto il giorno. Il timer vive in una ref
+   * e si spegne solo allo smontaggio, come già fa MonthView.
+   * `deposit.`: la caparra pagata online deve comparire da sola, senza che
+   * nessuno ricarichi la pagina. */
   const liveTimer = useRef(null);
   useEffect(() => {
-    const unsub = live.subscribe(({ events }) => {
-      if (!events.some((e) => /^(appointment|pause|waitlist|slot|visit|sale)\./.test(e.type))) return;
+    if (!live?.subscribe) return undefined;
+    return live.subscribe(({ events }) => {
+      if (!events.some((e) => /^(appointment|pause|waitlist|slot|visit|sale|deposit)\./.test(e.type))) return;
       clearTimeout(liveTimer.current);
       liveTimer.current = setTimeout(refetchAll, 250);
     });
-    // senza clearTimeout il ricarico partiva anche dopo aver lasciato l'agenda
-    return () => { clearTimeout(liveTimer.current); unsub(); };
   }, [live, refetchAll]);
+  useEffect(() => () => clearTimeout(liveTimer.current), []);
 
   /* refetch after any modal closes — mutations happen inside modals, keep the grid fresh */
   const prevModal = useRef(modal);
@@ -138,6 +155,9 @@ export default function AgendaSection() {
     if (!canWrite) { noWrite(); return; }
     openModal('newappt', { prefill: prefill || {}, onCreated: refetchAll });
   }, [canWrite, noWrite, openModal, refetchAll]);
+  /* groupOpen sta fra le dipendenze: senza, l'handler registrato restava
+   * quello di prima e vedeva il drawer di gruppo ancora chiuso — il tasto N ci
+   * apriva sopra la prenotazione singola. */
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'n' && e.key !== 'N') return;
@@ -150,7 +170,7 @@ export default function AgendaSection() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openNewAppt, date, modal]);
+  }, [openNewAppt, date, modal, groupOpen]);
 
   /* ---- mutations (drag & drop, pauses) ---- */
   const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
@@ -207,16 +227,25 @@ export default function AgendaSection() {
    * resterebbe marcato «forzato» in agenda senza motivo. */
   const splitItem = async (appt, item, startMin, opId, opts = {}) => {
     if (!canWrite) { noWrite(); return; }
+    // `opts.dateIso`: lo stacco può finire su un altro giorno (forbici lasciate
+    // sulla striscia in alto). Senza, la data era sempre quella a video e il
+    // servizio restava qui.
+    const iso = opts.dateIso || date;
+    const otherDay = iso !== date;
     setPending({ kind: 'appt', id: appt.id, startMin: aMin(appt.start), opId: appt.operator_id });
     try {
       await api.post(`/api/agenda/appointments/${appt.id}/split`, {
         item_id: item.id,
-        start: isoAtMin(date, startMin),
+        start: isoAtMin(iso, startMin),
         operator_id: opId && opId !== item.operator_id ? opId : null,
         force: !!opts.force,
       });
+      const dd = parseISO(iso);
+      const when = otherDay
+        ? t(`${DOW_IT[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`)
+        : timeLabel(startMin);
       fireToast({
-        msg: t(`${item.service_name} staccato alle ${timeLabel(startMin)}`, `${item.service_name} detached at ${timeLabel(startMin)}`)
+        msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`)
           + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'scissors',
       });
@@ -224,6 +253,7 @@ export default function AgendaSection() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
         await splitItem(appt, item, startMin, opId, {
+          ...opts,
           force: true,
           warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
         });
@@ -418,7 +448,13 @@ export default function AgendaSection() {
   const openDay = (iso) => { setDate(iso); setCalView('day'); };
   // Nessun fallback "mostra tutte": spegnendo tutte le chip la griglia deve
   // restare vuota (lo stato vuoto è già previsto), non riaccendere tutto.
-  const visibleRows = (dayData || []).filter((r) => vis[r.operator.id] !== false);
+  /* Le chip decidono quali COLONNE si disegnano, non quali dati esistono: il
+   * payload elenca ogni appuntamento una volta sola, nella riga dell'operatrice
+   * principale, ma i suoi servizi possono essere di altre. Filtrando anche i
+   * dati, spegnere una chip faceva sparire il lavoro delle colleghe rimaste e
+   * dichiarava «Disponibile» uno slot occupato davvero. */
+  const allRows = dayData || [];
+  const visibleRows = allRows.filter((r) => vis[r.operator.id] !== false);
 
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
@@ -537,6 +573,7 @@ export default function AgendaSection() {
             ) : (
               <DayGrid
                 rows={visibleRows}
+                allRows={allRows}
                 date={date}
                 pickMode={pickMode}
                 nowMin={isToday ? nowMin : null}

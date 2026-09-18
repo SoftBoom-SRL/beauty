@@ -5,6 +5,7 @@ import datetime as dt
 from decimal import Decimal
 
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.core.models import Salon
 
@@ -18,7 +19,7 @@ class ShiftWindowsTests(TestCase):
         self.operator = Operator.objects.create(
             salon=self.salon, first_name="Giulia", last_name="Rossi"
         )
-        # mercoledì 1 luglio 2026: settimana ISO 27 (27 % 2 == 1)
+        # mercoledì 1 luglio 2026: 105 685 settimane trascorse → indice 1 su ciclo 2
         self.day = dt.date(2026, 7, 1)
         assert self.day.weekday() == 2
 
@@ -56,6 +57,10 @@ class ShiftWindowsTests(TestCase):
         self.assertEqual(shift_windows(self.operator, self.day), [])
 
     def test_cycle_weeks_due(self):
+        """Indici scritti a mano, non ricavati da `_week_index`: seminare la
+        fixture con la funzione sotto esame renderebbe il test verde anche se
+        la funzione sbagliasse (le settimane trascorse dal 1° gennaio dell'anno
+        1 per il 2026-07-01 sono 105 685, dispari -> indice 1 su un ciclo di 2)."""
         self.operator.cycle_weeks = 2
         self.operator.save(update_fields=["cycle_weeks"])
         WeeklyShift.objects.create(
@@ -64,10 +69,8 @@ class ShiftWindowsTests(TestCase):
         WeeklyShift.objects.create(
             operator=self.operator, week_index=1, weekday=2, start_min=600, end_min=900
         )
-        day_a = self.day  # settimana ISO 27 -> week_index 1
-        day_b = self.day + dt.timedelta(days=7)  # settimana ISO 28 -> week_index 0
-        self.assertEqual(day_a.isocalendar()[1] % 2, 1)
-        self.assertEqual(day_b.isocalendar()[1] % 2, 0)
+        day_a = dt.date(2026, 7, 1)  # mercoledì, indice 1
+        day_b = dt.date(2026, 7, 8)  # mercoledì successivo, indice 0
         self.assertEqual(shift_windows(self.operator, day_a), [(600, 900)])
         self.assertEqual(shift_windows(self.operator, day_b), [(540, 1020)])
 
@@ -191,32 +194,357 @@ class ShiftCycleAndContiguityTests(TestCase):
         for previous, current in zip(indexes, indexes[1:]):
             self.assertNotEqual(previous, current, f"ciclo interrotto su {mondays}")
 
+    # Gli indici qui sotto sono scritti a mano (T22): le fixture non devono
+    # essere seminate con `_week_index`, la funzione che i test verificano.
+    # martedì 2026-09-22 → 105 697 settimane trascorse → indice 1 su ciclo 2
+    TUESDAY = dt.date(2026, 9, 22)
+    TUESDAY_WEEK_INDEX = 1
+
+    def test_week_index_matches_the_hand_computed_values(self):
+        """Valori calcolati a mano dalla data, non dalla formula di produzione."""
+        from .services import _week_index
+
+        self.assertEqual(_week_index(dt.date(2026, 7, 1), 2), 1)  # mercoledì
+        self.assertEqual(_week_index(dt.date(2026, 7, 8), 2), 0)
+        self.assertEqual(_week_index(dt.date(2026, 9, 22), 2), 1)  # martedì
+        self.assertEqual(_week_index(dt.date(2026, 7, 1), 3), 1)
+        self.assertEqual(_week_index(dt.date(2026, 7, 8), 3), 2)
+        self.assertEqual(_week_index(dt.date(2026, 7, 15), 3), 0)
+
+    def test_sunday_belongs_to_the_week_that_started_on_monday(self):
+        """La domenica chiude la settimana, non ne apre una nuova: domenica
+        2026-09-27 deve usare lo stesso indice del lunedì 2026-09-21 (1)."""
+        monday, sunday = dt.date(2026, 9, 21), dt.date(2026, 9, 27)
+        self.assertEqual(sunday.weekday(), 6)
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=1, weekday=0, start_min=9 * 60, end_min=13 * 60
+        )
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=1, weekday=6, start_min=10 * 60, end_min=14 * 60
+        )
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=0, weekday=6, start_min=8 * 60, end_min=9 * 60
+        )
+        self.assertEqual(shift_windows(self.operator, monday), [(9 * 60, 13 * 60)])
+        self.assertEqual(shift_windows(self.operator, sunday), [(10 * 60, 14 * 60)])
+
     def test_contiguous_shift_rows_become_one_window(self):
         """9–13 e 13–18 sono lo stesso turno spezzato in due righe: un servizio
         che attraversa le 13 deve poter entrare."""
-        day = dt.date(2026, 9, 22)  # martedì, week_index calcolato sotto
-        from .services import _week_index
-
-        week_index = _week_index(day, 2)
+        day = self.TUESDAY
         WeeklyShift.objects.create(
-            operator=self.operator, week_index=week_index, weekday=day.weekday(),
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
             start_min=9 * 60, end_min=13 * 60,
         )
         WeeklyShift.objects.create(
-            operator=self.operator, week_index=week_index, weekday=day.weekday(),
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
             start_min=13 * 60, end_min=18 * 60,
         )
         self.assertEqual(shift_windows(self.operator, day), [(9 * 60, 18 * 60)])
 
     def test_a_real_lunch_break_still_splits_the_window(self):
-        day = dt.date(2026, 9, 22)
-        from .services import _week_index
-
         WeeklyShift.objects.create(
-            operator=self.operator, week_index=_week_index(day, 2), weekday=day.weekday(),
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
             start_min=9 * 60, end_min=18 * 60,
             break_start_min=13 * 60, break_end_min=14 * 60,
         )
         self.assertEqual(
-            shift_windows(self.operator, day), [(9 * 60, 13 * 60), (14 * 60, 18 * 60)]
+            shift_windows(self.operator, self.TUESDAY),
+            [(9 * 60, 13 * 60), (14 * 60, 18 * 60)],
         )
+
+    def test_an_overlapping_row_cannot_swallow_the_lunch_break(self):
+        """Due righe sovrapposte (9–18 con pausa 13–14, più 12–15): la fusione
+        ricuciva il buco e l'agenda proponeva appuntamenti durante la pausa."""
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
+            start_min=9 * 60, end_min=18 * 60,
+            break_start_min=13 * 60, break_end_min=14 * 60,
+        )
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
+            start_min=12 * 60, end_min=15 * 60,
+        )
+        self.assertEqual(
+            shift_windows(self.operator, self.TUESDAY),
+            [(9 * 60, 13 * 60), (14 * 60, 18 * 60)],
+        )
+
+    def test_opening_hours_still_apply_after_the_break_is_removed(self):
+        from apps.core.models import SalonSettings
+
+        SalonSettings.objects.create(
+            salon=self.salon, opening_hours_week={"1": [["10:00", "17:00"]]}
+        )
+        WeeklyShift.objects.create(
+            operator=self.operator, week_index=self.TUESDAY_WEEK_INDEX, weekday=1,
+            start_min=9 * 60, end_min=18 * 60,
+            break_start_min=13 * 60, break_end_min=14 * 60,
+        )
+        operator = Operator.objects.select_related("salon").get(pk=self.operator.pk)
+        self.assertEqual(
+            shift_windows(operator, self.TUESDAY),
+            [(10 * 60, 13 * 60), (14 * 60, 17 * 60)],
+        )
+
+
+class StaffApiTestCase(TestCase):
+    """Base con token staff reale: questi test passano dall'HTTP vero."""
+
+    scopes = ["team"]
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from common.auth import create_staff_tokens
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Team", scopes=self.scopes)
+        Membership.objects.create(user=self.user, salon=self.salon, role=role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
+        }
+
+    def operator_payload(self, **overrides):
+        payload = {
+            "first_name": "Giulia",
+            "last_name": "Rossi",
+            "color": "#A5B4FC",
+            "cycle_weeks": 1,
+            "order": 0,
+        }
+        payload.update(overrides)
+        return payload
+
+    def put_operator(self, operator, **overrides):
+        return self.client.put(
+            f"/api/staff/{operator.id}",
+            data=self.operator_payload(**overrides),
+            content_type="application/json",
+            **self.auth,
+        )
+
+
+class OperatorValidationTests(StaffApiTestCase):
+    """Colore, ciclo e ordine fuori range sono 400, non errori del database."""
+
+    def test_invalid_color_is_refused(self):
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(color="viola"),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertFalse(Operator.objects.exists())
+
+    def test_zero_cycle_weeks_is_refused(self):
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(cycle_weeks=0),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_absurd_cycle_weeks_is_refused(self):
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(cycle_weeks=100000),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_negative_order_is_refused(self):
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(order=-3),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_valid_payload_creates_the_operator(self):
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(cycle_weeks=2),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(Operator.objects.get().cycle_weeks, 2)
+
+    def test_a_user_cannot_be_linked_to_two_operators(self):
+        first = Operator.objects.create(
+            salon=self.salon, first_name="Anna", last_name="Bianchi", user=self.user
+        )
+        res = self.client.post(
+            "/api/staff/",
+            data=self.operator_payload(user_id=self.user.id),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertIn("Anna", res.json()["detail"])
+        self.assertEqual(Operator.objects.count(), 1)
+        first.refresh_from_db()
+        self.assertEqual(first.user_id, self.user.id)
+
+
+class CycleWeeksReductionTests(StaffApiTestCase):
+    """Abbassare il ciclo non deve lasciare turni che nessuna data seleziona più."""
+
+    def setUp(self):
+        super().setUp()
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Rossi", cycle_weeks=2
+        )
+        self.kept = WeeklyShift.objects.create(
+            operator=self.operator, week_index=0, weekday=1, start_min=540, end_min=1080
+        )
+        self.orphan = WeeklyShift.objects.create(
+            operator=self.operator, week_index=1, weekday=1, start_min=600, end_min=900
+        )
+
+    def test_orphan_shifts_are_removed_with_the_cycle(self):
+        res = self.put_operator(self.operator, cycle_weeks=1)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.operator.refresh_from_db()
+        self.assertEqual(self.operator.cycle_weeks, 1)
+        self.assertEqual(
+            list(self.operator.shifts.values_list("id", flat=True)), [self.kept.id]
+        )
+        # martedì 2026-09-22: con ciclo 1 ogni settimana è l'indice 0, quindi il
+        # turno superstite torna a valere tutte le settimane
+        self.assertEqual(shift_windows(self.operator, dt.date(2026, 9, 22)), [(540, 1080)])
+
+    def test_raising_the_cycle_keeps_every_shift(self):
+        res = self.put_operator(self.operator, cycle_weeks=3)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(self.operator.shifts.count(), 2)
+
+
+class ReplaceShiftsValidationTests(StaffApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Rossi", cycle_weeks=2
+        )
+
+    def _put(self, shifts):
+        return self.client.put(
+            f"/api/staff/{self.operator.id}/shifts",
+            data={"shifts": shifts},
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_overlapping_rows_on_the_same_day_are_refused(self):
+        res = self._put(
+            [
+                {"week_index": 0, "weekday": 1, "start_min": 540, "end_min": 1080,
+                 "break_start_min": 780, "break_end_min": 840},
+                {"week_index": 0, "weekday": 1, "start_min": 720, "end_min": 900},
+            ]
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(WeeklyShift.objects.count(), 0)
+
+    def test_contiguous_rows_are_still_accepted(self):
+        res = self._put(
+            [
+                {"week_index": 0, "weekday": 1, "start_min": 540, "end_min": 780},
+                {"week_index": 0, "weekday": 1, "start_min": 780, "end_min": 1080},
+            ]
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(WeeklyShift.objects.count(), 2)
+
+    def test_rows_on_different_days_may_overlap_in_time(self):
+        res = self._put(
+            [
+                {"week_index": 0, "weekday": 1, "start_min": 540, "end_min": 1080},
+                {"week_index": 0, "weekday": 2, "start_min": 540, "end_min": 1080},
+                {"week_index": 1, "weekday": 1, "start_min": 540, "end_min": 1080},
+            ]
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(WeeklyShift.objects.count(), 3)
+
+    def test_negative_week_index_is_refused(self):
+        res = self._put([{"week_index": -1, "weekday": 1, "start_min": 540, "end_min": 1080}])
+        self.assertEqual(res.status_code, 400, res.content)
+
+    def test_week_index_beyond_the_cycle_is_refused(self):
+        res = self._put([{"week_index": 2, "weekday": 1, "start_min": 540, "end_min": 1080}])
+        self.assertEqual(res.status_code, 400, res.content)
+
+
+class PerformanceSeriesTests(TestCase):
+    """La serie di rendimento non deve poter essere allungata a piacere."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Rossi"
+        )
+
+    def test_months_are_capped(self):
+        from .services import MAX_PERFORMANCE_MONTHS, performance_series
+
+        series = performance_series(self.operator, months=5_000_000)
+        self.assertEqual(len(series), MAX_PERFORMANCE_MONTHS)
+
+    def test_months_below_one_fall_back_to_one(self):
+        from .services import performance_series
+
+        self.assertEqual(len(performance_series(self.operator, months=0)), 1)
+
+    def test_series_is_built_with_a_bounded_number_of_queries(self):
+        from .services import performance_series
+
+        with self.assertNumQueries(1):
+            series = performance_series(self.operator, months=24)
+        self.assertEqual(len(series), 24)
+        self.assertEqual(series[-1]["month"], timezone.localdate().strftime("%Y-%m"))
+
+
+class OperatorListQueryCountTests(StaffApiTestCase):
+    """La lista operatrici è la pagina che il salone tiene aperta tutto il
+    giorno: il numero di query non deve crescere con le operatrici."""
+
+    scopes = ["team", "agenda"]
+
+    def _make_operators(self, how_many):
+        for index in range(how_many):
+            operator = Operator.objects.create(
+                salon=self.salon, first_name=f"Op{index}", last_name="Rossi"
+            )
+            WeeklyShift.objects.create(
+                operator=operator, week_index=0, weekday=1, start_min=540, end_min=1080
+            )
+
+    def _count_queries(self, expected_rows):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as captured:
+            res = self.client.get("/api/staff/", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(len(res.json()), expected_rows)
+        return len(captured)
+
+    def test_query_count_does_not_grow_with_the_team(self):
+        self._make_operators(2)
+        with_two = self._count_queries(2)
+        self._make_operators(6)
+        with_eight = self._count_queries(8)
+        self.assertEqual(with_two, with_eight)
+
+    def test_list_works_without_salon_settings(self):
+        self._make_operators(1)
+        res = self.client.get("/api/staff/", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(len(res.json()), 1)
+        self.assertIn("on_shift", res.json()[0])

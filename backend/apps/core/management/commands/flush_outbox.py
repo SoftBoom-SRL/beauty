@@ -153,12 +153,19 @@ def deliver_event(event: OutboxEvent, *, client: httpx.Client | None = None) -> 
             client.close()
 
 
-def _claim(event: OutboxEvent, now) -> bool:
+def _claim(event: OutboxEvent) -> bool:
     """Prende in carico l'evento con un UPDATE condizionale.
 
     Ritorna False se un altro worker è arrivato prima: è questo a impedire che
     la stessa cliente riceva due volte lo stesso messaggio.
+
+    `claimed_at` è l'istante REALE della presa in carico, non quello di inizio
+    giro: con 200 eventi da consegnare, l'ultimo risultava preso in carico
+    minuti prima di quando è partito davvero e il giro successivo lo
+    considerava abbandonato mentre era ancora in volo — la cliente riceveva due
+    volte lo stesso OTP.
     """
+    now = timezone.now()
     claimed = OutboxEvent.objects.filter(
         pk=event.pk, status=OutboxEvent.Status.PENDING
     ).update(status=OutboxEvent.Status.SENDING, claimed_at=now)
@@ -190,7 +197,7 @@ def flush_pending(limit: int = 200) -> tuple[int, int]:
     sent = failed = 0
     with httpx.Client(timeout=TIMEOUT) as client:
         for event in pending:
-            if not _claim(event, now):
+            if not _claim(event):
                 continue
             if deliver_event(event, client=client):
                 sent += 1

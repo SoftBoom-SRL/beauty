@@ -45,6 +45,36 @@ def _account_opts(salon) -> dict:
     return {"stripe_account": account} if account else {}
 
 
+_INTENT_ACCOUNT_SALT = "youty.stripe-intent-account"
+
+
+def account_token(salon) -> str:
+    """Firma l'account su cui stiamo creando il pagamento, per i metadata.
+
+    Torna indietro dentro l'evento e permette di riconoscere un pagamento nato
+    su un account che nel frattempo è cambiato: prima il webhook confrontava con
+    l'account ATTUALE del salone, così bastava collegare (o scollegare) Stripe
+    perché i pagamenti dei link già in volo venissero scartati — soldi incassati
+    e nessuno che li riconciliasse.
+
+    È firmato perché i metadata di un evento Connect li scrive chi genera
+    l'evento: senza firma un salone collegato potrebbe dichiarare l'account che
+    preferisce e farsi accettare il pagamento di un appuntamento altrui.
+    """
+    return signing.dumps({"s": salon.id, "a": salon_account_id(salon)}, salt=_INTENT_ACCOUNT_SALT)
+
+
+def account_token_matches(salon, token: str, account: str) -> bool:
+    """Vero se `token` è nostro, è di questo salone e dichiara proprio `account`."""
+    if not token:
+        return False
+    try:
+        data = signing.loads(token, salt=_INTENT_ACCOUNT_SALT)
+    except signing.BadSignature:
+        return False
+    return data.get("s") == salon.id and (data.get("a") or "") == (account or "")
+
+
 def payments_enabled(salon) -> bool:
     """Vero se si possono creare pagamenti online per il salone."""
     return bool(settings.STRIPE_SECRET_KEY)
@@ -178,7 +208,12 @@ def create_deposit_intent(appointment):
         amount=_to_cents(amount),
         currency=_currency(appointment.salon),
         customer=customer_id,
-        metadata={"appointment_id": appointment.id, "kind": "deposit"},
+        metadata={
+            "appointment_id": appointment.id,
+            "kind": "deposit",
+            "salon_id": appointment.salon_id,
+            "acct": account_token(appointment.salon),
+        },
         idempotency_key=f"deposit-{appointment.salon_id}-{appointment.id}",
         **_account_opts(appointment.salon),
     )
@@ -205,7 +240,14 @@ def create_deposit_checkout(appointment) -> str:
     if amount <= 0:
         raise HttpError(400, "Nessuna caparra richiesta per questo appuntamento")
     client = appointment.client
-    metadata = {"appointment_id": str(appointment.id), "kind": "deposit", "salon_id": str(appointment.salon_id)}
+    metadata = {
+        "appointment_id": str(appointment.id),
+        "kind": "deposit",
+        "salon_id": str(appointment.salon_id),
+        # Account di OGGI, firmato: se il titolare collega o scollega Stripe
+        # prima che la cliente paghi, l'evento arriva comunque riconoscibile.
+        "acct": account_token(appointment.salon),
+    }
     success_url, cancel_url = _deposit_return_urls(appointment)
     when = timezone.localtime(appointment.start).strftime("%d/%m %H:%M")
     params = {
@@ -321,7 +363,13 @@ def no_show_charge_amount(appointment) -> Decimal:
     """
     amount = Decimal(str(appointment.total_price or 0))
     if appointment.deposit_status == "forfeited":
-        amount -= Decimal(str(appointment.deposit_amount or 0))
+        # Al NETTO di quanto è già tornato alla cliente: con 10 € rimborsati su
+        # 30, in cassa ne restano 20 ed è solo quella parte a scalare
+        # l'addebito. Sottraendo l'intera caparra il salone perdeva i 10.
+        kept = Decimal(str(appointment.deposit_amount or 0)) - Decimal(
+            str(appointment.deposit_refunded_amount or 0)
+        )
+        amount -= max(kept, Decimal("0.00"))
     return max(amount, Decimal("0.00")).quantize(Decimal("0.01"))
 
 
@@ -362,8 +410,20 @@ def charge_full_amount(appointment):
             payment_method=client.stripe_payment_method_id,
             off_session=True,
             confirm=True,
-            metadata={"appointment_id": appointment.id, "kind": "no_show"},
-            idempotency_key=f"no-show-{appointment.salon_id}-{appointment.id}",
+            metadata={
+                "appointment_id": appointment.id,
+                "kind": "no_show",
+                "salon_id": appointment.salon_id,
+                "acct": account_token(appointment.salon),
+            },
+            # La carta fa parte della chiave: un addebito rifiutato bruciava la
+            # chiave per 24 h e il ritentativo con un'altra carta si riprendeva
+            # lo stesso errore invece di partire. Un doppio clic con la STESSA
+            # carta continua a valere per un addebito solo.
+            idempotency_key=(
+                f"no-show-{appointment.salon_id}-{appointment.id}"
+                f"-{client.stripe_payment_method_id}"
+            ),
             **_account_opts(appointment.salon),
         )
     except stripe.StripeError as exc:
@@ -399,21 +459,22 @@ def refund_deposit(appointment):
         return None
 
 
-def refund_payment_intent(salon, intent_id: str, *, idempotency_key: str):
+def refund_payment_intent(salon, intent_id: str, *, idempotency_key: str, amount_cents: int = 0):
     """Rimborsa un PaymentIntent qualsiasi del salone. Ritorna il Refund, o None.
 
     Serve per gli incassi in eccesso: una seconda caparra pagata su un link
     ancora aperto va restituita, non tenuta senza che nessuno se ne accorga.
+    `amount_cents` rimborsa solo una parte (caparra più alta del conto finale);
+    a zero restituisce tutto.
     """
     if not settings.STRIPE_SECRET_KEY or not intent_id:
         return None
     stripe = _client()
+    params = {"payment_intent": intent_id, "idempotency_key": idempotency_key}
+    if amount_cents and int(amount_cents) > 0:
+        params["amount"] = int(amount_cents)
     try:
-        return stripe.Refund.create(
-            payment_intent=intent_id,
-            idempotency_key=idempotency_key,
-            **_account_opts(salon),
-        )
+        return stripe.Refund.create(**params, **_account_opts(salon))
     except stripe.StripeError as exc:
         logger.warning("Rimborso %s non riuscito: %s", intent_id, exc)
         return None

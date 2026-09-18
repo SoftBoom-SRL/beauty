@@ -21,7 +21,18 @@ class Command(BaseCommand):
         parser.add_argument("--salon", type=int, default=None, help="ID salone singolo")
 
     def handle(self, *args, **options):
-        qs = YourangConnection.objects.filter(status=YourangConnection.Status.CONNECTED)
+        # Anche i saloni in ERROR: quasi tutti gli errori qui sono passeggeri (un
+        # 502 del proxy, un timeout) e prima bastava uno di questi perché il
+        # salone uscisse dal cron PER SEMPRE — nessun percorso lo riportava a
+        # CONNECTED senza un OAuth rifatto a mano, e intanto i webhook
+        # continuavano a funzionare, quindi nessuno si accorgeva che il backfill
+        # era morto. Chi si disconnette (DISCONNECTED) resta fuori.
+        qs = YourangConnection.objects.filter(
+            status__in=[
+                YourangConnection.Status.CONNECTED,
+                YourangConnection.Status.ERROR,
+            ]
+        )
         if options["salon"]:
             qs = qs.filter(salon_id=options["salon"])
 
@@ -31,7 +42,10 @@ class Command(BaseCommand):
                 services = sync_services(conn)
                 conn.last_sync_at = timezone.now()
                 conn.last_error = ""
-                conn.save(update_fields=["last_sync_at", "last_error"])
+                # Il primo giro riuscito riporta la connessione a CONNECTED: è
+                # l'unico modo perché un errore passeggero non diventi definitivo.
+                conn.status = YourangConnection.Status.CONNECTED
+                conn.save(update_fields=["last_sync_at", "last_error", "status"])
                 self.stdout.write(self.style.SUCCESS(
                     f"[{conn.salon}] clienti: +{clients.created} link {clients.linked} "
                     f"push {clients.pushed} · voci catalogo {services.items}"

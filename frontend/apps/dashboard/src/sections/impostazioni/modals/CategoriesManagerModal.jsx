@@ -3,10 +3,10 @@
 //   clienti   → /api/clients/categories      {name, color, order}      (write: scope clients)
 //   servizi   → /api/catalog/categories      {name_it, name_en, color, order} (write: scope pricing)
 //   magazzino → /api/inventory/categories    {name, order}             (write: scope inventory)
-// Drag-reorder: per-item PUT of `order` for ALL kinds. NOTE: the dedicated
-// POST /api/catalog/categories/reorder is currently shadowed by the
-// /categories/{category_id} route (405) — backend bug reported; switch back
-// to it once fixed.
+// Riordino con trascinamento: dove esiste la rotta dedicata (solo catalog) si
+// manda un solo POST /reorder con la lista di id — atomico e con una sola voce
+// «category.reordered» nel registro attività. Clienti e magazzino non ce
+// l'hanno e restano con una PUT per categoria.
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, Icon, EmptyState } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
@@ -17,7 +17,7 @@ import { GD_PALETTE, PaletteGrid, inputCss, toastErr, LockNote } from '../lib.js
 
 const KINDS = {
   clienti: { base: '/api/clients/categories', scope: 'clients', hasColor: true, bilingual: false },
-  servizi: { base: '/api/catalog/categories', scope: 'pricing', hasColor: true, bilingual: true },
+  servizi: { base: '/api/catalog/categories', scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
   magazzino: { base: '/api/inventory/categories', scope: 'inventory', hasColor: false, bilingual: false },
 };
 const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3F3F3', '#EFEFEF'].includes(c));
@@ -86,10 +86,14 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     next.splice(toI, 0, moved);
     setList(kind, next); // optimistic
     try {
-      const body = (c) => (kind === 'servizi'
-        ? { name_it: c.name_it, name_en: c.name_en || '', color: c.color }
-        : kind === 'clienti' ? { name: c.name, color: c.color } : { name: c.name });
-      await Promise.all(next.map((c, i) => api.put(`${cfg.base}/${c.id}`, { ...body(c), order: i })));
+      if (cfg.reorder) {
+        // una sola chiamata: con una PUT per categoria il riordino non era
+        // atomico e, se una falliva a metà, l'ordine tornava indietro da solo
+        await api.post(`${cfg.base}/reorder`, { ids: next.map((c) => c.id) });
+      } else {
+        const body = (c) => (kind === 'clienti' ? { name: c.name, color: c.color } : { name: c.name });
+        await Promise.all(next.map((c, i) => api.put(`${cfg.base}/${c.id}`, { ...body(c), order: i })));
+      }
       await load(kind);
       syncCtx(kind);
       fireToast({ msg: t('Ordine aggiornato', 'Order updated'), icon: 'check' });

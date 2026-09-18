@@ -111,12 +111,18 @@ class YourangClient:
 
     def upsert_catalogue_item(self, item_id: str | None, payload: dict) -> dict:
         if item_id:
-            resp = self._request("PUT", f"/catalogues/items/{item_id}", json=payload)
+            # L'id remoto va percent-encodato: httpx normalizza i dot-segment,
+            # quindi un id come "1/../../contacts" cambierebbe rotta alla
+            # chiamata (.../catalogues/items/… diventa .../contacts).
+            resp = self._request(
+                "PUT", f"/catalogues/items/{quote(str(item_id), safe='')}", json=payload
+            )
         else:
             resp = self._request("POST", "/catalogues/items", json=payload)
         return self._data(resp) or {}
 
     # -- eventi --
     def get_event(self, event_id: str) -> dict:
-        resp = self._request("GET", f"/events/{event_id}")
+        # Stesso motivo dell'upsert: l'id arriva dal webhook, non è nostro.
+        resp = self._request("GET", f"/events/{quote(str(event_id), safe='')}")
         return self._data(resp) or {}

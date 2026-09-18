@@ -3,7 +3,7 @@
 // Ported from prototype desktop-comunicazioni.jsx. The prototype's TYPE taxonomy
 // (launch/seasonal/story/announce) has no API field and was dropped; status filter,
 // search, cards, composer and WhatsApp preview are kept.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, mediaUrl, Icon, EmptyState } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
@@ -29,15 +29,23 @@ export default function ComunicazioniSection() {
   const [edit, setEdit] = useState(null);       // null | 'new' | CommunicationOut
   const [sendFor, setSendFor] = useState(null); // null | CommunicationOut
 
+  /* Biglietto della richiesta in corso: cambiando lo stato del filtro mentre
+   * «Carica altre» è in volo, la risposta vecchia veniva appesa alla lista
+   * nuova. Ogni fetch incrementa il biglietto e scarta la propria risposta se
+   * nel frattempo ne è partita un'altra. */
+  const reqSeq = useRef(0);
   const fetchList = useCallback(async ({ append = false, offset = 0 } = {}) => {
+    const seq = ++reqSeq.current;
     append ? setLoadingMore(true) : setLoading(true);
     try {
       const res = await api.get('/api/marketing/communications', {
         params: { status: statusF === 'all' ? '' : statusF, limit: PAGE, offset },
       });
+      if (seq !== reqSeq.current) return;
       setCount(res.count || 0);
       setItems((prev) => (append ? [...prev, ...(res.items || [])] : (res.items || [])));
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
     } finally {
       append ? setLoadingMore(false) : setLoading(false);
@@ -49,11 +57,15 @@ export default function ComunicazioniSection() {
 
   const refetch = useCallback(() => fetchList(), [fetchList]);
 
-  // search is client-side (the endpoint has no q param), like the prototype
+  // La ricerca è lato client (l'endpoint non ha il parametro q): guarda solo
+  // le campagne già scaricate. Va detto a video, e «Carica altre» deve restare
+  // disponibile anche durante la ricerca — altrimenti una campagna di Natale
+  // oltre la prima pagina risultava inesistente, senza alcun indizio.
   const needle = q.trim().toLowerCase();
   const list = needle
     ? items.filter((c) => (c.title || '').toLowerCase().includes(needle) || (c.body || '').toLowerCase().includes(needle))
     : items;
+  const more = items.length < count;
 
   /* ---- mutation callbacks: close modal, refetch ---- */
   const onSaved = () => { setEdit(null); refetch(); };
@@ -105,8 +117,13 @@ export default function ComunicazioniSection() {
                 canWrite={canWrite} onOpen={() => setEdit(c)} onSend={() => setSendFor(c)} />
             ))}
           </div>
-          {!needle && items.length < count && (
-            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
+          {more && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 20 }}>
+              {needle && (
+                <span className="t-sm" style={{ color: 'var(--muted)' }}>
+                  {t(`La ricerca guarda solo le ${items.length} campagne caricate di ${count}.`, `The search only covers the ${items.length} loaded campaigns out of ${count}.`)}
+                </span>
+              )}
               <button className="dk-btn dk-btn--ghost" disabled={loadingMore} onClick={() => fetchList({ append: true, offset: items.length })}>
                 {loadingMore ? t('Caricamento…', 'Loading…') : t('Carica altre', 'Load more') + ` (${items.length}/${count})`}
               </button>
@@ -118,9 +135,13 @@ export default function ComunicazioniSection() {
           <div style={{ padding: '48px 22px' }}>
             <EmptyState icon="message"
               title={needle || statusF !== 'all' ? t('Nessun risultato', 'No results') : t('Nessuna comunicazione', 'No communications')}
-              sub={needle || statusF !== 'all'
-                ? t('Prova a cambiare ricerca o filtri.', 'Try changing search or filters.')
-                : t('Crea la prima campagna editoriale del salone.', 'Create the salon’s first editorial campaign.')} />
+              sub={needle && more
+                ? t(`Nessuna corrispondenza fra le ${items.length} campagne caricate di ${count}: carica le altre e riprova.`, `No match among the ${items.length} loaded campaigns out of ${count}: load the rest and try again.`)
+                : needle || statusF !== 'all'
+                  ? t('Prova a cambiare ricerca o filtri.', 'Try changing search or filters.')
+                  : t('Crea la prima campagna editoriale del salone.', 'Create the salon’s first editorial campaign.')}
+              action={needle && more ? (loadingMore ? t('Caricamento…', 'Loading…') : t('Carica altre', 'Load more')) : undefined}
+              onAction={needle && more ? () => fetchList({ append: true, offset: items.length }) : undefined} />
           </div>
         </div>
       )}
@@ -142,13 +163,23 @@ function ComCard({ comm, t, lang, clientCategories, canWrite, onOpen, onSend }) 
     <div className="dk-card dk-hovercard" onClick={onOpen} style={{ padding: 0, overflow: 'hidden', borderLeft: '3px solid ' + st.color }}>
       {/* cover */}
       <div style={{ height: 96, background: img ? `center/cover url(${img})` : st.tint, display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', padding: 14, gap: 8 }}>
-        {canWrite && comm.status !== 'sent' && (
+        {/* Solo sulle bozze: il backend rifiuta l'invio di una campagna gia
+            programmata (andrebbe rinviata all'infinito, accodando un invio in
+            piu ogni volta). Per cambiarle data si passa da «Modifica», che la
+            riporta in bozza e annulla l'invio gia in coda. */}
+        {canWrite && comm.status === 'draft' && (
           <button
             title={t('Invia…', 'Send…')}
             onClick={(e) => { e.stopPropagation(); onSend(); }}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--surface)', border: '1px solid var(--hair)', padding: '4px 10px', borderRadius: 99, cursor: 'pointer' }}>
             <Icon name="send" size={12} color="var(--clay-ink)" />{t('Invia', 'Send')}
           </button>
+        )}
+        {canWrite && comm.status === 'scheduled' && (
+          <span title={t('Per cambiare data apri la campagna e modificala', 'To change the date, open the campaign and edit it')}
+            style={{ fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--surface)', border: '1px solid var(--hair)', padding: '4px 10px', borderRadius: 99 }}>
+            {t('Modifica per riprogrammare', 'Edit to reschedule')}
+          </span>
         )}
         <span style={{ fontSize: 11, fontWeight: 700, color: st.color, background: 'var(--surface)', padding: '4px 10px', borderRadius: 99 }}>{st.label}</span>
       </div>

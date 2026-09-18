@@ -12,8 +12,8 @@ import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
 import useProductCatalog from '../useProductCatalog.js';
 import {
-  emptyPayments, inputCss, lineAmount, methodLabel, money, opName, paymentsError,
-  resolvePayments, round2, svcLabel,
+  couponDiscount, emptyPayments, findCoupon, inputCss, lineAmount, methodLabel, money, opName,
+  paymentsError, resolvePayments, round2, svcLabel,
 } from '../lib.js';
 
 export default function SellModal({ appointment, onDone, onClose }) {
@@ -54,6 +54,15 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);   // CheckoutOut { sale, breakdown }
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
+  /* Buono sconto presentato al banco: facoltativo. I premi del programma
+   * fedeltà erano emessi ma non spendibili — la cassiera poteva solo scontare
+   * a mano, o dire di no. Il codice si verifica prima di incassare, così il
+   * pagamento parte già dall'importo giusto; la parola definitiva resta del
+   * server, che lo rivalida e lo consuma dentro la transazione della vendita. */
+  const [couponCode, setCouponCode] = useState('');
+  const [coupon, setCoupon] = useState(null);
+  const [couponErr, setCouponErr] = useState(null);
+  const [couponBusy, setCouponBusy] = useState(false);
 
   /* Gift card «a trattamento» della cliente che coprono servizi di questa visita
    * (AppointmentOut.gifts): il pagamento parte già impostato con la gift card
@@ -131,10 +140,35 @@ export default function SellModal({ appointment, onDone, onClose }) {
   /* ---- totals & deposit rule ---- */
   const opSubtotal = (opId) => round2(linesOf(opId).reduce((s, l) => s + lineAmount(l), 0));
   const gross = round2(blockIds.reduce((s, oid) => s + opSubtotal(oid), 0));
+  // Le gift card vendute non si scontano: emetterne una da 100 incassandone 80
+  // significa regalare la differenza. È la regola del server, ripetuta qui solo
+  // per far vedere lo sconto giusto prima dell'incasso.
+  const giftCardTotal = round2(lines.filter((l) => l.line_type === 'gift_card').reduce((s, l) => s + lineAmount(l), 0));
+  const couponBase = round2(gross - giftCardTotal);
+  const discount = couponDiscount(coupon, couponBase);
   const deposit = round2(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
-  const due = round2(gross - deposit);
+  // Il buono si applica PRIMA della caparra: l'anticipo si detrae da ciò che la
+  // cliente deve davvero (stesso ordine di finalize_sale).
+  const due = round2(gross - discount - deposit);
   const dueOk = due >= 0;
   const payErr = paymentsError(pay, due, t);
+
+  const applyCoupon = async () => {
+    if (couponBusy) return;
+    setCouponBusy(true);
+    setCouponErr(null);
+    try {
+      if (!(couponBase > 0)) {
+        setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
+        return;
+      }
+      const { coupon: found, error } = await findCoupon(couponCode, { clientId: appt.client?.id ?? null, t });
+      if (error) { setCoupon(null); setCouponErr(error); return; }
+      setCoupon(found);
+      setCouponCode(found.code);
+    } finally { setCouponBusy(false); }
+  };
+  const clearCoupon = () => { setCoupon(null); setCouponCode(''); setCouponErr(null); };
 
   /* ---- submit ---- */
   const submit = async () => {
@@ -155,6 +189,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
             })),
         })),
         payments: resolvePayments(pay, due),
+        ...(coupon ? { coupon_code: coupon.code } : {}),
       };
       const res = await api.post(`/api/sales/checkout/${appt.id}`, body);
       setResult(res);
@@ -365,6 +400,37 @@ export default function SellModal({ appointment, onDone, onClose }) {
               </div>
             </div>
           )}
+          {/* buono sconto: si verifica prima, così il pagamento parte dal dovuto giusto */}
+          <div style={{ marginBottom: 12 }}>
+            <div className="t-meta" style={{ marginBottom: 6 }}>{t('Buono sconto', 'Voucher')}</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input value={couponCode} disabled={!!coupon}
+                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponErr(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !coupon) applyCoupon(); }}
+                placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
+                style={{ ...inputCss, flex: 1, minWidth: 0, letterSpacing: '0.06em', opacity: coupon ? 0.75 : 1 }} />
+              {coupon ? (
+                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={clearCoupon}>
+                  <Icon name="x" size={13} />{t('Togli', 'Remove')}
+                </button>
+              ) : (
+                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={couponBusy || !couponCode.trim()} onClick={applyCoupon}>
+                  <Icon name="coupon" size={13} />{couponBusy ? t('Verifica…', 'Checking…') : t('Applica', 'Apply')}
+                </button>
+              )}
+            </div>
+            {couponErr && (
+              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="alert" size={13} color="var(--danger)" />{couponErr}
+              </div>
+            )}
+            {coupon && (
+              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />
+                {t('Buono applicato', 'Voucher applied')} · −{money(discount, lang)}
+              </div>
+            )}
+          </div>
           <PaymentsPanel value={pay} onChange={setPay} due={Math.max(0, due)} t={t} lang={lang} compact />
 
           {/* totals — per operator + deposit + grand */}
@@ -381,6 +447,14 @@ export default function SellModal({ appointment, onDone, onClose }) {
               <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('Totale lordo', 'Gross total')}</span>
               <span className="t-num" style={{ fontSize: 13 }}>{money(gross, lang)}</span>
             </div>
+            {discount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', color: 'var(--clay-ink)' }}>
+                <span className="t-sm" style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="coupon" size={14} color="var(--clay-ink)" />{t('Buono', 'Voucher')} {coupon.code}
+                </span>
+                <span className="t-num" style={{ fontWeight: 700, fontSize: 13 }}>−{money(discount, lang)}</span>
+              </div>
+            )}
             {deposit > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', color: 'var(--ok)' }}>
                 <span className="t-sm" style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>

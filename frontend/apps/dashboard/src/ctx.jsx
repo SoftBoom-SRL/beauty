@@ -12,19 +12,28 @@ export const useDash = () => useContext(DashCtx);
  *  stato reale, non quello di quando ha aperto la pagina. */
 export function useLive(match, fn) {
   const { live } = useContext(DashCtx) || {};
+  const subscribe = live?.subscribe;
   const fnRef = useRef(fn);
   fnRef.current = fn;
+  // Il timer vive in un ref, non in una variabile dell'effetto: dipendendo
+  // dall'oggetto `live` (che cambia a ogni consegna) l'effetto si rimontava a
+  // ogni evento e il timer ripartiva da zero, così il debounce non univa mai
+  // due eventi vicini — tre appuntamenti salvati altrove facevano tre
+  // ricaricamenti. `live.subscribe` invece è stabile.
+  const timer = useRef(null);
   useEffect(() => {
-    if (!live) return undefined;
+    if (!subscribe) return undefined;
     const re = match instanceof RegExp ? match : new RegExp('^(' + [].concat(match).join('|').replace(/\./g, '\\.') + ')');
-    let timer = null;
-    return live.subscribe(({ events }) => {
+    const off = subscribe(({ events }) => {
       const hit = events.filter((e) => re.test(e.type));
       if (!hit.length) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => { try { fnRef.current?.(hit); } catch { /* ignore */ } }, 250);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => { try { fnRef.current?.(hit); } catch { /* ignore */ } }, 250);
     });
-  }, [live, String(match)]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Anche il timer va fermato allo smontaggio: cambiando sezione entro 250 ms
+    // dall'ultimo evento la callback partiva su un componente già smontato.
+    return () => { off(); clearTimeout(timer.current); };
+  }, [subscribe, String(match)]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 const OP_FALLBACK_PALETTE = ['#C9B8F2', '#B3DDF7', '#F7C5D9', '#FBE7A1', '#C2E8CB', '#FBD7B5', '#BFE9E1', '#C3CDF7', '#D2E5BE'];
@@ -209,14 +218,16 @@ export function DashboardProvider({ children }) {
 
   /* ---- dati sempre aggiornati (altre postazioni / altre schede) ---- */
   const live = useLiveFeed(session);
-  // cataloghi base del contesto: si ricaricano da soli quando cambiano altrove
+  // cataloghi base del contesto: si ricaricano da soli quando cambiano altrove.
+  // Dipende da `live.subscribe` (stabile) e non da `live`, che cambia identità
+  // a ogni consegna: altrimenti ci si riscriveva alla lista a ogni evento.
   useEffect(() => live.subscribe(({ events }) => {
     const has = (re) => events.some((e) => re.test(e.type));
     if (has(/^operator\./)) reload.operators().catch(() => {});
     if (has(/^(service|category|package)\./)) { reload.services().catch(() => {}); reload.serviceCategories().catch(() => {}); }
     if (has(/^client_category\./)) reload.clientCategories().catch(() => {});
     if (has(/^settings\./)) reload.salon().catch(() => {});
-  }), [live, reload]);
+  }), [live.subscribe, reload]);
 
   /* ---- cross-section UI state ---- */
   const [search, setSearch] = useState('');

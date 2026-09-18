@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, fmtEur, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { MOVE_META, STOCK_META, UNIT_OPTIONS, errMsg, eur0, fmtQty, fmtWhen, num, unitCost } from './lib.js';
+import { MOVE_META, STOCK_META, UNIT_OPTIONS, errMsg, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
 
 /* category colour: fallback + pastel presets offered in the picker */
@@ -314,10 +314,17 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
         </div>
         {(() => {
           const net = unitCost(draft);                                  /* purchase_price × (1 − discount%) */
-          const buyIncl = net * (1 + num(draft.vat_rate) / 100);        /* net cost + IVA */
+          const vatMul = 1 + num(draft.vat_rate) / 100;
+          const buyIncl = net * vatMul;                                 /* net cost + IVA */
           const sale = num(draft.sale_price);                           /* IVA inclusa */
-          const margin = sale - net;                                    /* vendita − costo netto */
-          const marginPct = sale > 0 ? (margin / sale) * 100 : null;    /* guard divide-by-zero */
+          /* L'IVA va scorporata dal prezzo di vendita prima del confronto: il
+             prezzo d'acquisto è dichiarato IVA esclusa e sottrarlo da un prezzo
+             lordo gonfiava il margine di tutta l'imposta (20 € IVA inclusa su
+             10 € di costo: «€10 · 50%» invece di 6,39 € e circa 32%), e il
+             titolare fissava i listini su un numero che non esiste. */
+          const saleNet = sale / vatMul;                                /* vendita, IVA scorporata */
+          const margin = round2(saleNet - net);                         /* vendita netta − costo netto */
+          const marginPct = saleNet > 0 ? (margin / saleNet) * 100 : null;  /* guard divide-by-zero */
           const marginColor = margin > 0 ? 'var(--ok)' : (margin < 0 ? 'var(--danger)' : 'var(--ink)');
           return (
             <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -326,7 +333,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
                 <span className="t-num" style={{ fontSize: 17 }}>{eur0(buyIncl, lang, fmtEur)}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', background: 'var(--surface-2)', borderRadius: 10 }}>
-                <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('Margine', 'Margin')} <span style={{ color: 'var(--muted-2)', fontWeight: 500 }}>· {t('vendita − costo netto', 'sale − net cost')}</span></span>
+                <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('Margine', 'Margin')} <span style={{ color: 'var(--muted-2)', fontWeight: 500 }}>· {t('vendita IVA esclusa − costo netto', 'sale excl. VAT − net cost')}</span></span>
                 <span className="t-num" style={{ fontSize: 17, color: marginColor }}>{eur0(margin, lang, fmtEur)}{marginPct != null ? ' · ' + marginPct.toFixed(0) + '%' : ''}</span>
               </div>
             </div>

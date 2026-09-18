@@ -9,16 +9,99 @@ percorso non scarica nulla. Prima chiunque avesse l'URL scaricava il file.
 """
 
 import posixpath
+import uuid
 
 from django.conf import settings
 from django.core import signing
 from django.http import HttpResponseForbidden
 from django.views.static import serve
+from ninja.errors import HttpError
 
 PRIVATE_PREFIXES = ("client_notes/", "technical_sheets/", "inventory/invoices/")
 TOKEN_MAX_AGE = 4 * 3600  # secondi: la scheda cliente ricarica gli URL a ogni apertura
 TOKEN_PARAM = "t"
 _SALT = "youty.media"
+
+# ---------------------------------------------------------------------------
+# Validazione degli upload
+# ---------------------------------------------------------------------------
+# Il Content-Type di un upload lo dichiara il client: si falsifica cambiando una
+# riga della richiesta. Da solo non dice NIENTE sul contenuto del file, e il
+# nome originale non dice niente sul tipo. Quello che conta davvero è
+# l'estensione con cui il file finisce sul disco, perché è da lì che
+# `django.views.static.serve` deduce il Content-Type in uscita: un evil.html
+# caricato come "image/png" veniva riservito come text/html sull'origin
+# dell'API, dove vive anche /admin/. Quindi: tipo dichiarato nella whitelist,
+# estensione coerente col tipo dichiarato, e nome del file generato da noi.
+UPLOAD_EXTENSIONS = {
+    "image/jpeg": (".jpg", ".jpeg"),
+    "image/png": (".png",),
+    "image/webp": (".webp",),
+    "image/gif": (".gif",),
+    "image/heic": (".heic",),
+    "image/heif": (".heif",),
+    "application/pdf": (".pdf",),
+    "text/plain": (".txt",),
+    "application/msword": (".doc",),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (".docx",),
+}
+
+IMAGE_CONTENT_TYPES = (
+    "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif",
+)
+DOCUMENT_CONTENT_TYPES = (
+    "application/pdf",
+    "text/plain",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+
+# Estensioni che il browser può aprire nella pagina senza poter eseguire nulla.
+# Tutto il resto (pdf, doc, txt, e qualunque file caricato prima di questa
+# regola) esce con Content-Disposition: attachment.
+INLINE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"})
+
+# Tetto di default: lo stesso di ClientNoteAttachment.MAX_BYTES.
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+def upload_extension(filename: str) -> str:
+    """Estensione minuscola del nome file, punto compreso («.jpg»); «» se assente."""
+    return posixpath.splitext(str(filename or "").replace("\\", "/"))[1].lower()
+
+
+def validate_upload(uploaded, *, allowed_types, max_bytes: int = MAX_UPLOAD_BYTES) -> tuple[str, str]:
+    """Valida un upload e restituisce `(content_type, estensione)` normalizzati.
+
+    Solleva HttpError 400 con un messaggio leggibile dall'operatrice. Va chiamata
+    PRIMA di scrivere qualunque cosa su disco.
+    """
+    name = str(getattr(uploaded, "name", "") or "file")
+    ctype = (getattr(uploaded, "content_type", "") or "").lower().split(";")[0].strip()
+    if ctype not in allowed_types or ctype not in UPLOAD_EXTENSIONS:
+        raise HttpError(400, f"Formato non supportato: {name} (immagini, PDF, Word o testo)")
+    ext = upload_extension(name)
+    # L'estensione deve corrispondere al tipo dichiarato: un .html spacciato per
+    # image/png si ferma qui, e un .png spacciato per application/pdf pure.
+    if ext not in UPLOAD_EXTENSIONS[ctype]:
+        attesi = " o ".join(UPLOAD_EXTENSIONS[ctype])
+        raise HttpError(400, f"Estensione non coerente col formato: {name} (atteso {attesi})")
+    size = getattr(uploaded, "size", 0) or 0
+    if size > max_bytes:
+        raise HttpError(400, f"File troppo grande: {name} (max {max_bytes // (1024 * 1024)} MB)")
+    return ctype, ext
+
+
+def stored_upload_name(uploaded, *, allowed_types, max_bytes: int = MAX_UPLOAD_BYTES) -> str:
+    """Valida l'upload e restituisce il nome con cui salvarlo su disco.
+
+    Il nome lo genera il server: quello del client può contenere percorsi, una
+    doppia estensione («foto.png.html») o ripetere quello di un file già
+    presente. Il nome originale, se serve mostrarlo, va tenuto in un campo del
+    modello — non nel filesystem.
+    """
+    _ctype, ext = validate_upload(uploaded, allowed_types=allowed_types, max_bytes=max_bytes)
+    return f"{uuid.uuid4().hex}{ext}"
 
 
 def canonical_path(path: str) -> str:
@@ -34,7 +117,11 @@ def canonical_path(path: str) -> str:
 
 
 def is_private(path: str) -> bool:
-    return canonical_path(path).startswith(PRIVATE_PREFIXES)
+    # Confronto in minuscolo: su un filesystem case-insensitive (macOS in
+    # sviluppo, un volume SMB in produzione) «Client_notes/…» apre lo stesso
+    # file di «client_notes/…», e con il confronto sensibile alle maiuscole
+    # saltava la verifica della firma.
+    return canonical_path(path).lower().startswith(PRIVATE_PREFIXES)
 
 
 def sign_media_path(path: str) -> str:
@@ -73,8 +160,18 @@ def serve_media(request, path: str):
     file che salti il controllo della firma.
     """
     canonical = canonical_path(path)
-    if canonical.startswith(PRIVATE_PREFIXES) and not verify_media_token(
+    if is_private(canonical) and not verify_media_token(
         canonical, request.GET.get(TOKEN_PARAM, "")
     ):
         return HttpResponseForbidden("Accesso al file non autorizzato o link scaduto")
-    return serve(request, canonical, document_root=settings.MEDIA_ROOT)
+    response = serve(request, canonical, document_root=settings.MEDIA_ROOT)
+    # /media/ vive sull'origin dell'API, lo stesso di /admin/: un file servito
+    # come pagina eseguirebbe il suo JavaScript lì dentro, con i cookie di
+    # sessione dell'amministratore. Solo le immagini vere si aprono nella
+    # pagina; tutto il resto si scarica e basta. `nosniff` chiude la strada al
+    # browser che prova a indovinare il tipo ignorando il Content-Type.
+    response["X-Content-Type-Options"] = "nosniff"
+    if upload_extension(canonical) not in INLINE_EXTENSIONS:
+        filename = posixpath.basename(canonical).replace('"', "").replace("\\", "")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response

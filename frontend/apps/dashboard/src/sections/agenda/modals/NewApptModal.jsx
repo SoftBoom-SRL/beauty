@@ -24,7 +24,9 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   useEffect(() => { if (pf.clientId) api.get(`/api/clients/${pf.clientId}`).then(setClient).catch(() => {}); }, [pf.clientId]);
 
   /* ---- data + richiesta (operatrice/orario cliccati in agenda) ---- */
-  const [date, setDate] = useState(pf.date || (pf.start ? pf.start.slice(0, 10) : todayStr()));
+  // toDateStr e non slice(0, 10): `pf.start` è un istante UTC, e per un
+  // appuntamento serale i primi dieci caratteri sono il giorno prima.
+  const [date, setDate] = useState(pf.date || (pf.start ? toDateStr(pf.start) : todayStr()));
   const [req, setReq] = useState(() => (
     pf.start || pf.operatorId
       ? { operatorId: pf.operatorId || null, startMin: pf.start ? minutesOfDay(pf.start) : null }

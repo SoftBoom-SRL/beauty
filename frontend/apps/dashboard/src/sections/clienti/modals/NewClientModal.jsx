@@ -13,6 +13,20 @@ import { inputCss, toClientIn } from '../helpers.js';
 
 const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
 
+/* Definiti FUORI dal componente: ricreati a ogni render sarebbero un tipo di
+ * componente nuovo ogni volta, React smonterebbe e rimonterebbe il sottoalbero
+ * a ogni battuta di tasto e il fuoco sul toggle dei consensi se ne andrebbe. */
+const Section = ({ children }) => <div className="t-meta" style={{ margin: '18px 0 8px', color: 'var(--ink-2)' }}>{children}</div>;
+const Cons = ({ label, sub, on, onChange }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0' }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{label}</div>
+      {sub && <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5 }}>{sub}</div>}
+    </div>
+    <Toggle on={on} onChange={onChange} />
+  </div>
+);
+
 export default function NewClientModal({ client, onClose, onSaved }) {
   const { t, lang, clientCategories, fireToast, setSelClient, setTab, tab } = useDash();
   const isEdit = !!client?.id;
@@ -67,17 +81,6 @@ export default function NewClientModal({ client, onClose, onSaved }) {
       setErr(msg);
     } finally { setSaving(false); }
   };
-
-  const Cons = ({ k, label, sub }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 0' }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 13.5 }}>{label}</div>
-        {sub && <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5 }}>{sub}</div>}
-      </div>
-      <Toggle on={f[k]} onChange={(v) => set(k, v)} />
-    </div>
-  );
-  const Section = ({ children }) => <div className="t-meta" style={{ margin: '18px 0 8px', color: 'var(--ink-2)' }}>{children}</div>;
 
   return (
     <DkModal open onClose={onClose}
@@ -162,11 +165,11 @@ export default function NewClientModal({ client, onClose, onSaved }) {
 
           <Section>{t('Consensi GDPR', 'GDPR consents')}</Section>
           <div style={{ border: '1px solid var(--hair)', borderRadius: 12, padding: '2px 14px', display: 'flex', flexDirection: 'column' }}>
-            <Cons k="privacy" label={t('Privacy & trattamento dati', 'Privacy & data')} sub={t("Obbligatorio per l'anagrafica", 'Required for records')} />
+            <Cons label={t('Privacy & trattamento dati', 'Privacy & data')} sub={t("Obbligatorio per l'anagrafica", 'Required for records')} on={f.privacy} onChange={(v) => set('privacy', v)} />
             <div style={{ height: 1, background: 'var(--hair)' }} />
-            <Cons k="marketing" label={t('Comunicazioni marketing', 'Marketing messages')} />
+            <Cons label={t('Comunicazioni marketing', 'Marketing messages')} on={f.marketing} onChange={(v) => set('marketing', v)} />
             <div style={{ height: 1, background: 'var(--hair)' }} />
-            <Cons k="whatsapp" label={t('Promemoria WhatsApp', 'WhatsApp reminders')} />
+            <Cons label={t('Promemoria WhatsApp', 'WhatsApp reminders')} on={f.whatsapp} onChange={(v) => set('whatsapp', v)} />
           </div>
           <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 10 }}>
             {t('I consensi possono arrivare anche da modulo cartaceo e restano modificabili dalla scheda.', 'Consents may come from a paper form and stay editable from the profile.')}

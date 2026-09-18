@@ -199,6 +199,14 @@ export function buildRows(dataRows, mapping, { dateOrder = 'dmy' } = {}) {
 }
 
 /* ---------- componente ---------- */
+/* Fuori dal componente: ridefinito a ogni render sarebbe un tipo nuovo ogni
+ * volta e React rimonterebbe la barra a ogni tasto premuto. */
+const Steps = ({ step }) => (
+  <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+    {[1, 2, 3].map((n) => <span key={n} style={{ flex: 1, height: 4, borderRadius: 99, background: n <= step ? 'var(--clay)' : 'var(--hair)' }} />)}
+  </div>
+);
+
 export default function BulkImportModal({ onClose }) {
   const { t, lang, fireToast } = useDash();
   const [step, setStep] = useState(1);
@@ -246,7 +254,19 @@ export default function BulkImportModal({ onClose }) {
       for (let i = 0; i < payload.length; i += CHUNK) {
         const res = await api.post('/api/clients/import', { rows: payload.slice(i, i + CHUNK), update_existing: updateExisting });
         total.created += res.created; total.updated += res.updated; total.skipped += res.skipped || 0;
-        (res.errors || []).forEach((e) => total.errors.push({ ...e, row: e.row + i, name: `${payload[e.row + i]?.first_name || ''} ${payload[e.row + i]?.last_name || ''}`.trim() }));
+        // Il server numera gli errori dentro il blocco inviato: `e.row + i` è
+        // l'indice in `payload`, che salta le righe scartate. Chi corregge il
+        // file cerca però la riga del FILE, la stessa numerata nell'anteprima
+        // del passo 3: si riporta l'indice originale (`_idx`).
+        (res.errors || []).forEach((e) => {
+          const k = e.row + i;
+          const src = ready[k];
+          total.errors.push({
+            ...e,
+            row: src ? src._idx : k,
+            name: `${payload[k]?.first_name || ''} ${payload[k]?.last_name || ''}`.trim(),
+          });
+        });
         setProgress(Math.min(100, Math.round(((i + CHUNK) / payload.length) * 100)));
       }
       total.skipped += rows.length - ready.length;
@@ -292,11 +312,6 @@ export default function BulkImportModal({ onClose }) {
   }
 
   const stepTitle = ['', t('1 · Sorgente', '1 · Source'), t('2 · Colonne', '2 · Columns'), t('3 · Verifica', '3 · Review')][step];
-  const Steps = () => (
-    <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-      {[1, 2, 3].map((n) => <span key={n} style={{ flex: 1, height: 4, borderRadius: 99, background: n <= step ? 'var(--clay)' : 'var(--hair)' }} />)}
-    </div>
-  );
 
   return (
     <DkModal open onClose={onClose} title={t('Importa clienti', 'Import clients')} sub={stepTitle} width={780}
@@ -316,7 +331,7 @@ export default function BulkImportModal({ onClose }) {
           </button>
         )}
       </React.Fragment>}>
-      <Steps />
+      <Steps step={step} />
 
       {/* ── 1. sorgente ── */}
       {step === 1 && (

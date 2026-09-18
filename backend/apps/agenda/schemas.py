@@ -3,6 +3,32 @@ from decimal import Decimal
 from typing import Optional
 
 from ninja import Field, Schema
+from pydantic import field_validator
+
+# Servizi per richiesta. La ricerca di disponibilità prova ogni slot della
+# giornata per ogni servizio: senza tetto una sola richiesta con qualche
+# centinaio di voci tiene occupato un worker e interroga il database migliaia di
+# volte (e in creazione scrive altrettante righe con il lock in mano). Nessuna
+# visita vera ne ha più di una decina.
+MAX_ITEMS_PER_REQUEST = 12
+
+# Un orario senza fuso non è un istante: interpretarlo a caso significa
+# prenotare all'ora sbagliata, e fino a ieri arrivava intatto fino al database
+# e faceva esplodere la richiesta con un 500 invece di dire cosa manca.
+NAIVE_DATETIME_MESSAGE = (
+    "Orario senza fuso orario: usa il formato ISO con offset (es. 2026-09-18T10:00:00+02:00)"
+)
+
+
+def _require_aware(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        raise ValueError(NAIVE_DATETIME_MESSAGE)
+    return value
+
+
+def aware_start_validator():
+    """Validatore condiviso: il campo `start` deve portare il fuso orario."""
+    return field_validator("start")(_require_aware)
 
 
 # ---- Input -----------------------------------------------------------------
@@ -17,12 +43,12 @@ class ItemEditIn(Schema):
     id: Optional[int] = None            # existing AppointmentService id (None = new item)
     service_id: int
     operator_id: Optional[int] = None   # None = first eligible free operator
-    duration_min: Optional[int] = None  # None = use the service's catalog duration
+    duration_min: Optional[int] = None  # None = keep the duration already booked
 
 
 class AppointmentCreateIn(Schema):
     client_id: int
-    items: list[ItemIn]
+    items: list[ItemIn] = Field(..., max_length=MAX_ITEMS_PER_REQUEST)
     start: dt.datetime
     flexible: bool = False
     note: str = ""
@@ -31,16 +57,22 @@ class AppointmentCreateIn(Schema):
     # (straordinario, "ci incastriamo"). L'appuntamento resta marcato `forced`.
     force: bool = False
 
+    _start_aware = aware_start_validator()
+
 
 class ClientAppointmentCreateIn(Schema):
-    items: list[ItemIn]
+    items: list[ItemIn] = Field(..., max_length=MAX_ITEMS_PER_REQUEST)
     start: dt.datetime
+
+    _start_aware = aware_start_validator()
 
 
 class MoveIn(Schema):
     start: dt.datetime
     operator_id: Optional[int] = None
     force: bool = False
+
+    _start_aware = aware_start_validator()
 
 
 class SplitIn(Schema):
@@ -51,6 +83,8 @@ class SplitIn(Schema):
     operator_id: Optional[int] = None
     force: bool = False
 
+    _start_aware = aware_start_validator()
+
 
 class RestoreIn(Schema):
     force: bool = False
@@ -59,13 +93,23 @@ class RestoreIn(Schema):
 class ClientMoveIn(Schema):
     start: dt.datetime
 
+    _start_aware = aware_start_validator()
+
 
 class ReasonIn(Schema):
-    reason: str = ""
+    # Il motivo finisce in Appointment.cancel_reason, che è lungo 255: più in là
+    # PostgreSQL rifiutava la scrittura e la richiesta moriva con un 500.
+    reason: str = Field("", max_length=255)
+
+
+class DepositCashedIn(Schema):
+    """Caparra incassata al banco: come è stata pagata (contanti, POS, …)."""
+
+    method: str = Field("cash", max_length=20)
 
 
 class AppointmentUpdateIn(Schema):
-    items: Optional[list[ItemEditIn]] = None
+    items: Optional[list[ItemEditIn]] = Field(None, max_length=MAX_ITEMS_PER_REQUEST)
     note: Optional[str] = None
 
 
@@ -75,7 +119,9 @@ class PauseIn(Schema):
     # Una pausa di zero minuti (o negativa) arrivava fino al database e poi
     # occupava un intervallo vuoto che nessuna vista sapeva disegnare.
     duration_min: int = Field(..., ge=5, le=12 * 60)
-    note: str = ""
+    note: str = Field("", max_length=255)  # come sulla colonna del modello
+
+    _start_aware = aware_start_validator()
 
 
 class WaitlistIn(Schema):

@@ -8,13 +8,32 @@ BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 
 pids=()
+
+# Uccide un processo E tutta la sua discendenza. Serve perché i pid che
+# registriamo qui sotto sono quelli di `npm run`, non di vite: uccidendo solo il
+# padre, vite restava attaccato alla 5173/5174 e al rilancio `strictPort: true`
+# (vite.config.js) faceva fallire il dev server. Stessa storia per il processo
+# figlio dell'autoreload di runserver.
+# Prima c'era un `pkill -f "vite.*--port 517"` come rete di sicurezza: non ha mai
+# combaciato con niente, perché la porta la decide vite.config.js e sulla riga di
+# comando non compare. Risalire l'albero dei processi non dipende da come è
+# scritto il comando, e non rischia di colpire un vite di un altro progetto.
+kill_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   echo ""
   echo "→ arresto dei servizi…"
-  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  # pulizia di sicurezza
-  pkill -f "manage.py runserver 8000" 2>/dev/null || true
-  pkill -f "vite.*--port 517" 2>/dev/null || true
+  # `${pids[@]}` su array vuoto è un errore con `set -u` (bash 3.2, quello di
+  # macOS): capita se si preme Ctrl-C prima che parta il primo servizio.
+  if [ ${#pids[@]} -gt 0 ]; then
+    for pid in "${pids[@]}"; do kill_tree "$pid"; done
+  fi
   exit 0
 }
 trap cleanup INT TERM

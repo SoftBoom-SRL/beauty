@@ -18,7 +18,7 @@ import {
 } from './lib.js';
 
 export default function DayGrid({
-  rows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
+  rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
   picker, setPicker, setOpColor, opPalette, pickMode,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
@@ -34,14 +34,22 @@ export default function DayGrid({
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
   const marks = gridMarks(step);                     // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (DK_END - DK_START) * PXM;
+  /* `rows` = le colonne da disegnare (le chip delle operatrici spente non ci
+   * sono). `dataRows` = TUTTE le righe del giorno: i conti vanno fatti su
+   * quelle, perché un appuntamento è elencato una volta sola nella riga
+   * dell'operatrice principale mentre i suoi servizi possono essere di altre.
+   * Con i soli dati visibili, spegnere una chip nascondeva il lavoro delle
+   * colleghe dentro le visite rimaste e faceva dire «Disponibile» a uno slot
+   * occupato — ci si prenotava sopra davvero. */
+  const dataRows = allRows || rows;
   const ops = rows.map((r) => r.operator);
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
-  const rowOf = (opId) => rows.find((r) => r.operator.id === opId);
+  const rowOf = (opId) => dataRows.find((r) => r.operator.id === opId);
   const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
 
   // tutti i blocchi-servizio del giorno (ogni appuntamento compare una volta nel payload)
-  const allBlocks = rows.flatMap((r) => r.appointments).flatMap((a) => itemBlocks(a));
-  const allPauses = rows.flatMap((r) => r.pauses);
+  const allBlocks = dataRows.flatMap((r) => r.appointments).flatMap((a) => itemBlocks(a));
+  const allPauses = dataRows.flatMap((r) => r.pauses);
 
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
   // Esc annulla il drag in corso
@@ -132,7 +140,7 @@ export default function DayGrid({
     if (!d || d.mode === 'resize') return null;
     if (d.kind === 'pause') {
       const row = rowOf(d.nop);
-      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows }) : null;
+      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows: dataRows }) : null;
     }
     const appt = d.block.appt;
     const multi = (appt.items || []).length > 1;
@@ -143,7 +151,7 @@ export default function DayGrid({
       const row = rowOf(d.nop);
       if (!row) return null;
       return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
-        excludeItemId: d.itemId, nowMin, t, rows,
+        excludeItemId: d.itemId, nowMin, t, rows: dataRows,
       });
     }
     const delta = d.ns - d.orig;
@@ -154,7 +162,7 @@ export default function DayGrid({
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
       // orario già passato mentre il menu sullo stesso slot lo vietava.
-      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows });
+      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows: dataRows });
       if (!r.ok) return r;
       if (r.code === 'soak') warn = r;
     }
@@ -220,6 +228,16 @@ export default function DayGrid({
     // quello restituisce ciò che sta in cima nel punto esatto, e basta un
     // pixel di stacco fra una pillola e l'altra per farlo cadere nel vuoto.
     const dayTarget = dropDate(d.cx, d.cy);
+    if (dayTarget && onSplitItem && d.kind === 'item' && d.detach) {
+      // Le forbici staccano QUEL servizio, anche quando lo si lascia su un
+      // altro giorno: il controllo sul bersaglio «giorno» veniva prima di
+      // guardare d.detach, e il rilascio sulla pillola spostava l'INTERA
+      // visita senza staccare niente (l'avviso diceva pure «Spostato a...»).
+      // Orario e operatrice restano quelli di partenza: salendo sulla striscia
+      // il cursore esce dalla griglia e non indica né un'ora né una colonna.
+      onSplitItem(d.block.appt, d.block.item, d.orig, d.origOp, { dateIso: dayTarget });
+      return;
+    }
     if (dayTarget && onDropOnDate && d.kind === 'item') {
       // Orario ORIGINALE: salendo sulla striscia il cursore esce dalla griglia e
       // l'ora si schiaccerebbe all'inizio del tabellone. Chi trascina su un
@@ -269,9 +287,14 @@ export default function DayGrid({
       const opId = d.itemId === block.item.id ? ((block.appt.items || []).length > 1 ? block.opId : d.nop) : block.opId;
       return { startMin, opId, ...phases, dragging: true, verdict: d.verdict };
     }
-    if (d && d.kind === 'item' && d.mode === 'resize' && d.itemId === block.item.id) {
+    if (d && d.kind === 'item' && d.mode === 'resize' && d.apptId === block.apptId) {
       // durante il resize cambia SOLO il tempo attivo; la posa resta
-      return { startMin: block.startMin, opId: block.opId, activeMin: d.ndur, soakMin: block.soakMin, resizing: true };
+      if (d.itemId === block.item.id) return { startMin: block.startMin, opId: block.opId, activeMin: d.ndur, soakMin: block.soakMin, resizing: true };
+      // I servizi di una visita sono concatenati: allungando il primo, quelli
+      // dopo slittano. Lasciandoli fermi l'anteprima mostrava una visita che il
+      // server non avrebbe mai scritto (e una finta sovrapposizione).
+      if (block.startMin > d.orig) return { startMin: block.startMin + (d.ndur - d.origDur), opId: block.opId, ...phases };
+      return { startMin: block.startMin, opId: block.opId, ...phases };
     }
     if (pending && pending.kind === 'appt' && pending.id === block.apptId) {
       return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId: (block.appt.items || []).length > 1 ? block.opId : pending.opId, ...phases };
@@ -397,7 +420,7 @@ export default function DayGrid({
             const isTarget = dragging && d.nop === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
             const h = hint && hint.opId === o.id ? hint : null;
-            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows }) : null;
+            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows: dataRows }) : null;
             return (
               <div
                 key={o.id}
@@ -411,7 +434,7 @@ export default function DayGrid({
                   const rect = e.currentTarget.getBoundingClientRect();
                   const raw = DK_START + (e.clientY - rect.top) / PXM;
                   const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
-                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows }));
+                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows: dataRows }));
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
@@ -424,8 +447,11 @@ export default function DayGrid({
                     )}
                   </div>
                 ))}
-                {/* traccia dell'origine durante il drag */}
-                {dragging && d.kind === 'item' && itemBlocks(d.block.appt).filter((b) => b.opId === o.id).map((b) => (
+                {/* traccia dell'origine durante il drag.
+                    Con le forbici si muove UN servizio: la traccia sotto tutti
+                    quelli della visita faceva sembrare che partisse tutta,
+                    mentre gli altri restano fermi davvero (vedi itemPos). */}
+                {dragging && d.kind === 'item' && itemBlocks(d.block.appt).filter((b) => b.opId === o.id && (!d.detach || b.item.id === d.itemId)).map((b) => (
                   <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - DK_START) * PXM + 1.5, height: b.dur * PXM - 3 }} />
                 ))}
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
@@ -474,7 +500,7 @@ export default function DayGrid({
                           onDetachDown={(e) => onItemDown(e, b, { detach: true })}
                           onResizeDown={(e) => onItemResizeDown(e, b)}
                           onHover={dragging ? null : onHover} onLeave={onLeave}
-                          onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows }))}
+                          onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows: dataRows }))}
                         />
                       ))}
                     </React.Fragment>
@@ -508,10 +534,19 @@ export default function DayGrid({
       {dragging && (() => {
         const v = d.verdict;
         const tone = verdictTone(v);
-        const durMin = d.kind === 'pause' ? d.obj.duration_min : (d.block.appt.total_duration_min || d.block.dur);
-        const start = d.kind === 'pause' ? d.ns : d.apptStart + (d.ns - d.orig);
-        const multi = d.kind === 'item' && (d.block.appt.items || []).length > 1;
-        const who = d.kind === 'item' && multi ? opName(d.origOp) : opName(d.nop);
+        // Uno STACCO muove un servizio solo: durata della visita intera,
+        // orario d'inizio della visita e nome dell'operatrice di partenza
+        // annunciavano tutt'altro rispetto a quel che sarebbe arrivato al
+        // server («Anna 13:15-14:45» per un 14:00-14:45 su Giulia).
+        const detach = d.kind === 'item' && !!d.detach;
+        const durMin = d.kind === 'pause' ? d.obj.duration_min
+          : detach ? d.block.dur
+            : (d.block.appt.total_duration_min || d.block.dur);
+        const start = (d.kind === 'pause' || detach) ? d.ns : d.apptStart + (d.ns - d.orig);
+        // la nota «operatrice fissa» non vale per lo stacco: lì la riassegnazione
+        // avviene davvero.
+        const multi = d.kind === 'item' && !detach && (d.block.appt.items || []).length > 1;
+        const who = multi ? opName(d.origOp) : opName(d.nop);
         return (
           <div className={'dk-drag-badge' + (tone === 'bad' ? ' dk-drag-badge--bad' : tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
             <Icon name={tone === 'bad' ? 'x' : tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />

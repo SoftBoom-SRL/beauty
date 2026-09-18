@@ -6,7 +6,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, EmptyState, fmtEur, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, errMsg, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, unitCost } from './lib.js';
+import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, errMsg, eur0, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, round2, unitCost } from './lib.js';
 import { Pager, SkelRows, inputCss } from './bits.jsx';
 
 const PAGE = 20;
@@ -120,13 +120,16 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
   const [recv, setRecv] = useState({});           // lineId → received qty
   const [recvCsv, setRecvCsv] = useState(null);   // string | null
 
-  /* enrich lines with product data (price net of discount, VAT, unit, stock) */
+  /* enrich lines with product data (price net of discount, VAT, unit, stock).
+   * Il prodotto può mancare dallo snapshot (catalogo enorme, articolo
+   * eliminato): in quel caso `cost` resta null e la riga si dichiara senza
+   * prezzo invece di valere silenziosamente 0 € nei totali e nel PDF. */
   const lines = order.lines.map((l) => {
     const p = prodById.get(l.product_id);
     return {
       ...l,
       qty: qtyDraft[l.id] != null ? qtyDraft[l.id] : num(l.qty_ordered),
-      cost: unitCost(p),
+      cost: p ? unitCost(p) : null,
       vat: p ? num(p.vat_rate) : 0,
       unit: p?.package_unit || '',
       stock: p ? num(p.stock_qty) : null,
@@ -134,12 +137,14 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
       lowItem: p ? p.stock_state === 'low' : false,
     };
   });
+  const noPrice = lines.filter((l) => l.cost == null).length;
   const dirty = Object.keys(qtyDraft).some((id) => {
     const l = order.lines.find((x) => String(x.id) === String(id));
     return l && num(l.qty_ordered) !== qtyDraft[id];
   });
-  const grandNet = lines.reduce((a, l) => a + orderLineMath(l.qty, l.cost, l.vat).net, 0);
-  const grandVat = lines.reduce((a, l) => a + orderLineMath(l.qty, l.cost, l.vat).vat, 0);
+  const priced = lines.filter((l) => l.cost != null);
+  const grandNet = round2(priced.reduce((a, l) => a + orderLineMath(l.qty, l.cost, l.vat).net, 0));
+  const grandVat = round2(priced.reduce((a, l) => a + orderLineMath(l.qty, l.cost, l.vat).vat, 0));
   const contact = supplier ? (method === 'whatsapp' ? (supplier.phone || supplier.email) : (supplier.email || supplier.phone)) : '';
 
   /* ---- draft line editing (PUT, qty 0 deletes) ---- */
@@ -334,6 +339,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
           </div>
 
           {lines.map((l) => {
+            const known = l.cost != null;
             const mth = orderLineMath(isDone ? num(l.qty_received) : l.qty, l.cost, l.vat);
             if (isDone) {
               const diff = num(l.qty_received) - num(l.qty_ordered);
@@ -348,7 +354,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
                   <div>{diff === 0
                     ? <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ok)' }}>{t('Completo', 'Complete')}</span>
                     : <span style={{ fontSize: 11.5, fontWeight: 700, color: STOCK_META.low.color, background: STOCK_META.low.tint, padding: '2px 8px', borderRadius: 99 }}>{diff > 0 ? '+' : ''}{fmtQty(diff, lang)}</span>}</div>
-                  <div className="t-num" style={{ textAlign: 'right', fontSize: 13 }}>{fmtEur(mth.total, lang)}</div>
+                  <div className="t-num" style={{ textAlign: 'right', fontSize: 13 }}>{known ? eur0(mth.total, lang, fmtEur) : '—'}</div>
                 </div>
               );
             }
@@ -364,9 +370,9 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
                     onChange={(v) => setQtyDraft((d) => ({ ...d, [l.id]: v }))}
                     style={{ ...inputCss, width: 62, textAlign: 'right', fontWeight: 700, fontFamily: 'var(--mono, monospace)', borderColor: isDraft ? 'var(--clay)' : 'var(--hair)', background: isDraft && canWrite ? 'var(--surface)' : 'var(--surface-2)' }} />
                 </div>
-                <div className="t-num" style={{ textAlign: 'right', fontSize: 13 }}>{fmtEur(l.cost, lang)}</div>
+                <div className="t-num" style={{ textAlign: 'right', fontSize: 13, color: known ? undefined : 'var(--warn)' }} title={known ? undefined : t('Prodotto non più a catalogo: prezzo da concordare', 'Product no longer in the catalogue: price to be agreed')}>{known ? eur0(mth.unit, lang, fmtEur) : '—'}</div>
                 <div className="t-num" style={{ textAlign: 'right', fontSize: 13, color: 'var(--muted)' }}>{num(l.vat)}%</div>
-                <div className="t-num" style={{ textAlign: 'right', fontSize: 13.5, fontWeight: 700 }}>{fmtEur(mth.total, lang)}</div>
+                <div className="t-num" style={{ textAlign: 'right', fontSize: 13.5, fontWeight: 700 }}>{known ? eur0(mth.total, lang, fmtEur) : '—'}</div>
                 {isDraft && canWrite
                   ? <button className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 8 }} onClick={() => removeLine(l)} title={t('Rimuovi', 'Remove')}><Icon name="x" size={14} color="var(--muted)" /></button>
                   : <span />}
@@ -378,9 +384,15 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
           {/* footer totals + actions */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 18, padding: '14px 20px', borderTop: '1px solid var(--hair)', background: 'var(--surface-2)', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', gap: 20, flex: 1, flexWrap: 'wrap' }}>
-              <div><span className="t-meta">{t('Imponibile', 'Net')}</span><div className="t-num" style={{ fontSize: 15, marginTop: 2 }}>{fmtEur(grandNet, lang)}</div></div>
-              <div><span className="t-meta">IVA</span><div className="t-num" style={{ fontSize: 15, marginTop: 2 }}>{fmtEur(grandVat, lang)}</div></div>
-              <div><span className="t-meta">{t('Totale ordine', 'Order total')}</span><div className="t-num" style={{ fontSize: 19, marginTop: 2, fontWeight: 800 }}>{fmtEur(grandNet + grandVat, lang)}</div></div>
+              <div><span className="t-meta">{t('Imponibile', 'Net')}</span><div className="t-num" style={{ fontSize: 15, marginTop: 2 }}>{eur0(grandNet, lang, fmtEur)}</div></div>
+              <div><span className="t-meta">IVA</span><div className="t-num" style={{ fontSize: 15, marginTop: 2 }}>{eur0(grandVat, lang, fmtEur)}</div></div>
+              <div><span className="t-meta">{t('Totale ordine', 'Order total')}</span><div className="t-num" style={{ fontSize: 19, marginTop: 2, fontWeight: 800 }}>{eur0(round2(grandNet + grandVat), lang, fmtEur)}</div></div>
+              {noPrice > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--warn)', fontSize: 12, fontWeight: 600, alignSelf: 'center' }}>
+                  <Icon name="alert" size={14} color="var(--warn)" />
+                  {t(`${noPrice} righe senza prezzo · escluse dai totali`, `${noPrice} lines without a price · excluded from the totals`)}
+                </div>
+              )}
             </div>
             <button className="dk-btn dk-btn--ghost" onClick={onPdf} disabled={!lines.length} style={{ flexShrink: 0 }}><Icon name="arrowDn" size={16} />{t('Scarica PDF', 'Download PDF')}</button>
             {isDraft && canWrite && dirty && <button className="dk-btn dk-btn--ghost" onClick={onSaveLines} disabled={busy} style={{ flexShrink: 0 }}><Icon name="check" size={16} />{t('Salva quantità', 'Save quantities')}</button>}

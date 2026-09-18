@@ -8,7 +8,8 @@ import PaymentsPanel from './PaymentsPanel.jsx';
 import DkModal from '../../ui/DkModal.jsx';
 import useProductCatalog from './useProductCatalog.js';
 import {
-  emptyPayments, lineAmount, methodLabel, money, opName, paymentsError, resolvePayments, round2,
+  couponDiscount, emptyPayments, findCoupon, inputCss, lineAmount, methodLabel, money, opName,
+  paymentsError, resolvePayments, round2,
 } from './lib.js';
 
 const stockMeta = (state, t) => {
@@ -39,6 +40,12 @@ export default function CartTab({ onGoHistory }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null); // SaleDetailOut after a successful sale
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
+  /* Buono sconto al banco: stesso campo del check-out (vedi pos/lib.js). Il
+   * server lo rivalida e lo consuma; qui serve a mostrare il dovuto giusto. */
+  const [couponCode, setCouponCode] = useState('');
+  const [coupon, setCoupon] = useState(null);
+  const [couponErr, setCouponErr] = useState(null);
+  const [couponBusy, setCouponBusy] = useState(false);
 
   const addProduct = (p) => {
     setCart((c) => {
@@ -89,11 +96,34 @@ export default function CartTab({ onGoHistory }) {
     : { line_type: 'product', product_id: l.product_id, qty: l.qty, unit_price: Number(l.unit_price).toFixed(2), discount_pct: effDisc(l), is_gift: !!l.is_gift });
   const lineVal = (l) => lineAmount({ ...l, discount_pct: effDisc(l) });
   const subtotal = round2(cart.reduce((s, l) => s + lineAmount({ ...l, discount_pct: 0 }), 0));
-  const total = round2(cart.reduce((s, l) => s + lineVal(l), 0));
-  const discAmt = round2(subtotal - total);
+  const gross = round2(cart.reduce((s, l) => s + lineVal(l), 0));
+  // Le gift card vendute restano fuori dal buono: scontarne una da 100
+  // incassandone 80 significa regalare la differenza (regola del server).
+  const giftCardTotal = round2(cart.filter((l) => l.line_type === 'gift_card').reduce((s, l) => s + lineVal(l), 0));
+  const couponBase = round2(gross - giftCardTotal);
+  const couponAmt = couponDiscount(coupon, couponBase);
+  const total = round2(gross - couponAmt);
+  const discAmt = round2(subtotal - gross);
   const itemCount = cart.reduce((s, l) => s + (l.qty || 1), 0);
   const payErr = paymentsError(pay, total, t);
   const seller = operators.find((o) => o.id === Number(sellerId)) || null;
+
+  const applyCoupon = async () => {
+    if (couponBusy) return;
+    setCouponBusy(true);
+    setCouponErr(null);
+    try {
+      if (!(couponBase > 0)) {
+        setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
+        return;
+      }
+      const { coupon: found, error } = await findCoupon(couponCode, { clientId: clientSel?.id ?? null, t });
+      if (error) { setCoupon(null); setCouponErr(error); return; }
+      setCoupon(found);
+      setCouponCode(found.code);
+    } finally { setCouponBusy(false); }
+  };
+  const clearCoupon = () => { setCoupon(null); setCouponCode(''); setCouponErr(null); };
 
   /* ---- submit ---- */
   const complete = async () => {
@@ -105,6 +135,7 @@ export default function CartTab({ onGoHistory }) {
         client_id: clientSel ? clientSel.id : null,
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
         payments: resolvePayments(pay, total),
+        ...(coupon ? { coupon_code: coupon.code } : {}),
       });
       setDone(sale);
       refreshProducts();  // le giacenze sono cambiate: il banco deve vederlo subito
@@ -120,6 +151,7 @@ export default function CartTab({ onGoHistory }) {
   const reset = () => {
     setCart([]); setClientSel(null); setGlobalDisc(0); setQ('');
     setPay(emptyPayments()); setGiftAmt('50'); setGiftName(''); setDone(null); setConfirmOpen(false);
+    setCoupon(null); setCouponCode(''); setCouponErr(null);
   };
 
   /* ---- completion screen ---- */
@@ -230,10 +262,11 @@ export default function CartTab({ onGoHistory }) {
 
         {/* riepilogo totale — in alto */}
         <div style={{ flexShrink: 0, padding: '12px 20px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-          {discAmt > 0 ? (
+          {discAmt > 0 || couponAmt > 0 ? (
             <div>
               <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>
-              <div className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>{t('Sconto', 'Discount')} · −{money(discAmt, lang)}</div>
+              {discAmt > 0 && <div className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>{t('Sconto', 'Discount')} · −{money(discAmt, lang)}</div>}
+              {couponAmt > 0 && <div className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 600 }}>{t('Buono', 'Voucher')} {coupon.code} · −{money(couponAmt, lang)}</div>}
             </div>
           ) : <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>}
           <span className="t-num" style={{ fontSize: 24, fontWeight: 800 }}>{money(total, lang)}</span>
@@ -335,6 +368,37 @@ export default function CartTab({ onGoHistory }) {
                 style={{ width: 34, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 13.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
               <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>
             </div>
+          </div>
+
+          {/* buono sconto — prima del pagamento, così il dovuto è già quello giusto */}
+          <div style={{ margin: '18px 0 0' }}>
+            <div className="t-meta" style={{ marginBottom: 7 }}>{t('Buono sconto (facoltativo)', 'Voucher (optional)')}</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input value={couponCode} disabled={!!coupon}
+                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponErr(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !coupon) applyCoupon(); }}
+                placeholder={t('Codice del buono', 'Voucher code')}
+                style={{ ...inputCss, flex: 1, minWidth: 0, letterSpacing: '0.06em', opacity: coupon ? 0.75 : 1 }} />
+              {coupon ? (
+                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={clearCoupon}>
+                  <Icon name="x" size={13} />{t('Togli', 'Remove')}
+                </button>
+              ) : (
+                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={couponBusy || !couponCode.trim()} onClick={applyCoupon}>
+                  <Icon name="coupon" size={13} />{couponBusy ? t('Verifica…', 'Checking…') : t('Applica', 'Apply')}
+                </button>
+              )}
+            </div>
+            {couponErr && (
+              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="alert" size={13} color="var(--danger)" />{couponErr}
+              </div>
+            )}
+            {coupon && (
+              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Buono applicato', 'Voucher applied')} · −{money(couponAmt, lang)}
+              </div>
+            )}
           </div>
 
           {/* metodo di pagamento — in basso */}

@@ -11,8 +11,10 @@ finestra ancora valida: lo esegue il database, quindi due processi in parallelo
 contano due volte. La scadenza è un campo nostro e resta quella richiesta.
 """
 
+import ipaddress
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
@@ -27,18 +29,62 @@ def _model():
     return RateLimitCounter
 
 
+# Reti da cui può arrivare solo il nostro reverse proxy: quelle interne del
+# datacenter e di Docker. Sono elencate a mano e non dedotte da `is_private`,
+# che in Python 3.12 comprende anche gli intervalli di documentazione (RFC 5737,
+# quelli che si usano negli esempi e nei test) e ci farebbe fidare di indirizzi
+# che in un altro ambiente potrebbero essere reali.
+_TRUSTED_PROXY_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "127.0.0.0/8",     # localhost (rete host, healthcheck del container)
+        "10.0.0.0/8",
+        "172.16.0.0/12",   # rete bridge di Docker: qui sta Traefik su Coolify
+        "192.168.0.0/16",
+        "::1/128",
+        "fc00::/7",        # unique local address IPv6
+        "fe80::/10",       # link-local IPv6
+    )
+)
+
+
+def _is_trusted_peer(addr: str) -> bool:
+    """Vero se chi ha aperto la connessione può essere il nostro reverse proxy.
+
+    Con Traefik/Coolify il backend riceve la connessione dalla rete interna di
+    Docker, o da localhost quando il container è in rete host: sono indirizzi
+    che nessuno può raggiungere da fuori. `TRUSTED_PROXY_IPS` copre
+    l'installazione in cui il proxy sta su un'altra macchina.
+    """
+    if addr in getattr(settings, "TRUSTED_PROXY_IPS", ()):
+        return True
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in network for network in _TRUSTED_PROXY_NETWORKS if ip.version == network.version)
+
+
 def client_ip(request) -> str:
     """IP reale del chiamante, tenendo conto del proxy.
 
-    Si prende l'ULTIMO elemento di X-Forwarded-For, non il primo: la catena è
-    scrivibile dal client, ma il nostro proxy accoda in fondo il peer che ha
-    davvero aperto la connessione. Fidarsi del primo elemento renderebbe ogni
-    rate limit aggirabile con un header.
+    Due regole, e servono entrambe:
+
+    1. X-Forwarded-For si legge solo se la connessione arriva dal proxy. È un
+       header, cioè testo che scrive il client: se il container diventa
+       raggiungibile direttamente (porta pubblicata per sbaglio, rete interna
+       esposta) bastava cambiarlo a ogni richiesta per avere un secchiello
+       nuovo ogni volta, e ogni tetto — login staff, registrazioni, OTP —
+       spariva.
+    2. Della catena si prende l'ULTIMO elemento, non il primo: il client può
+       precompilare l'header con quello che vuole, ma il nostro proxy accoda in
+       fondo il peer che ha davvero aperto la connessione.
     """
+    remote = (request.META.get("REMOTE_ADDR") or "").strip()
     xff = (request.META.get("HTTP_X_FORWARDED_FOR") or "").strip()
-    if xff:
-        return xff.split(",")[-1].strip() or "unknown"
-    return request.META.get("REMOTE_ADDR") or "unknown"
+    if xff and _is_trusted_peer(remote):
+        return xff.split(",")[-1].strip() or remote or "unknown"
+    return remote or "unknown"
 
 
 def hit(key: str, limit: int, window_seconds: int) -> bool:

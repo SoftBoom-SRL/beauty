@@ -1,14 +1,19 @@
-Django>=5.1,<6
-django-ninja>=1.3
-django-unfold>=0.100
-PyJWT>=2.9
-dj-database-url>=2.2
-python-dotenv>=1.0
-django-cors-headers>=4.4
-stripe>=11
-Pillow>=10
-psycopg[binary]>=3.2
-httpx>=0.27
-cryptography>=43
-gunicorn>=23
-whitenoise>=6.7
+# Versioni bloccate: la stessa commit deve produrre la stessa immagine. Con i
+# vincoli aperti (>=) ogni ricostruzione risolveva le versioni del giorno, e
+# ogni push su main ricostruisce tutti e tre i servizi.
+# Sono le versioni installate nel venv di sviluppo (backend/.venv): per
+# aggiornare, aggiorna lì, provalo e riporta qui il numero nuovo.
+Django==5.2.17
+django-ninja==1.7.0
+django-unfold==0.106.1
+PyJWT==2.14.0
+dj-database-url==3.1.2
+python-dotenv==1.2.3
+django-cors-headers==4.9.0
+stripe==15.6.1
+Pillow==12.3.0
+psycopg[binary]==3.3.5
+httpx==0.28.1
+cryptography==50.0.1
+gunicorn==26.2.0
+whitenoise==6.12.0

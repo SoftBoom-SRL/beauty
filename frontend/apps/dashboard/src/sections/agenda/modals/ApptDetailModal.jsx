@@ -1,7 +1,7 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
@@ -40,6 +40,22 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
       else toastErr(err, t, fireToast);
     } finally { setLinkBusy(false); }
   }
+  /* Caparra incassata al banco (contanti o POS del salone). Senza questo,
+   * l'unico modo di segnarla pagata era il pagamento online: dove Stripe non
+   * è configurato — o quando la cliente paga di persona — il termine scadeva
+   * lo stesso e lo slot si liberava da solo. */
+  async function cashDeposit(method) {
+    if (linkBusy) return;
+    setLinkBusy(true);
+    try {
+      const res = await api.post(`/api/agenda/appointments/${appt.id}/deposit-cashed`, { method });
+      setAppt(res);
+      fireToast({ msg: t('Caparra incassata e registrata in cassa', 'Deposit cashed and recorded in the till'), icon: 'check' });
+      onMutate?.();
+    } catch (err) { toastErr(err, t, fireToast); }
+    finally { setLinkBusy(false); }
+  }
+
   async function restoreReleased(force = false) {
     if (busy) return;
     setBusy(true);
@@ -110,7 +126,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const sm = statusMeta(appt.status, t);
   const dm = depositMeta(appt.deposit_status, t);
   const startMin = aStartMin(appt), endMin = aEndMin(appt);
-  const dateStr = appt.start.slice(0, 10);
+  // toDateStr e non slice(0, 10): `start` è l'istante in UTC, e il giorno
+  // del salone può essere quello dopo (appuntamento delle 23:30).
+  const dateStr = toDateStr(appt.start);
   const terminal = ['closed', 'no_show', 'cancelled'].includes(appt.status);
 
   /* ---- editable services (only when live + can write) ---- */
@@ -351,6 +369,17 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                         <Icon name="copy" size={13} />{t('Copia link', 'Copy link')}
                       </button>
                     )}
+                    {/* Il salone che non incassa online non aveva nessun modo di
+                        registrare la caparra pagata al banco: il termine scadeva
+                        e lo slot si liberava sotto gli occhi dell'operatrice. */}
+                    <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('cash')}
+                      title={t('Segna la caparra incassata in contanti al banco: il posto non si libera più e l’incasso entra in cassa', 'Mark the deposit as cashed at the counter: the slot is no longer freed and the money is recorded in the till')}>
+                      <Icon name="wallet" size={13} />{t('Incassata: contanti', 'Cashed: cash')}
+                    </button>
+                    <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('card')}
+                      title={t('Segna la caparra incassata con il POS del salone', 'Mark the deposit as cashed on the salon card terminal')}>
+                      <Icon name="wallet" size={13} />{t('Incassata: POS', 'Cashed: card')}
+                    </button>
                   </div>
                 )}
               </div>
@@ -593,7 +622,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone }) {
   const [manual, setManual] = useState('');
   const [needForce, setNeedForce] = useState(false); // orario fuori dagli slot liberi o 409
-  const [date, setDate] = useState(appt.start.slice(0, 10) >= todayStr() ? appt.start.slice(0, 10) : todayStr());
+  const apptDay = toDateStr(appt.start);   // giorno del salone, non quello UTC
+  const [date, setDate] = useState(apptDay >= todayStr() ? apptDay : todayStr());
   const [slots, setSlots] = useState(null);
   const [selStart, setSelStart] = useState(null);
   const items = (appt.items || []).map((it) => ({ service_id: it.service_id, operator_id: it.operator_id }));
@@ -632,7 +662,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
   const anyRecommended = (slots || []).some((s) => s.recommended) && (slots || []).some((s) => s.recommended === false);
 
   return (
-    <DkModal open onClose={onClose} title={t('Riprogramma', 'Reschedule')} sub={`${appt.client?.full_name} · ${t('attuale', 'currently')} ${fmtDateIt(appt.start.slice(0, 10), { weekday: false })} ${timeLabel(aStartMin(appt))}`} width={560}
+    <DkModal open onClose={onClose} title={t('Riprogramma', 'Reschedule')} sub={`${appt.client?.full_name} · ${t('attuale', 'currently')} ${fmtDateIt(apptDay, { weekday: false })} ${timeLabel(aStartMin(appt))}`} width={560}
       foot={
         <React.Fragment>
           <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
@@ -692,7 +722,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
 
 /* ---- stacca un servizio: nuovo appuntamento della stessa cliente, altro orario/giorno ---- */
 function SplitFlow({ appt, item, t, lang, fireToast, operators, onBack, onClose, onDone }) {
-  const [date, setDate] = useState(appt.start.slice(0, 10));
+  const [date, setDate] = useState(toDateStr(appt.start));   // giorno del salone
   const [slots, setSlots] = useState(null);
   const [selStart, setSelStart] = useState(null);
   const [manual, setManual] = useState('');
@@ -723,7 +753,7 @@ function SplitFlow({ appt, item, t, lang, fireToast, operators, onBack, onClose,
     setBusy(true);
     try {
       const res = await api.post(`/api/agenda/appointments/${appt.id}/split`, { item_id: item.id, start: selStart, force: needForce });
-      fireToast({ msg: t(`${item.service_name} spostato: ${fmtDateIt(selStart.slice(0, 10), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`, `${item.service_name} moved: ${fmtDateIt(selStart.slice(0, 10), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`), icon: 'calendar' });
+      fireToast({ msg: t(`${item.service_name} spostato: ${fmtDateIt(toDateStr(selStart), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`, `${item.service_name} moved: ${fmtDateIt(toDateStr(selStart), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`), icon: 'calendar' });
       onDone(res);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) { setNeedForce(true); fireToast({ msg: t('Orario occupato o fuori turno: puoi forzare con «Sposta comunque»', 'Time busy or off shift: you can override with “Move anyway”'), icon: 'alert' }); }

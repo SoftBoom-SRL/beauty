@@ -24,7 +24,7 @@ export default function App() {
 }
 
 function Root() {
-  const { t, brand, brandError, reloadBrand, session, view, toastProps, authOpen, openAuth, closeAuth, setView, fireToast } = useApp();
+  const { t, brand, brandError, reloadBrand, session, view, viewParams, toastProps, authOpen, openAuth, closeAuth, setView, fireToast } = useApp();
 
   /* Ritorno dal pagamento della caparra (Stripe Checkout rimanda a
    * /<slug>?deposit=paid|cancelled): si avvisa una volta sola e si ripulisce
@@ -43,7 +43,18 @@ function Root() {
 
   const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'waitlist-new', 'sposta', 'annulla', 'giftcard'];
   const gated = !session && PERSONAL_VIEWS.includes(view);
-  useEffect(() => { if (gated) { openAuth(); setView('home'); } }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!gated) return;
+    // La destinazione va RICORDATA: `openAuth()` senza callback buttava via
+    // dove la cliente stava andando (e i suoi parametri — l'appuntamento da
+    // spostare, il servizio per la lista d'attesa), così dopo l'accesso si
+    // ritrovava sulla home e doveva rifare tutto il percorso da capo.
+    // Il meccanismo di ripresa esiste nel contesto: qui lo si collega.
+    const target = view;
+    const params = viewParams;
+    openAuth(() => setView(target, params));
+    setView('home');
+  }, [gated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* branding boot gate */
   if (!brand) {

@@ -6,9 +6,10 @@ GET (lista) e POST (creazione), nessun endpoint di update/delete.
 """
 
 import logging
+from decimal import Decimal
 from typing import Optional
 
-from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -20,10 +21,11 @@ from ninja.pagination import LimitOffsetPagination, paginate
 from apps.agenda.schemas import AppointmentOut
 from apps.core.models import Salon, SalonSettings
 from apps.core.services import emit_event, log_activity
+from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
-from common.media import signed_media_url
-from common.phone import canonical_phone, find_client_by_phone
+from common.media import signed_media_url, stored_upload_name, validate_upload
+from common.phone import canonical_phone, find_client_by_phone, phone_key
 from common.utils import salon_get
 
 from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
@@ -117,10 +119,41 @@ def _set_categories(client: Client, category_ids: list[int]) -> None:
     client.categories.set(categories)
 
 
+DUPLICATE_PHONE = "Telefono già registrato per un altro cliente"
+
+
 def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) -> None:
     """Il numero è unico per salone comunque sia scritto (+39 / spazi / 0039)."""
     if find_client_by_phone(ctx.salon, phone, exclude_id=exclude_id) is not None:
-        raise HttpError(400, "Telefono già registrato per un altro cliente")
+        raise HttpError(400, DUPLICATE_PHONE)
+
+
+def _search_filter(q: str) -> Q:
+    """Filtro della ricerca in anagrafica: nome completo e numero formattato.
+
+    Il filtro campo per campo non trovava né «Sofia Ricci» (nessuna colonna
+    contiene nome e cognome insieme) né «+39 333 123 4567» (in archivio il
+    numero è E.164 senza separatori). Chi non trova la cliente ne crea una
+    seconda e si vede rifiutare il telefono senza capire perché.
+
+    Ogni parola deve comparire da qualche parte nella scheda (AND fra le
+    parole, OR fra i campi): «Sofia Ricci» trova solo Sofia Ricci, non tutte
+    le Sofia. Il numero si cerca sulla chiave normalizzata, la stessa che
+    riconosce la cliente al login.
+    """
+    words = [w for w in q.split() if w]
+    condition = Q()
+    for word in words:
+        condition &= (
+            Q(first_name__icontains=word)
+            | Q(last_name__icontains=word)
+            | Q(phone__icontains=word)
+            | Q(email__icontains=word)
+        )
+    key = phone_key(q)
+    if key:
+        condition |= Q(phone_key__contains=key)
+    return condition
 
 
 @router.get("/", auth=staff_auth, response=list[ClientOut])
@@ -136,12 +169,7 @@ def list_clients(
     ctx = request.auth
     qs = Client.objects.filter(salon=ctx.salon).prefetch_related("categories")
     if q:
-        qs = qs.filter(
-            Q(first_name__icontains=q)
-            | Q(last_name__icontains=q)
-            | Q(phone__icontains=q)
-            | Q(email__icontains=q)
-        )
+        qs = qs.filter(_search_filter(q))
     if category_id is not None:
         qs = qs.filter(categories__id=category_id)
     if reliability_min is not None:
@@ -153,21 +181,58 @@ def list_clients(
     return qs.distinct()
 
 
-def _client_payload(data: ClientIn) -> tuple[dict, list[int]]:
-    """ClientIn → kwargs del modello: compleanno (con/senza anno) e genere validati."""
-    payload = data.dict()
-    category_ids = payload.pop("category_ids")
-    # Salvato in E.164 quando riconoscibile: login OTP, import e sync Yourang
-    # confrontano lo stesso numero, comunque sia stato digitato.
-    payload["phone"] = canonical_phone(payload["phone"])
-    payload["gender"] = normalize_gender(payload.get("gender") or "")
-    birthday, year_known = parse_birthday(payload.pop("birthday", None))
-    payload["birthday"] = birthday
-    payload["birthday_year_known"] = year_known
-    if not payload["first_name"].strip():
+# I tre consensi che il resto del prodotto legge come booleani: le audience
+# marketing filtrano su `consents__marketing=True` e stripe_service rifiuta
+# l'addebito senza `card_charge`. Un "true" di testo o un 1 li facevano
+# rispondere in modo diverso a seconda di chi leggeva.
+CONSENT_FLAGS = ("privacy", "marketing", "card_charge")
+
+
+def _clean_consents(raw) -> dict:
+    """Consensi con i tre flag riportati a booleano.
+
+    Le altre chiavi restano come sono: sono le date della prova del consenso
+    (`privacy_at`, `marketing_at`, `marketing_revoked_at`) e le scrive anche
+    apps.marketing. Scartarle qui cancellerebbe, al primo salvataggio dalla
+    scheda cliente, la traccia di quando il consenso è stato dato o revocato.
+    """
+    if not isinstance(raw, dict):
+        raise HttpError(400, "Consensi non validi")
+    cleaned = dict(raw)
+    for name in CONSENT_FLAGS:
+        if name in cleaned:
+            cleaned[name] = bool(cleaned[name])
+    return cleaned
+
+
+def _client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Optional[list[int]]]:
+    """ClientIn → kwargs del modello: compleanno (con/senza anno) e genere validati.
+
+    Con `partial=True` (il PUT) restano solo i campi davvero presenti nel
+    corpo. `ClientIn` ha un default per quasi tutto: riversarlo intero su una
+    scheda esistente significava che chiunque aggiornasse il solo telefono
+    cancellava i consensi (con la prova del consenso privacy), riportava
+    l'affidabilità a 100 e riattivava una scheda disattivata. Il chiamante che
+    non manda un campo non lo sta svuotando: non lo sta toccando.
+    """
+    payload = data.dict(exclude_unset=True) if partial else data.dict()
+    category_ids = payload.pop("category_ids", None)  # None = lasciare le etichette come sono
+    if "phone" in payload:
+        # Salvato in E.164 quando riconoscibile: login OTP, import e sync Yourang
+        # confrontano lo stesso numero, comunque sia stato digitato.
+        payload["phone"] = canonical_phone(payload["phone"])
+        if not payload["phone"]:
+            raise HttpError(400, "Il telefono è obbligatorio")
+    if "gender" in payload:
+        payload["gender"] = normalize_gender(payload.get("gender") or "")
+    if "birthday" in payload:
+        birthday, year_known = parse_birthday(payload.pop("birthday"))
+        payload["birthday"] = birthday
+        payload["birthday_year_known"] = year_known
+    if "consents" in payload:
+        payload["consents"] = _clean_consents(payload["consents"])
+    if "first_name" in payload and not payload["first_name"].strip():
         raise HttpError(400, "Il nome è obbligatorio")
-    if not payload["phone"]:
-        raise HttpError(400, "Il telefono è obbligatorio")
     return payload, category_ids
 
 
@@ -178,8 +243,20 @@ def create_client(request, data: ClientIn):
     payload, category_ids = _client_payload(data)
     phone = payload["phone"]
     _check_phone_unique(ctx, phone)
-    client = Client.objects.create(salon=ctx.salon, **payload)
-    _set_categories(client, category_ids)
+    if not payload.get("since"):
+        # Cliente dal giorno in cui è entrata in rubrica. Nessuna via di
+        # creazione la valorizzava e il KPI «nuovi clienti» restava a zero per
+        # sempre; chi importa uno storico può sempre correggerla dopo.
+        payload["since"] = timezone.localdate()
+    try:
+        with transaction.atomic():
+            client = Client.objects.create(salon=ctx.salon, **payload)
+    except IntegrityError:
+        # Il controllo qui sopra non è atomico: due salvataggi simultanei dello
+        # stesso numero lo superano entrambi e a fermarli è il vincolo del
+        # database. Meglio il 400 «già registrato» di un 500 sulla violazione.
+        raise HttpError(400, DUPLICATE_PHONE)
+    _set_categories(client, category_ids or [])
     log_activity(
         ctx.salon,
         "client.created",
@@ -194,10 +271,22 @@ def create_client(request, data: ClientIn):
 def get_client(request, client_id: int):
     ctx = request.auth
     client = salon_get(Client, ctx, client_id)
-    stats = client_stats(client)
+    # Spesa totale, numero di visite e ultima visita sono dati di cassa: li
+    # vede solo chi ha il permesso «vendite», come sulla lista degli incassi.
+    # A chi non ce l'ha la scheda arriva completa, con i contatori a zero.
+    may_see = ctx.is_owner or "sales" in ctx.scopes
+    if may_see:
+        stats = client_stats(client)
+    else:
+        stats = {"visits": 0, "total_spent": Decimal("0"), "last_visit": None}
     client.visits = stats["visits"]
     client.total_spent = stats["total_spent"]
     client.last_visit = stats["last_visit"]
+    # Senza questo flag l'interfaccia mostrava «0 visite · 0 € spesi» a chi non
+    # ha il permesso vendite: una cliente storica sembrava alla prima visita, e
+    # l'operatrice rischiava di trattarla come tale (caparra compresa). Zero e
+    # «non visibile» devono restare distinguibili.
+    client.stats_hidden = not may_see
     return client
 
 
@@ -206,13 +295,19 @@ def update_client(request, client_id: int, data: ClientIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    payload, category_ids = _client_payload(data)
-    phone = payload["phone"]
-    _check_phone_unique(ctx, phone, exclude_id=client.id)
+    payload, category_ids = _client_payload(data, partial=True)
+    phone = payload.get("phone")
+    if phone:
+        _check_phone_unique(ctx, phone, exclude_id=client.id)
     for name, value in payload.items():
         setattr(client, name, value)
-    client.save()
-    _set_categories(client, category_ids)
+    try:
+        with transaction.atomic():
+            client.save()
+    except IntegrityError:
+        raise HttpError(400, DUPLICATE_PHONE)
+    if category_ids is not None:
+        _set_categories(client, category_ids)
     log_activity(
         ctx.salon,
         "client.updated",
@@ -271,18 +366,25 @@ def list_client_appointments(request, client_id: int):
     per evitare dipendenze a livello di modulo tra le due app di dominio.
     """
     ctx = request.auth
+    # Stessa invariante di storico, note e schede: l'elenco delle visite di una
+    # persona è un dato della sua scheda, non dell'agenda del giorno.
+    require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
 
-    from apps.agenda.api import _appointment_out  # lazy: riuso serializzazione esistente
+    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione esistente
     from apps.agenda.models import Appointment  # lazy: evita import cross-app a livello modulo
 
     appointments = (
         Appointment.objects.filter(salon=ctx.salon, client=client)
-        .select_related("client", "operator")
+        .select_related("client", "operator", "salon")
         .prefetch_related("items__service", "items__operator")
         .order_by("start")
     )
-    return [_appointment_out(a) for a in appointments]
+    # Indice delle gift card calcolato una volta sola: senza, _appointment_out
+    # ne interroga una per appuntamento (più una SELECT sul salone, che non era
+    # in select_related). Una cliente con 80 visite costava 160 query in più.
+    gifts = gift_index(ctx.salon, [client.id])
+    return [_appointment_out(a, gifts) for a in appointments]
 
 
 # ---- Storico unificato (visite + note + schede) ---------------------------------
@@ -356,26 +458,32 @@ def client_history(request, client_id: int):
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
 
-    from apps.agenda.api import _appointment_out  # lazy: riuso serializzazione
+    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione
     from apps.agenda.models import Appointment  # lazy
     from apps.sales.api import _sale_out  # lazy
     from apps.sales.models import Sale  # lazy
 
+    # Gli incassi di ogni visita sono dati di cassa: senza il permesso
+    # «vendite» la timeline resta completa ma senza importi, come la lista
+    # degli incassi che a quel ruolo è già preclusa.
+    can_read_sales = ctx.is_owner or "sales" in ctx.scopes
+
     appointments = list(
         Appointment.objects.filter(salon=ctx.salon, client=client)
-        .select_related("client", "operator")
+        .select_related("client", "operator", "salon")
         .prefetch_related("items__service", "items__operator")
         .order_by("-start")
     )
-    sales = {
-        s.appointment_id: s
-        for s in Sale.objects.filter(salon=ctx.salon, client=client).select_related("client")
-        if s.appointment_id
-    }
-    counter_sales = [
-        s for s in Sale.objects.filter(salon=ctx.salon, client=client).select_related("client")
-        if not s.appointment_id
-    ]
+    # Una lista sola: la stessa query girava due volte, e l'indice delle gift
+    # card va calcolato una volta per tutte (vedi list_client_appointments).
+    gifts = gift_index(ctx.salon, [client.id])
+    all_sales = (
+        list(Sale.objects.filter(salon=ctx.salon, client=client).select_related("client"))
+        if can_read_sales
+        else []
+    )
+    sales = {s.appointment_id: s for s in all_sales if s.appointment_id}
+    counter_sales = [s for s in all_sales if not s.appointment_id]
     notes = list(client.notes.select_related("author").prefetch_related("attachments"))
     sheets = list(client.sheets.select_related("author"))
     notes_by_appt: dict = {}
@@ -396,7 +504,7 @@ def client_history(request, client_id: int):
                 "kind": "visit",
                 "date": a.start,
                 "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
-                "appointment": _appointment_out(a),
+                "appointment": _appointment_out(a, gifts),
                 "operator_name": f"{a.operator.first_name} {a.operator.last_name}".strip() if a.operator_id else "",
                 "sale": _sale_out(sale) if sale else None,
                 "notes": [_note_out(n) for n in notes_by_appt.get(a.id, [])],
@@ -439,22 +547,40 @@ def _appointment_for(ctx, client: Client, appointment_id):
     return appointment
 
 
+# Tipi ammessi negli allegati di una nota: quelli del modello, che l'interfaccia
+# già dichiara. Il controllo vero (estensione coerente col tipo e nome generato
+# dal server) sta in common.media, unico posto dove vive questa regola.
+ATTACHMENT_TYPES = ClientNoteAttachment.IMAGE_TYPES + ClientNoteAttachment.DOC_TYPES
+
+
 def _validate_upload(f: UploadedFile) -> None:
-    ctype = (f.content_type or "").lower()
-    if ctype not in ClientNoteAttachment.IMAGE_TYPES + ClientNoteAttachment.DOC_TYPES:
-        raise HttpError(400, f"Formato non supportato: {f.name} (immagini, PDF, Word o testo)")
-    if f.size > ClientNoteAttachment.MAX_BYTES:
-        raise HttpError(400, f"File troppo grande: {f.name} (max 15 MB)")
+    """Controlla un allegato prima di scrivere qualunque cosa su disco.
+
+    Guardava solo il tipo DICHIARATO dal client — che si falsifica cambiando una
+    riga della richiesta — e salvava il file col nome scelto da chi caricava: un
+    «foto.png.html» spacciato per image/png finiva su /media/ con estensione
+    .html, sullo stesso origin di /admin/.
+    """
+    validate_upload(f, allowed_types=ATTACHMENT_TYPES, max_bytes=ClientNoteAttachment.MAX_BYTES)
 
 
 def _attach_files(note: ClientNote, files: list[UploadedFile]) -> None:
-    for f in files:
-        _validate_upload(f)
-    for f in files:
+    # Prima tutti i controlli, poi le scritture: un file rifiutato a metà elenco
+    # lasciava a terra gli allegati già salvati.
+    names = [
+        stored_upload_name(f, allowed_types=ATTACHMENT_TYPES, max_bytes=ClientNoteAttachment.MAX_BYTES)
+        for f in files
+    ]
+    for f, stored in zip(files, names):
+        # Il nome originale resta nel campo descrittivo (è quello che
+        # l'operatrice ha scritto e riconosce); sul disco ci va quello nostro.
         att = ClientNoteAttachment(
-            note=note, name=f.name[:200], content_type=(f.content_type or "")[:100], size=f.size
+            note=note,
+            name=(f.name or "")[:200],
+            content_type=(f.content_type or "")[:100],
+            size=f.size,
         )
-        att.file.save(f.name, f, save=True)
+        att.file.save(stored, f, save=True)
 
 
 @router.get("/{int:client_id}/notes", auth=staff_auth, response=list[NoteOut])
@@ -512,7 +638,9 @@ def create_note_with_files(
         client=client,
         appointment=_appointment_for(ctx, client, appointment_id),
         text=text.strip(),
-        visibility=visibility if visibility in ("private", "ai", "shared") else "private",
+        # "shared" non è una scelta di ClientNote.Visibility: era ammesso qui e
+        # finiva in archivio come valore che nessuna lettura sa interpretare.
+        visibility=visibility if visibility in ("private", "ai") else "private",
         author=ctx.user,
     )
     _attach_files(note, files)
@@ -605,10 +733,18 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
+    payload = data.dict()
+    # Come l'endpoint gemello delle note: l'appuntamento va risolto, non
+    # passato grezzo. Un id inesistente usciva come 500 sulla chiave esterna e
+    # un id di un altro salone (o di un'altra cliente) veniva salvato lo
+    # stesso, facendo sparire la scheda dallo storico — lo storico la cerca fra
+    # gli appuntamenti di questa cliente, dove quell'id non c'è.
+    appointment = _appointment_for(ctx, client, payload.pop("appointment_id", None))
     sheet = TechnicalSheet.objects.create(
         client=client,
         author=ctx.user,
-        **data.dict(),
+        appointment=appointment,
+        **payload,
     )
     log_activity(
         ctx.salon,
@@ -627,13 +763,17 @@ def upload_sheet_photo(request, client_id: int, sheet_id: int, photo: UploadedFi
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     sheet = get_object_or_404(TechnicalSheet, pk=sheet_id, client=client)
-    if (photo.content_type or "").lower() not in ClientNoteAttachment.IMAGE_TYPES:
-        raise HttpError(400, "La foto deve essere un'immagine (JPEG, PNG, WebP, HEIC)")
-    if photo.size > ClientNoteAttachment.MAX_BYTES:
-        raise HttpError(400, "Foto troppo grande (max 15 MB)")
+    # Stessa regola degli allegati: tipo dichiarato nella whitelist, estensione
+    # coerente e nome generato dal server. La foto finisce sotto
+    # technical_sheets/, servito dallo stesso origin di /admin/.
+    stored = stored_upload_name(
+        photo,
+        allowed_types=ClientNoteAttachment.IMAGE_TYPES,
+        max_bytes=ClientNoteAttachment.MAX_BYTES,
+    )
     if sheet.photo:
         sheet.photo.delete(save=False)
-    sheet.photo.save(photo.name, photo, save=True)
+    sheet.photo.save(stored, photo, save=True)
     return sheet
 
 
@@ -649,20 +789,6 @@ HOOK_LABEL_COLOR = "#8B5CF6"
 # contro lo spam mirato la difesa è l'honeypot.
 HOOK_MAX_PER_WINDOW = 20
 HOOK_WINDOW_SECONDS = 3600
-
-
-def _client_ip(request) -> str:
-    """IP reale dietro il proxy.
-
-    Si prende l'ULTIMO elemento di X-Forwarded-For, non il primo: la catena è
-    scrivibile dal client, ma il nostro proxy accoda in fondo il peer che ha
-    davvero aperto la connessione. Fidarsi del primo elemento renderebbe il rate
-    limit aggirabile con un header.
-    """
-    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.META.get("REMOTE_ADDR", "") or "unknown"
 
 
 @router.post("/public/hook", auth=None, response=HookLeadOut)
@@ -714,62 +840,95 @@ def public_hook(request, data: HookLeadIn):
             "hook: consenso raccolto senza informativa privacy configurata (salone=%s)", salon.slug
         )
 
-    # Rate limit per IP. La cache è su database (vedi settings.CACHES): condivisa
-    # fra i worker, altrimenti ognuno conterebbe per conto suo e il limite non
-    # limiterebbe nulla.
-    key = f"hook:{salon.id}:{_client_ip(request)}"
-    hits = cache.get(key, 0)
-    if hits >= HOOK_MAX_PER_WINDOW:
+    # Rate limit per IP, sul contatore condiviso di common.ratelimit: è una
+    # UPDATE atomica sul database, mentre il vecchio leggi-poi-scrivi sulla
+    # cache lasciava passare un flood in parallelo contandolo come una
+    # richiesta sola (ogni richiesta qui crea una scheda e un evento).
+    key = f"hook:{salon.id}:{ratelimit.client_ip(request)}"
+    if not ratelimit.hit(key, HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS):
         logger.warning("hook: rate limit superato per %s", key)
         return {"ok": True}
-    cache.set(key, hits + 1, HOOK_WINDOW_SECONDS)
 
     now = timezone.now().isoformat()
     client = find_client_by_phone(salon, phone)
 
     if client is None:
-        client = Client.objects.create(
-            salon=salon,
-            first_name=first_name,
-            last_name=data.last_name.strip(),
-            phone=phone,
-            email=data.email.strip(),
-            origin="hook",
-            consents={
-                "privacy": True,
-                "privacy_at": now,
-                "marketing": bool(data.marketing),
-                "marketing_at": now if data.marketing else "",
-                "card_charge": False,
-            },
-        )
-        label, _ = ClientCategory.objects.get_or_create(
-            salon=salon, name=HOOK_LABEL, defaults={"color": HOOK_LABEL_COLOR}
-        )
-        client.categories.add(label)
-        emit_event(
-            salon,
-            "client.created",
-            {"client_id": client.id, "name": client.full_name, "phone": client.phone, "source": "hook"},
-        )
-        log_activity(salon, "client.created", f"Contatto dal form: {client.full_name}")
+        try:
+            with transaction.atomic():
+                client = Client.objects.create(
+                    salon=salon,
+                    first_name=first_name,
+                    last_name=data.last_name.strip(),
+                    phone=phone,
+                    email=data.email.strip(),
+                    origin="hook",
+                    since=timezone.localdate(),
+                    consents={
+                        "privacy": True,
+                        "privacy_at": now,
+                        "marketing": bool(data.marketing),
+                        "marketing_at": now if data.marketing else "",
+                        "card_charge": False,
+                    },
+                )
+        except IntegrityError:
+            # Doppio tocco su «Invia», o due invii in parallelo: il controllo
+            # qui sopra non è atomico, il vincolo di unicità sì. Si riprende la
+            # scheda appena nata e si prosegue come per chi è già in rubrica —
+            # questo endpoint risponde 200 in ogni caso, un 500 racconterebbe a
+            # uno sconosciuto che quel numero è cliente del salone.
+            client = find_client_by_phone(salon, phone)
+            if client is None:
+                logger.warning(
+                    "hook: creazione rifiutata e scheda non ritrovata (salone=%s)", salon.slug
+                )
+                return {"ok": True}
+        else:
+            _mark_as_hook_lead(salon, client)
+            return {"ok": True}
+
+    # Cliente già in rubrica: si aggiornano i consensi (è il senso del form) e
+    # si riempiono solo i campi vuoti. Sovrascrivere nome o email con quanto
+    # digitato da uno sconosciuto rovinerebbe una scheda reale, e l'etichetta
+    # "Da form" non va messa a chi è già cliente.
+    client.consents = {
+        **(client.consents or {}),
+        "privacy": True,
+        "privacy_at": now,
+        "marketing": bool(data.marketing) or bool((client.consents or {}).get("marketing")),
+        "marketing_at": now if data.marketing else (client.consents or {}).get("marketing_at", ""),
+    }
+    if not client.email and data.email.strip():
+        client.email = data.email.strip()
+    if not client.last_name and data.last_name.strip():
+        client.last_name = data.last_name.strip()
+    fields = ["consents", "email", "last_name"]
+    revived = not client.is_active
+    if revived:
+        # Una scheda disattivata che ricompila il modulo è un contatto nuovo a
+        # tutti gli effetti. Lasciandola spenta il consenso veniva registrato
+        # ma la persona restava fuori da ogni lista e da ogni audience: il
+        # salone raccoglieva un contatto e non lo vedeva mai.
+        client.is_active = True
+        fields.append("is_active")
+    client.save(update_fields=fields)
+    if revived:
+        _mark_as_hook_lead(salon, client)
     else:
-        # Cliente già in rubrica: si aggiornano i consensi (è il senso del form) e
-        # si riempiono solo i campi vuoti. Sovrascrivere nome o email con quanto
-        # digitato da uno sconosciuto rovinerebbe una scheda reale, e l'etichetta
-        # "Da form" non va messa a chi è già cliente.
-        client.consents = {
-            **(client.consents or {}),
-            "privacy": True,
-            "privacy_at": now,
-            "marketing": bool(data.marketing) or bool((client.consents or {}).get("marketing")),
-            "marketing_at": now if data.marketing else (client.consents or {}).get("marketing_at", ""),
-        }
-        if not client.email and data.email.strip():
-            client.email = data.email.strip()
-        if not client.last_name and data.last_name.strip():
-            client.last_name = data.last_name.strip()
-        client.save(update_fields=["consents", "email", "last_name"])
         log_activity(salon, "client.updated", f"Consensi aggiornati dal form: {client.full_name}")
 
     return {"ok": True}
+
+
+def _mark_as_hook_lead(salon, client: Client) -> None:
+    """Etichetta «Da form», evento SSE e registro: la scheda è un lead nuovo."""
+    label, _ = ClientCategory.objects.get_or_create(
+        salon=salon, name=HOOK_LABEL, defaults={"color": HOOK_LABEL_COLOR}
+    )
+    client.categories.add(label)
+    emit_event(
+        salon,
+        "client.created",
+        {"client_id": client.id, "name": client.full_name, "phone": client.phone, "source": "hook"},
+    )
+    log_activity(salon, "client.created", f"Contatto dal form: {client.full_name}")

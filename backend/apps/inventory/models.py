@@ -115,7 +115,12 @@ class StockMovement(models.Model):
     salon = models.ForeignKey(
         "core.Salon", on_delete=models.CASCADE, related_name="stock_movements"
     )
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="movements")
+    # PROTECT e non CASCADE: le API disattivano il prodotto (soft delete), ma
+    # dall'admin la cancellazione è reale e portava via lo storico dei carichi e
+    # degli scarichi — cioè la prova contabile di che cosa è entrato e uscito dal
+    # magazzino. `SaleLine.product` è SET_NULL per lo stesso motivo: la vendita
+    # sopravvive al prodotto.
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="movements")
     kind = models.CharField(max_length=20, choices=Kind.choices)
     qty = models.DecimalField(max_digits=10, decimal_places=2)  # + carico / − scarico
     reason = models.CharField(max_length=255, blank=True)

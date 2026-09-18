@@ -14,14 +14,24 @@ from .models import ActivityLog, OutboxEvent
 logger = logging.getLogger("youty.events")
 
 
+# Lunghezze delle colonne di ActivityLog: il registro va TRONCATO, non fatto
+# fallire. log_activity gira dentro la transazione dell'operazione, quindi un
+# nome o un riepilogo troppo lunghi facevano fallire l'azione vera e propria —
+# una collaboratrice con un nome di 130 caratteri non poteva più fare nulla.
+MAX_ACTOR_NAME = 120
+MAX_SUMMARY = 255
+MAX_TYPE = 60
+
+
 def log_activity(salon, type: str, summary: str, *, actor=None, location=None, payload=None):
+    actor_name = (actor.get_full_name() or actor.email) if actor else ""
     return ActivityLog.objects.create(
         salon=salon,
         location=location,
         actor=actor if (actor and getattr(actor, "pk", None)) else None,
-        actor_name=(actor.get_full_name() or actor.email) if actor else "",
-        type=type,
-        summary=summary,
+        actor_name=actor_name[:MAX_ACTOR_NAME],
+        type=str(type)[:MAX_TYPE],
+        summary=str(summary)[:MAX_SUMMARY],
         payload=payload or {},
     )
 
@@ -69,7 +79,10 @@ def normalize_opening_hours_week(value) -> dict:
             mins = []
             for hm in rng:
                 m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(hm).strip())
-                if not m or int(m.group(1)) > 24 or int(m.group(2)) > 59:
+                # La giornata finisce a mezzanotte: "24:30" veniva accettato e
+                # salvato, il salone risultava chiuso in agenda e le
+                # Impostazioni continuavano a mostrare una fascia dall'aria valida.
+                if not m or int(m.group(2)) > 59 or int(m.group(1)) * 60 + int(m.group(2)) > 24 * 60:
                     raise ValueError(f"Orario non valido per {WEEKDAYS_IT[day]}: {hm}")
                 mins.append(int(m.group(1)) * 60 + int(m.group(2)))
             if mins[1] <= mins[0]:

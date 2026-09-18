@@ -1,7 +1,7 @@
 // ClientProfile.jsx — full client profile (ported DkClientProfile): header with
 // contact actions, editable labels, KPI stats, deposit banner, language card
 // and the 5 tabs (Storico / Scheda tecnica / Note / Wallet / Consensi).
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
@@ -11,6 +11,8 @@ import TechSheetTab from './tabs/TechSheetTab.jsx';
 import NotesTab from './tabs/NotesTab.jsx';
 import WalletTab from './tabs/WalletTab.jsx';
 import ConsensiTab from './tabs/ConsensiTab.jsx';
+
+const catIdsOf = (cl) => (cl?.categories || []).map((x) => x.id);
 
 export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const { t, lang, fireToast, hasScope, clientCategories, openModal } = useDash();
@@ -54,15 +56,35 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
 
   /* PUT helper — always sends the FULL ClientIn (partial bodies would reset
    * unspecified fields to schema defaults). Response is a ClientOut: merge it
-   * over the detail to keep visits/total_spent/last_visit. */
-  const updateClient = async (patch, toast) => {
-    try {
-      const res = await api.put(`/api/clients/${clientId}`, toClientIn(c, patch));
-      setC((prev) => ({ ...prev, ...res }));
-      if (toast) fireToast(toast);
-      onChanged && onChanged();
-      return true;
-    } catch (err) { toastErr(err); return false; }
+   * over the detail to keep visits/total_spent/last_visit.
+   *
+   * Corpo completo + due clic ravvicinati = l'uno cancella l'altro: «VIP» e
+   * poi «Colore» partivano entrambi dalla stessa lista di etichette e la
+   * seconda PUT riscriveva la prima. Due difese:
+   *  - le chiamate si mettono in coda, una alla volta;
+   *  - `patch` può essere una funzione (prev) => patch, valutata al momento
+   *    dell'invio sull'ultimo stato noto (cRef), non su quello del render in
+   *    cui è stato premuto il pulsante. */
+  const cRef = useRef(c);
+  cRef.current = c;
+  const queue = useRef(Promise.resolve());
+
+  const updateClient = (patch, toast) => {
+    const run = queue.current.then(async () => {
+      const prev = cRef.current;
+      if (!prev) return false;
+      const body = toClientIn(prev, typeof patch === 'function' ? patch(prev) : patch);
+      try {
+        const res = await api.put(`/api/clients/${clientId}`, body);
+        cRef.current = { ...prev, ...res };   // la prossima in coda parte da qui
+        setC((cur) => (cur ? { ...cur, ...res } : res));
+        if (toast) fireToast(toast);
+        onChanged && onChanged();
+        return true;
+      } catch (err) { toastErr(err); return false; }
+    });
+    queue.current = run.catch(() => {});      // un errore non deve bloccare la coda
+    return run;
   };
 
   const doDelete = async () => {
@@ -105,9 +127,14 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const rel = relMeta(score, t);
   const visits = c.visits || 0;
   const totalSpent = Number(c.total_spent || 0);
+  // Il backend azzera visite e speso a chi non ha il permesso «vendite». Senza
+  // distinguere i due casi, una cliente storica sembrava alla prima visita e
+  // rischiava di vedersi chiedere la caparra da chi non poteva saperlo.
+  const statsHidden = !!c.stats_hidden;
+  const hiddenNote = t('Richiede il permesso vendite', 'Requires the sales permission');
   const wa = waHref(c.phone);
   const sinceYear = c.since ? String(c.since).slice(0, 4) : null;
-  const assignedIds = (c.categories || []).map((x) => x.id);
+  const assignedIds = catIdsOf(c);   // solo per il segno di spunta a video
   const bdays = daysToBirthday(c.birthday);
   const subtitle = [
     genderLabel(c.gender, t),
@@ -177,7 +204,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', position: 'relative', margin: '-6px 0 20px' }}>
         {(c.categories || []).map((cat) => (
           <CatChip key={cat.id} cat={cat}
-            onRemove={canWrite ? () => updateClient({ category_ids: assignedIds.filter((x) => x !== cat.id) }, { msg: t('Etichetta rimossa', 'Label removed'), icon: 'check' }) : null}
+            onRemove={canWrite ? () => updateClient((prev) => ({ category_ids: catIdsOf(prev).filter((x) => x !== cat.id) }), { msg: t('Etichetta rimossa', 'Label removed'), icon: 'check' }) : null}
             removeTitle={t('Rimuovi etichetta', 'Remove label')} />
         ))}
         {canWrite && (
@@ -195,7 +222,12 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
                   const on = assignedIds.includes(cat.id);
                   return (
                     <button key={cat.id} className="dk-row" style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', padding: '8px 9px', borderRadius: 8, textAlign: 'left', border: 'none', background: 'transparent' }}
-                      onClick={() => updateClient({ category_ids: on ? assignedIds.filter((x) => x !== cat.id) : [...assignedIds, cat.id] })}>
+                      onClick={() => updateClient((prev) => {
+                        // le etichette assegnate si rileggono al momento dell'invio:
+                        // due clic ravvicinati devono sommarsi, non annullarsi
+                        const ids = catIdsOf(prev);
+                        return { category_ids: ids.includes(cat.id) ? ids.filter((x) => x !== cat.id) : [...ids, cat.id] };
+                      })}>
                       <span style={{ width: 11, height: 11, borderRadius: 99, background: cat.color, flexShrink: 0 }} />
                       <span style={{ flex: 1, fontWeight: on ? 700 : 600, fontSize: 13.5, color: on ? 'var(--ink)' : 'var(--ink-2)' }}>{cat.name}</span>
                       {on && <Icon name="check" size={14} color="var(--clay-ink)" stroke={2.4} />}
@@ -215,9 +247,15 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
 
       {/* KPIs (visits / total_spent / avg ticket from ClientDetailOut) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 14 }}>
-        <ProfStat label={t('Visite', 'Visits')} value={visits} />
-        <ProfStat label={t('Valore totale', 'Lifetime value')} value={totalSpent ? fmtEur(totalSpent, lang) : '€0'} />
-        <ProfStat label={t('Scontrino medio', 'Avg ticket')} value={totalSpent ? fmtEur(Math.round(totalSpent / Math.max(1, visits)), lang) : '€0'} />
+        <ProfStat label={t('Visite', 'Visits')} value={statsHidden ? '—' : visits} hint={statsHidden ? hiddenNote : null} />
+        <ProfStat label={t('Valore totale', 'Lifetime value')}
+          value={statsHidden ? '—' : (totalSpent ? fmtEur(totalSpent, lang) : '€0')}
+          hint={statsHidden ? hiddenNote : null} />
+        {/* niente Math.round: con 2 visite e 95,00 € lo scontrino medio è
+            47,50 €, non 48 € — e il «Valore totale» qui accanto dice 95,00 € */}
+        <ProfStat label={t('Scontrino medio', 'Avg ticket')}
+          value={statsHidden ? '—' : (totalSpent ? fmtEur(totalSpent / Math.max(1, visits), lang) : '€0')}
+          hint={statsHidden ? hiddenNote : null} />
         <div className="dk-card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           <div className="t-meta" style={{ marginBottom: 8 }}>{t('Affidabilità', 'Reliability')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

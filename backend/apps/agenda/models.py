@@ -55,8 +55,12 @@ class Appointment(TimeStampedModel):
         blank=True,
         related_name="appointments",
     )
+    # PROTECT e non CASCADE: le API cancellano le clienti in modo morbido, ma
+    # dall'admin la cancellazione è reale e si portava dietro tutto lo storico
+    # delle visite (e i loro AppointmentService). Le vendite invece restavano,
+    # con client NULL: i ricavi non tornavano più a nessuna visita.
     client = models.ForeignKey(
-        "clients.Client", on_delete=models.CASCADE, related_name="appointments"
+        "clients.Client", on_delete=models.PROTECT, related_name="appointments"
     )
     operator = models.ForeignKey(  # operatrice principale (quella del primo servizio)
         "staff.Operator", on_delete=models.PROTECT, related_name="appointments"

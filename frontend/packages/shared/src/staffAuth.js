@@ -29,6 +29,17 @@ function setSession(next) {
 
 export function getSession() { return session; }
 
+/* Le schede dello stesso browser condividono una sola sessione: quando una la
+   rinnova o esce, le altre devono accorgersene, altrimenti continuano a usare
+   un token già consumato e finiscono buttate fuori a metà giornata. */
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY) return;
+    session = load();
+    listeners.forEach((fn) => fn(session));
+  });
+}
+
 export function subscribe(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -44,7 +55,26 @@ export async function login(email, password) {
  *  shape as /staff/login: { user, salon, scopes, is_owner, access, refresh }. */
 export function applySession(data) { setSession(data); }
 
-export function logout() { setSession(null); }
+/** Uscita: prima si revocano le sessioni sul server, poi si svuota il browser.
+ *
+ *  Cancellare solo `localStorage` non era un'uscita: il refresh restava valido
+ *  trenta giorni, quindi chi ne aveva una copia (telefono smarrito, computer
+ *  della reception) continuava a entrare. L'ordine conta, perché la chiamata
+ *  ha bisogno del token che stiamo per buttare.
+ *
+ *  Un errore non ferma l'uscita: se il server non risponde si esce lo stesso
+ *  da questo browser — restare dentro sarebbe il peggiore dei due esiti. */
+export async function logout() {
+  try {
+    // Con un timeout: senza, una rete lenta lasciava la persona «dentro» dopo
+    // aver premuto Esci, senza nessun segnale, finché fetch non si arrendeva.
+    const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+      ? AbortSignal.timeout(3000)
+      : undefined;
+    await api.post('/api/auth/staff/logout', undefined, { signal });
+  } catch { /* rete giù, token scaduto o timeout: si esce comunque */ }
+  setSession(null);
+}
 
 /** true if the session has the scope, or is_owner (owner bypasses all scopes) */
 export function hasScope(scope) {
@@ -58,6 +88,13 @@ let refreshing = null;
 /** Re-issues both tokens via POST /api/auth/staff/refresh.
  *  Resolves true on success, false on failure (and logs out). Single-flight. */
 export function refresh() {
+  // Il token di rinnovo ora vale una volta sola, e ogni scheda del browser
+  // teneva la propria copia in memoria senza mai risincronizzarsi: la scheda in
+  // secondo piano tentava di rinnovare con un token già consumato dall'altra,
+  // riceveva 401 e svuotava localStorage per tutte e due. Si rilegge sempre dal
+  // deposito condiviso prima di usarlo.
+  const stored = load();
+  if (stored && stored.refresh !== session?.refresh) session = stored;
   if (!session?.refresh) return Promise.resolve(false);
   if (refreshing) return refreshing;
   refreshing = api

@@ -1,5 +1,6 @@
 // lib.js — staff section helpers: availability meta (prototype AVAIL_STATUS styling),
 // minutes↔"HH:MM" conversions, weekly-pattern (de)serialization, local GD palette.
+import { todayStr } from '@youty/shared';
 
 /* ---- availability / absence meta — ported from prototype AVAIL_STATUS ----
  * Keys follow the API: absence type ∈ vacation | holiday | other, plus the
@@ -142,17 +143,26 @@ export function shiftsFromWeeks(weeks, t) {
   return rows;
 }
 
-/* ---- ISO week: which week of the cycle is the current one ----
- * Backend: week_index = date.isocalendar()[1] % cycle_weeks */
-export function isoWeek(date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+/* ---- quale settimana del ciclo è quella in corso ----
+ * La formula è quella del server (`_week_index` in apps/staff/services.py):
+ * si contano le settimane TRASCORSE, `((ordinale − 1) / 7) % settimane`, non
+ * il numero di settimana ISO. ISO riparte da 1 a ogni capodanno e negli anni
+ * da 53 settimane (2026 lo è) la 53ª e la 1ª successiva cadono sullo stesso
+ * indice: con la vecchia formula dal 4 gennaio 2027 il ciclo a due settimane
+ * restava invertito per sempre rispetto al server, e chi modificava «questa
+ * settimana» finiva per toccare l'altra.
+ * L'ordinale 1 (0001-01-01) è un lunedì, quindi l'indice cambia esattamente al
+ * cambio di settimana; 1970-01-01 ha ordinale 719163. */
+const EPOCH_ORDINAL = 719163;
+export function cycleWeekIndex(dateStr, cycleWeeks) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  const ordinal = Math.round(Date.UTC(y, m - 1, d) / 86400000) + EPOCH_ORDINAL;
+  return Math.floor((ordinal - 1) / 7) % Math.max(1, cycleWeeks || 1);
 }
+/** Il giorno è quello del SALONE: a cavallo della mezzanotte una postazione su
+ *  un altro fuso evidenziava la settimana sbagliata. */
 export function currentWeekIndex(cycleWeeks) {
-  return isoWeek(new Date()) % Math.max(1, cycleWeeks || 1);
+  return cycleWeekIndex(todayStr(), cycleWeeks);
 }
 
 /* ---- Google-Docs-style colour palette (local port of prototype GD_PALETTE) ---- */
@@ -185,9 +195,14 @@ export const inputCss = {
 
 export function opName(o) { return `${o.first_name} ${o.last_name}`.trim(); }
 
-/** € for revenue/cost figures: 0 must read "€0", not fmtEur's "Gratis"/"Free". */
+/** € per ricavi e costi: lo 0 dev'essere «€0», non il «Gratis» di fmtEur
+ *  (convenzione dei listini servizi).
+ *  I centesimi si scrivono sempre: senza minimumFractionDigits un costo orario
+ *  di 12,50 € finiva a video come «€12,5» e uno di 8,415 € come «€8,415». */
 export function eur(v, lang) {
-  return '€' + (Number(v) || 0).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT');
+  const n = Number(v) || 0;
+  if (n === 0) return '€0';
+  return '€' + n.toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** derive the today-status pill from OperatorStatusOut (port of staffTodayStatus) */

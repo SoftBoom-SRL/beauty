@@ -3,9 +3,24 @@
 Ogni app di dominio espone `router` in apps/<nome>/api.py.
 """
 
+import os
+
+from django.conf import settings
 from ninja import NinjaAPI
 
-api = NinjaAPI(title="youty API", version="1.0", docs_url="/docs")
+# La documentazione interattiva (/api/docs + /api/openapi.json) è aperta a
+# chiunque: elenca ogni rotta, ogni parametro e ogni schema, compresi quelli
+# delle aree riservate. Utilissima in sviluppo, regalata a chi cerca un bersaglio
+# in produzione. Default: accesa solo con DEBUG. Chi la vuole online la accende
+# di proposito con API_DOCS=1.
+_DOCS_ENABLED = os.getenv("API_DOCS", "1" if settings.DEBUG else "0") == "1"
+
+api = NinjaAPI(
+    title="youty API",
+    version="1.0",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 from apps.accounts.api import router as accounts_router  # noqa: E402
 from apps.agenda.api import router as agenda_router  # noqa: E402

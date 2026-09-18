@@ -17,7 +17,7 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
-from .models import Appointment, AppointmentService, Pause
+from .models import Appointment, AppointmentService, Pause, WaitlistEntry
 from .services import (
     cancel_appointment,
     compute_deposit,
@@ -497,19 +497,52 @@ class CancelAppointmentTests(AgendaTestBase):
             deposit_amount=Decimal("15.00"),
         )
 
-    def test_late_cancel_forfeits_deposit(self):
+    def test_salon_cancelling_at_the_last_minute_does_not_punish_the_client(self):
+        # Il test di prima pretendeva caparra trattenuta e `cancelled_late` da un
+        # annullamento senza attore, cioè fatto dal salone: blindava il difetto.
+        # L'app cliente rifiuta l'annullamento sotto le 24 ore, quindi l'unico
+        # modo di arrivare qui a due ore dalla visita è che sia la reception ad
+        # annullare (l'operatrice si è ammalata): la cliente non deve perdere la
+        # caparra né finire fra le inaffidabili.
         appointment = self._make(timezone.now() + dt.timedelta(hours=2))
         cancel_appointment(appointment, reason="imprevisto")
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.CANCELLED)
-        self.assertTrue(appointment.cancelled_late)
+        self.assertFalse(appointment.cancelled_late)
         self.assertEqual(
-            appointment.deposit_status, Appointment.DepositStatus.FORFEITED
+            appointment.deposit_status, Appointment.DepositStatus.REFUND_DUE
         )
         self.assertEqual(appointment.cancel_reason, "imprevisto")
         types = set(OutboxEvent.objects.values_list("event_type", flat=True))
         self.assertIn("appointment.cancelled", types)
         self.assertIn("slot.freed", types)
+
+    def test_late_cancel_by_the_client_forfeits_deposit(self):
+        # La penale resta, ma solo per chi annulla all'ultimo: la cliente.
+        appointment = self._make(timezone.now() + dt.timedelta(hours=2))
+        cancel_appointment(appointment, reason="non ce la faccio", by_client=True)
+        appointment.refresh_from_db()
+        self.assertTrue(appointment.cancelled_late)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.FORFEITED)
+
+    def test_client_cancelling_in_time_gets_the_deposit_back(self):
+        appointment = self._make(timezone.now() + dt.timedelta(hours=72))
+        cancel_appointment(appointment, by_client=True)
+        appointment.refresh_from_db()
+        self.assertFalse(appointment.cancelled_late)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUND_DUE)
+
+    def test_mark_deposit_refunded_also_writes_how_much_came_back(self):
+        # La scheda diceva «Caparra 15 · Rimborsato 0 · Stato: rimborsata».
+        from .services import mark_deposit_refunded
+
+        appointment = self._make(timezone.now() + dt.timedelta(hours=72))
+        cancel_appointment(appointment)
+        appointment.refresh_from_db()
+        mark_deposit_refunded(appointment)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("15.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("0.00"))
 
     def test_early_cancel_without_stripe_leaves_deposit_refund_due(self):
         # Nessun rimborso è avvenuto (Stripe non configurato, caparra incassata in
@@ -652,7 +685,7 @@ class AppointmentEditApiTests(AgendaTestBase):
                     "id": item.id,
                     "service_id": self.svc60.id,
                     "operator_id": self.op1.id,
-                    "duration_min": 0,  # non valido: usa la durata di listino (60)
+                    "duration_min": 0,  # non valido: resta la durata della visita (60)
                 }
             ]
         }
@@ -1099,11 +1132,18 @@ class DepositHoldTests(AgendaTestBase):
     """Caparra con scadenza: sollecito, rilascio automatico con traccia, ripristino."""
 
     def setUp(self):
-        SalonSettings.objects.create(salon=self.salon, deposit_hold_minutes=20, deposit_reminder_minutes=10)
+        # hold 30 e sollecito 10: con 20/10 «dieci minuti prima della scadenza» e
+        # «dieci minuti dopo la prenotazione» cadevano sullo stesso istante, e il
+        # test non distingueva più le due formule.
+        SalonSettings.objects.create(salon=self.salon, deposit_hold_minutes=30, deposit_reminder_minutes=10)
         DepositRule.objects.create(
             salon=self.salon, name="Sempre", conditions={}, amount_type="fixed", amount=Decimal("10.00")
         )
         self.salon = Salon.objects.get(pk=self.salon.pk)
+        # La scadenza esiste solo dove si può pagare online: qui si finge di sì.
+        enabled = patch("apps.sales.stripe_service.payments_enabled", return_value=True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
 
     def _book(self):
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
@@ -1118,7 +1158,80 @@ class DepositHoldTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
         self.assertIsNotNone(appointment.deposit_due_at)
         minutes = (appointment.deposit_due_at - timezone.now()).total_seconds() / 60
-        self.assertTrue(19 < minutes <= 20)
+        self.assertTrue(29 < minutes <= 30)
+
+    def test_without_online_payments_no_deadline_is_set(self):
+        # Senza Stripe nessun link parte: fissare la scadenza significava
+        # annullare da sola ogni prenotazione con caparra.
+        with patch("apps.sales.stripe_service.payments_enabled", return_value=False):
+            appointment = self._book()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertIsNone(appointment.deposit_due_at)
+        from .services import process_deposit_holds
+
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=3))
+        self.assertEqual(result["released"], 0)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+    def test_the_deadline_never_goes_past_the_start_of_the_visit(self):
+        # Prenotazione presa dieci minuti prima della visita con un'ora di hold:
+        # la scadenza cadeva a visita iniziata e il posto si liberava con la
+        # cliente già sotto le mani dell'operatrice.
+        SalonSettings.objects.filter(salon=self.salon).update(deposit_hold_minutes=60)
+        self.salon = Salon.objects.get(pk=self.salon.pk)
+        start = timezone.now() + dt.timedelta(minutes=10)
+        appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.op1, start=start,
+            deposit_status=Appointment.DepositStatus.REQUIRED, deposit_amount=Decimal("10.00"),
+        )
+        from .services import process_deposit_holds, schedule_deposit_hold
+
+        schedule_deposit_hold(appointment)
+        self.assertEqual(appointment.deposit_due_at, start)
+        # e una volta cominciata, la visita non si annulla più da sola
+        result = process_deposit_holds(self.salon, now=start + dt.timedelta(minutes=5))
+        self.assertEqual(result["released"], 0)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+    def test_a_deposit_cashed_at_the_counter_keeps_the_slot(self):
+        from apps.accounts.models import Membership, Role, User
+
+        appointment = self._book()
+        self.assertIsNotNone(appointment.deposit_due_at)
+        user = User.objects.create_user(email="cassa@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        res = self.client.post(
+            f"/api/agenda/appointments/{appointment.id}/deposit-cashed",
+            data=json.dumps({"method": "cash"}),
+            content_type="application/json",
+            **auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["deposit_status"], Appointment.DepositStatus.PAID)
+        appointment.refresh_from_db()
+        self.assertIsNone(appointment.deposit_due_at)
+        # e il termine non la tocca più
+        from .services import process_deposit_holds
+
+        self.assertEqual(
+            process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=2))["released"],
+            0,
+        )
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.cashed").exists()
+        )
+        # una seconda registrazione non raddoppia l'incasso
+        res = self.client.post(
+            f"/api/agenda/appointments/{appointment.id}/deposit-cashed",
+            data=json.dumps({"method": "cash"}),
+            content_type="application/json",
+            **auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
 
     def test_reminder_then_release_with_trace_and_restore(self):
         from .services import process_deposit_holds, released_appointments, restore_released
@@ -1126,13 +1239,16 @@ class DepositHoldTests(AgendaTestBase):
         appointment = self._book()
         now = timezone.now()
         self.assertEqual(process_deposit_holds(self.salon, now=now), {"reminded": 0, "released": 0})
-        # dopo 10 minuti: sollecito (una volta sola)
+        # Il sollecito parte `deposit_reminder_minutes` DOPO la prenotazione
+        # (10'), non 10' prima della scadenza (che è a 30'): con hold 20 le due
+        # letture coincidevano e il test non distingueva le due formule.
+        self.assertEqual(process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=5))["reminded"], 0)
         result = process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=11))
         self.assertEqual(result, {"reminded": 1, "released": 0})
         self.assertEqual(process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=12))["reminded"], 0)
         self.assertTrue(OutboxEvent.objects.filter(event_type="deposit.reminder").exists())
-        # dopo 20 minuti: slot liberato, traccia per richiamare
-        result = process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=21))
+        # dopo 30 minuti: slot liberato, traccia per richiamare
+        result = process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=31))
         self.assertEqual(result["released"], 1)
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.CANCELLED)
@@ -1174,7 +1290,7 @@ class DepositHoldTests(AgendaTestBase):
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         appointment = self._book()
-        process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=30))
+        process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
         res = self.client.get("/api/agenda/released", **auth)
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual([a["id"] for a in res.json()], [appointment.id])
@@ -1431,6 +1547,29 @@ class BugHuntAgendaTests(AgendaTestBase):
             gift_service=self.svc30, buyer_client=self.client_obj,
             payment_status=GiftCard.PaymentStatus.PAID,
         )
+        self.assertEqual(
+            list(gift_index(self.salon, [self.client_obj.id])), [self.client_obj.id]
+        )
+
+    def test_an_expired_gift_card_is_not_offered_as_a_bookable_present(self):
+        """Lo stato «scaduta» lo scrive solo chi prova a riscattare: in agenda
+        la carta compariva ancora fra i regali, e la cassa poi la rifiutava."""
+        from apps.marketing.models import GiftCard
+
+        from .api import gift_index
+
+        card = GiftCard.objects.create(
+            salon=self.salon, code="GC-SCADUTA-1",
+            initial_value=Decimal("30.00"), balance=Decimal("30.00"),
+            gift_service=self.svc30, recipient_client=self.client_obj,
+            payment_status=GiftCard.PaymentStatus.PAID,
+            expires_at=timezone.now() - dt.timedelta(days=1),
+        )
+        self.assertEqual(gift_index(self.salon, [self.client_obj.id]), {})
+
+        # spostata in avanti la scadenza, torna spendibile
+        card.expires_at = timezone.now() + dt.timedelta(days=1)
+        card.save(update_fields=["expires_at"])
         self.assertEqual(
             list(gift_index(self.salon, [self.client_obj.id])), [self.client_obj.id]
         )
@@ -1693,3 +1832,775 @@ class AvailabilityMatchesBookingTests(AgendaTestBase):
         self.assertEqual(booked.status_code, 200, booked.content)
         self.svc30.soak_min = 0
         self.svc30.save(update_fields=["soak_min"])
+
+
+class StaleCopyEditTests(AgendaTestBase):
+    """PUT appuntamento: niente più decisioni (e salvataggi) su una copia vecchia."""
+
+    def _appointment(self, **extra):
+        return Appointment.objects.create(
+            salon=self.salon,
+            client=self.client_obj,
+            operator=self.op1,
+            start=_aware(self.day, 10),
+            **extra,
+        )
+
+    def test_editing_a_note_cannot_resurrect_an_appointment_cancelled_meanwhile(self):
+        from .services import edit_appointment
+
+        appointment = self._appointment()
+        stale = Appointment.objects.get(pk=appointment.pk)  # copia entrata con la richiesta
+        cancel_appointment(appointment, reason="chiuso per lutto")
+
+        with self.assertRaises(HttpError) as caught:
+            edit_appointment(stale, note="richiamare")
+        self.assertEqual(caught.exception.status_code, 400)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CANCELLED)
+        self.assertEqual(appointment.cancel_reason, "chiuso per lutto")
+
+    def test_editing_a_note_does_not_undo_a_deposit_paid_meanwhile(self):
+        from .services import edit_appointment
+
+        appointment = self._appointment(
+            deposit_status=Appointment.DepositStatus.REQUIRED,
+            deposit_amount=Decimal("20.00"),
+            deposit_due_at=timezone.now() + dt.timedelta(minutes=30),
+        )
+        stale = Appointment.objects.get(pk=appointment.pk)
+        # Il webhook Stripe registra il pagamento mentre la nota è in volo.
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.PAID,
+            deposit_payment_intent_id="pi_123",
+            deposit_due_at=None,
+        )
+        edit_appointment(stale, note="allergica alla formaldeide")
+
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.note, "allergica alla formaldeide")
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.PAID)
+        self.assertEqual(appointment.deposit_payment_intent_id, "pi_123")
+        self.assertIsNone(appointment.deposit_due_at)
+
+    def test_editing_the_services_keeps_the_price_agreed_with_the_client(self):
+        """Il listino può cambiare: la visita vale quello che valeva quando è stata presa."""
+        from .services import create_appointment, edit_appointment
+
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+            item = appointment.items.get()
+            self.assertEqual(item.price, Decimal("50.00"))
+            # il titolare ritocca il listino e alza anche la posa
+            self.svc60.price = Decimal("70.00")
+            self.svc60.soak_min = 20
+            self.svc60.save(update_fields=["price", "soak_min"])
+            edit_appointment(
+                appointment,
+                items=[{
+                    "id": item.id,
+                    "service_id": self.svc60.id,
+                    "operator_id": self.op1.id,
+                    "duration_min": 75,  # si allunga solo la durata
+                }],
+            )
+        item = appointment.items.get()
+        self.assertEqual(item.duration_min, 75)
+        self.assertEqual(item.price, Decimal("50.00"))  # prezzo concordato
+        self.assertEqual(item.soak_min, 0)              # posa dello snapshot
+        self.assertEqual(appointment.total_price, Decimal("50.00"))
+        self.svc60.price = Decimal("50.00")
+        self.svc60.soak_min = 0
+        self.svc60.save(update_fields=["price", "soak_min"])
+
+    def test_a_service_added_now_takes_todays_price(self):
+        from .services import create_appointment, edit_appointment
+
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+            item = appointment.items.get()
+            edit_appointment(
+                appointment,
+                items=[
+                    {"id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                ],
+            )
+        added = appointment.items.order_by("order").last()
+        self.assertEqual(added.price, self.svc30.price)
+        # la modifica dei servizi va anche in coda per il promemoria alla cliente
+        self.assertTrue(OutboxEvent.objects.filter(event_type="appointment.updated").exists())
+
+
+class DepositFitsTheVisitTests(AgendaTestBase):
+    """La caparra non può superare quello che resta da pagare: il conto va chiuso."""
+
+    def _paid_visit(self, deposit):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="dashboard",
+            )
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.PAID, deposit_amount=deposit
+        )
+        appointment.refresh_from_db()
+        return appointment
+
+    def test_detaching_a_service_brings_the_deposit_down_to_the_new_total(self):
+        from .services import split_appointment
+
+        appointment = self._paid_visit(Decimal("60.00"))  # totale 80, caparra 60
+        first = appointment.items.order_by("order").first()  # il servizio da 50
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            original, created = split_appointment(
+                appointment, first.id, _aware(self.day, 15)
+            )
+        original.refresh_from_db()
+        self.assertEqual(original.total_price, Decimal("30.00"))
+        self.assertEqual(original.deposit_amount, Decimal("30.00"))
+        # resta pagata: i 30 ancora in cassa si detraggono al checkout
+        self.assertEqual(original.deposit_credit, Decimal("30.00"))
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.refund_due")
+        self.assertEqual(log.payload["amount"], "30.00")
+        self.assertEqual(created.deposit_amount, Decimal("0.00"))
+
+    def test_removing_a_service_brings_the_deposit_down_to_the_new_total(self):
+        from .services import edit_appointment
+
+        appointment = self._paid_visit(Decimal("60.00"))
+        first = appointment.items.order_by("order").first()
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            edit_appointment(
+                appointment,
+                items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            )
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.total_price, Decimal("50.00"))
+        self.assertEqual(appointment.deposit_amount, Decimal("50.00"))
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_due").exists()
+        )
+
+    def test_a_deposit_that_still_fits_is_left_alone(self):
+        from .services import edit_appointment
+
+        appointment = self._paid_visit(Decimal("20.00"))
+        first = appointment.items.order_by("order").first()
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            edit_appointment(
+                appointment,
+                items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            )
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_amount, Decimal("20.00"))
+        self.assertFalse(
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_due").exists()
+        )
+
+
+class RefundConcurrencyTests(AgendaTestBase):
+    """I rimborsi parziali si sommano, non si sovrascrivono."""
+
+    def test_two_partial_refunds_add_up(self):
+        from .services import record_deposit_refund
+
+        appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.op1,
+            start=_aware(self.day, 10),
+            deposit_status=Appointment.DepositStatus.PAID,
+            deposit_amount=Decimal("30.00"),
+        )
+        first = Appointment.objects.get(pk=appointment.pk)
+        second = Appointment.objects.get(pk=appointment.pk)  # due worker, due copie
+        record_deposit_refund(first, refund_id="re_1", cents=1500, status="succeeded")
+        record_deposit_refund(second, refund_id="re_2", cents=1500, status="succeeded")
+
+        appointment.refresh_from_db()
+        self.assertEqual(set(appointment.deposit_refunds), {"re_1", "re_2"})
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
+        self.assertEqual(appointment.deposit_credit, Decimal("0.00"))
+
+
+class RestoreReleasedTests(AgendaTestBase):
+    """Ripristino di uno slot liberato: una volta sola, e con un link pagabile."""
+
+    def _released(self):
+        appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.op1,
+            start=_aware(self.day, 10),
+            status=Appointment.Status.CANCELLED,
+            auto_released=True,
+            deposit_status=Appointment.DepositStatus.REQUIRED,
+            deposit_amount=Decimal("10.00"),
+            deposit_payment_link="https://pay.example/scaduto",
+            deposit_checkout_session_id="cs_old",
+        )
+        AppointmentService.objects.create(
+            appointment=appointment, service=self.svc60, operator=self.op1,
+            duration_min=60, soak_min=0, price=self.svc60.price, order=0,
+        )
+        return appointment
+
+    def test_the_second_restore_click_is_refused(self):
+        from .services import restore_released
+
+        appointment = self._released()
+        stale = Appointment.objects.get(pk=appointment.pk)  # la seconda operatrice
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            restore_released(appointment)
+            with self.assertRaises(HttpError) as caught:
+                restore_released(stale)
+        self.assertEqual(caught.exception.status_code, 400)
+        # una sola conferma alla cliente
+        self.assertEqual(OutboxEvent.objects.filter(event_type="appointment.created").count(), 1)
+
+    def test_restoring_drops_the_expired_payment_link(self):
+        from .services import restore_released
+
+        appointment = self._released()
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            restore_released(appointment)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_payment_link, "")
+        # l'id della sessione resta: serve a chiudere quella vecchia su Stripe
+        self.assertEqual(appointment.deposit_checkout_session_id, "cs_old")
+
+    def test_restoring_does_not_overwrite_a_refund_arrived_meanwhile(self):
+        from .services import restore_released
+
+        appointment = self._released()
+        stale = Appointment.objects.get(pk=appointment.pk)
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.REFUND_DUE,
+            deposit_payment_intent_id="pi_abc",
+        )
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            restore_released(stale)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUND_DUE)
+        self.assertEqual(appointment.deposit_payment_intent_id, "pi_abc")
+
+
+class ClosingTimeOnEveryPathTests(AgendaTestBase):
+    """«Non si finisce dopo la chiusura» non vale solo in creazione."""
+
+    def setUp(self):
+        self.svc30.soak_min = 60
+        self.svc30.save(update_fields=["soak_min"])
+        self.addCleanup(self._reset_soak)
+        SalonSettings.objects.update_or_create(
+            salon=self.salon,
+            defaults={"opening_hours_week": {
+                str((self.day + dt.timedelta(days=offset)).weekday()): [["09:00", "19:00"]]
+                for offset in range(2)
+            }},
+        )
+        self.salon.refresh_from_db()
+
+    def _reset_soak(self):
+        self.svc30.soak_min = 0
+        self.svc30.save(update_fields=["soak_min"])
+
+    def _appointment(self, hour):
+        with self._windows({self.op1.id: [(0, 1440)]}):
+            return create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+                _aware(self.day, hour), via="dashboard", force=True,
+            )
+
+    def test_a_move_cannot_push_the_soak_past_closing_time(self):
+        appointment = self._appointment(10)
+        with self._windows({self.op1.id: [(0, 1440)]}):
+            with self.assertRaises(HttpError) as caught:
+                move_appointment(appointment, _aware(self.day, 18, 30))
+        self.assertEqual(caught.exception.status_code, 409)
+        appointment.refresh_from_db()
+        self.assertEqual(timezone.localtime(appointment.start).hour, 10)
+
+    def test_stretching_a_service_cannot_push_it_past_closing_time(self):
+        from .services import edit_appointment
+
+        appointment = self._appointment(17)
+        item = appointment.items.get()
+        with self._windows({self.op1.id: [(0, 1440)]}):
+            with self.assertRaises(HttpError) as caught:
+                edit_appointment(
+                    appointment,
+                    items=[{
+                        "id": item.id,
+                        "service_id": self.svc30.id,
+                        "operator_id": self.op1.id,
+                        "duration_min": 90,  # 17:00 + 90' + 60' di posa = 19:30
+                    }],
+                )
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(appointment.items.get().duration_min, 30)
+
+
+class MidnightPauseTests(AgendaTestBase):
+    """Una pausa lunga a cavallo di mezzanotte occupa anche il giorno dopo."""
+
+    def test_a_pause_running_past_midnight_blocks_the_next_morning(self):
+        Pause.objects.create(
+            salon=self.salon,
+            operator=self.op1,
+            start=_aware(self.day, 23),
+            duration_min=10 * 60,  # 23:00 -> 09:00 del giorno dopo
+        )
+        next_day = self.day + dt.timedelta(days=1)
+        with self._windows({self.op1.id: [(8 * 60, 18 * 60)]}):
+            slots = get_free_slots(
+                self.salon, next_day,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+            )
+        starts = {timezone.localtime(dt.datetime.fromisoformat(s["start"])).hour for s in slots}
+        self.assertNotIn(8, starts)   # coperte dalla pausa di ieri sera
+        self.assertIn(9, starts)      # appena finita, si riparte
+
+
+class DeactivatedOperatorTests(AgendaTestBase):
+    """Chi lascia il salone non può congelare le visite delle sue clienti."""
+
+    def test_the_client_can_still_find_a_slot_after_her_operator_left(self):
+        from common.auth import create_client_tokens
+
+        self.op2.services.add(self.svc60)  # una collega sa fare lo stesso servizio
+        with self._windows({self.op1.id: [(9 * 60, 18 * 60)], self.op2.id: [(9 * 60, 18 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="app",
+            )
+            self.op1.active = False
+            self.op1.save(update_fields=["active"])
+            auth = {
+                "HTTP_AUTHORIZATION":
+                f"Bearer {create_client_tokens(self.client_obj)['access']}"
+            }
+            res = self.client.get(
+                "/api/agenda/client/availability",
+                {
+                    "date": self.day.isoformat(),
+                    "items": json.dumps([{"service_id": self.svc60.id}]),
+                    "exclude_appointment_id": appointment.id,
+                },
+                **auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        slots = res.json()
+        self.assertTrue(slots, "senza slot la cliente non può più spostare la visita")
+        self.assertTrue(
+            all(a["operator_id"] == self.op2.id for s in slots for a in s["assignment"])
+        )
+        self.op1.active = True
+        self.op1.save(update_fields=["active"])
+
+
+class DaylightSavingTests(AgendaTestBase):
+    """L'ora che non esiste non si prenota."""
+
+    def test_the_hour_skipped_by_dst_is_never_offered(self):
+        # Ultima domenica di marzo 2027: alle 02:00 gli orologi saltano alle 03:00.
+        day = dt.date(2027, 3, 28)
+        with self._windows({self.op1.id: [(0, 6 * 60)]}):
+            slots = get_free_slots(
+                self.salon, day,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+            )
+        offered = [dt.datetime.fromisoformat(s["start"]) for s in slots]
+        self.assertTrue(offered)
+        # L'etichetta che parte (02:30+01:00) non è l'ora che la cliente leggerà
+        # sul telefono (03:30): quell'orario semplicemente non esiste e non va
+        # proposto. Prima ne uscivano quattro, tutti con l'ora sbagliata.
+        self.assertNotIn(2, {s.hour for s in offered})
+        self.assertIn(1, {s.hour for s in offered})
+        for start in offered:
+            self.assertEqual(
+                start.hour,
+                timezone.localtime(start).hour,
+                f"{start.isoformat()} non corrisponde all'ora locale",
+            )
+
+
+class WaitlistTests(AgendaTestBase):
+    """Lista d'attesa: iscrizione, elenco, cancellazione e abbinamento allo slot libero."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from common.auth import create_client_tokens
+
+        self.client_auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.client_obj)['access']}"
+        }
+        user = User.objects.create_user(email="desk@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.staff_auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+
+    def _subscribe(self, body):
+        return self.client.post(
+            "/api/agenda/client/waitlist",
+            data=json.dumps(body),
+            content_type="application/json",
+            **self.client_auth,
+        )
+
+    def test_subscribe_list_and_leave(self):
+        res = self._subscribe({"service_id": self.svc60.id, "preference": "morning"})
+        self.assertEqual(res.status_code, 200, res.content)
+        entry_id = res.json()["id"]
+        self.assertEqual(res.json()["status"], WaitlistEntry.Status.ACTIVE)
+
+        listed = self.client.get("/api/agenda/waitlist", **self.staff_auth)
+        self.assertEqual([e["id"] for e in listed.json()], [entry_id])
+        self.assertEqual(listed.json()[0]["client_name"], self.client_obj.full_name)
+
+        marked = self.client.post(
+            f"/api/agenda/waitlist/{entry_id}/contacted", **self.staff_auth
+        )
+        self.assertEqual(marked.json()["status"], WaitlistEntry.Status.CONTACTED)
+        self.assertEqual(self.client.get("/api/agenda/waitlist", **self.staff_auth).json(), [])
+
+        gone = self.client.delete(
+            f"/api/agenda/client/waitlist/{entry_id}", **self.client_auth
+        )
+        self.assertEqual(gone.status_code, 200, gone.content)
+        self.assertFalse(WaitlistEntry.objects.filter(id=entry_id).exists())
+        # la cancellazione lascia traccia: l'operatrice sa perché è sparita
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="waitlist.deleted").exists()
+        )
+
+    def test_bad_preference_and_bad_days_are_refused(self):
+        self.assertEqual(
+            self._subscribe({"service_id": self.svc60.id, "preference": "quandocapita"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            self._subscribe(
+                {"service_id": self.svc60.id, "preference": "exact", "exact_days": [9]}
+            ).status_code,
+            400,
+        )
+
+    def test_a_freed_slot_names_the_people_waiting_for_that_service(self):
+        mine = WaitlistEntry.objects.create(
+            salon=self.salon, client=self.client_obj, service=self.svc60, operator=self.op1
+        )
+        any_operator = WaitlistEntry.objects.create(
+            salon=self.salon, client=self.client_obj, service=self.svc60
+        )
+        other_service = WaitlistEntry.objects.create(
+            salon=self.salon, client=self.client_obj, service=self.svc30
+        )
+        contacted = WaitlistEntry.objects.create(
+            salon=self.salon, client=self.client_obj, service=self.svc60,
+            status=WaitlistEntry.Status.CONTACTED,
+        )
+        with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+            cancel_appointment(appointment)
+        freed = OutboxEvent.objects.filter(event_type="slot.freed").latest("id")
+        self.assertEqual(
+            set(freed.payload["matching_waitlist"]), {mine.id, any_operator.id}
+        )
+        self.assertNotIn(other_service.id, freed.payload["matching_waitlist"])
+        self.assertNotIn(contacted.id, freed.payload["matching_waitlist"])
+
+
+class RealShiftWindowsTests(AgendaTestBase):
+    """Senza mock: turni e assenze veri arrivano fino all'agenda."""
+
+    def setUp(self):
+        from apps.staff.models import WeeklyShift
+
+        WeeklyShift.objects.create(
+            operator=self.op1, week_index=0, weekday=self.day.weekday(),
+            start_min=9 * 60, end_min=13 * 60,
+        )
+
+    def _starts(self):
+        slots = get_free_slots(
+            self.salon, self.day, [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
+        )
+        return [timezone.localtime(dt.datetime.fromisoformat(s["start"])).hour for s in slots]
+
+    def test_the_shift_bounds_the_day(self):
+        hours = self._starts()
+        self.assertEqual(min(hours), 9)
+        self.assertEqual(max(hours), 12)  # 12:00-13:00 è l'ultimo che ci sta
+
+    def test_an_absence_empties_the_day(self):
+        from apps.staff.models import Absence
+
+        Absence.objects.create(
+            operator=self.op1, date_from=self.day, date_to=self.day, type="vacation"
+        )
+        self.assertEqual(self._starts(), [])
+
+    def test_booking_on_a_day_off_is_refused(self):
+        from apps.staff.models import Absence
+
+        Absence.objects.create(
+            operator=self.op1, date_from=self.day, date_to=self.day, type="vacation"
+        )
+        with self.assertRaises(HttpError) as caught:
+            create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+
+
+class ReadEndpointsTests(AgendaTestBase):
+    """Permessi e limiti delle rotte di lettura dell'agenda."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.user = User.objects.create_user(email="mag@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Magazzino", scopes=["inventory"])
+        Membership.objects.create(user=self.user, salon=self.salon, role=role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
+        }
+
+    def test_reading_the_agenda_needs_the_agenda_permission(self):
+        # Tutti i ruoli predefiniti (Manager, Front desk, Operatrice) hanno
+        # «agenda»: qui il ruolo è di solo magazzino e non deve vedere né
+        # l'agenda né i margini di una visita.
+        for path, params in (
+            ("/api/agenda/day", {"date": self.day.isoformat()}),
+            ("/api/agenda/week", {"start": self.day.isoformat()}),
+            ("/api/agenda/range", {"start": self.day.isoformat(), "end": self.day.isoformat()}),
+            ("/api/agenda/pauses", {}),
+        ):
+            res = self.client.get(path, params, **self.auth)
+            self.assertEqual(res.status_code, 403, f"{path}: {res.content}")
+
+    def test_the_week_view_carries_the_note_for_the_hover_card(self):
+        from apps.accounts.models import Membership
+
+        Membership.objects.filter(user=self.user).update(is_owner=True)
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard", note="allergia alla tinta",
+            )
+        week = self.client.get(
+            "/api/agenda/week", {"start": self.day.isoformat()}, **self.auth
+        ).json()
+        booked = [a for row in week for a in row["appointments"]]
+        self.assertEqual([a["note"] for a in booked], ["allergia alla tinta"])
+
+    def test_the_month_view_stops_at_six_weeks(self):
+        from apps.accounts.models import Membership
+
+        Membership.objects.filter(user=self.user).update(is_owner=True)
+        first = self.day
+        ok = self.client.get(
+            "/api/agenda/range",
+            {"start": first.isoformat(), "end": (first + dt.timedelta(days=41)).isoformat()},
+            **self.auth,
+        )
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(len(ok.json()), 42)
+        too_long = self.client.get(
+            "/api/agenda/range",
+            {"start": first.isoformat(), "end": (first + dt.timedelta(days=42)).isoformat()},
+            **self.auth,
+        )
+        self.assertEqual(too_long.status_code, 400, too_long.content)
+
+    def test_pauses_without_a_date_are_only_todays(self):
+        from apps.accounts.models import Membership
+
+        Membership.objects.filter(user=self.user).update(is_owner=True)
+        today = Pause.objects.create(
+            salon=self.salon, operator=self.op1,
+            start=timezone.now().replace(hour=12, minute=0, second=0, microsecond=0),
+            duration_min=30,
+        )
+        Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 12), duration_min=30
+        )
+        res = self.client.get("/api/agenda/pauses", **self.auth)
+        self.assertEqual([p["id"] for p in res.json()], [today.id])
+
+    def test_the_margin_is_revenue_minus_costs(self):
+        from apps.accounts.models import Membership
+
+        Membership.objects.filter(user=self.user).update(is_owner=True)
+        self.svc60.supplier_cost = Decimal("4.00")
+        self.svc60.product_cost = Decimal("6.00")
+        self.svc60.save(update_fields=["supplier_cost", "product_cost"])
+        self.op1.hourly_cost = Decimal("20.00")
+        self.op1.save(update_fields=["hourly_cost"])
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+        body = self.client.get(
+            f"/api/agenda/appointments/{appointment.id}/margin", **self.auth
+        ).json()
+        # 50 di ricavo, 4 + 6 di costi, un'ora di manodopera a 20
+        self.assertEqual(body["revenue"], "50.00")
+        self.assertEqual(body["labor_cost"], "20.00")
+        self.assertEqual(body["margin"], "20.00")
+        self.assertEqual(body["margin_pct"], "40.0")
+        self.svc60.supplier_cost = Decimal("0.00")
+        self.svc60.product_cost = Decimal("0.00")
+        self.svc60.save(update_fields=["supplier_cost", "product_cost"])
+
+
+class RequestValidationTests(AgendaTestBase):
+    """Richieste malformate: risposta di validazione, non 500."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="val@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+
+    def _post(self, path, body):
+        return self.client.post(
+            path, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_a_start_without_timezone_is_refused(self):
+        res = self._post(
+            "/api/agenda/appointments",
+            {
+                "client_id": self.client_obj.id,
+                "items": [{"service_id": self.svc60.id}],
+                "start": f"{self.day.isoformat()}T10:00:00",  # senza offset
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(Appointment.objects.exists())
+
+    def test_a_reason_longer_than_the_column_is_refused(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+        res = self._post(
+            f"/api/agenda/appointments/{appointment.id}/cancel", {"reason": "x" * 300}
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+    def test_too_many_services_in_one_request_are_refused(self):
+        res = self._post(
+            "/api/agenda/appointments",
+            {
+                "client_id": self.client_obj.id,
+                "items": [{"service_id": self.svc60.id}] * 50,
+                "start": _aware(self.day, 10).isoformat(),
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(Appointment.objects.exists())
+
+    def test_a_pause_can_be_created_moved_and_removed(self):
+        created = self._post(
+            "/api/agenda/pauses",
+            {
+                "operator_id": self.op1.id,
+                "start": _aware(self.day, 12).isoformat(),
+                "duration_min": 30,
+                "note": "pranzo",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        pause_id = created.json()["id"]
+        moved = self.client.put(
+            f"/api/agenda/pauses/{pause_id}",
+            data=json.dumps({
+                "operator_id": self.op1.id,
+                "start": _aware(self.day, 13).isoformat(),
+                "duration_min": 45,
+                "note": "pranzo lungo",
+            }),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(moved.status_code, 200, moved.content)
+        self.assertEqual(moved.json()["duration_min"], 45)
+        self.assertEqual(moved.json()["note"], "pranzo lungo")
+        pause = Pause.objects.get(pk=pause_id)
+        self.assertEqual(timezone.localtime(pause.start).hour, 13)
+        gone = self.client.delete(f"/api/agenda/pauses/{pause_id}", **self.auth)
+        self.assertEqual(gone.status_code, 200, gone.content)
+        self.assertFalse(Pause.objects.exists())
+
+    def test_a_pause_note_longer_than_the_column_is_refused(self):
+        res = self._post(
+            "/api/agenda/pauses",
+            {
+                "operator_id": self.op1.id,
+                "start": _aware(self.day, 12).isoformat(),
+                "duration_min": 30,
+                "note": "n" * 300,
+            },
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(Pause.objects.exists())
+
+
+class PublicAvailabilityContentTests(AgendaTestBase):
+    """La disponibilità pubblica restituisce orari veri, non una lista vuota."""
+
+    def test_public_availability_returns_the_real_free_times(self):
+        from apps.staff.models import WeeklyShift
+
+        WeeklyShift.objects.create(
+            operator=self.op1, week_index=0, weekday=self.day.weekday(),
+            start_min=9 * 60, end_min=12 * 60,
+        )
+        items = json.dumps([{"service_id": self.svc60.id}])
+        res = self.client.get(
+            f"/api/agenda/public/availability?salon={self.salon.slug}"
+            f"&date={self.day.isoformat()}&items={items}"
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        slots = res.json()
+        starts = [timezone.localtime(dt.datetime.fromisoformat(s["start"])) for s in slots]
+        self.assertEqual(starts[0].hour, 9)
+        self.assertEqual(starts[-1].hour, 11)  # 11:00-12:00, l'ultimo che ci sta
+        self.assertTrue(
+            all(a["operator_id"] == self.op1.id for s in slots for a in s["assignment"])
+        )
