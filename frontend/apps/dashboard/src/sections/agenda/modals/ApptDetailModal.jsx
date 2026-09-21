@@ -334,7 +334,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                       che il salone non ha più. */}
                   {Number(appt.deposit_refunded_amount || 0) > 0 && (
                     <span> · {t('rimborsati', 'refunded')} <b className="tabnum">{fmtEur(Number(appt.deposit_refunded_amount), lang)}</b>
-                      {appt.deposit_status === 'paid' && <>, {t('in cassa', 'in the till')} <b className="tabnum">{fmtEur(Number(appt.deposit_credit), lang)}</b></>}
+                      {/* «In cassa» ha senso finché quella quota è ancora da
+                          scontare: a visita chiusa è già stata detratta dal
+                          conto, e ripeterla faceva sembrare che il salone la
+                          tenesse ancora da parte. */}
+                      {appt.deposit_status === 'paid' && appt.status !== 'closed' && (
+                        <>, {t('in cassa', 'in the till')} <b className="tabnum">{fmtEur(Number(appt.deposit_credit), lang)}</b></>
+                      )}
                     </span>
                   )}
                   {appt.deposit_status === 'required' && appt.deposit_due_at && !terminal && (

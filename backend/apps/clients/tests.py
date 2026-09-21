@@ -163,6 +163,23 @@ class ImportUpsertTests(ClientsTestCase):
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "Giulia")
 
+    def test_a_phone_added_by_the_import_matches_the_next_rows(self):
+        """Aggiornando per email una scheda con un telefono nuovo, la chiave
+        non entrava nella cache di deduplicazione: una riga successiva con lo
+        stesso numero provava a inserirne un'altra e finiva fra le righe
+        rifiutate dal database (caccia ai bug del 21/09/2026)."""
+        existing = self.make_client(phone="", email="giulia@example.com", first_name="Giulia")
+        result = import_rows(self.salon, [
+            {"first_name": "Giulia", "email": "giulia@example.com", "phone": "+393337776666"},
+            {"first_name": "Giulia", "last_name": "Rossi", "email": "", "phone": "+393337776666"},
+        ])
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 2, 0))
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+        existing.refresh_from_db()
+        self.assertEqual(existing.phone, "+393337776666")
+        self.assertEqual(existing.last_name, "Rossi")
+
     def test_import_row_without_phone_or_match_is_skipped(self):
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
         self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))

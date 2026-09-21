@@ -202,6 +202,11 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                         client.email = email
                     if phone and phone_key(phone) not in by_phone:
                         client.phone = canonical_phone(phone)
+                        # La chiave nuova entra nella cache: senza questo, una
+                        # riga successiva con lo STESSO telefono non trovava la
+                        # scheda appena aggiornata, provava a inserirne un'altra
+                        # e finiva fra le righe rifiutate dal database.
+                        by_phone[phone_key(phone)] = client
                     if gender:
                         client.gender = gender
                     if birthday:

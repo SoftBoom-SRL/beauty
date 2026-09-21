@@ -1318,7 +1318,14 @@ class SplitCollisionTests(AgendaTestBase):
         self.assertEqual(appointment.items.count(), 2)          # rollback completo
         self.assertEqual(Appointment.objects.count(), 1)
 
-    def test_remaining_chain_is_revalidated_when_the_first_service_leaves(self):
+    def test_the_services_that_stay_keep_the_time_they_were_booked_for(self):
+        """Staccando il PRIMO servizio, la copertura delle 11:00 resta alle 11:00.
+
+        Prima la catena residua ripartiva da `start` e scivolava alle 10:00 da
+        sola: la cliente si presentava a un orario che in agenda non c'era più e,
+        se quel posto era occupato, il ritentativo forzato della dashboard la
+        metteva sopra un'altra cliente.
+        """
         from apps.clients.models import Client
 
         from .services import split_appointment
@@ -1332,24 +1339,58 @@ class SplitCollisionTests(AgendaTestBase):
                 [{"service_id": self.svc60.id, "operator_id": self.op1.id}, {"service_id": self.svc30.id, "operator_id": self.op2.id}],
                 _aware(self.day, 10), via="dashboard",
             )
-            # op2 è occupata alle 10:00 da un'altra cliente
-            create_appointment(
+            # op2 è occupata alle 10:00 da un'altra cliente: se la catena
+            # residua scalasse indietro le finirebbe addosso
+            elsewhere = create_appointment(
                 self.salon, other, [{"service_id": self.svc30.id, "operator_id": self.op2.id}],
                 _aware(self.day, 10), via="dashboard",
             )
             first = appointment.items.order_by("order").first()
-            # staccando il primo servizio, svc30 scalerebbe a 10:00 sopra l'altra cliente
-            with self.assertRaises(HttpError) as caught:
-                split_appointment(appointment, first.id, _aware(self.day, 15))
-            self.assertEqual(caught.exception.status_code, 409)
-        appointment.refresh_from_db()
-        self.assertEqual(appointment.items.count(), 2)
-        self.assertEqual(timezone.localtime(appointment.start).hour, 10)
-        # forzando, lo staff se ne assume la responsabilità
-        with self._windows({self.op1.id: [(9 * 60, 18 * 60)], self.op2.id: [(9 * 60, 18 * 60)]}):
-            original, created = split_appointment(appointment, appointment.items.order_by("order").first().id, _aware(self.day, 15), force=True)
+            original, created = split_appointment(appointment, first.id, _aware(self.day, 15))
+        original.refresh_from_db()
+        # la visita ora comincia dal servizio rimasto, all'ora in cui era
+        self.assertEqual(timezone.localtime(original.start).hour, 11)
         self.assertEqual(original.items.count(), 1)
+        self.assertFalse(original.forced)
         self.assertEqual(timezone.localtime(created.start).hour, 15)
+        # l'altra cliente non è stata sfiorata
+        elsewhere.refresh_from_db()
+        self.assertEqual(timezone.localtime(elsewhere.start).hour, 10)
+
+    def test_a_service_detached_from_the_middle_cannot_push_the_rest_over_someone(self):
+        """Il servizio staccato da in mezzo compatta quelli dopo di lui: se
+        finiscono sopra un'altra cliente lo stacco si annulla, e nemmeno `force`
+        lo passa — nessuno ha chiesto di spostarli."""
+        from apps.clients.models import Client
+
+        from .services import split_appointment
+
+        other = Client.objects.create(salon=self.salon, first_name="Terza", last_name="Cliente", phone="+390000000008")
+        self.op2.services.add(self.svc30)
+        with self._windows({self.op1.id: [(9 * 60, 18 * 60)], self.op2.id: [(9 * 60, 18 * 60)]}):
+            # visita: 10:00 svc30 (op1) + 10:30 svc60 (op1) + 11:30 svc30 (op2)
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op2.id},
+                ],
+                _aware(self.day, 10), via="dashboard",
+            )
+            # op2 occupata alle 10:30: è lì che finirebbe il terzo servizio
+            create_appointment(
+                self.salon, other, [{"service_id": self.svc30.id, "operator_id": self.op2.id}],
+                _aware(self.day, 10, 30), via="dashboard",
+            )
+            middle = appointment.items.order_by("order")[1]
+            for forced in (False, True):
+                with self.assertRaises(HttpError) as caught:
+                    split_appointment(appointment, middle.id, _aware(self.day, 15), force=forced)
+                self.assertEqual(caught.exception.status_code, 409)
+                appointment.refresh_from_db()
+                self.assertEqual(appointment.items.count(), 3)      # rollback completo
+                self.assertEqual(timezone.localtime(appointment.start).hour, 10)
 
 
 class BugHuntAgendaTests(AgendaTestBase):
@@ -1693,3 +1734,173 @@ class AvailabilityMatchesBookingTests(AgendaTestBase):
         self.assertEqual(booked.status_code, 200, booked.content)
         self.svc30.soak_min = 0
         self.svc30.save(update_fields=["soak_min"])
+
+
+class BugHunt21SeptemberTests(AgendaTestBase):
+    """Difetti trovati nella caccia ai bug del 21/09/2026 (docs/BUG_HUNT_2026-09-21.md)."""
+
+    def _staff(self):
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="hunt21@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+
+    def _visit(self, items, hour=10, **fields):
+        with self._windows({self.op1.id: [(0, 24 * 60)], self.op2.id: [(0, 24 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj, items, _aware(self.day, hour),
+                via="dashboard", force=True,
+            )
+        if fields:
+            for name, value in fields.items():
+                setattr(appointment, name, value)
+            appointment.save(update_fields=list(fields) + ["updated_at"])
+        return appointment
+
+    # ---- B16 -------------------------------------------------------------
+
+    def test_an_appointment_of_a_deactivated_stylist_can_still_be_moved(self):
+        """La vista giorno mostra la colonna di chi ha lasciato il salone «così
+        si possono riassegnare»: mandando sempre `operator_id`, l'API lo cercava
+        fra le operatrici ATTIVE e rispondeva 404 a ogni spostamento."""
+        auth = self._staff()
+        appointment = self._visit([{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+        self.op1.active = False
+        self.op1.save(update_fields=["active"])
+
+        # la colonna c'è ancora, marcata inattiva
+        day = self.client.get(f"/api/agenda/day?date={self.day.isoformat()}", **auth)
+        self.assertEqual(day.status_code, 200, day.content)
+        row = next(r for r in day.json() if r["operator"]["id"] == self.op1.id)
+        self.assertTrue(row["operator"]["inactive"])
+
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            moved = self.client.post(
+                f"/api/agenda/appointments/{appointment.id}/move",
+                json.dumps({"start": _aware(self.day, 12).isoformat(), "operator_id": self.op1.id}),
+                content_type="application/json",
+                **auth,
+            )
+        self.assertEqual(moved.status_code, 200, moved.content)
+        appointment.refresh_from_db()
+        self.assertEqual(timezone.localtime(appointment.start).hour, 12)
+
+    def test_a_new_assignment_still_requires_an_active_stylist(self):
+        auth = self._staff()
+        appointment = self._visit([{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+        self.op2.services.add(self.svc30)
+        self.op2.active = False
+        self.op2.save(update_fields=["active"])
+        with self._windows({self.op1.id: [(0, 24 * 60)], self.op2.id: [(0, 24 * 60)]}):
+            response = self.client.post(
+                f"/api/agenda/appointments/{appointment.id}/move",
+                json.dumps({"start": _aware(self.day, 12).isoformat(), "operator_id": self.op2.id}),
+                content_type="application/json",
+                **auth,
+            )
+        self.assertEqual(response.status_code, 404, response.content)
+
+    # ---- B18 -------------------------------------------------------------
+
+    def test_a_move_cannot_push_the_soak_past_closing_time(self):
+        """La creazione lo vietava già (la cliente resta in salone durante la
+        posa); lo spostamento no, nemmeno dall'app cliente."""
+        SalonSettings.objects.update_or_create(
+            salon=self.salon,
+            defaults={"opening_hours_week": {str(d): [["09:00", "18:00"]] for d in range(7)}},
+        )
+        self.salon.refresh_from_db()
+        self.svc30.soak_min = 60
+        self.svc30.save(update_fields=["soak_min"])
+        try:
+            appointment = self._visit([{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+            with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
+                # 17:30 + 30' di lavoro + 60' di posa = 19:00, un'ora dopo la chiusura
+                with self.assertRaises(HttpError) as caught:
+                    move_appointment(appointment, _aware(self.day, 17, 30))
+                self.assertEqual(caught.exception.status_code, 409)
+                appointment.refresh_from_db()
+                self.assertEqual(timezone.localtime(appointment.start).hour, 10)
+                # lo staff può ancora forzare consapevolmente
+                moved = move_appointment(appointment, _aware(self.day, 17, 30), force=True)
+                self.assertEqual(timezone.localtime(moved.start).hour, 17)
+        finally:
+            self.svc30.soak_min = 0
+            self.svc30.save(update_fields=["soak_min"])
+
+    # ---- B21 -------------------------------------------------------------
+
+    def test_a_freed_slot_declares_the_whole_time_it_frees(self):
+        """`slot.freed` portava la sola fase attiva: un colore da 30' di lavoro e
+        60' di posa liberava «30 minuti» e alla lista d'attesa venivano proposti
+        servizi che in quel buco non entravano."""
+        self.svc30.soak_min = 60
+        self.svc30.save(update_fields=["soak_min"])
+        try:
+            appointment = self._visit([{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+            self.assertEqual(appointment.total_duration_min, 90)
+            OutboxEvent.objects.all().delete()
+            cancel_appointment(appointment)
+            freed = OutboxEvent.objects.get(salon=self.salon, event_type="slot.freed")
+            self.assertEqual(freed.payload["duration_min"], 90)
+        finally:
+            self.svc30.soak_min = 0
+            self.svc30.save(update_fields=["soak_min"])
+
+    # ---- B24 -------------------------------------------------------------
+
+    def test_a_manual_refund_writes_the_amount_it_gave_back(self):
+        from .services import mark_deposit_refunded
+
+        appointment = self._visit(
+            [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+            deposit_status=Appointment.DepositStatus.REFUND_DUE,
+            deposit_amount=Decimal("30.00"),
+        )
+        mark_deposit_refunded(appointment)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+        entry = next(iter(appointment.deposit_refunds.values()))
+        self.assertEqual(entry["status"], "succeeded")
+        self.assertEqual(entry["amount_cents"], 3000)
+        self.assertTrue(entry["manual"])
+
+    def test_a_manual_refund_after_a_partial_one_only_covers_the_rest(self):
+        from .services import mark_deposit_refunded, record_deposit_refund
+
+        appointment = self._visit(
+            [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+            deposit_status=Appointment.DepositStatus.PAID,
+            deposit_amount=Decimal("30.00"),
+        )
+        # 10 € già tornati da Stripe
+        record_deposit_refund(appointment, refund_id="re_1", cents=1000, status="succeeded")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
+        appointment.deposit_status = Appointment.DepositStatus.REFUND_DUE
+        appointment.save(update_fields=["deposit_status", "updated_at"])
+
+        mark_deposit_refunded(appointment)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+        self.assertEqual(appointment.deposit_refunds["re_1"]["amount_cents"], 1000)
+        manual = [r for k, r in appointment.deposit_refunds.items() if k.startswith("manual-")]
+        self.assertEqual([r["amount_cents"] for r in manual], [2000])
+
+    # ---- Pause a cavallo della mezzanotte --------------------------------
+
+    def test_a_break_that_runs_past_midnight_still_blocks_the_next_day(self):
+        from .services import _busy_map
+
+        Pause.objects.create(
+            salon=self.salon, operator=self.op1,
+            start=_aware(self.day, 23, 30), duration_min=60, note="Chiusura",
+        )
+        busy = _busy_map(self.salon, self.day + dt.timedelta(days=1))
+        self.assertTrue(
+            any(start < 30 and end > 0 for start, end, hard in busy.get(self.op1.id, []) if hard),
+            busy.get(self.op1.id),
+        )

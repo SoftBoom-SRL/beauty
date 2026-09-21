@@ -116,9 +116,16 @@ def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) ->
                 )
             offset = active_end + item.soak_min
 
-    for pause in Pause.objects.filter(salon=salon, start__date=day):
+    # Anche le pause del giorno prima, con lo stesso criterio degli
+    # appuntamenti: una pausa a cavallo della mezzanotte occupa l'operatrice
+    # anche in questo giorno.
+    for pause in Pause.objects.filter(salon=salon, start__date__in=(previous, day)):
         start = _minutes_local(pause.start)
-        busy[pause.operator_id].append((start, start + pause.duration_min, True))
+        if timezone.localtime(pause.start).date() != day:
+            start -= 1440
+        end = start + pause.duration_min
+        if end > 0:
+            busy[pause.operator_id].append((start, end, True))
 
     return busy
 
@@ -884,6 +891,19 @@ def move_appointment(
             ],
             exclude_appointment_id=appointment.id,
         )
+        # La permanenza della cliente, posa finale compresa, deve stare dentro
+        # l'apertura del centro: il controllo c'era solo in creazione, e
+        # spostando si potevano portare i 60' di posa di un colore mezz'ora
+        # dopo la serranda abbassata (anche dall'app cliente).
+        local_start = timezone.localtime(new_start)
+        _ensure_within_opening(
+            appointment.salon,
+            local_start.date(),
+            local_start.hour * 60
+            + local_start.minute
+            + sum(item.duration_min + item.soak_min for item in items),
+            force=False,
+        )
     else:
         appointment.forced = True
 
@@ -937,9 +957,15 @@ def split_appointment(
     """Stacca UN servizio da un appuntamento multi-servizio e lo sposta altrove
     (anche in un altro giorno), come appuntamento a sé della stessa cliente.
 
-    Il servizio staccato mantiene durata, posa e prezzo dello snapshot; gli altri
-    restano concatenati dall'orario originale. La caparra resta sull'appuntamento
-    di partenza. Con force=True si salta la verifica di disponibilità.
+    Il servizio staccato mantiene durata, posa e prezzo dello snapshot. Gli altri
+    NON si spostano: `start` della visita scala in avanti di quello che c'era
+    prima del servizio staccato, così il primo servizio rimasto resta all'ora in
+    cui era prenotato. Staccando un servizio in MEZZO alla visita, invece, quelli
+    dopo di lui si compattano (la cliente non aspetta un servizio che non c'è
+    più): solo quelli vengono rivalidati, e lì un conflitto non si può forzare —
+    nessuno ha chiesto di spostarli sopra un'altra cliente.
+    La caparra resta sull'appuntamento di partenza. Con force=True si salta la
+    verifica di disponibilità del servizio staccato.
     Ritorna (originale aggiornato, nuovo appuntamento).
     """
     _lock_and_reload(appointment)
@@ -953,6 +979,16 @@ def split_appointment(
     if operator is not None and not item.service.operators.filter(id=operator.id).exists():
         raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
 
+    # Orario assoluto di ogni servizio PRIMA dello stacco: serve per rimettere
+    # la visita residua dov'era e per sapere quali servizi si sono davvero
+    # mossi. Senza questo, staccando il primo servizio la catena ripartiva da
+    # `start` e la piega delle 11:00 diventava delle 10:00 da sola.
+    was_at: dict[int, int] = {}
+    cursor = 0
+    for existing in items:
+        was_at[existing.id] = cursor
+        cursor += existing.duration_min + existing.soak_min
+
     # Prima si stacca l'item e si ricompatta la visita, POI si valida: così il
     # controllo vede la situazione reale (i servizi rimasti da una parte, quello
     # spostato dall'altra) invece di escludere l'intera visita e lasciar passare
@@ -965,8 +1001,20 @@ def split_appointment(
         if rest.order != index:
             rest.order = index
             rest.save(update_fields=["order"])
+    old_appointment_start = appointment.start
     appointment.operator = remaining[0].operator
-    appointment.save()
+    # Il primo servizio rimasto torna all'ora in cui era: la visita inizia da lì.
+    appointment.start = old_appointment_start + dt.timedelta(minutes=was_at[remaining[0].id])
+    appointment.save(update_fields=["operator", "start", "updated_at"])
+
+    # Servizi che dopo lo stacco cadono a un'ora diversa da quella prenotata:
+    # solo quelli dopo un servizio staccato in mezzo alla visita.
+    moved = []
+    cursor = was_at[remaining[0].id]
+    for rest in remaining:
+        if cursor != was_at[rest.id]:
+            moved.append((rest, cursor))
+        cursor += rest.duration_min + rest.soak_min
 
     created = Appointment.objects.create(
         salon=appointment.salon,
@@ -998,14 +1046,24 @@ def split_appointment(
             appointment.salon, new_start, [(duration_min, soak_min, target)],
             exclude_appointment_id=created.id,
         )
-        # togliendo il primo servizio la catena residua scala indietro: va
-        # rivalidata, altrimenti si sovrappone a chi occupava quell'orario
-        _validate_segments(
-            appointment.salon,
-            appointment.start,
-            [(it.duration_min, it.soak_min, it.operator) for it in remaining],
-            exclude_appointment_id=appointment.id,
-        )
+    if moved:
+        # Servizio staccato da in mezzo: quelli dopo di lui si compattano. Non
+        # è uno spostamento chiesto dallo staff, quindi non lo copre `force`:
+        # se quell'ora è occupata lo stacco si annulla e lo si dice.
+        offset = moved[0][1]
+        try:
+            _validate_segments(
+                appointment.salon,
+                old_appointment_start + dt.timedelta(minutes=offset),
+                [(rest.duration_min, rest.soak_min, rest.operator) for rest, _ in moved],
+                exclude_appointment_id=appointment.id,
+            )
+        except HttpError:
+            raise HttpError(
+                409,
+                "Staccando questo servizio quelli dopo si sposterebbero sopra un altro "
+                "appuntamento: sposta prima l'altro, oppure stacca partendo dall'ultimo servizio",
+            )
 
     client_name = appointment.client.full_name
     log_activity(
@@ -1153,8 +1211,7 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
         record_deposit_refund(
             appointment,
             refund_id=refund.get("id") or "",
-            cents=int(refund.get("amount") or 0)
-            or int((Decimal(str(appointment.deposit_amount or 0)) * 100).quantize(Decimal("1"))),
+            cents=int(refund.get("amount") or 0) or _to_cents(appointment.deposit_amount),
             status=refund.get("status") or REFUND_DONE,
             actor=actor,
         )
@@ -1172,6 +1229,19 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
 # Stati Stripe di un rimborso: solo «succeeded» è denaro tornato alla cliente.
 REFUND_DONE = "succeeded"
 REFUND_IN_FLIGHT = ("pending", "requires_action")
+
+
+def _to_cents(amount) -> int:
+    return int((Decimal(str(amount or 0)) * 100).quantize(Decimal("1")))
+
+
+def _refunds_done_cents(refunds: dict) -> int:
+    """Centesimi dei soli rimborsi RIUSCITI fra quelli registrati."""
+    return sum(
+        int(row.get("amount_cents") or 0)
+        for row in (refunds or {}).values()
+        if (row.get("status") or "") == REFUND_DONE
+    )
 
 
 @transaction.atomic
@@ -1208,9 +1278,9 @@ def record_deposit_refund(
             if predicate(row.get("status") or "")
         )
 
-    done = max(_sum(lambda st: st == REFUND_DONE), int(floor_cents or 0))
+    done = max(_refunds_done_cents(refunds), int(floor_cents or 0))
     in_flight = _sum(lambda st: st in REFUND_IN_FLIGHT)
-    deposit_cents = int((Decimal(str(appointment.deposit_amount or 0)) * 100).quantize(Decimal("1")))
+    deposit_cents = _to_cents(appointment.deposit_amount)
 
     previous = appointment.deposit_status
     if deposit_cents > 0 and done >= deposit_cents:
@@ -1265,17 +1335,50 @@ def record_deposit_refund(
 
 @transaction.atomic
 def mark_deposit_refunded(appointment: Appointment, *, actor=None) -> Appointment:
-    """Conferma manuale dello staff: la caparra «da rimborsare» è stata restituita."""
+    """Conferma manuale dello staff: la caparra «da rimborsare» è stata restituita.
+
+    Scrive anche l'importo e una voce fra i rimborsi: `deposit_refunded_amount`
+    è «la somma dei rimborsi riusciti», e dopo una conferma manuale restava a
+    zero — il dettaglio diceva «rimborsata» senza importo e le riconciliazioni
+    che sommano quel campo saltavano i rimborsi fatti in salone.
+    """
     if appointment.deposit_status != Appointment.DepositStatus.REFUND_DUE:
         raise HttpError(400, "La caparra di questo appuntamento non è in attesa di rimborso")
+    deposit_cents = _to_cents(appointment.deposit_amount)
+    refunds = dict(appointment.deposit_refunds or {})
+    # Quello che resta da coprire: se una parte era già tornata da Stripe, la
+    # conferma manuale vale solo per la differenza.
+    missing = max(deposit_cents - _refunds_done_cents(refunds), 0)
+    if missing:
+        refunds[f"manual-{appointment.id}-{int(timezone.now().timestamp())}"] = {
+            "amount_cents": missing,
+            "status": REFUND_DONE,
+            "manual": True,
+        }
     appointment.deposit_status = Appointment.DepositStatus.REFUNDED
-    appointment.save(update_fields=["deposit_status", "updated_at"])
+    appointment.deposit_refunds = refunds
+    appointment.deposit_refunded_amount = (Decimal(_refunds_done_cents(refunds)) / 100).quantize(
+        Decimal("0.01")
+    )
+    appointment.save(
+        update_fields=[
+            "deposit_status",
+            "deposit_refunds",
+            "deposit_refunded_amount",
+            "updated_at",
+        ]
+    )
     log_activity(
         appointment.salon,
         "deposit.refunded",
         f"Caparra rimborsata — {appointment.client.full_name}",
         actor=actor,
-        payload={"appointment_id": appointment.id, "amount": str(appointment.deposit_amount), "manual": True},
+        payload={
+            "appointment_id": appointment.id,
+            "amount": str(appointment.deposit_amount),
+            "refunded": str(appointment.deposit_refunded_amount),
+            "manual": True,
+        },
     )
     return appointment
 
@@ -1485,7 +1588,12 @@ def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):
         {
             "appointment_id": appointment.id,
             "start": start.isoformat(),
-            "duration_min": sum(item.duration_min for item in items),
+            # Tempo che si libera per la cliente successiva: lavoro attivo E
+            # posa. Con la sola fase attiva un colore da 30' di lavoro e 60' di
+            # posa liberava «30 minuti», e alla lista d'attesa venivano proposti
+            # servizi che in quel buco non entravano (o non venivano proposti
+            # quelli che ci stavano).
+            "duration_min": sum(item.duration_min + item.soak_min for item in items),
             "operator_id": operator_id,
             "matching_waitlist": list(matching),
         },

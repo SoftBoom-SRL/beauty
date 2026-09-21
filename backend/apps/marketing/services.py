@@ -43,11 +43,16 @@ def create_gift_card(
     paid_method="",
     sold_by=None,
     sale=None,
+    cash_in=True,
 ):
     """Crea una gift card (usata anche da sales per le righe gift_card vendute).
 
     Se `gift_service` è valorizzato la carta regala quel trattamento: il valore
-    passato deve già coincidere col prezzo del servizio (garantito dal chiamante)."""
+    passato deve già coincidere col prezzo del servizio (garantito dal chiamante).
+
+    `cash_in=False` per le carte che nascono già pagate ma senza che nessuno
+    abbia versato denaro (i premi fedeltà): la carta resta spendibile, ma nel
+    registro attività non compare un incasso che non c'è stato."""
     value = Decimal(value)
     if value <= 0:
         raise HttpError(422, "Valore della gift card non valido")
@@ -77,7 +82,7 @@ def create_gift_card(
             "sale_id": sale.id if sale else None,
         },
     )
-    if paid:
+    if paid and cash_in:
         log_activity(
             salon,
             "giftcard.paid",
@@ -194,6 +199,7 @@ def _issue_reward(program, client):
             recipient_name=client.full_name,
             paid=True,
             paid_method="loyalty",
+            cash_in=False,
         )
         return {
             "label": f"servizio omaggio {service.name_it} (carta {card.code})",
@@ -214,6 +220,7 @@ def _issue_reward(program, client):
             recipient_name=client.full_name,
             paid=True,
             paid_method="loyalty",
+            cash_in=False,
         )
         return {
             "label": f"gift card {card.code} (€{value})",

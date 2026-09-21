@@ -13,7 +13,7 @@ from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Count, DateField, Sum
+from django.db.models import Count, DateField, Q, Sum
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
 from django.utils import timezone
 from ninja.errors import HttpError
@@ -140,20 +140,46 @@ def _operator_shift_minutes(operator, d: date_cls) -> int:
     return sum(max(0, end - start) for start, end in windows)
 
 
-def _daily_shift_minutes(salon, days: list[date_cls]) -> dict[date_cls, int]:
+def _daily_shift_minutes(
+    salon, days: list[date_cls], extra_operator_ids=()
+) -> dict[date_cls, int]:
+    """Minuti di turno del salone per ciascun giorno.
+
+    `extra_operator_ids` aggiunge operatrici non più attive che nel periodo
+    hanno però lavorato: la capacità e i minuti prenotati devono riguardare le
+    stesse persone. Contando solo le attive, disattivare un'operatrice
+    riscriveva l'occupazione di giornate già chiuse — i suoi appuntamenti
+    restavano al numeratore e il suo turno usciva dal denominatore, e il mese
+    scorso passava da 33 % a 67 % da solo.
+    """
     if not days:
         return {}
     # Turni, assenze e impostazioni del salone caricati una volta sola: senza
     # prefetch ogni giorno di ogni operatrice tornava a interrogare il database,
     # e una sola operatrice su trenta giorni costava 63 query.
     operators = list(
-        Operator.objects.filter(salon=salon, active=True)
+        Operator.objects.filter(salon=salon)
+        .filter(Q(active=True) | Q(id__in=set(extra_operator_ids or ())))
         .select_related("salon__settings")
         .prefetch_related("shifts", "absences")
     )
     if not operators:
         return {d: 0 for d in days}
     return {d: sum(_operator_shift_minutes(op, d) for op in operators) for d in days}
+
+
+def _worked_operator_ids(salon, start: datetime, end: datetime, statuses) -> set[int]:
+    """Operatrici con almeno un servizio nel periodo (attive o no)."""
+    return set(
+        AppointmentService.objects.filter(
+            appointment__salon=salon,
+            appointment__status__in=statuses,
+            appointment__start__gte=start,
+            appointment__start__lt=end,
+        )
+        .values_list("operator_id", flat=True)
+        .distinct()
+    )
 
 
 def _daily_booked_minutes(salon, start: datetime, end: datetime, statuses) -> dict[date_cls, int]:
@@ -183,7 +209,9 @@ def occupancy_by_weekday(salon, period: str, date: date_cls | None = None, date_
     start, end = resolve_range(period, date, date_from, date_to)
     days = _dates_in_range(start, end)
     booked_by_day = _daily_booked_minutes(salon, start, end, _OCCUPIED_STATUSES)
-    shift_by_day = _daily_shift_minutes(salon, days)
+    shift_by_day = _daily_shift_minutes(
+        salon, days, _worked_operator_ids(salon, start, end, _OCCUPIED_STATUSES)
+    )
     result = []
     for weekday in range(7):
         weekday_days = [d for d in days if d.weekday() == weekday]
@@ -322,7 +350,9 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     cancel_rate = _safe_div(cancel_count, total_appointments)
 
     booked_by_day = _daily_booked_minutes(salon, start, end, _OCCUPIED_STATUSES)
-    shift_by_day = _daily_shift_minutes(salon, days)
+    shift_by_day = _daily_shift_minutes(
+        salon, days, _worked_operator_ids(salon, start, end, _OCCUPIED_STATUSES)
+    )
     occupancy_pct = _occupancy_for_days(booked_by_day, shift_by_day, days)
 
     # --- clienti -----------------------------------------------------------

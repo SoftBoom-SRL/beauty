@@ -72,6 +72,8 @@ export function composeReward(rewardType, rewardValue, serviceName, lang) {
   switch (rewardType) {
     case 'discount_pct': return lang === 'en' ? `${v}% discount` : `Sconto ${v}%`;
     case 'free_service': return serviceName || (lang === 'en' ? 'Free service' : 'Servizio omaggio');
+    // Non si può più scegliere (né qui né dall'API: il banco non saprebbe
+    // riscattarlo), ma un programma salvato prima resta da etichettare.
     case 'free_product': return lang === 'en' ? 'Free product' : 'Prodotto omaggio';
     case 'gift_card': return lang === 'en' ? `€${v} gift card` : `Gift card da €${v}`;
     case 'coupon_amount':

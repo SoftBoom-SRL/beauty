@@ -4,7 +4,7 @@ import { api, ApiError, Avatar, Icon, minutesOfDay, nowMinutes, timeLabel, toDat
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
-  isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay,
+  isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay, moveIsNoop,
 } from './lib.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
@@ -166,13 +166,25 @@ export default function AgendaSection() {
   const [dragOn, setDragOn] = useState(false);
 
   const moveAppt = async (a, startMin, opId, opts = {}) => {
-    const fromMin = aMin(a.start);
-    const fromOp = a.operator_id;
-    if (startMin === undefined || (startMin === fromMin && opId === fromOp)) return;
+    // Da dove parte: `opts.from` lo dice esplicitamente. Serve ad «Annulla»,
+    // che rimanda l'appuntamento indietro partendo dall'oggetto di prima dello
+    // spostamento: letta da lì, la posizione di partenza era quella di arrivo
+    // dell'annullamento e il movimento sembrava un non-movimento, così
+    // «Annulla» non faceva niente e l'appuntamento restava dove era.
+    const fromMin = opts.from ? opts.from.startMin : aMin(a.start);
+    const fromOp = opts.from ? opts.from.opId : a.operator_id;
+    if (moveIsNoop(startMin, opId, { startMin: fromMin, opId: fromOp })) return;
     setPending({ kind: 'appt', id: a.id, startMin, opId });
+    const reassigned = opId != null && opId !== fromOp;
     try {
-      await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(date, startMin), operator_id: opId, force: !!opts.force });
-      const reassigned = opId !== fromOp;
+      // `operator_id` SOLO quando l'operatrice cambia davvero (come in vista
+      // settimana): mandandolo sempre, spostare un appuntamento di un'operatrice
+      // disattivata — colonna che l'agenda mostra apposta — rispondeva 404.
+      await api.post(`/api/agenda/appointments/${a.id}/move`, {
+        start: isoAtMin(date, startMin),
+        ...(reassigned ? { operator_id: opId } : {}),
+        force: !!opts.force,
+      });
       const opName = firstName((operators.find((o) => o.id === opId) || {}).first_name || '');
       const where = reassigned
         ? t(`Spostato a ${opName}, ${timeLabel(startMin)}`, `Moved to ${opName}, ${timeLabel(startMin)}`)
@@ -181,7 +193,9 @@ export default function AgendaSection() {
         msg: where + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
         undo: opts.undo === false ? undefined : t('Annulla', 'Undo'),
-        undoFn: opts.undo === false ? undefined : () => moveAppt(a, fromMin, fromOp, { undo: false }),
+        undoFn: opts.undo === false
+          ? undefined
+          : () => moveAppt(a, fromMin, fromOp, { undo: false, from: { startMin, opId } }),
       });
       await fetchDay();
     } catch (err) {
@@ -418,6 +432,10 @@ export default function AgendaSection() {
   const openDay = (iso) => { setDate(iso); setCalView('day'); };
   // Nessun fallback "mostra tutte": spegnendo tutte le chip la griglia deve
   // restare vuota (lo stato vuoto è già previsto), non riaccendere tutto.
+  // Le chip nascondono COLONNE, non appuntamenti: `visibleRows` decide cosa si
+  // disegna, mentre i controlli di disponibilità girano su `dayData` intero.
+  // Filtrando anche quelli, un servizio dentro la visita di una collega
+  // nascosta spariva dal conto e l'orario risultava «Disponibile».
   const visibleRows = (dayData || []).filter((r) => vis[r.operator.id] !== false);
 
   return (
@@ -537,6 +555,7 @@ export default function AgendaSection() {
             ) : (
               <DayGrid
                 rows={visibleRows}
+                allRows={dayData || []}
                 date={date}
                 pickMode={pickMode}
                 nowMin={isToday ? nowMin : null}

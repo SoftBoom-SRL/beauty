@@ -1,7 +1,29 @@
 """Bug-hunt probes — 21/09/2026.
 
 Ogni test RIPRODUCE un comportamento sospetto: l'asserzione descrive quello che
-il codice fa OGGI, non quello che dovrebbe fare. Dati sintetici, Stripe finto.
+il codice faceva il 21/09/2026, non quello che dovrebbe fare. Dati sintetici,
+Stripe finto.
+
+STORICO — tutti i difetti di questa tornata sono stati corretti (i dodici qui
+riprodotti più B27, emerso durante le correzioni), quindi queste prove ORA
+FALLISCONO: è la conferma che il comportamento è cambiato (l'unica che passa
+ancora è P2c, che era già una controprova). Il file resta come documentazione di
+quello che è stato trovato e di come è stato riprodotto; gli esiti di allora sono
+in probe-results.log. I test di regressione, che asseriscono il comportamento
+CORRETTO, vivono nelle suite delle app:
+
+  B15  apps/agenda/tests.py    SplitCollisionTests
+  B16  apps/agenda/tests.py    BugHunt21SeptemberTests
+  B17  apps/sales/tests.py     BugHunt21SeptemberTests
+  B18  apps/agenda/tests.py    BugHunt21SeptemberTests
+  B19  apps/dashboard/test/agenda-lib.test.js  (npm test)
+  B20  nessun test: il badge del trascinamento sta dentro il JSX di DayGrid
+  B21  apps/agenda/tests.py    BugHunt21SeptemberTests
+  B22  apps/insights/tests.py  OccupancyAfterStaffChangesTests
+  B23  apps/dashboard/test/agenda-lib.test.js  (npm test)
+  B24  apps/agenda/tests.py    BugHunt21SeptemberTests
+  B25  apps/sales/tests.py     BugHunt21SeptemberTests
+  B26  apps/marketing/tests.py LoyaltyRewardIssueTests
 
 Esecuzione (dalla cartella backend/):
   PYTHONPATH=../docs/bug-hunt-2026-09-21 \

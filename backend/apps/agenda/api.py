@@ -548,7 +548,12 @@ def move_appointment(request, appointment_id: int, data: MoveIn):
     appointment = salon_get(Appointment, ctx, appointment_id)
 
     operator = None
-    if data.operator_id:
+    # `active=True` vale solo per una NUOVA assegnazione: quando l'operatrice
+    # indicata è già quella dell'appuntamento non c'è niente da riassegnare, e
+    # pretenderla attiva faceva rispondere 404 a ogni spostamento degli
+    # appuntamenti di un'operatrice disattivata — quelli che l'agenda mostra
+    # apposta, in una colonna a parte, per poterli sistemare.
+    if data.operator_id and data.operator_id != appointment.operator_id:
         from apps.staff.models import Operator  # lazy
 
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
@@ -646,16 +651,22 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-    if appointment.status not in services.OPEN_STATUSES:
-        raise HttpError(400, "Appuntamento non modificabile nello stato attuale")
-
-    if data.note is not None:
-        appointment.note = data.note
     with transaction.atomic():
+        # Lock e rilettura dentro la transazione, e si scrivono solo i campi
+        # modificati qui: un save() completo riportava indietro tutto quello che
+        # era cambiato nel frattempo (stato, caparra), come faceva lo
+        # spostamento prima della correzione di B04.
+        services.lock_salon(ctx.salon)
+        appointment.refresh_from_db()
+        if appointment.status not in services.OPEN_STATUSES:
+            raise HttpError(400, "Appuntamento non modificabile nello stato attuale")
+        changed = ["updated_at"]
+        if data.note is not None:
+            appointment.note = data.note
+            changed.append("note")
         if data.items is not None:
             if not data.items:
                 raise HttpError(400, "Nessun servizio selezionato")
-            services.lock_salon(ctx.salon)
             resolved = services.resolve_items_edit(
                 ctx.salon,
                 [item.dict() for item in data.items],
@@ -669,7 +680,8 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
             appointment.items.all().delete()
             services.snapshot_items_edit(appointment, resolved)
             appointment.operator = resolved[0][1]
-        appointment.save()
+            changed.append("operator")
+        appointment.save(update_fields=changed)
 
     log_activity(
         ctx.salon,

@@ -76,6 +76,17 @@ export function addMonths(dateStr, n) {
   return toDateStr(new Date(d.getFullYear(), d.getMonth() + n, 1));
 }
 
+/** Vero quando uno spostamento non muove niente (stesso orario, stessa
+ *  operatrice): si esce prima di chiamare il server.
+ *
+ *  `from` va passato ESPLICITO da chi rimanda un appuntamento indietro
+ *  («Annulla»): quel percorso ha in mano l'oggetto di prima dello spostamento,
+ *  e confrontando il ritorno con `appt.start` il movimento sembrava un
+ *  non-movimento — l'annullamento non partiva e l'appuntamento restava dove
+ *  era stato spostato, senza dire niente. */
+export const moveIsNoop = (startMin, opId, from) =>
+  startMin === undefined || (startMin === from.startMin && opId === from.opId);
+
 /** ApiError → toast, with network fallback */
 export function toastErr(err, t, fireToast) {
   if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
@@ -127,13 +138,22 @@ export function prefLabel(w, t) {
   }
 }
 
+/** Operatrici coinvolte in una visita: quelle dei singoli servizi più la
+ *  principale. È la stessa regola del backend (free_slot_event), che sulle voci
+ *  di lista d'attesa guarda TUTTI gli item: qui si guardava solo l'operatrice
+ *  principale, e chi aspettava un servizio con la collega che lo esegue
+ *  davvero non veniva contato fra i match. */
+export const apptOperatorIds = (appt) =>
+  new Set([...(appt.items || []).map((i) => i.operator_id), appt.operator_id].filter((x) => x != null));
+
 /** entries matching a freed appointment: same service + compatible operator, still active */
 export function wlMatches(waitlist, appt) {
   const svcIds = (appt.items || []).map((i) => i.service_id);
+  const opIds = apptOperatorIds(appt);
   return (waitlist || []).filter((w) =>
     w.status === 'active' &&
     svcIds.includes(w.service_id) &&
-    (w.operator_id == null || w.operator_id === appt.operator_id)
+    (w.operator_id == null || opIds.has(w.operator_id))
   );
 }
 
@@ -141,9 +161,10 @@ export function wlMatches(waitlist, appt) {
 export function wlRank(entries, appt) {
   const hour = Math.floor(aStartMin(appt) / 60);
   const dow = (parseISO(appt.start).getDay() + 6) % 7;
+  const opIds = apptOperatorIds(appt);
   const score = (w) => {
     let s = 10;
-    if (w.operator_id != null && w.operator_id === appt.operator_id) s += 5;
+    if (w.operator_id != null && opIds.has(w.operator_id)) s += 5;
     if (w.preference === 'morning' && hour < 13) s += 4;
     else if (w.preference === 'afternoon' && hour >= 13) s += 4;
     else if (w.preference === 'weekend' && dow >= 5) s += 4;

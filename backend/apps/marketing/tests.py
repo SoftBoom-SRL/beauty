@@ -563,6 +563,34 @@ class LoyaltyRewardIssueTests(TestCase):
         self.assertEqual(card.payment_status, GiftCard.PaymentStatus.PAID)
         self.assertFalse(Coupon.objects.filter(salon=self.salon).exists())
 
+    def test_a_reward_card_is_not_written_down_as_money_taken(self):
+        """Le carte premio nascono pagate — è così che il banco le riscatta —
+        ma nessuno ha versato quel denaro: il registro attività riportava
+        «Incasso gift card €30,00 (loyalty)» per un incasso mai avvenuto."""
+        from apps.core.models import ActivityLog
+
+        self._program(reward_type="free_service", reward_service=self.service, reward_value=0)
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.payment_status, GiftCard.PaymentStatus.PAID)
+        self.assertFalse(
+            ActivityLog.objects.filter(salon=self.salon, type="giftcard.paid").exists()
+        )
+        # l'emissione resta tracciata, come premio
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="giftcard.created").exists()
+        )
+        reward = ActivityLog.objects.get(salon=self.salon, type="loyalty.reward")
+        self.assertIn(card.code, reward.summary)
+
+    def test_a_gift_card_sold_at_the_till_is_still_written_down_as_money_taken(self):
+        from apps.core.models import ActivityLog
+        from apps.marketing.services import create_gift_card
+
+        create_gift_card(self.salon, Decimal("40.00"), paid=True, paid_method="cash")
+        taken = ActivityLog.objects.get(salon=self.salon, type="giftcard.paid")
+        self.assertIn("Incasso gift card", taken.summary)
+
     def test_a_gift_card_reward_issues_a_card_of_that_value(self):
         self._program(reward_type="gift_card", reward_value=Decimal("20.00"))
         self._sell()

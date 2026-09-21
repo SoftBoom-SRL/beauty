@@ -235,3 +235,59 @@ class ShiftCapacityQueryBudgetTests(TestCase):
         # Una lettura per operatrici, turni e assenze: il numero di giorni non
         # entra nel conto.
         self.assertLessEqual(len(captured), 5, [q["sql"] for q in captured])
+
+
+class OccupancyAfterStaffChangesTests(TestCase):
+    """L'occupazione di una giornata già chiusa non deve cambiare quando
+    un'operatrice viene disattivata: i suoi appuntamenti restano fra i minuti
+    prenotati, quindi il suo turno deve restare nella capacità.
+    Difetto della caccia ai bug del 21/09/2026 (B22)."""
+
+    def setUp(self):
+        from apps.staff.models import WeeklyShift
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
+        service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Piega", duration_min=180, price=60
+        )
+        client = Client.objects.create(
+            salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
+        )
+        self.day = date(2026, 7, 1)  # mercoledì
+        self.operators = []
+        for index, name in enumerate(("Sofia", "Marta")):
+            operator = Operator.objects.create(salon=self.salon, first_name=name, last_name="Ricci")
+            # turno 9–18 = 540 minuti di capacità a testa
+            WeeklyShift.objects.create(
+                operator=operator, week_index=0, weekday=2, start_min=540, end_min=1080
+            )
+            appointment = Appointment.objects.create(
+                salon=self.salon, client=client, operator=operator,
+                start=timezone.make_aware(timezone.datetime(2026, 7, 1, 10 + index * 4, 0)),
+                status="closed",
+            )
+            AppointmentService.objects.create(
+                appointment=appointment, service=service, operator=operator,
+                duration_min=180, price=60,
+            )
+            self.operators.append(operator)
+
+    def _pct(self):
+        return kpis(self.salon, "custom", date_from=self.day, date_to=self.day)["occupancy_pct"]
+
+    def test_deactivating_a_stylist_does_not_rewrite_a_closed_day(self):
+        before = self._pct()
+        self.assertAlmostEqual(before, 33.3, places=1)   # 360' su 1.080'
+        self.operators[1].active = False
+        self.operators[1].save(update_fields=["active"])
+        self.assertAlmostEqual(self._pct(), before, places=1)
+
+    def test_an_inactive_stylist_without_work_does_not_count_as_capacity(self):
+        from apps.staff.models import WeeklyShift
+
+        idle = Operator.objects.create(
+            salon=self.salon, first_name="Lucia", last_name="Neri", active=False
+        )
+        WeeklyShift.objects.create(operator=idle, week_index=0, weekday=2, start_min=540, end_min=1080)
+        self.assertAlmostEqual(self._pct(), 33.3, places=1)

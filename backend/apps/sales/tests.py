@@ -1012,3 +1012,133 @@ class NoShowAmountTests(TestCase):
         self.assertEqual(Decimal(response.json()["amount"]), Decimal("70.00"))
         logged = ActivityLog.objects.get(salon=self.salon, type="sale.no_show_charged")
         self.assertEqual(Decimal(logged.payload["amount"]), Decimal("70.00"))
+
+
+class BugHunt21SeptemberTests(TestCase):
+    """Difetti trovati nella caccia ai bug del 21/09/2026 (docs/BUG_HUNT_2026-09-21.md)."""
+
+    def setUp(self):
+        from django.utils import timezone
+
+        from apps.accounts.models import Membership, Role, User
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.staff.models import Operator
+
+        self.Appointment = Appointment
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        self.service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Manicure",
+            duration_min=60, price=Decimal("50.00"),
+        )
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.operator,
+            start=timezone.now() + timezone.timedelta(hours=2),
+            deposit_status="required", deposit_amount=Decimal("20.00"),
+        )
+        AppointmentService.objects.create(
+            appointment=self.appointment, service=self.service, operator=self.operator,
+            duration_min=60, price=Decimal("50.00"),
+        )
+        user = User.objects.create_user(email="cassa@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+
+    def _checkout(self, amount="50.00"):
+        import json
+
+        return self.client.post(
+            f"/api/sales/checkout/{self.appointment.id}",
+            json.dumps({
+                "blocks": [{"operator_id": self.operator.id, "lines": [
+                    {"line_type": "service", "service_id": self.service.id, "qty": 1, "unit_price": "50.00"}
+                ]}],
+                "payments": [{"method": "cash", "amount": amount}],
+            }),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    # ---- B17 -------------------------------------------------------------
+
+    def test_a_deposit_paid_while_the_checkout_runs_is_not_wiped(self):
+        """La visita si chiudeva con un save() completo su un'istanza letta
+        all'inizio della richiesta: il webhook della caparra pagata, arrivato
+        nel frattempo, veniva riscritto all'indietro — denaro incassato su
+        Stripe e PaymentIntent perso, quindi nemmeno rimborsabile."""
+        from . import api as sales_api
+
+        real_finalize = sales_api.finalize_sale
+
+        def interleaved(*args, **kwargs):
+            # il webhook Stripe arriva mentre il checkout è in corso
+            self.Appointment.objects.filter(pk=self.appointment.pk).update(
+                deposit_status="paid", deposit_payment_intent_id="pi_probe_123", deposit_due_at=None
+            )
+            return real_finalize(*args, **kwargs)
+
+        with patch.object(sales_api, "finalize_sale", side_effect=interleaved):
+            response = self._checkout()
+        self.assertEqual(response.status_code, 200, response.content)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, "closed")
+        self.assertEqual(self.appointment.deposit_status, "paid")
+        self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_probe_123")
+
+    def test_the_deposit_deducted_is_the_one_read_under_the_lock(self):
+        """Caparra già pagata: il conto la detrae, e il pagamento chiesto alla
+        cliente è il saldo."""
+        self.appointment.deposit_status = "paid"
+        self.appointment.save(update_fields=["deposit_status"])
+        response = self._checkout(amount="30.00")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(Decimal(response.json()["sale"]["deposit_deducted"]), Decimal("20.00"))
+
+    def test_a_cancelled_appointment_is_still_refused(self):
+        self.appointment.status = "cancelled"
+        self.appointment.save(update_fields=["status"])
+        response = self._checkout()
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertFalse(Sale.objects.filter(appointment=self.appointment).exists())
+
+    def test_the_same_appointment_cannot_be_cashed_twice(self):
+        self.assertEqual(self._checkout().status_code, 200)
+        second = self._checkout()
+        self.assertEqual(second.status_code, 400, second.content)
+        self.assertEqual(Sale.objects.filter(appointment=self.appointment).count(), 1)
+
+    # ---- B25 -------------------------------------------------------------
+
+    def test_every_gift_card_sold_has_its_own_line(self):
+        """Con una riga da tre carte ne venivano emesse tre ma una sola restava
+        collegata alla vendita: le altre risultavano «mai vendute» e
+        reincassabili una seconda volta dalla sezione Fedeltà."""
+        from apps.marketing.models import GiftCard
+        from .services import record_gift_card_cashed
+
+        with patch(PATCH_LOYALTY):
+            sale = finalize_sale(
+                self.salon,
+                kind=Sale.Kind.POS,
+                blocks=_blocks([{"line_type": "gift_card", "value": Decimal("50.00"), "qty": 3}]),
+                payments=[{"method": "cash", "amount": Decimal("150.00")}],
+                client=self.client_obj,
+            )
+        cards = list(GiftCard.objects.filter(salon=self.salon).order_by("id"))
+        self.assertEqual(len(cards), 3)
+        self.assertEqual(sale.total, Decimal("150.00"))
+        lines = list(SaleLine.objects.filter(sale=sale).order_by("id"))
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([l.qty for l in lines], [1, 1, 1])
+        self.assertEqual(
+            sorted(l.gift_card_id for l in lines), sorted(c.id for c in cards)
+        )
+        # nessuna carta può essere incassata una seconda volta
+        for card in cards:
+            self.assertIsNone(record_gift_card_cashed(self.salon, card, method="cash"))

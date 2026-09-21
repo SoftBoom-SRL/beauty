@@ -1,6 +1,14 @@
 // Probe frontend: si caricano i VERI helper della sezione agenda
 // (apps/dashboard/src/sections/agenda/lib.js) con '@youty/shared' rimappato su
-// format.js. Le asserzioni descrivono il comportamento ATTUALE.
+// format.js. Le asserzioni descrivono il comportamento del 21/09/2026.
+//
+// STORICO — i difetti sono corretti. F2 ora FALLISCE, ed è la conferma che il
+// conteggio della lista d'attesa è cambiato (test di regressione:
+// apps/dashboard/test/agenda-lib.test.js). F1 e F3 passano ancora perché non
+// toccano il componente: F1 interroga `explainSlot` con le righe già filtrate
+// — la risposta «Disponibile» è giusta per QUEL dato, il difetto era che
+// DayGrid passasse le righe filtrate, e adesso riceve anche `allRows`; F3
+// ricalcola nel test la vecchia formula del badge, che vive dentro il JSX.
 //
 //   node --import ./register.mjs --test agenda-probes.test.js
 import assert from 'node:assert/strict';

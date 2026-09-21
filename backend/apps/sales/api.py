@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Optional
 
 from django.apps import apps as django_apps
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Q, Sum
 from django.utils.dateparse import parse_date
 from ninja import Router
@@ -129,41 +129,53 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
     require_scope(ctx, "sales")
     Appointment = django_apps.get_model("agenda", "Appointment")
     appointment = salon_get(Appointment, ctx, appointment_id)
-    # Un appuntamento annullato o segnato come no-show non è stato erogato:
-    # incassarlo lo riporterebbe a «chiuso» e conterebbe nei ricavi un servizio
-    # che nessuno ha fatto. Il no-show si addebita con la sua funzione.
-    if appointment.status in ("cancelled", "no_show"):
-        raise HttpError(
-            400,
-            "Appuntamento annullato o segnato come no-show: non può essere incassato",
-        )
-    if Sale.objects.filter(appointment=appointment).exists():
-        raise HttpError(400, "Appuntamento già incassato")
-
-    # Non `deposit_amount`: quello che si detrae è la quota ancora in cassa,
-    # cioè al netto dei rimborsi già fatti su quella caparra.
-    deposit_deducted = appointment.deposit_credit
     payload = data.dict()
+    # Tutto il checkout dentro una transazione, con la riga dell'appuntamento
+    # bloccata e riletta: la caparra si legge DOPO il lock e la chiusura scrive
+    # solo `status`. Prima la visita veniva chiusa con un save() completo su
+    # un'istanza letta all'inizio della richiesta: se nel frattempo arrivava il
+    # webhook della caparra pagata, quel save la riportava a «richiesta» e
+    # cancellava il PaymentIntent — denaro incassato su Stripe e non più
+    # rimborsabile dalla dashboard.
     try:
-        sale = finalize_sale(
-            ctx.salon,
-            kind=Sale.Kind.CHECKOUT,
-            blocks=payload["blocks"],
-            payments=payload["payments"],
-            client=appointment.client,
-            appointment=appointment,
-            location=appointment.location,
-            deposit_deducted=deposit_deducted,
-            actor=ctx.user,
-        )
+        with transaction.atomic():
+            appointment = (
+                Appointment.objects.select_for_update()
+                .select_related("client", "location")
+                .get(pk=appointment.pk, salon=ctx.salon)
+            )
+            # Un appuntamento annullato o segnato come no-show non è stato
+            # erogato: incassarlo lo riporterebbe a «chiuso» e conterebbe nei
+            # ricavi un servizio che nessuno ha fatto. Il no-show si addebita
+            # con la sua funzione.
+            if appointment.status in ("cancelled", "no_show"):
+                raise HttpError(
+                    400,
+                    "Appuntamento annullato o segnato come no-show: non può essere incassato",
+                )
+            if Sale.objects.filter(appointment=appointment).exists():
+                raise HttpError(400, "Appuntamento già incassato")
+            # Non `deposit_amount`: quello che si detrae è la quota ancora in
+            # cassa, cioè al netto dei rimborsi già fatti su quella caparra.
+            deposit_deducted = appointment.deposit_credit
+            sale = finalize_sale(
+                ctx.salon,
+                kind=Sale.Kind.CHECKOUT,
+                blocks=payload["blocks"],
+                payments=payload["payments"],
+                client=appointment.client,
+                appointment=appointment,
+                location=appointment.location,
+                deposit_deducted=deposit_deducted,
+                actor=ctx.user,
+            )
+            appointment.status = "closed"
+            appointment.save(update_fields=["status", "updated_at"])
     except IntegrityError:
-        # Due checkout partiti insieme: il controllo qui sopra li lascia passare
-        # entrambi, il vincolo di unicità ne ferma uno. Senza questo ramo la
-        # cassiera vede un errore 500 invece del messaggio giusto.
+        # Due checkout partiti insieme: il vincolo di unicità ne ferma uno.
+        # Senza questo ramo la cassiera vede un errore 500 invece del messaggio
+        # giusto.
         raise HttpError(400, "Appuntamento già incassato")
-
-    appointment.status = "closed"
-    appointment.save()
 
     client = appointment.client
     service_names = [

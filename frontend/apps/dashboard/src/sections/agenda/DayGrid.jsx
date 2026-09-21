@@ -18,7 +18,7 @@ import {
 } from './lib.js';
 
 export default function DayGrid({
-  rows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
+  rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
   picker, setPicker, setOpColor, opPalette, pickMode,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
@@ -36,7 +36,14 @@ export default function DayGrid({
   const gridH = (DK_END - DK_START) * PXM;
   const ops = rows.map((r) => r.operator);
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
-  const rowOf = (opId) => rows.find((r) => r.operator.id === opId);
+  /* `rows` sono le colonne DISEGNATE (filtrate dalle chip di visibilità);
+   * i controlli di disponibilità girano invece su TUTTE le righe del giorno:
+   * un servizio di questa operatrice può vivere dentro la visita di una
+   * collega, e con la collega nascosta quell'impegno spariva dal conto —
+   * l'orario risultava «Disponibile», il server rispondeva 409 e lo
+   * spostamento partiva comunque forzato, sovrapponendo due clienti. */
+  const checkRows = allRows && allRows.length ? allRows : rows;
+  const rowOf = (opId) => checkRows.find((r) => r.operator.id === opId);
   const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
 
   // tutti i blocchi-servizio del giorno (ogni appuntamento compare una volta nel payload)
@@ -132,7 +139,7 @@ export default function DayGrid({
     if (!d || d.mode === 'resize') return null;
     if (d.kind === 'pause') {
       const row = rowOf(d.nop);
-      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows }) : null;
+      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows: checkRows }) : null;
     }
     const appt = d.block.appt;
     const multi = (appt.items || []).length > 1;
@@ -143,7 +150,7 @@ export default function DayGrid({
       const row = rowOf(d.nop);
       if (!row) return null;
       return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
-        excludeItemId: d.itemId, nowMin, t, rows,
+        excludeItemId: d.itemId, nowMin, t, rows: checkRows,
       });
     }
     const delta = d.ns - d.orig;
@@ -154,7 +161,7 @@ export default function DayGrid({
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
       // orario già passato mentre il menu sullo stesso slot lo vietava.
-      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows });
+      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows: checkRows });
       if (!r.ok) return r;
       if (r.code === 'soak') warn = r;
     }
@@ -397,7 +404,7 @@ export default function DayGrid({
             const isTarget = dragging && d.nop === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
             const h = hint && hint.opId === o.id ? hint : null;
-            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows }) : null;
+            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows: checkRows }) : null;
             return (
               <div
                 key={o.id}
@@ -411,7 +418,7 @@ export default function DayGrid({
                   const rect = e.currentTarget.getBoundingClientRect();
                   const raw = DK_START + (e.clientY - rect.top) / PXM;
                   const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
-                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows }));
+                  onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows: checkRows }));
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
@@ -474,7 +481,7 @@ export default function DayGrid({
                           onDetachDown={(e) => onItemDown(e, b, { detach: true })}
                           onResizeDown={(e) => onItemResizeDown(e, b)}
                           onHover={dragging ? null : onHover} onLeave={onLeave}
-                          onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows }))}
+                          onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows: checkRows }))}
                         />
                       ))}
                     </React.Fragment>
@@ -508,10 +515,18 @@ export default function DayGrid({
       {dragging && (() => {
         const v = d.verdict;
         const tone = verdictTone(v);
-        const durMin = d.kind === 'pause' ? d.obj.duration_min : (d.block.appt.total_duration_min || d.block.dur);
-        const start = d.kind === 'pause' ? d.ns : d.apptStart + (d.ns - d.orig);
-        const multi = d.kind === 'item' && (d.block.appt.items || []).length > 1;
-        const who = d.kind === 'item' && multi ? opName(d.origOp) : opName(d.nop);
+        /* Con le forbici si muove UN servizio: il badge deve dire il suo orario
+         * e la sua durata, non quelli della visita intera (un servizio da 30'
+         * lasciato alle 14:00 annunciava «13:30–15:00»), e l'operatrice è
+         * quella di destinazione — lo stacco la riassegna davvero, mentre il
+         * badge prometteva «operatrice fissa». */
+        const wholeVisit = d.kind === 'item' && !d.detach;
+        const durMin = d.kind === 'pause'
+          ? d.obj.duration_min
+          : (wholeVisit ? (d.block.appt.total_duration_min || d.block.dur) : d.block.dur);
+        const start = wholeVisit ? d.apptStart + (d.ns - d.orig) : d.ns;
+        const multi = wholeVisit && (d.block.appt.items || []).length > 1;
+        const who = opName(multi ? d.origOp : d.nop);
         return (
           <div className={'dk-drag-badge' + (tone === 'bad' ? ' dk-drag-badge--bad' : tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
             <Icon name={tone === 'bad' ? 'x' : tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />

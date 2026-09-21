@@ -79,22 +79,29 @@ def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
                     "Sconto non applicabile a una gift card: indica direttamente il valore",
                 )
             is_gift = bool(raw.get("is_gift"))
-            amount = line_amount(qty, unit_price, discount_pct, is_gift)
-            prepared.append(
-                {
-                    "operator_id": operator_id,
-                    "line_type": line_type,
-                    "service_id": raw.get("service_id"),
-                    "product_id": raw.get("product_id"),
-                    "qty": qty,
-                    "unit_price": Decimal(str(unit_price)).quantize(TWO_PLACES),
-                    "discount_pct": discount_pct,
-                    "is_gift": is_gift,
-                    "amount": amount,
-                    "recipient_name": raw.get("recipient_name") or "",
-                }
-            )
-            total += amount
+            # Ogni gift card ha il suo codice, quindi ha la sua riga: con una
+            # riga da tre carte ne venivano emesse tre ma una sola restava
+            # collegata alla vendita, e le altre due risultavano «mai vendute»
+            # — reincassabili una seconda volta dalla sezione Fedeltà.
+            repeat = qty if line_type == SaleLine.LineType.GIFT_CARD and qty > 1 else 1
+            each_qty = 1 if repeat > 1 else qty
+            amount = line_amount(each_qty, unit_price, discount_pct, is_gift)
+            for _ in range(repeat):
+                prepared.append(
+                    {
+                        "operator_id": operator_id,
+                        "line_type": line_type,
+                        "service_id": raw.get("service_id"),
+                        "product_id": raw.get("product_id"),
+                        "qty": each_qty,
+                        "unit_price": Decimal(str(unit_price)).quantize(TWO_PLACES),
+                        "discount_pct": discount_pct,
+                        "is_gift": is_gift,
+                        "amount": amount,
+                        "recipient_name": raw.get("recipient_name") or "",
+                    }
+                )
+                total += amount
     return prepared, total
 
 
@@ -193,21 +200,21 @@ def finalize_sale(
             if data["line_type"] == SaleLine.LineType.GIFT_CARD:
                 from apps.marketing.services import create_gift_card  # lazy
 
-                card = None
-                for _ in range(data["qty"]):
-                    card = create_gift_card(
-                        salon,
-                        data["unit_price"],
-                        buyer_client=client,
-                        recipient_name=data["recipient_name"],
-                        paid=not data["is_gift"],
-                        paid_method=first_method,
-                        sold_by=actor,
-                        sale=sale,
-                    )
-                if card is not None:
-                    line.gift_card = card
-                    line.save(update_fields=["gift_card"])
+                # Una carta per riga: `_prepare_lines` ha già spezzato le
+                # quantità maggiori di uno, così ogni carta emessa ha la sua
+                # riga di vendita che la collega.
+                card = create_gift_card(
+                    salon,
+                    data["unit_price"],
+                    buyer_client=client,
+                    recipient_name=data["recipient_name"],
+                    paid=not data["is_gift"],
+                    paid_method=first_method,
+                    sold_by=actor,
+                    sale=sale,
+                )
+                line.gift_card = card
+                line.save(update_fields=["gift_card"])
 
         for payment in payments:
             amount = Decimal(str(payment.get("amount") or 0)).quantize(TWO_PLACES)
