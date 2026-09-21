@@ -1,0 +1,78 @@
+=== Probe backend: PYTHONPATH=../docs/bug-hunt-2026-09-21 manage.py test bug_hunt_probes ===
+Found 13 test(s).
+Creating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+Operations to perform:
+  Synchronize unmigrated apps: corsheaders, insights, messages, staticfiles, unfold, unfold_filters, unfold_forms
+  Apply all migrations: accounts, admin, agenda, auth, automations, catalog, clients, contenttypes, core, integrations, inventory, marketing, sales, sessions, staff
+Synchronizing apps without migrations:
+Running migrations:
+System check identified no issues (0 silenced).
+INFO youty.events: outbox event appointment.updated (#1)
+INFO youty.events: outbox event appointment.created (#2)
+PROBE P1: staccato il 1º servizio → la piega passa da 11:00 a 10:00 senza che nessuno l'abbia spostata
+ok
+test_the_rest_is_dragged_over_another_client (bug_hunt_probes.P1SplitFirstService.test_the_rest_is_dragged_over_another_client)
+Lo slittamento può finire sopra un altro appuntamento: 409, e la ... INFO youty.events: outbox event appointment.updated (#1)
+INFO youty.events: outbox event appointment.created (#2)
+PROBE P1b: il 409 nasce dallo slittamento, e col force la piega si accavalla a un'altra cliente
+ok
+WARNING django.request: Not Found: /api/agenda/appointments/1/move
+PROBE P2: spostare nella stessa colonna un appuntamento di un'operatrice disattivata → 404 Not Found
+ok
+test_multi_service_visit_of_an_inactive_operator_cannot_be_reassigned (bug_hunt_probes.P2MoveOfAFormerStylist.test_multi_service_visit_of_an_inactive_operator_cannot_be_reassigned) ... WARNING django.request: Not Found: /api/agenda/appointments/1/move
+PROBE P2b: una visita multi-servizio di un'operatrice disattivata non si sposta né si riassegna (404)
+ok
+test_without_operator_id_the_same_move_works (bug_hunt_probes.P2MoveOfAFormerStylist.test_without_operator_id_the_same_move_works) ... INFO youty.events: outbox event appointment.moved (#1)
+INFO youty.events: outbox event slot.freed (#2)
+PROBE P2c: lo stesso spostamento SENZA operator_id riesce → è il parametro a farlo fallire
+ok
+test_checkout_full_save_reverts_a_deposit_paid_meanwhile (bug_hunt_probes.P3CheckoutOverwrite.test_checkout_full_save_reverts_a_deposit_paid_meanwhile) ... INFO youty.events: outbox event visit.completed (#1)
+PROBE P3: il save() completo del checkout riporta la caparra a «richiesta» e perde il PaymentIntent
+ok
+test_manual_refund_leaves_the_refunded_amount_at_zero (bug_hunt_probes.P4ManualRefundAmount.test_manual_refund_leaves_the_refunded_amount_at_zero) ... PROBE P4: caparra «rimborsata» a mano, deposit_refunded_amount resta 0,00
+ok
+test_freed_slot_duration_ignores_the_soak (bug_hunt_probes.P5FreedSlotDuration.test_freed_slot_duration_ignores_the_soak) ... PROBE P5: slot.freed dichiara 30' per una visita che occupa 90' (posa esclusa)
+ok
+test_client_app_can_do_the_same (bug_hunt_probes.P6MovePastClosing.test_client_app_can_do_the_same) ... INFO youty.events: outbox event appointment.moved (#1)
+INFO youty.events: outbox event slot.freed (#2)
+PROBE P6b: anche l'app cliente può spostare la visita oltre la chiusura
+ok
+test_move_accepts_what_creation_refuses (bug_hunt_probes.P6MovePastClosing.test_move_accepts_what_creation_refuses) ... INFO youty.events: outbox event appointment.moved (#1)
+INFO youty.events: outbox event slot.freed (#2)
+PROBE P6: spostamento alle 17:30 accettato (fine posa 19:00, chiusura 18:00); la creazione dà 409
+ok
+test_only_the_last_card_is_linked_to_the_sale_line (bug_hunt_probes.P7GiftCardQty.test_only_the_last_card_is_linked_to_the_sale_line) ... PROBE P7: 3 gift card emesse, 1 sola collegata alla riga; 2 restano senza vendita
+ok
+test_deactivating_a_stylist_inflates_past_occupancy (bug_hunt_probes.P8OccupancyOfFormerStylists.test_deactivating_a_stylist_inflates_past_occupancy) ... PROBE P8: occupazione di ieri 33.3% → 66.7% solo perché un'operatrice è stata disattivata
+ok
+test_free_service_reward_logs_a_gift_card_cash_in (bug_hunt_probes.P9LoyaltyFakeCashIn.test_free_service_reward_logs_a_gift_card_cash_in) ... INFO youty.events: outbox event loyalty.reward (#1)
+PROBE P9: registro attività → «Incasso gift card 5PBBP73E55FB: €40.00 (loyalty)» per un premio che non ha incassato nulla
+ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 4.279s
+
+OK
+Destroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+
+=== Probe frontend: node --import ./register.mjs --test agenda-probes.test.js ===
+TAP version 13
+# PROBE F1: colonna nascosta → 10:30 di Marta «Disponibile» mentre sta lavorando (il server poi dà 409)
+# PROBE F2: la voce che chiede l'operatrice secondaria (Marta) non compare fra i match del client
+# PROBE F3: stacco alle 14:00 di un servizio da 60' → il badge annuncia 13:30–15:00
+# Subtest: PROBE F0: con tutte le righe, le 10:30 di Marta risultano occupate (corretto)
+ok 1 - PROBE F0: con tutte le righe, le 10:30 di Marta risultano occupate (corretto)
+# Subtest: PROBE F1: nascondendo la colonna di Giulia, lo stesso orario di Marta torna «Disponibile»
+ok 2 - PROBE F1: nascondendo la colonna di Giulia, lo stesso orario di Marta torna «Disponibile»
+# Subtest: PROBE F2: la lista d'attesa del cliente legata a un'operatrice secondaria non viene contata
+ok 3 - PROBE F2: la lista d'attesa del cliente legata a un'operatrice secondaria non viene contata
+# Subtest: PROBE F3: il badge del drag durante uno stacco usa la durata di TUTTA la visita
+ok 4 - PROBE F3: il badge del drag durante uno stacco usa la durata di TUTTA la visita
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
