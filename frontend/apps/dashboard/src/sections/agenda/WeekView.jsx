@@ -236,10 +236,24 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     return `${day ? `${t(DOW_IT[dayIdx], DOW_EN[dayIdx])} ${parseISO(day.date).getDate()} · ` : ''}${op ? op.first_name + ' · ' : ''}${timeLabel(ns)}`;
   }
 
+  /* «Torna indietro» del server, lo stesso del tasto in barra: rimette
+   * l'appuntamento dov'era e, se il messaggio alla cliente non è ancora
+   * partito, lo ferma. Rifare lo spostamento al contrario lo lasciava invece
+   * partire. */
+  async function undoLast() {
+    try {
+      const res = await api.post('/api/agenda/undo', {});
+      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
+    } catch (err) { toastErr(err, t, fireToast); }
+    await refetchWeek();
+  }
+
   /* Uno spostamento su un orario occupato o fuori turno NON si ferma a chiedere
    * conferma: chi usa l'agenda tutti i giorni sa quando sta incastrando una
-   * cliente. Si sposta forzando e lo si dice nell'avviso, con «Annulla» per
-   * rimettere tutto dov'era. Stessa regola della vista giorno. */
+   * cliente. Si sposta e basta, con «Annulla» nell'avviso per rimettere tutto
+   * dov'era. Che sia stato «forzato» non si scrive da nessuna parte: al banco
+   * lo sanno già, ed era l'ennesimo allarme per una giornata normale. Stessa
+   * regola della vista giorno. */
   async function commitMove(d, opts = {}) {
     const day = dayData[d.dayIdx];
     if (!day) return;
@@ -250,21 +264,17 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try {
       await api.post(`/api/agenda/appointments/${d.id}/move`, body);
       if (opts.undo !== false) {
-        const back = {
-          id: d.id, obj: d.obj, dayIdx: d.origDayIdx, ns: d.orig, nop: d.origOp,
-          orig: d.ns, origOp: d.nop, origDayIdx: d.dayIdx,
-        };
         fireToast({
-          msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns) + (opts.warn ? ' · ' + opts.warn : ''),
-          icon: opts.warn ? 'alert' : 'calendar',
+          msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns),
+          icon: 'calendar',
           undo: t('Annulla', 'Undo'),
-          undoFn: () => commitMove(back, { undo: false }),
+          undoFn: () => undoLast(),
         });
       }
       await refetchWeek();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
-        await commitMove(d, { ...opts, force: true, warn: t('forzato: occupato o fuori turno', 'forced: busy or off shift') });
+        await commitMove(d, { ...opts, force: true });
         return;
       }
       setPending(null);        // il blocco torna al suo posto
@@ -484,8 +494,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
  * deve dire che lavoro è anche qui — con la tinta dell'operatrice tutti i
  * blocchi di una colonna erano identici e il tipo di trattamento si scopriva
  * solo passandoci sopra. Chi lo fa resta scritto nella striscia verticale a
- * sinistra e nell'intestazione della sotto-colonna. Indicatori forced / caparra
- * dovuta / gift come nella vista giorno.
+ * sinistra e nell'intestazione della sotto-colonna. Indicatori caparra dovuta /
+ * gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
 function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, canWrite, t, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * PXM;
@@ -497,7 +507,13 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false,
   const bands = serviceBands(a);
   const gifts = (a.gifts || []).length;   // il payload settimana può non avere `gifts`
   const depositDue = a.deposit_status === 'required';
-  const flags = !!(a.forced || depositDue || gifts);
+  /* «Forzato» NON si segnala più in griglia. Da quando l'agenda non chiede più
+   * conferme — si trascina e basta, si forza per conto nostro al primo rifiuto —
+   * quasi ogni appuntamento nasce o passa da una forzatura: il triangolino
+   * finiva su tutti i blocchi e non distingueva più niente, spaventando per
+   * giornate perfettamente normali. Resta scritto nel pannello di dettaglio,
+   * dove serve davvero (e dove la vista giorno lo lascia da tempo). */
+  const flags = !!(depositDue || gifts);
   const svcTint = (it) => {
     const col = it && itemColor
       ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
@@ -546,7 +562,6 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false,
       ))}
       {flags && (
         <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 3 }}>
-          {a.forced && <span title={t('Inserito forzando le regole', 'Booked overriding the rules')} style={{ display: 'grid' }}><Icon name="alert" size={10} color="var(--warn)" stroke={2.6} /></span>}
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
           {gifts > 0 && <span title={t('Gift card', 'Gift card')} style={{ display: 'grid' }}><Icon name="gift" size={10} color="var(--ink-2)" stroke={2.2} /></span>}
         </div>
