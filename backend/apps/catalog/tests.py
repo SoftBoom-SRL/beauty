@@ -1,9 +1,11 @@
 """Test essenziali: reorder categorie, pacchetto con items (ricreati a ogni
 update), endpoint pubblici (raggruppamento + filtro attivi + 404 salone).
 
-Le view sono chiamate direttamente (bypassando l'HTTP layer): usano solo
-`request.auth`, quindi basta un `SimpleNamespace` con un `StaffContext` costruito
-a mano — evita di dipendere da apps.accounts (fuori dal perimetro di questa app).
+Le view sono chiamate per lo più direttamente (bypassando l'HTTP layer): usano
+solo `request.auth`, quindi basta un `SimpleNamespace` con un `StaffContext`
+costruito a mano. `CatalogHttpSmokeTests` invece passa DAVVERO da /api/catalog/…:
+finché nessun test faceva una richiesta HTTP, un instradamento rotto sarebbe
+rimasto invisibile con la suite tutta verde.
 """
 
 from decimal import Decimal
@@ -22,11 +24,17 @@ from .api import (
     public_packages,
     public_services,
     reorder_categories,
+    update_category,
     update_package,
     update_service,
 )
 from .models import Package, PackageItem, Service, ServiceCategory
 from .schemas import CategoryIn, PackageIn, PackageItemIn, ReorderIn, ServiceIn
+
+
+def fake_request(auth=None):
+    """Richiesta finta: `META` serve al rate limit degli endpoint pubblici."""
+    return SimpleNamespace(auth=auth, META={"REMOTE_ADDR": "203.0.113.7"}, GET={})
 
 
 class CatalogTestCase(TestCase):
@@ -35,7 +43,7 @@ class CatalogTestCase(TestCase):
         ctx = StaffContext(
             user=None, salon=self.salon, membership=None, scopes={"pricing"}, is_owner=False
         )
-        self.request = SimpleNamespace(auth=ctx)
+        self.request = fake_request(ctx)
 
 
 class ReorderCategoriesTests(CatalogTestCase):
@@ -217,7 +225,7 @@ class PublicEndpointsTests(CatalogTestCase):
             price=Decimal("25.00"), active=True,
         )
 
-        result = public_services(None, self.salon.slug)
+        result = public_services(fake_request(), self.salon.slug)
 
         # ordinate per "order" della categoria: Capelli (0) prima di Unghie (1)
         self.assertEqual([c["id"] for c in result], [cat_b.id, cat_a.id])
@@ -227,7 +235,7 @@ class PublicEndpointsTests(CatalogTestCase):
 
     def test_public_services_unknown_salon_returns_404(self):
         with self.assertRaises(HttpError) as exc:
-            public_services(None, "salone-inesistente")
+            public_services(fake_request(), "salone-inesistente")
         self.assertEqual(exc.exception.status_code, 404)
 
     def test_public_packages_hides_inactive_and_includes_items(self):
@@ -239,7 +247,7 @@ class PublicEndpointsTests(CatalogTestCase):
         PackageItem.objects.create(package=active_pkg, service=service, qty=1)
         Package.objects.create(salon=self.salon, name="Combo disattivo", price=Decimal("40.00"), active=False)
 
-        result = public_packages(None, self.salon.slug)
+        result = public_packages(fake_request(), self.salon.slug)
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "Combo attivo")
@@ -247,7 +255,7 @@ class PublicEndpointsTests(CatalogTestCase):
 
     def test_public_packages_unknown_salon_returns_404(self):
         with self.assertRaises(HttpError) as exc:
-            public_packages(None, "salone-inesistente")
+            public_packages(fake_request(), "salone-inesistente")
         self.assertEqual(exc.exception.status_code, 404)
 
 
@@ -301,3 +309,148 @@ class ServiceDescriptionTests(CatalogTestCase):
         service = listing[0]["services"][0]
         self.assertEqual(service.description_it, "Cura completa di mani e unghie")
         self.assertEqual(service.description_en, "Full hand and nail care")
+
+
+class CategoryColorTests(CatalogTestCase):
+    """Rinominare una categoria non deve riportarne il colore a quello di fabbrica."""
+
+    def test_update_without_color_keeps_the_existing_one(self):
+        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
+        update_category(self.request, category.id, CategoryIn(name_it="Mani", order=2))
+        category.refresh_from_db()
+        self.assertEqual(category.color, "#123456")
+        self.assertEqual(category.name_it, "Mani")
+        self.assertEqual(category.order, 2)
+
+    def test_update_with_color_changes_it(self):
+        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
+        update_category(self.request, category.id, CategoryIn(name_it="Unghie", color="#00FF00"))
+        category.refresh_from_db()
+        self.assertEqual(category.color, "#00FF00")
+
+    def test_create_without_color_uses_the_default(self):
+        category = create_category(self.request, CategoryIn(name_it="Viso"))
+        self.assertEqual(category.color, "#E0E7FF")
+
+
+class CategoryValidationTests(CatalogTestCase):
+    """Colore e ordine fuori range sono errori della richiesta, non del database."""
+
+    def test_invalid_color_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_category(self.request, CategoryIn(name_it="Unghie", color="rosso"))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_negative_order_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_category(self.request, CategoryIn(name_it="Unghie", order=-1))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_update_with_invalid_color_is_a_400_and_changes_nothing(self):
+        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
+        with self.assertRaises(HttpError) as caught:
+            update_category(self.request, category.id, CategoryIn(name_it="X", color="#12"))
+        self.assertEqual(caught.exception.status_code, 400)
+        category.refresh_from_db()
+        self.assertEqual((category.name_it, category.color), ("Unghie", "#123456"))
+
+
+class PackageItemsPreservedTests(CatalogTestCase):
+    """Un PUT che cambia solo il prezzo non deve svuotare il pacchetto."""
+
+    def setUp(self):
+        super().setUp()
+        cat = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        self.service = Service.objects.create(
+            salon=self.salon, category=cat, name_it="Manicure", duration_min=30, price=Decimal("20")
+        )
+
+    def test_update_without_items_keeps_them(self):
+        created = create_package(
+            self.request,
+            PackageIn(
+                name="Combo", price=Decimal("45"),
+                items=[PackageItemIn(service_id=self.service.id, qty=2)],
+            ),
+        )
+        update_package(self.request, created["id"], PackageIn(name="Combo", price=Decimal("39")))
+        package = Package.objects.get(pk=created["id"])
+        self.assertEqual(package.price, Decimal("39"))
+        self.assertEqual(
+            list(package.items.values_list("service_id", "qty")), [(self.service.id, 2)]
+        )
+
+    def test_update_with_empty_items_empties_the_package(self):
+        """Mandare `items: []` resta un ordine esplicito di svuotare."""
+        created = create_package(
+            self.request,
+            PackageIn(
+                name="Combo", price=Decimal("45"),
+                items=[PackageItemIn(service_id=self.service.id, qty=2)],
+            ),
+        )
+        update_package(
+            self.request, created["id"], PackageIn(name="Combo", price=Decimal("45"), items=[])
+        )
+        self.assertEqual(Package.objects.get(pk=created["id"]).items.count(), 0)
+
+
+class CatalogHttpSmokeTests(TestCase):
+    """Una richiesta HTTP vera per router: senza, un endpoint irraggiungibile
+    (405 o 404 di instradamento) resta verde in una suite che chiama le view
+    come funzioni. Il riordino categorie era dato per rotto proprio così."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from common.auth import create_staff_tokens
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Listino", scopes=["pricing"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+
+    def test_post_categories_reorder_is_routed_and_persists_the_order(self):
+        first = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        second = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
+        res = self.client.post(
+            "/api/catalog/categories/reorder",
+            data={"ids": [second.id, first.id]},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual([c["id"] for c in res.json()], [second.id, first.id])
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual((second.order, first.order), (0, 1))
+
+    def test_categories_crud_round_trip_over_http(self):
+        created = self.client.post(
+            "/api/catalog/categories",
+            data={"name_it": "Viso", "color": "#ABCDEF"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        category_id = created.json()["id"]
+
+        renamed = self.client.put(
+            f"/api/catalog/categories/{category_id}",
+            data={"name_it": "Viso e collo"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.content)
+        self.assertEqual(renamed.json()["color"], "#ABCDEF")  # colore non travolto
+
+        listing = self.client.get("/api/catalog/categories", **self.auth)
+        self.assertEqual(listing.status_code, 200, listing.content)
+        self.assertEqual([c["name_it"] for c in listing.json()], ["Viso e collo"])
+
+    def test_public_services_over_http_needs_no_auth(self):
+        res = self.client.get(f"/api/catalog/public/services?salon={self.salon.slug}")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json(), [])

@@ -15,6 +15,7 @@ import json
 import logging
 import time
 
+from django.apps import apps as django_apps
 from django.conf import settings
 from django.utils import timezone
 from ninja import Router
@@ -46,6 +47,15 @@ def _status_out(conn: YourangConnection | None) -> dict:
         "last_sync_at": conn.last_sync_at,
         "yourang_org_id": conn.yourang_org_id,
     }
+
+
+def _first_sync_error(errors: list[str]) -> str:
+    """Riassunto degli errori di sync da mostrare al titolare ("" se tutto bene)."""
+    if not errors:
+        return ""
+    head = "; ".join(errors[:3])
+    more = f" (+{len(errors) - 3} altri)" if len(errors) > 3 else ""
+    return f"Sincronizzazione parziale: {head}{more}"[:500]
 
 
 def _require_config() -> None:
@@ -129,13 +139,17 @@ def oauth_exchange(request, data: ExchangeIn):
     conn.save()
 
     try:
-        sync.sync_clients(conn)
-        sync.sync_services(conn)
+        clients = sync.sync_clients(conn)
+        services = sync.sync_services(conn)
         conn.last_sync_at = timezone.now()
-        conn.save(update_fields=["last_sync_at"])
+        # Gli errori della prima sync venivano buttati via: la dashboard diceva
+        # "Connesso" mentre su Yourang non era arrivato nulla. Restano scritti
+        # sulla connessione, che è ciò che il titolare vede.
+        conn.last_error = _first_sync_error(clients.errors + services.errors)
+        conn.save(update_fields=["last_sync_at", "last_error"])
     except Exception as exc:
         logger.exception("Yourang initial sync failed")
-        conn.last_error = str(exc)
+        conn.last_error = str(exc)[:500]
         conn.save(update_fields=["last_error"])
 
     return {"mode": "connect", "status": _status_out(conn)}
@@ -152,6 +166,18 @@ def disconnect(request):
     ctx = request.auth
     require_owner(ctx)
     YourangConnection.objects.filter(salon=ctx.salon).delete()
+    # Via anche i riferimenti remoti: restavano appiccicati ai record locali e
+    # dopo una riconnessione (org e catalogo nuovi) ogni cliente veniva saltato
+    # perché "già sincronizzato" e ogni PUT catalogues/items/{id} rispondeva 404,
+    # cioè il listino non arrivava MAI nel catalogo nuovo. I modelli sono di
+    # altre app: accesso lazy, come altrove nel progetto.
+    django_apps.get_model("clients", "Client").objects.filter(salon=ctx.salon).exclude(
+        yourang_contact_id=""
+    ).update(yourang_contact_id="")
+    for model_name in ("Service", "Package"):
+        django_apps.get_model("catalog", model_name).objects.filter(
+            salon=ctx.salon
+        ).exclude(yourang_item_id="").update(yourang_item_id="")
     return OkOut()
 
 
@@ -168,6 +194,11 @@ def _verify_webhook(body: bytes, signature_header: str, timestamp: str) -> bool:
     """
     secret = settings.YOURANG_PROXY_WEBHOOK_SECRET
     if not secret or not signature_header or not timestamp:
+        return False
+    # compare_digest alza TypeError se una delle due stringhe non è ASCII: un
+    # header con un byte ≥ 0x80 diventava un 500 su una rotta pubblica (e un
+    # 500 ripetibile è già di per sé una leva). Firma non ASCII = firma sbagliata.
+    if not signature_header.isascii():
         return False
     try:
         if abs(time.time() - int(timestamp)) > WEBHOOK_TOLERANCE_SECONDS:
@@ -186,9 +217,14 @@ def webhook(request):
     org_id = ""
     try:
         payload = json.loads(body) if body else {}
-        org_id = str(payload.get("organization_id") or "")
     except json.JSONDecodeError:
         raise HttpError(400, "Payload non valido")
+    # Un corpo JSON che non è un oggetto (una lista, un numero, null) faceva
+    # esplodere payload.get con un 500 su rotta pubblica, ripetibile a piacere:
+    # è una richiesta malformata, e come tale va rifiutata.
+    if not isinstance(payload, dict):
+        raise HttpError(400, "Payload non valido")
+    org_id = str(payload.get("organization_id") or "")
 
     # La firma si verifica PRIMA di toccare il DB: /yourang/webhook è pubblica,
     # e l'org nel payload non è attendibile finché la firma non lo rende tale.
@@ -211,7 +247,11 @@ def webhook(request):
     try:
         if event_type.startswith("contact"):
             sync.sync_clients(conn)  # riconciliazione completa (robusta al payload)
-        elif event_type == "event.deleted":
+        elif event_type == "event.deleted" and entity_id:
+            # `and entity_id` come nel ramo gemello qui sotto: senza, un
+            # event.deleted col campo assente (o rinominato ancora dal proxy)
+            # arrivava a cancel_event con "" e annullava l'INTERA agenda del
+            # salone in una sola UPDATE, rispondendo pure 200 "ok".
             sync.cancel_event(conn, entity_id)
         elif event_type.startswith("event") and entity_id:
             sync.import_event(conn, entity_id)

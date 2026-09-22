@@ -1,7 +1,7 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Screen agents CONSUME this via useApp() — never edit it.
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, useT, useToastHost } from '@youty/shared';
+import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
 
 /* Il salone servito da questa pagina è il primo segmento del path
@@ -17,6 +17,12 @@ const FALLBACK_BRAND_COLOR = '#7C4A57';
 
 export function AppProvider({ children }) {
   const { t, lang, setLang } = useT();
+  /* La lingua scelta dalla cliente vince sempre; se non ne ha mai scelta una,
+   * vale `default_lang` del salone. Veniva ignorato del tutto e un salone che
+   * lavora in inglese apriva comunque in italiano. Si guarda il valore SALVATO
+   * ALL'AVVIO perché il provider riscrive la chiave al primo render. */
+  const langChosen = useRef(storedLang() !== null);
+  const setLangChosen = useCallback((next) => { langChosen.current = true; setLang(next); }, [setLang]);
 
   /* ---- white-label branding boot ---- */
   const [brand, setBrand] = useState(null);
@@ -28,6 +34,7 @@ export function AppProvider({ children }) {
       // Orari sempre quelli del salone: dall'estero la cliente leggeva l'ora
       // del proprio telefono e si presentava all'ora sbagliata.
       setSalonTz(b.timezone);
+      if (!langChosen.current && (b.default_lang === 'it' || b.default_lang === 'en')) setLang(b.default_lang);
       setBrand(makeBrand({
         color: b.brand_color || FALLBACK_BRAND_COLOR,
         name: b.name,
@@ -37,6 +44,9 @@ export function AppProvider({ children }) {
         phone: b.phone || '',
         openingHours: b.opening_hours || '',
         privacyUrl: b.privacy_policy_url || '',
+        // La soglia di preavviso è configurabile: se il branding non la espone
+        // ancora si resta sul 24 di `makeBrand`, mai su un testo fisso.
+        cancelMinHours: b.cancel_min_hours,
       }));
     } catch (err) {
       setBrandError(err?.message || 'Errore');
@@ -100,7 +110,7 @@ export function AppProvider({ children }) {
   }, []);
 
   const ctx = {
-    t, lang, setLang,
+    t, lang, setLang: setLangChosen,
     brand, reloadBrand: loadBrand, brandError,
     session, client,
     authOpen, openAuth, closeAuth,

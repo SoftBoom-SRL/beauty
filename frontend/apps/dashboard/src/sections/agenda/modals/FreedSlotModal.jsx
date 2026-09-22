@@ -1,7 +1,7 @@
 // FreedSlotModal — after a staff cancel/no-show: matching waitlist entries for the freed
 // slot, ranked client-side, with WhatsApp-suggestion copy (display only — Yourang sends).
 import React, { useState } from 'react';
-import { api, Avatar, Icon, timeLabel } from '@youty/shared';
+import { api, Avatar, Icon, timeLabel, toDateStr } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, prefLabel, svcLabel, toastErr, wlRank, wlDaysWaiting, wlWhatsAppMsg } from '../lib.js';
@@ -33,7 +33,10 @@ export default function FreedSlotModal({ appointment, matches: rawMatches, onClo
       prefill: {
         clientId: w.client_id, clientName: w.client_name,
         serviceIds: [w.service_id], operatorId: w.operator_id || appointment.operator_id,
-        start: appointment.start, date: appointment.start.slice(0, 10),
+        // toDateStr: `start` è un istante UTC — tagliato a dieci caratteri
+        // dava il giorno prima per gli appuntamenti serali, e la nuova
+        // prenotazione si apriva sulla data sbagliata.
+        start: appointment.start, date: toDateStr(appointment.start),
       },
     }), 150);
   };
@@ -131,7 +134,7 @@ export default function FreedSlotModal({ appointment, matches: rawMatches, onClo
         <Icon name="plus" size={15} color="var(--muted-2)" />
         <span className="t-sm" style={{ color: 'var(--muted-2)', flex: 1 }}>{t("Vuoi proporre lo slot a un'altra cliente?", 'Want to propose this slot to another client?')}</span>
         <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 13 }} onClick={() => { onClose(); setTimeout(() => openModal('waitlist'), 150); }}>{t("Apri lista d'attesa", 'Open waiting list')}</button>
-        <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 13 }} onClick={() => { onClose(); setTimeout(() => openModal('newappt', { prefill: { start: appointment.start, operatorId: appointment.operator_id, date: appointment.start.slice(0, 10) } }), 150); }}>{t('Nuova prenotazione', 'New booking')}</button>
+        <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 13 }} onClick={() => { onClose(); setTimeout(() => openModal('newappt', { prefill: { start: appointment.start, operatorId: appointment.operator_id, date: toDateStr(appointment.start) } }), 150); }}>{t('Nuova prenotazione', 'New booking')}</button>
       </div>
     </DkModal>
   );

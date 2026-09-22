@@ -1,16 +1,16 @@
 """Servizi marketing: gift card, coupon, fedeltà, comunicazioni.
 
-`create_gift_card`, `redeem_gift_card`, `accrue_loyalty` e `validate_coupon`
-sono API interne chiamate anche da apps.sales.finalize_sale (import lazy lato sales):
-le firme NON vanno cambiate.
+`create_gift_card`, `redeem_gift_card`, `accrue_loyalty`, `validate_coupon`,
+`coupon_discount` e `mark_coupon_redeemed` sono API interne chiamate anche da
+apps.sales.finalize_sale (import lazy lato sales): le firme NON vanno cambiate.
 """
 
 import math
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.apps import apps as django_apps
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -18,6 +18,12 @@ from apps.core.services import emit_event, log_activity
 from common.utils import human_code
 
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
+
+# Sentinella per distinguere «non ho passato scheduled_at» da «l'ho passato a
+# None perché voglio inviare adesso»: senza, una comunicazione già programmata
+# non si poteva più forzare in invio immediato (il None veniva rimpiazzato dalla
+# data salvata a database).
+_UNSET = object()
 
 
 def unique_code(model, salon, length: int) -> str:
@@ -100,6 +106,11 @@ def redeem_gift_card(salon, code, amount):
         raise HttpError(422, "Importo da scalare non valido")
     # L'eventuale errore viene sollevato FUORI dal blocco atomico: così la marcatura
     # EXPIRED sopravvive al rollback che l'eccezione provocherebbe.
+    # Attenzione: quando questa funzione gira dentro finalize_sale l'atomic qui
+    # sotto è solo un savepoint, e il rollback del checkout si porta via anche la
+    # marcatura. Per questo la scadenza NON è mai un'informazione autoritativa in
+    # lettura: ogni elenco che mostra carte spendibili filtra `expires_at` per
+    # conto suo (vedi client_wallet e i KPI in api.py).
     error = None
     with transaction.atomic():
         card = (
@@ -230,6 +241,34 @@ def _issue_reward(program, client):
     return None
 
 
+# Tetto ai premi che una singola vendita può emettere. Un programma configurato
+# male (1000 punti per euro, soglia 10) trasformava un incasso da 100 € in
+# diecimila premi: trentamila insert e diecimila messaggi WhatsApp dentro la
+# transazione della cassa, con la cassiera bloccata a guardare la rotellina.
+# Oltre il tetto i punti restano sul saldo del cliente — non si perde niente, i
+# premi successivi arriveranno con le spese seguenti — e resta a registro una
+# riga che segnala al salone che la configurazione è sbagliata.
+MAX_REWARDS_PER_SALE = 10
+
+
+def _points_earned(sale, program) -> int:
+    """Punti maturati dalla vendita secondo la metrica del programma."""
+    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        # Le gift card vendute non danno punti: li darà la spesa fatta con
+        # la carta. Contarle qui significava pagare due volte lo stesso
+        # denaro, una all'acquisto e una al riscatto.
+        gift_card_sold = sale.lines.filter(line_type="gift_card").aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        base = Decimal(sale.total) - Decimal(gift_card_sold)
+        return math.floor(base * program.earn_ratio) if base > 0 else 0
+    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_VISIT:
+        return math.floor(program.earn_ratio)
+    # per_service
+    n_services = sale.lines.filter(line_type="service").count()
+    return math.floor(program.earn_ratio * n_services)
+
+
 def accrue_loyalty(sale):
     """Accredita punti per la vendita su ogni programma attivo; alla soglia genera
     un Coupon origin=loyalty ed emette `loyalty.reward`. No-op se la vendita è anonima."""
@@ -238,69 +277,96 @@ def accrue_loyalty(sale):
         return
     salon = sale.salon
     for program in LoyaltyProgram.objects.filter(salon=salon, active=True):
-        account = LoyaltyAccount.objects.filter(program=program, client=client).first()
-        if account is None:
-            if program.enrollment != LoyaltyProgram.Enrollment.AUTO:
-                continue  # iscrizione su richiesta/a pagamento: nessun auto-enroll
-            account = LoyaltyAccount.objects.create(program=program, client=client)
+        # Lettura del saldo, emissione dei premi e scrittura stanno in una sola
+        # transazione con la riga del conto bloccata. Prima erano una lettura, una
+        # somma in Python e un save: due casse che chiudevano insieme due scontrini
+        # della stessa cliente leggevano entrambe 95 punti su una soglia di 100,
+        # emettevano entrambe il premio e si sovrascrivevano il saldo a vicenda.
+        with transaction.atomic():
+            account = (
+                LoyaltyAccount.objects.select_for_update()
+                .filter(program=program, client=client)
+                .first()
+            )
+            if account is None:
+                if program.enrollment != LoyaltyProgram.Enrollment.AUTO:
+                    continue  # iscrizione su richiesta/a pagamento: nessun auto-enroll
+                # get_or_create ripiega su una get quando la unique scatta. Con la
+                # create secca, due vendite simultanee della stessa cliente appena
+                # iscritta facevano esplodere l'IntegrityError dentro l'atomic di
+                # finalize_sale: 500 alla cassiera e scontrino annullato per intero.
+                LoyaltyAccount.objects.get_or_create(program=program, client=client)
+                account = LoyaltyAccount.objects.select_for_update().get(
+                    program=program, client=client
+                )
 
-        if program.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-            # Le gift card vendute non danno punti: li darà la spesa fatta con
-            # la carta. Contarle qui significava pagare due volte lo stesso
-            # denaro, una all'acquisto e una al riscatto.
-            gift_card_sold = sale.lines.filter(line_type="gift_card").aggregate(
-                total=Sum("amount")
-            )["total"] or Decimal("0")
-            base = Decimal(sale.total) - Decimal(gift_card_sold)
-            earned = math.floor(base * program.earn_ratio) if base > 0 else 0
-        elif program.earn_metric == LoyaltyProgram.EarnMetric.PER_VISIT:
-            earned = math.floor(program.earn_ratio)
-        else:  # per_service
-            n_services = sale.lines.filter(line_type="service").count()
-            earned = math.floor(program.earn_ratio * n_services)
-        if earned <= 0:
-            continue
+            earned = _points_earned(sale, program)
+            if earned <= 0:
+                continue
 
-        account.points += earned
-        while program.threshold > 0 and account.points >= program.threshold:
-            reward = _issue_reward(program, client)
-            if reward is None:
-                # Premio non emettibile (servizio omaggio senza servizio
-                # scelto, valore a zero): i punti NON si consumano, altrimenti
-                # la cliente pagherebbe la soglia per niente.
+            points = account.points + earned
+            issued = 0
+            while (
+                program.threshold > 0
+                and points >= program.threshold
+                and issued < MAX_REWARDS_PER_SALE
+            ):
+                reward = _issue_reward(program, client)
+                if reward is None:
+                    # Premio non emettibile (servizio omaggio senza servizio
+                    # scelto, valore a zero): i punti NON si consumano, altrimenti
+                    # la cliente pagherebbe la soglia per niente.
+                    log_activity(
+                        salon,
+                        "loyalty.reward_misconfigured",
+                        f"Premio fedeltà «{program.name}» non emesso: configurazione incompleta",
+                        payload={"client_id": client.id, "program_id": program.id},
+                    )
+                    break
+                points -= program.threshold
+                issued += 1
+                emit_event(
+                    salon,
+                    "loyalty.reward",
+                    {
+                        "client_id": client.id,
+                        "client_name": client.full_name,
+                        "phone": client.phone,
+                        "lang": client.lang,
+                        "program_id": program.id,
+                        "program": program.name,
+                        **reward["event"],
+                    },
+                )
                 log_activity(
                     salon,
-                    "loyalty.reward_misconfigured",
-                    f"Premio fedeltà «{program.name}» non emesso: configurazione incompleta",
-                    payload={"client_id": client.id, "program_id": program.id},
+                    "loyalty.reward",
+                    f"Premio fedeltà «{program.name}» per {client.full_name}: {reward['label']}",
+                    payload={
+                        "client_id": client.id,
+                        "program_id": program.id,
+                        "sale_id": sale.id,
+                        **reward["event"],
+                    },
                 )
-                break
-            account.points -= program.threshold
-            emit_event(
-                salon,
-                "loyalty.reward",
-                {
-                    "client_id": client.id,
-                    "client_name": client.full_name,
-                    "phone": client.phone,
-                    "lang": client.lang,
-                    "program_id": program.id,
-                    "program": program.name,
-                    **reward["event"],
-                },
+            if issued >= MAX_REWARDS_PER_SALE and points >= program.threshold > 0:
+                log_activity(
+                    salon,
+                    "loyalty.reward_capped",
+                    f"Programma «{program.name}»: raggiunto il tetto di {MAX_REWARDS_PER_SALE} "
+                    "premi per vendita, i punti restanti restano sul saldo",
+                    payload={
+                        "client_id": client.id,
+                        "program_id": program.id,
+                        "sale_id": sale.id,
+                        "points_left": points,
+                    },
+                )
+            # Incremento in SQL: il delta si applica al valore che il database ha
+            # davvero, non a una copia letta prima di emettere i premi.
+            LoyaltyAccount.objects.filter(pk=account.pk).update(
+                points=F("points") + (points - account.points)
             )
-            log_activity(
-                salon,
-                "loyalty.reward",
-                f"Premio fedeltà «{program.name}» per {client.full_name}: {reward['label']}",
-                payload={
-                    "client_id": client.id,
-                    "program_id": program.id,
-                    "sale_id": sale.id,
-                    **reward["event"],
-                },
-            )
-        account.save(update_fields=["points"])
 
 
 # ---- Coupon ------------------------------------------------------------------
@@ -317,21 +383,82 @@ def validate_coupon(salon, code, client=None):
         raise HttpError(422, "Coupon scaduto")
     if coupon.status != Coupon.Status.ACTIVE:
         raise HttpError(422, "Coupon non più valido")
-    if coupon.client_id and client is not None and coupon.client_id != client.id:
-        raise HttpError(422, "Coupon riservato a un altro cliente")
+    # Un coupon intestato vale SOLO per la sua cliente. Prima `client is None`
+    # faceva passare il controllo: su una vendita anonima (il caso più comune al
+    # banco) chiunque presentasse il codice di qualcun altro otteneva lo sconto.
+    if coupon.client_id and (client is None or coupon.client_id != client.id):
+        raise HttpError(422, "Coupon riservato a un altro cliente: intestalo alla vendita")
     return coupon
+
+
+def coupon_discount(coupon, base) -> Decimal:
+    """Sconto in euro che il coupon vale su un imponibile di `base`.
+
+    Mai più dell'imponibile: un buono da 50 € su un conto da 30 sconta 30, non
+    trasforma la cassa in un bancomat. Tutto in Decimal, come il resto del
+    denaro: con i float un 33% su 89,90 arrivava a cifre che non si scrivono su
+    uno scontrino.
+    """
+    base = Decimal(str(base or 0))
+    if base <= 0:
+        return Decimal("0.00")
+    value = Decimal(str(coupon.value))
+    if coupon.kind == Coupon.Kind.PERCENT:
+        value = base * value / Decimal(100)
+    return min(value, base).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def mark_coupon_redeemed(coupon, sale) -> bool:
+    """Consuma il coupon legandolo alla vendita; False se qualcuno l'ha già usato.
+
+    Una sola UPDATE filtrata su status='active': è il database a decidere chi
+    arriva primo, come nell'endpoint di riscatto. Con il leggi-poi-scrivi, due
+    banchi che battono lo stesso codice nello stesso istante lo troverebbero
+    attivo entrambi e lo scalerebbero due volte.
+    """
+    return bool(
+        Coupon.objects.filter(pk=coupon.pk, status=Coupon.Status.ACTIVE).update(
+            status=Coupon.Status.REDEEMED, redeemed_at=timezone.now(), sale=sale
+        )
+    )
 
 
 # ---- Comunicazioni -----------------------------------------------------------
 
 
-def send_communication(comm: Communication, *, scheduled_at=None, actor=None):
+def cancel_pending_send(comm: Communication) -> int:
+    """Toglie dalla coda l'invio non ancora partito di questa comunicazione.
+
+    Una comunicazione programmata lascia in outbox un evento con la data futura:
+    Yourang lo consegnerà comunque. Senza questa pulizia, riprogrammare una
+    comunicazione accodava un secondo evento (e ogni cliente riceveva il
+    messaggio due volte), ed eliminarla non fermava niente — il messaggio
+    partiva per una campagna che non esisteva più.
+
+    Gli eventi già presi in carico da un worker (`sending`/`sent`) non si
+    recuperano: quelli restano. Ritorna quanti ne sono stati annullati.
+    """
+    OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
+    return OutboxEvent.objects.filter(
+        salon=comm.salon,
+        event_type="communication.send",
+        status=OutboxEvent.Status.PENDING,
+        payload__communication_id=comm.id,
+    ).delete()[0]
+
+
+def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
     """Risolve l'audience in client ids (consents.marketing=True) ed emette
     `communication.send`. Se programmata l'evento esce SUBITO con scheduled_at
-    nel payload: l'invio alla data è demandato a Yourang."""
+    nel payload: l'invio alla data è demandato a Yourang.
+
+    `scheduled_at` omesso significa «usa la data salvata sulla comunicazione»;
+    `scheduled_at=None` esplicito significa «invia adesso»."""
     salon = comm.salon
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
 
+    # Solo chi ha il consenso marketing ATTIVO adesso: la revoca (GDPR art. 7.3)
+    # si scrive sullo stesso campo, quindi chi l'ha ritirato sparisce da qui.
     audience_ids = [int(x) for x in (comm.audience or [])]
     qs = Client.objects.filter(salon=salon, is_active=True, consents__marketing=True)
     if comm.audience_type == Communication.AudienceType.LABELS:
@@ -351,7 +478,11 @@ def send_communication(comm: Communication, *, scheduled_at=None, actor=None):
         "langs": {str(c.id): c.lang for c in clients},
     }
 
-    scheduled_at = scheduled_at or comm.scheduled_at
+    if scheduled_at is _UNSET:
+        scheduled_at = comm.scheduled_at
+    # Un invio nuovo sostituisce quello eventualmente ancora in coda: mai due
+    # eventi vivi per la stessa comunicazione.
+    cancel_pending_send(comm)
     if scheduled_at:
         comm.status = Communication.Status.SCHEDULED
         comm.scheduled_at = scheduled_at
@@ -360,6 +491,9 @@ def send_communication(comm: Communication, *, scheduled_at=None, actor=None):
     else:
         comm.status = Communication.Status.SENT
         comm.sent_at = timezone.now()
+        # Inviata adesso: la data programmata non vale più, lasciarla scritta
+        # farebbe credere all'interfaccia che parta una seconda volta.
+        comm.scheduled_at = None
         summary = f"Comunicazione «{comm.title}» inviata a {len(clients)} clienti"
     comm.save(update_fields=["status", "scheduled_at", "sent_at"])
 

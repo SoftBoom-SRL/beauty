@@ -24,15 +24,23 @@ router = Router(tags=["automations"])
 
 # ---- Catalogo statico per il costruttore UI --------------------------------
 
+# Il catalogo mostrato dal costruttore DEVE coincidere con le scelte del
+# modello: erano due elenchi separati, e un evento aggiunto al modello (o tolto)
+# lasciava l'interfaccia a proporre valori che l'API poi rifiuta, o a nascondere
+# quelli buoni. Qui l'elenco è quello del modello; la traduzione inglese è
+# l'unica cosa che vive in questo file.
+EVENTS_EN = {
+    "new_client": "New client",
+    "appointment_created": "Appointment created",
+    "appointment_upcoming": "Upcoming appointment",
+    "visit_completed": "Visit completed",
+    "birthday": "Birthday",
+    "client_inactive": "Inactive client",
+    "no_show": "No-show",
+    "slot_freed": "Slot freed",
+}
 EVENTS = [
-    ("new_client", "Nuovo cliente", "New client"),
-    ("appointment_created", "Appuntamento creato", "Appointment created"),
-    ("appointment_upcoming", "Appuntamento in arrivo", "Upcoming appointment"),
-    ("visit_completed", "Visita completata", "Visit completed"),
-    ("birthday", "Compleanno", "Birthday"),
-    ("client_inactive", "Cliente inattivo", "Inactive client"),
-    ("no_show", "Mancata presentazione", "No-show"),
-    ("slot_freed", "Slot liberato", "Slot freed"),
+    (value, label, EVENTS_EN.get(value, label)) for value, label in Automation.Event.choices
 ]
 
 OPERATORS = [
@@ -80,16 +88,70 @@ def _definition(automation: Automation) -> dict:
 # ---- CRUD --------------------------------------------------------------
 
 
+# Valore massimo dell'anticipo/ritardo, per unità: oltre non è una regola, è un
+# errore di digitazione. `offset_value` è una colonna senza segno, quindi un -2
+# arrivava fino al database e tornava 500.
+MAX_OFFSET = {"minutes": 7 * 24 * 60, "hours": 24 * 30, "days": 365}
+MAX_NAME_CHARS = 120
+
+
+def _validated(data: AutomationIn) -> dict:
+    """Payload ripulito, con gli enum confrontati con le scelte del MODELLO.
+
+    Senza questi controlli un refuso come event="birtday" veniva salvato e
+    spedito a Yourang: il titolare vedeva la regola attiva in dashboard e non
+    partiva mai un messaggio.
+    """
+    payload = data.dict()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HttpError(400, "Il nome dell'automazione è obbligatorio")
+    payload["name"] = name[:MAX_NAME_CHARS]
+    for field, choices, label in (
+        ("event", Automation.Event.values, "Evento"),
+        ("offset_direction", Automation.OffsetDirection.values, "Direzione"),
+        ("offset_unit", Automation.OffsetUnit.values, "Unità"),
+        ("trigger_origin", Automation.TriggerOrigin.values, "Origine"),
+    ):
+        if payload.get(field) not in choices:
+            raise HttpError(400, f"{label} non valido: usa {', '.join(choices)}")
+    offset = payload.get("offset_value") or 0
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        raise HttpError(400, "Anticipo non valido")
+    if not 0 <= offset <= MAX_OFFSET[payload["offset_unit"]]:
+        raise HttpError(
+            400,
+            f"Anticipo fuori scala: da 0 a {MAX_OFFSET[payload['offset_unit']]} "
+            f"{payload['offset_unit']}",
+        )
+    payload["offset_value"] = offset
+    if not isinstance(payload.get("conditions") or {}, dict):
+        raise HttpError(400, "Condizioni non valide")
+    return payload
+
+
 @router.get("/", auth=staff_auth, response=list[AutomationOut])
 def list_automations(request):
-    return request.auth.salon.automations.all()
+    ctx = request.auth
+    # I webhook_token sono credenziali: l'endpoint pubblico /hook/<token> non ha
+    # altra autenticazione e il token non si rigenera, quindi li vede solo chi ha
+    # «marketing». L'elenco in sé resta però leggibile da tutto lo staff: negarlo
+    # spegneva la sezione Automazioni per due dei tre ruoli predefiniti (Front
+    # desk e Operatrice non hanno «marketing»), che fino a ieri la consultavano.
+    # La sezione era già progettata come lettura a tutti e scrittura ai soli
+    # marketing: qui si nasconde il segreto, non la pagina.
+    mask = not (ctx.is_owner or "marketing" in ctx.scopes)
+    rows = list(ctx.salon.automations.all())
+    for row in rows:
+        row._mask_secrets = mask
+    return rows
 
 
 @router.post("/", auth=staff_auth, response=AutomationOut)
 def create_automation(request, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    automation = Automation.objects.create(salon=ctx.salon, **data.dict())
+    automation = Automation.objects.create(salon=ctx.salon, **_validated(data))
     log_activity(
         ctx.salon,
         "automation.created",
@@ -106,7 +168,7 @@ def update_automation(request, automation_id: int, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
     automation = salon_get(Automation, ctx, automation_id)
-    for name, value in data.dict().items():
+    for name, value in _validated(data).items():
         setattr(automation, name, value)
     automation.save()
     log_activity(

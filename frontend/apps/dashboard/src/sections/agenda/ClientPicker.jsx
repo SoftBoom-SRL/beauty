@@ -1,4 +1,7 @@
 // ClientPicker — ricerca cliente (nome/telefono) + creazione rapida inline.
+// La tendina si apre solo quando si è digitato qualcosa (MIN_Q): con quattromila
+// clienti in anagrafica, «gli ultimi inseriti» che comparivano da soli aprendo il
+// campo non erano mai quelli giusti — solo un pannello da scavalcare.
 // Usato dal drawer "nuova prenotazione" e dalla prenotazione di gruppo: un solo
 // componente, stessa UX. Tastiera: ↑/↓ scorrono, Invio seleziona, Esc chiude.
 // "Nuovo cliente" apre un mini-form (nome, cognome, telefono) precompilato con
@@ -23,6 +26,9 @@ const EMPTY_DRAFT = {
 
 const looksLikePhone = (s) => /^[+\d][\d\s./-]{4,}$/.test(String(s || '').trim());
 
+/** Caratteri minimi prima di cercare e di aprire la tendina. */
+const MIN_Q = 2;
+
 export default function ClientPicker({ value, onChange, autoFocus = false, placeholder }) {
   const { t, lang, fireToast, hasScope, clientCategories } = useDash();
   const canCreate = hasScope('clients');
@@ -42,13 +48,13 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
 
   useEffect(() => { if (autoFocus && !value) inputRef.current?.focus(); }, [autoFocus, value]);
 
-  /* ricerca (debounced) — anche a query vuota: mostra gli ultimi clienti */
+  /* ricerca (debounced) — solo da MIN_Q caratteri in su */
   useEffect(() => {
-    if (!open || value) return;
+    if (!open || value || q.trim().length < MIN_Q) return;
     let alive = true;
     setResults(null);
     const tm = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: q.trim() || undefined, limit: 7, is_active: true } })
+      api.get('/api/clients/', { params: { q: q.trim(), limit: 7, is_active: true } })
         .then((res) => { if (alive) { setResults(res.items || []); setHi(0); } })
         .catch(() => { if (alive) setResults([]); });
     }, 180);
@@ -96,7 +102,8 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   };
 
   const onKey = (e) => {
-    if (!open) { if (e.key === 'ArrowDown') setOpen(true); return; }
+    // ↓ apre comunque la tendina: chi vuole vedere l'elenco può chiederlo
+    if (!open) { if (e.key === 'ArrowDown' && q.trim().length >= MIN_Q) setOpen(true); return; }
     const n = (results || []).length;
     if (e.key === 'ArrowDown') { e.preventDefault(); setHi((i) => Math.min(n, i + 1)); } // n = riga "nuovo cliente"
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((i) => Math.max(0, i - 1)); }
@@ -237,9 +244,9 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       <div className="dk-search" style={{ width: '100%', height: 40, borderRadius: 12, borderColor: open ? 'var(--line-strong)' : undefined }}>
         <Icon name="search" size={16} color="var(--muted-2)" />
         <input
-          ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setOpen(e.target.value.trim().length >= MIN_Q); }}
           placeholder={placeholder || t('Cerca per nome o telefono…', 'Search by name or phone…')}
-          onFocus={() => { clearTimeout(blurTimer.current); setOpen(true); }}
+          onFocus={() => { clearTimeout(blurTimer.current); if (q.trim().length >= MIN_Q) setOpen(true); }}
           onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 160); }}
           onKeyDown={onKey}
           aria-expanded={open} aria-autocomplete="list" role="combobox"

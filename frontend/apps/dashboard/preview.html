@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agenda — anteprima locale</title>
+  <style>html, body { height: 100%; margin: 0; } body { background: #F7F8FA; overflow: hidden; } #root { height: 100vh; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // sessione finta scritta prima degli import: staffAuth legge localStorage
+    // al caricamento del modulo, non quando parte il nostro codice.
+    localStorage.setItem('yt.staff.session', JSON.stringify({
+      user: { id: 1, email: 'anteprima@locale', name: 'Anteprima' },
+      salon: { id: 1, name: 'The Parlour', slug: 'the-parlour' },
+      scopes: [], is_owner: true, access: 'finto', refresh: 'finto',
+    }));
+  </script>
+  <script type="module" src="/preview/preview.jsx"></script>
+</body>
+</html>

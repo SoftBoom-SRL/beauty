@@ -31,6 +31,20 @@ class CoreTests(TestCase):
         ev = emit_event(self.salon, "test.event", {"a": 1})
         self.assertEqual(ev.status, "pending")
 
+    def test_a_very_long_name_or_summary_does_not_break_the_action(self):
+        # log_activity gira DENTRO la transazione dell'operazione: un nome di
+        # 130 caratteri faceva fallire ogni azione registrata da quella persona.
+        from apps.accounts.models import User
+
+        user = User.objects.create_user(
+            email="lunga@theparlour.it", password="x" * 10,
+            first_name="A" * 90, last_name="B" * 90,
+        )
+        log = log_activity(self.salon, "client.updated", "S" * 400, actor=user)
+        log.refresh_from_db()
+        self.assertEqual(len(log.actor_name), 120)
+        self.assertEqual(len(log.summary), 255)
+
     def test_conditions_evaluator(self):
         facts = {"reliability": 55, "categories": ["VIP"], "total_spent": 210}
         cond = {
@@ -127,6 +141,68 @@ class SettingsApiTests(TestCase):
         self.salon.refresh_from_db()
         self.assertEqual(self.salon.default_lang, "it")
 
+    def test_explicit_nulls_do_not_reach_the_columns(self):
+        # I campi sono Optional: un null mandato apposta arrivava a `int()` (500)
+        # o finiva su colonne NOT NULL. Significa «non tocco», non «azzera».
+        resp = self._put({
+            "slot_interval_min": None,
+            "deposit_hold_minutes": None,
+            "brand_color": None,
+            "lastminute_monthly_budget": None,
+        })
+        self.assertEqual(resp.status_code, 200, resp.content)
+        saved = SalonSettings.objects.get(salon=self.salon)
+        self.assertEqual(saved.slot_interval_min, 15)
+        self.assertEqual(saved.brand_color, "#6366F1")
+
+    def test_values_out_of_range_and_unknown_enums_are_refused(self):
+        for payload in (
+            {"lastminute_discount_cap": 500},
+            {"flexible_reward_pct": 1000},
+            {"flexible_window_min": 99999},
+            {"deposit_hold_minutes": -1},
+            {"agenda_fill": "massimo"},
+            {"slot_recovery": "forse"},
+            {"brand_color": "rosso"},
+            {"lastminute_monthly_budget": -5},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self._put(payload).status_code, 400, payload)
+        saved = SalonSettings.objects.get(salon=self.salon)
+        self.assertEqual(saved.agenda_fill, "max_revenue")
+        self.assertEqual(saved.flexible_reward_pct, 10)
+
+    def test_privacy_policy_url_must_be_a_real_address(self):
+        # Il valore è reso come href nell'app pubblica delle clienti.
+        self.assertEqual(self._put({"privacy_policy_url": "javascript:alert(1)"}).status_code, 400)
+        self.assertEqual(self._put({"privacy_policy_url": "www.theparlour.it"}).status_code, 400)
+        ok = self._put({"privacy_policy_url": "https://theparlour.it/privacy"})
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(ok.json()["privacy_policy_url"], "https://theparlour.it/privacy")
+        # la stringa vuota resta il modo per toglierlo
+        self.assertEqual(self._put({"privacy_policy_url": ""}).json()["privacy_policy_url"], "")
+
+    def test_lowering_the_hold_alone_cannot_orphan_the_reminder(self):
+        # hold 120 / sollecito 60: portando hold a 30 il sollecito non sarebbe
+        # più partito, e in Impostazioni avrebbe continuato a mostrare 60.
+        self.assertEqual(
+            self._put({"deposit_hold_minutes": 120, "deposit_reminder_minutes": 60}).status_code, 200
+        )
+        refused = self._put({"deposit_hold_minutes": 30})
+        self.assertEqual(refused.status_code, 400, refused.content)
+        saved = SalonSettings.objects.get(salon=self.salon)
+        self.assertEqual((saved.deposit_hold_minutes, saved.deposit_reminder_minutes), (120, 60))
+        ok = self._put({"deposit_hold_minutes": 30, "deposit_reminder_minutes": 15})
+        self.assertEqual(ok.status_code, 200, ok.content)
+
+    def test_opening_hours_cannot_run_past_midnight(self):
+        self.assertEqual(self._put({"opening_hours_week": {"0": [["24:00", "24:30"]]}}).status_code, 400)
+        self.assertEqual(self._put({"opening_hours_week": {"0": [["20:00", "25:00"]]}}).status_code, 400)
+        # fino a mezzanotte esatta è legittimo
+        ok = self._put({"opening_hours_week": {"0": [["20:00", "24:00"]]}})
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(ok.json()["opening_hours_week"]["0"], [["20:00", "24:00"]])
+
     def test_opening_hours_persists(self):
         resp = self._put({"opening_hours": "Lun-Ven 9-19\nSab 9-13"})
         self.assertEqual(resp.status_code, 200, resp.content)
@@ -154,7 +230,7 @@ class PublicBrandingApiTests(TestCase):
             phone="022222222",
             is_default=True,
         )
-        s = SalonSettings.objects.create(salon=self.salon, opening_hours="Lun-Ven 9-19")
+        SalonSettings.objects.create(salon=self.salon, opening_hours="Lun-Ven 9-19")
 
         resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
         self.assertEqual(resp.status_code, 200, resp.content)
@@ -162,7 +238,15 @@ class PublicBrandingApiTests(TestCase):
         self.assertEqual(data["address"], "Via Milano 2")
         self.assertEqual(data["phone"], "022222222")
         self.assertEqual(data["opening_hours"], "Lun-Ven 9-19")
-        self.assertEqual(s.opening_hours, "Lun-Ven 9-19")
+
+    def test_a_public_visit_does_not_create_rows(self):
+        # L'endpoint è aperto e senza autenticazione: bastava chiamarlo per far
+        # nascere una riga di impostazioni a ogni salone sconosciuto.
+        self.assertEqual(SalonSettings.objects.count(), 0)
+        resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["brand_color"], "#6366F1")  # valori predefiniti
+        self.assertEqual(SalonSettings.objects.count(), 0)
 
     def test_falls_back_to_first_location_when_no_default(self):
         Location.objects.create(
@@ -182,6 +266,14 @@ class PublicBrandingApiTests(TestCase):
         self.assertEqual(data["address"], "")
         self.assertEqual(data["phone"], "")
         self.assertEqual(data["opening_hours"], "")
+
+    @override_settings(CLIENT_MOVE_CANCEL_MIN_HOURS=48)
+    def test_the_cancellation_policy_is_knowable_by_the_client_app(self):
+        """L'app cliente scriveva «24h» a codice fisso: un salone con una soglia
+        diversa prometteva una regola che il server non applicava."""
+        resp = self.client.get("/api/core/public/branding", {"salon": "the-parlour"})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["cancel_min_hours"], 48)
 
 
 class LogoApiTests(TestCase):
@@ -227,6 +319,86 @@ class LogoApiTests(TestCase):
         settings_obj.refresh_from_db()
         self.assertFalse(settings_obj.logo)
         self.assertFalse(os.path.exists(logo_path))
+
+    def test_only_real_images_are_accepted(self):
+        # branding/ non è fra i percorsi riservati: il file è scaricabile da
+        # chiunque sull'origin dell'API, dove vive anche /admin/. Un .html
+        # dichiarato "image/png" eseguirebbe JavaScript in quell'origin.
+        evil = SimpleUploadedFile(
+            "evil.html", b"<script>alert(1)</script>", content_type="image/png"
+        )
+        resp = self.client.post("/api/core/settings/logo", {"logo": evil}, **self.auth)
+        self.assertEqual(resp.status_code, 400, resp.content)
+        # tipo dichiarato non ammesso, anche con estensione buona
+        resp = self.client.post(
+            "/api/core/settings/logo",
+            {"logo": SimpleUploadedFile("logo.png", b"x", content_type="text/html")},
+            **self.auth,
+        )
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertFalse(SalonSettings.objects.filter(salon=self.salon, logo__gt="").exists())
+
+    def test_an_oversized_logo_is_refused(self):
+        from apps.core.api import LOGO_MAX_BYTES
+
+        big = SimpleUploadedFile(
+            "logo.png", b"0" * (LOGO_MAX_BYTES + 1), content_type="image/png"
+        )
+        resp = self.client.post("/api/core/settings/logo", {"logo": big}, **self.auth)
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+    def test_the_stored_name_is_decided_by_the_server(self):
+        upload = SimpleUploadedFile(
+            "../../../etc/passwd.png", b"fake-image-bytes", content_type="image/png"
+        )
+        resp = self.client.post("/api/core/settings/logo", {"logo": upload}, **self.auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        name = SalonSettings.objects.get(salon=self.salon).logo.name
+        self.assertTrue(name.startswith("branding/"), name)
+        self.assertTrue(name.endswith(".png"), name)
+        self.assertNotIn("passwd", name)
+
+
+class LocationDefaultTests(TestCase):
+    """La sede predefinita è UNA: chi legge fa filter(is_default=True).first()."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        owner = User.objects.create_user(email="titolare2@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+
+    def _post(self, body):
+        return self.client.post(
+            "/api/core/locations", data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_marking_a_new_default_clears_the_previous_one(self):
+        first = self._post({"name": "Centro", "address": "Via Roma 1", "is_default": True}).json()
+        second = self._post({"name": "Nuova sede", "address": "Via Milano 2", "is_default": True}).json()
+        defaults = list(
+            Location.objects.filter(salon=self.salon, is_default=True).values_list("id", flat=True)
+        )
+        self.assertEqual(defaults, [second["id"]])
+        self.assertFalse(Location.objects.get(pk=first["id"]).is_default)
+        # ed è quella che l'app cliente mostra
+        public = self.client.get("/api/core/public/branding?salon=the-parlour").json()
+        self.assertEqual(public["address"], "Via Milano 2")
+
+    def test_promoting_an_existing_location_demotes_the_others(self):
+        first = self._post({"name": "Centro", "is_default": True}).json()
+        second = self._post({"name": "Nuova sede", "is_default": False}).json()
+        resp = self.client.put(
+            f"/api/core/locations/{second['id']}",
+            data=json.dumps({"name": "Nuova sede", "is_default": True}),
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertFalse(Location.objects.get(pk=first["id"]).is_default)
+        self.assertTrue(Location.objects.get(pk=second["id"]).is_default)
 
 
 class ActivityFeedApiTests(TestCase):
@@ -285,18 +457,82 @@ class ActivityFeedApiTests(TestCase):
         res = self.client.get("/api/core/activity/feed")
         self.assertEqual(res.status_code, 401)
 
-    def test_feed_and_stream_share_the_same_prefixes(self):
+    def test_feed_and_stream_deliver_the_same_events(self):
         # Il polling di riserva deve vedere gli stessi eventi dello stream SSE:
-        # impostazioni ed etichette clienti erano escluse solo lato HTTP.
-        from .api import LIVE_FEED_PREFIXES as api_prefixes
-        from .views import LIVE_FEED_PREFIXES as stream_prefixes
+        # confrontare i due elenchi di prefissi non provava nulla (è lo stesso
+        # oggetto importato), quindi si confrontano le CONSEGNE alla stessa
+        # persona.
+        from apps.core.views import event_generator
 
-        self.assertEqual(api_prefixes, stream_prefixes)
+        log_activity(self.salon, "appointment.created", "Punto di partenza")
         start = self._feed()["cursor"]
-        log_activity(self.salon, "settings.updated", "Impostazioni")
-        log_activity(self.salon, "client_category.created", "Etichetta")
+        log_activity(self.salon, "appointment.created", "Appuntamento")
+        log_activity(self.salon, "client_category.created", "Etichetta")  # senza scope clients
+        log_activity(self.salon, "pause.updated", "Pausa")
+        from_polling = [e["type"] for e in self._feed(after=start)["events"]]
+        frames = list(
+            event_generator(self.salon.id, start, scopes={"agenda"}, max_seconds=0.05, poll=0)
+        )
+        body = json.loads(
+            [f for f in frames if "event: events" in f][0].split("data: ", 1)[1]
+        )
+        self.assertEqual(from_polling, [e["type"] for e in body["events"]])
+        self.assertEqual(from_polling, ["appointment.created", "pause.updated"])
+
+    def test_deposit_events_reach_the_dashboard(self):
+        # La cliente paga la caparra: senza il prefisso `deposit.` l'agenda
+        # restava col pallino «caparra richiesta» fino a un ricaricamento.
+        start = self._feed()["cursor"]
+        log_activity(self.salon, "deposit.paid", "Caparra pagata")
+        log_activity(self.salon, "deposit.refunded", "Caparra rimborsata")
         data = self._feed(after=start)
-        self.assertEqual([e["type"] for e in data["events"]], ["settings.updated", "client_category.created"])
+        self.assertEqual(
+            [e["type"] for e in data["events"]], ["deposit.paid", "deposit.refunded"]
+        )
+
+    def test_areas_without_permission_are_not_delivered(self):
+        # L'operatrice ha solo l'agenda: incassi, magazzino e gift card sono
+        # esattamente ciò che il permesso d'area le nega, e il feed live non
+        # deve essere la scorciatoia per leggerli comunque.
+        start = self._feed()["cursor"]
+        log_activity(self.salon, "appointment.created", "Suo")
+        log_activity(self.salon, "sale.created", "Incasso")
+        log_activity(self.salon, "stock.loaded", "Carico")
+        log_activity(self.salon, "giftcard.created", "Gift card")
+        last = log_activity(self.salon, "pause.updated", "Pausa")
+        data = self._feed(after=start)
+        self.assertEqual(
+            [e["type"] for e in data["events"]], ["appointment.created", "pause.updated"]
+        )
+        # il cursore avanza comunque: gli eventi negati non si richiedono in eterno
+        self.assertEqual(data["cursor"], last.id)
+
+    def test_salon_settings_reach_every_member(self):
+        """Le impostazioni del salone fanno eccezione, ed è voluto.
+
+        Prima erano riservate al titolare insieme a incassi e magazzino, ma
+        orari, intervallo delle fasce e regole del salone li legge già chiunque
+        da /api/core/salon, e la dashboard ricarica proprio su questi eventi:
+        riservarli significava che un cambio di orari fatto dal titolare non
+        raggiungeva più le altre postazioni fino al ricaricamento della pagina.
+        Il sommario non contiene dati di cassa.
+        """
+        start = self._feed()["cursor"]
+        log_activity(self.salon, "settings.updated", "Impostazioni aggiornate")
+        data = self._feed(after=start)
+        self.assertEqual([e["type"] for e in data["events"]], ["settings.updated"])
+
+    def test_the_owner_receives_every_area(self):
+        from apps.accounts.models import Membership, User
+
+        owner = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        start = self.client.get("/api/core/activity/feed", **auth).json()["cursor"]
+        log_activity(self.salon, "sale.created", "Incasso")
+        log_activity(self.salon, "settings.updated", "Impostazioni")
+        data = self.client.get(f"/api/core/activity/feed?after={start}", **auth).json()
+        self.assertEqual([e["type"] for e in data["events"]], ["sale.created", "settings.updated"])
 
 
 class ActivityStreamTests(TestCase):
@@ -316,13 +552,13 @@ class ActivityStreamTests(TestCase):
         self.assertEqual(self.client.post("/api/core/activity/stream-ticket").status_code, 401)
         res = self.client.post("/api/core/activity/stream-ticket", **self.auth)
         self.assertEqual(res.status_code, 200, res.content)
-        ticket = res.json()["ticket"]
+        self.assertTrue(res.json()["ticket"])
         self.assertEqual(self.client.get("/api/core/activity/stream?ticket=nope").status_code, 403)
         # generatore limitato nel tempo: primo frame `ready` con il cursore corrente
         from apps.core.views import event_generator
 
         log_activity(self.salon, "appointment.created", "A")
-        frames = list(event_generator(self.salon.id, 0, max_seconds=0, poll=0))
+        frames = list(event_generator(self.salon.id, 0, scopes={"agenda"}, max_seconds=0, poll=0))
         self.assertTrue(frames[0].startswith("id: "))
         self.assertIn("event: ready", frames[0])
         self.assertIn("event: bye", frames[-1])
@@ -333,7 +569,9 @@ class ActivityStreamTests(TestCase):
         first = log_activity(self.salon, "appointment.created", "Prima")
         log_activity(self.salon, "team.role_created", "Amministrativo")  # filtrato
         new = log_activity(self.salon, "pause.updated", "Pausa", actor=self.user)
-        frames = list(event_generator(self.salon.id, first.id, max_seconds=0.05, poll=0))
+        frames = list(
+            event_generator(self.salon.id, first.id, scopes={"agenda"}, max_seconds=0.05, poll=0)
+        )
         data_frames = [f for f in frames if "event: events" in f]
         self.assertEqual(len(data_frames), 1)
         body = json.loads(data_frames[0].split("data: ", 1)[1])
@@ -352,6 +590,31 @@ class ActivityStreamTests(TestCase):
             self.assertEqual(stream["Content-Type"], "text/event-stream")
             body = b"".join(stream.streaming_content).decode()
         self.assertIn("event: ready", body)
+
+    def test_the_ticket_carries_the_permissions_and_the_stream_filters(self):
+        # Il ticket è l'unica cosa che lo stream conosce di chi ascolta
+        # (EventSource non manda header): senza i permessi dentro, consegnava
+        # incassi e impostazioni a qualunque membro autenticato.
+        from django.core.cache import cache
+
+        res = self.client.post("/api/core/activity/stream-ticket", **self.auth)
+        ticket = res.json()["ticket"]
+        info = cache.get(f"stream-ticket:{ticket}")
+        self.assertEqual(info["scopes"], ["agenda"])
+        self.assertFalse(info["is_owner"])
+
+        before = log_activity(self.salon, "appointment.created", "Punto di partenza")
+        log_activity(self.salon, "sale.created", "Incasso")
+        log_activity(self.salon, "appointment.moved", "Appuntamento spostato")
+        from unittest import mock
+
+        with mock.patch("apps.core.views.STREAM_MAX_SECONDS", 0.05):
+            stream = self.client.get(
+                f"/api/core/activity/stream?ticket={ticket}&after={before.id}"
+            )
+            body = b"".join(stream.streaming_content).decode()
+        self.assertIn("appointment.moved", body)
+        self.assertNotIn("sale.created", body)
 
 
 class SettingsAuditExtrasTests(TestCase):
@@ -467,6 +730,51 @@ class FlushOutboxTests(TestCase):
         with patch("httpx.Client.post", side_effect=fake_post):
             self.assertEqual(flush_pending(), (0, 0))
         self.assertEqual(calls, [])
+
+    @override_settings(YOURANG_API_URL="https://yourang.example/events")
+    def test_the_claim_is_stamped_when_it_really_happens(self):
+        """L'ultimo evento di un giro lungo non deve risultare preso in carico
+        all'inizio del giro: il worker successivo lo considerava abbandonato
+        mentre era ancora in volo e la cliente riceveva due volte lo stesso OTP.
+        """
+        from datetime import timedelta
+        from itertools import count
+        from unittest.mock import MagicMock, patch
+
+        from apps.core.management.commands.flush_outbox import (
+            STALE_CLAIM_SECONDS,
+            flush_pending,
+            release_stale_claims,
+        )
+
+        from .models import OutboxEvent
+
+        first = emit_event(self.salon, "client.otp", {"code": "1"})
+        last = emit_event(self.salon, "client.otp", {"code": "2"})
+        claims = {}
+
+        def slow_post(url, json, headers):
+            claims[json["id"]] = OutboxEvent.objects.get(pk=json["id"]).claimed_at
+            return MagicMock(status_code=200, text="")
+
+        # Orologio che avanza di dieci minuti a ogni lettura: è il caso reale di
+        # Yourang lento con la coda piena, dove fra il primo e l'ultimo evento
+        # del giro passa più della finestra di recupero.
+        base = timezone.now()
+        ticks = count()
+        with patch(
+            "django.utils.timezone.now", side_effect=lambda: base + timedelta(minutes=10 * next(ticks))
+        ):
+            with patch("httpx.Client.post", side_effect=slow_post):
+                flush_pending()
+
+        gap = (claims[last.id] - claims[first.id]).total_seconds()
+        self.assertGreaterEqual(gap, STALE_CLAIM_SECONDS)  # con l'ora di inizio giro era 0
+        # L'ultimo evento, appena preso in carico, non risulta abbandonato.
+        OutboxEvent.objects.filter(pk=last.pk).update(
+            status=OutboxEvent.Status.SENDING, claimed_at=claims[last.id]
+        )
+        self.assertEqual(release_stale_claims(now=claims[last.id] + timedelta(seconds=60)), 0)
 
     @override_settings(YOURANG_API_URL="https://yourang.example/events")
     def test_an_event_stuck_in_sending_goes_back_in_the_queue(self):
@@ -643,6 +951,21 @@ class StreamConnectionCapTests(TestCase):
             again = self.client.get(f"/api/core/activity/stream?ticket={self._ticket()}")
             self.assertEqual(again.status_code, 200)
             again.close()
+
+    def test_a_zeroed_setting_falls_back_to_the_default_in_force(self):
+        """Il ripiego era rimasto a 40, il vecchio tetto che con 24 thread non
+        scattava mai: un'impostazione azzerata riportava quel comportamento."""
+        import importlib
+
+        from django.conf import settings as django_settings
+
+        from apps.core import views
+
+        with override_settings(SSE_MAX_CONNECTIONS=0):
+            importlib.reload(views)
+            self.assertEqual(views.STREAM_MAX_CONCURRENT, 12)
+        importlib.reload(views)
+        self.assertEqual(views.STREAM_MAX_CONCURRENT, django_settings.SSE_MAX_CONNECTIONS)
 
 
 class RateLimitCounterTests(TestCase):

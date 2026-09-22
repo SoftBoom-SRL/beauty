@@ -45,11 +45,14 @@ export function CatChip({ cat, sm, onRemove, removeTitle }) {
 }
 
 /* KPI stat card (ported ProfStat). */
-export function ProfStat({ label, value }) {
+export function ProfStat({ label, value, hint = null }) {
   return (
     <div className="dk-card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)' }}>
       <div className="t-meta" style={{ marginBottom: 6 }}>{label}</div>
       <div className="t-num" style={{ fontSize: 24 }}>{value}</div>
+      {/* La nota serve a dire «non ti e permesso vedere» invece di far passare
+          un trattino per uno zero. */}
+      {hint && <div className="t-meta" style={{ marginTop: 4, opacity: 0.7 }}>{hint}</div>}
     </div>
   );
 }

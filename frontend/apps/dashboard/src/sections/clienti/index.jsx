@@ -38,27 +38,35 @@ export default function ClientiSection() {
     ...relRange(relFilt),
   }), [q, seg, relFilt]);
 
-  /* ---- client list (server-side filters, {items,count} pagination) ---- */
+  /* ---- client list (server-side filters, {items,count} pagination) ----
+   * `reqSeq` è il biglietto della richiesta in corso: ogni fetch (prima pagina
+   * o «Carica altre») lo incrementa e scarta la propria risposta se nel
+   * frattempo ne è partita un'altra. Senza, premendo «Carica altre» e
+   * cambiando subito filtro le 50 clienti del filtro precedente finivano in
+   * coda alla lista nuova, con il conteggio in testata che non tornava. */
+  const reqSeq = useRef(0);
   useEffect(() => {
-    let dead = false;
+    const seq = ++reqSeq.current;
     setItems(null);
     api.get('/api/clients/', { params: { ...listParams, limit: PAGE, offset: 0 } })
-      .then((res) => { if (!dead) { setItems(res.items); setCount(res.count); } })
+      .then((res) => { if (seq === reqSeq.current) { setItems(res.items); setCount(res.count); } })
       .catch((err) => {
-        if (dead) return;
+        if (seq !== reqSeq.current) return;
         setItems([]); setCount(0);
         fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
       });
-    return () => { dead = true; };
   }, [listParams, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
+    const seq = ++reqSeq.current;
     setLoadingMore(true);
     try {
       const res = await api.get('/api/clients/', { params: { ...listParams, limit: PAGE, offset: items.length } });
+      if (seq !== reqSeq.current) return;
       setItems((l) => [...l, ...res.items]);
       setCount(res.count);
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
     } finally { setLoadingMore(false); }
   };

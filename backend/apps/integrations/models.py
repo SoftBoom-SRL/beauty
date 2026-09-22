@@ -41,5 +41,18 @@ class YourangConnection(models.Model):
     connected_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [
+            # Un'organizzazione Yourang appartiene a UN solo salone: il webhook
+            # risolve il salone dall'org, quindi due righe con la stessa org
+            # consegnano le prenotazioni al salone sbagliato. Parziale perché ""
+            # significa "non ancora collegata" e vale per molte righe.
+            models.UniqueConstraint(
+                fields=["yourang_org_id"],
+                condition=~models.Q(yourang_org_id=""),
+                name="uniq_yourang_connection_org",
+            ),
+        ]
+
     def __str__(self):
         return f"Yourang · {self.salon_id} ({self.status})"

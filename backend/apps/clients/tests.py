@@ -33,13 +33,14 @@ from .api import (
     delete_note,
     get_client,
     import_clients,
+    list_client_appointments,
     list_clients,
     list_notes,
     list_sheets,
     router,
     update_client,
 )
-from .models import Client, ClientCategory, ClientNote, TechnicalSheet
+from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
 from .schemas import CategoryIn, ClientIn, ImportIn, ImportRowIn, NoteIn, TechnicalSheetIn
 from .services import client_facts, client_stats, import_rows
 
@@ -76,6 +77,118 @@ class ClientCrudTests(ClientsTestCase):
             create_client(self.request, data)
         self.assertEqual(exc.exception.status_code, 400)
 
+    def test_since_is_filled_at_creation(self):
+        """Senza `since` il KPI «nuovi clienti» resta a zero per sempre."""
+        client = create_client(
+            self.request, ClientIn(first_name="Giada", phone="+393334445555")
+        )
+        self.assertEqual(client.since, timezone.localdate())
+
+    def test_given_since_is_kept(self):
+        """Chi importa uno storico dice da quando è cliente: non si sovrascrive."""
+        client = create_client(
+            self.request,
+            ClientIn(first_name="Giada", phone="+393334446666", since=dt.date(2019, 5, 2)),
+        )
+        self.assertEqual(client.since, dt.date(2019, 5, 2))
+
+    def test_the_database_refuses_two_cards_for_the_same_number(self):
+        """L'identità è phone_key, non la stringa digitata.
+
+        Il vincolo su (salone, telefono) guardava il testo: «+39 333 000 1111»
+        e «+393330001111» erano due schede per la stessa persona, con storico,
+        affidabilità e caparre spaccati a metà.
+        """
+        from django.db import IntegrityError, transaction
+
+        self.make_client(phone="+393330001111")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.make_client(phone="+39 333 000 1111", first_name="Doppia")
+
+    def test_a_concurrent_duplicate_answers_400_not_500(self):
+        """Il controllo di unicità non è atomico: a fermare la seconda scheda è
+        il vincolo del database, e la violazione deve uscire come 400."""
+        from unittest.mock import patch
+
+        self.make_client(phone="+393337778888")
+        data = ClientIn(first_name="Altra", phone="+39 333 777 8888")
+        # find_client_by_phone cieco = le due richieste simultanee che superano
+        # entrambe il controllo e arrivano insieme alla INSERT.
+        with patch("apps.clients.api.find_client_by_phone", return_value=None):
+            with self.assertRaises(HttpError) as exc:
+                create_client(self.request, data)
+        self.assertEqual(exc.exception.status_code, 400)
+
+
+class ClientPartialUpdateTests(ClientsTestCase):
+    """Il PUT applica solo i campi presenti nel corpo.
+
+    `ClientIn` ha un default per quasi tutto: riversarlo intero su una scheda
+    esistente cancellava i consensi (con la prova del consenso privacy),
+    riportava l'affidabilità a 100 e riattivava le schede disattivate.
+    """
+
+    def test_a_partial_put_does_not_wipe_consents_and_reliability(self):
+        client = self.make_client(
+            phone="+393332221111",
+            reliability=42,
+            consents={"privacy": True, "privacy_at": "2026-01-02T10:00:00", "marketing": True},
+        )
+        update_client(
+            self.request,
+            client.id,
+            ClientIn(first_name="Sofia", last_name="Neri", phone="+393332221111"),
+        )
+        client.refresh_from_db()
+        self.assertEqual(client.last_name, "Neri")
+        self.assertEqual(client.reliability, 42)
+        self.assertTrue(client.consents["privacy"])
+        self.assertEqual(client.consents["privacy_at"], "2026-01-02T10:00:00")
+        self.assertTrue(client.consents["marketing"])
+
+    def test_a_partial_put_does_not_reactivate_a_disabled_card(self):
+        client = self.make_client(phone="+393332223333", is_active=False)
+        update_client(self.request, client.id, ClientIn(first_name="Sofia", phone="+393332223333"))
+        client.refresh_from_db()
+        self.assertFalse(client.is_active)
+
+    def test_what_is_in_the_body_is_applied(self):
+        client = self.make_client(phone="+393332224444", reliability=100)
+        update_client(
+            self.request,
+            client.id,
+            ClientIn(first_name="Sofia", phone="+393332224444", reliability=30, is_active=False),
+        )
+        client.refresh_from_db()
+        self.assertEqual(client.reliability, 30)
+        self.assertFalse(client.is_active)
+
+    def test_categories_are_left_alone_when_the_body_omits_them(self):
+        client = self.make_client(phone="+393332225555")
+        vip = ClientCategory.objects.create(salon=self.salon, name="VIP")
+        client.categories.add(vip)
+        update_client(self.request, client.id, ClientIn(first_name="Sofia", phone="+393332225555"))
+        self.assertEqual(list(client.categories.all()), [vip])
+
+    def test_stripe_identifiers_are_not_writable_from_the_client(self):
+        """Copiare gli identificativi Stripe di un'altra cliente su questa
+        scheda permetteva di addebitare un no-show sulla carta di lei."""
+        client = self.make_client(phone="+393332226666")
+        data = ClientIn.model_validate(
+            {
+                "first_name": "Sofia",
+                "phone": "+393332226666",
+                "stripe_customer_id": "cus_di_un_altra",
+                "stripe_payment_method_id": "pm_di_un_altra",
+            }
+        )
+        self.assertFalse(hasattr(data, "stripe_customer_id"))
+        update_client(self.request, client.id, data)
+        client.refresh_from_db()
+        self.assertEqual(client.stripe_customer_id, "")
+        self.assertEqual(client.stripe_payment_method_id, "")
+
     def test_soft_delete_sets_is_active_false_and_logs(self):
         client = self.make_client()
         delete_client(self.request, client.id)
@@ -98,6 +211,22 @@ class ClientListTests(ClientsTestCase):
         result = list_clients(self.request, q="Sofia")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0].first_name, "Sofia")
+
+    def test_search_finds_the_full_name(self):
+        """«Sofia Ricci» non stava in nessuna colonna: il filtro campo per
+        campo non trovava nulla e si creava un doppione."""
+        self.make_client(first_name="Sofia", last_name="Ricci", phone="+391110001111")
+        self.make_client(first_name="Sofia", last_name="Conti", phone="+391110002222")
+        result = list_clients(self.request, q="Sofia Ricci")
+        self.assertEqual([c.last_name for c in result["items"]], ["Ricci"])
+
+    def test_search_finds_a_formatted_phone_number(self):
+        """In archivio il numero è E.164 senza separatori, sulla scheda si legge
+        formattato: copiarlo dalla scheda nella ricerca non trovava nessuno."""
+        client = self.make_client(phone="+393331234567")
+        for written in ("+39 333 123 4567", "333 123 4567", "3331234567"):
+            result = list_clients(self.request, q=written)
+            self.assertEqual([c.id for c in result["items"]], [client.id], written)
 
     def test_list_filters_by_is_active(self):
         active = self.make_client(phone="+391110003333")
@@ -163,26 +292,63 @@ class ImportUpsertTests(ClientsTestCase):
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "Giulia")
 
-    def test_a_phone_added_by_the_import_matches_the_next_rows(self):
-        """Aggiornando per email una scheda con un telefono nuovo, la chiave
-        non entrava nella cache di deduplicazione: una riga successiva con lo
-        stesso numero provava a inserirne un'altra e finiva fra le righe
-        rifiutate dal database (caccia ai bug del 21/09/2026)."""
-        existing = self.make_client(phone="", email="giulia@example.com", first_name="Giulia")
-        result = import_rows(self.salon, [
-            {"first_name": "Giulia", "email": "giulia@example.com", "phone": "+393337776666"},
-            {"first_name": "Giulia", "last_name": "Rossi", "email": "", "phone": "+393337776666"},
-        ])
-        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 2, 0))
-        self.assertEqual(result["errors"], [])
-        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
-        existing.refresh_from_db()
-        self.assertEqual(existing.phone, "+393337776666")
-        self.assertEqual(existing.last_name, "Rossi")
-
     def test_import_row_without_phone_or_match_is_skipped(self):
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
         self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
+
+    def test_rows_with_their_own_phone_are_never_merged_by_email(self):
+        """L'email è la rete di sicurezza delle righe SENZA telefono.
+
+        Un file esportato con lo stesso indirizzo di servizio su tutte le
+        schede (`info@salone.it`) faceva finire 250 persone su una sola scheda,
+        con la risposta «1 nuovo · 249 aggiornati» e nessun errore.
+        """
+        rows = [
+            {"first_name": "Anna", "last_name": "Uno", "phone": "+393330001111", "email": "info@salone.it"},
+            {"first_name": "Bea", "last_name": "Due", "phone": "+393330002222", "email": "info@salone.it"},
+            {"first_name": "Carla", "last_name": "Tre", "phone": "+393330003333", "email": "info@salone.it"},
+        ]
+        result = import_rows(self.salon, rows)
+        self.assertEqual((result["created"], result["updated"]), (3, 0))
+        self.assertEqual(
+            sorted(Client.objects.filter(salon=self.salon).values_list("first_name", flat=True)),
+            ["Anna", "Bea", "Carla"],
+        )
+
+    def test_an_email_match_never_moves_the_phone_number(self):
+        existing = self.make_client(phone="+393330005555", email="giulia@example.com")
+        import_rows(self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": ""}])
+        existing.refresh_from_db()
+        self.assertEqual(existing.phone, "+393330005555")
+
+    def test_phones_without_a_single_digit_are_refused(self):
+        """`phone_key("n/d") == ""`: tutte queste righe condividevano la chiave
+        vuota e si sovrascrivevano l'una con l'altra sulla stessa scheda."""
+        rows = [
+            {"first_name": "Anna", "phone": "n/d"},
+            {"first_name": "Bea", "phone": "-"},
+            {"first_name": "Carla", "phone": "nessuno"},
+        ]
+        result = import_rows(self.salon, rows)
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 3))
+        self.assertEqual([e["row"] for e in result["errors"]], [0, 1, 2])
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 0)
+
+    def test_imported_clients_get_a_since_date(self):
+        import_rows(self.salon, [{"first_name": "Anna", "phone": "+393330007777"}])
+        client = Client.objects.get(salon=self.salon, first_name="Anna")
+        self.assertEqual(client.since, timezone.localdate())
+
+    def test_import_refuses_a_file_bigger_than_the_cap(self):
+        """Ogni riga costa 2-5 query in una richiesta sincrona: senza tetto un
+        file enorme tiene occupato un worker finché il proxy non chiude."""
+        from pydantic import ValidationError
+
+        from .schemas import IMPORT_MAX_ROWS
+
+        rows = [{"first_name": f"C{i}", "phone": f"+3933310{i:05d}"} for i in range(IMPORT_MAX_ROWS + 1)]
+        with self.assertRaises(ValidationError):
+            ImportIn(rows=rows)
 
     def test_import_endpoint_logs_activity(self):
         data = ImportIn(rows=[ImportRowIn(first_name="A", phone="+393330000000")])
@@ -210,6 +376,60 @@ class TechnicalSheetTests(ClientsTestCase):
         )
         self.assertEqual(TechnicalSheet.objects.filter(client=client).count(), 1)
         self.assertEqual(list(list_sheets(self.request, client.id)), [sheet])
+
+    def _operator(self, salon=None):
+        from apps.staff.models import Operator
+
+        return Operator.objects.create(
+            salon=salon or self.salon, first_name="Giulia", last_name="Bianchi"
+        )
+
+    def test_sheet_linked_to_an_appointment_of_this_client(self):
+        from apps.agenda.models import Appointment
+
+        client = self.make_client()
+        appointment = Appointment.objects.create(
+            salon=self.salon, client=client, operator=self._operator(), start=timezone.now()
+        )
+        sheet = create_sheet(
+            self.request,
+            client.id,
+            TechnicalSheetIn(category="hair", treatment="Colore", appointment_id=appointment.id),
+        )
+        self.assertEqual(sheet.appointment_id, appointment.id)
+
+    def test_an_appointment_of_someone_else_is_refused(self):
+        """Prima l'id finiva dritto nella create: quello di un altro salone
+        veniva salvato e la scheda spariva dallo storico (che la cerca fra gli
+        appuntamenti di questa cliente), quello inesistente usciva come 500."""
+        from apps.agenda.models import Appointment
+
+        client = self.make_client()
+        other_salon = Salon.objects.create(name="Altro", slug="altro")
+        stranger = Client.objects.create(
+            salon=other_salon, first_name="Estranea", phone="+390001112222"
+        )
+        foreign = Appointment.objects.create(
+            salon=other_salon,
+            client=stranger,
+            operator=self._operator(other_salon),
+            start=timezone.now(),
+        )
+        other_client = self.make_client(phone="+393338889999", first_name="Altra")
+        mine_but_hers = Appointment.objects.create(
+            salon=self.salon, client=other_client, operator=self._operator(), start=timezone.now()
+        )
+        for appointment_id in (foreign.id, mine_but_hers.id, 999999):
+            with self.assertRaises(HttpError) as caught:
+                create_sheet(
+                    self.request,
+                    client.id,
+                    TechnicalSheetIn(
+                        category="hair", treatment="Colore", appointment_id=appointment_id
+                    ),
+                )
+            self.assertEqual(caught.exception.status_code, 404, appointment_id)
+        self.assertEqual(TechnicalSheet.objects.count(), 0)
 
     def test_no_update_or_delete_routes_for_sheets(self):
         """Verifica di contratto: le schede tecniche sono sola lettura dopo la
@@ -315,7 +535,10 @@ class PublicHookTests(TestCase):
     URL = "/api/clients/public/hook"
 
     def setUp(self):
-        cache.clear()  # il rate limit è per (salone, IP): senza reset i test si contaminano
+        # Il rate limit vive su core.RateLimitCounter (common.ratelimit), quindi
+        # lo azzera il rollback di TestCase. cache.clear() resta per tutto il
+        # resto che passa dalla cache.
+        cache.clear()
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
 
     def _with_privacy_policy(self):
@@ -384,6 +607,53 @@ class PublicHookTests(TestCase):
         self.assertEqual(self._post(phone="3339999999").status_code, 200)  # scartata, non 429
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 20)
 
+    def test_the_counter_does_not_live_in_the_cache(self):
+        """Il contatore è su core.RateLimitCounter, non sulla cache.
+
+        Sulla cache era un leggi-poi-scrivi: duecento richieste in parallelo
+        leggevano quasi tutte lo stesso valore, il contatore avanzava di poche
+        unità e il tetto non fermava il flood. Qui lo verifichiamo per via
+        indiretta: svuotare la cache non regala quota nuova.
+        """
+        for i in range(20):
+            self.assertEqual(self._post(phone=f"33300000{i:02d}").status_code, 200)
+        cache.clear()
+        self.assertEqual(self._post(phone="3339999999").status_code, 200)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 20)
+
+    def test_a_double_submit_answers_200_and_creates_one_card(self):
+        """Doppio tocco su «Invia»: prima la seconda richiesta violava il
+        vincolo di unicità e usciva come 500 su un endpoint che per progetto
+        risponde sempre 200 (altrimenti dice a uno sconosciuto chi è cliente)."""
+        from unittest.mock import patch
+
+        self.assertEqual(self._post().status_code, 200)
+        # find_client_by_phone cieco = le due richieste che partono insieme e
+        # non vedono ancora la scheda dell'altra.
+        with patch("apps.clients.api.find_client_by_phone", side_effect=[None, Client.objects.get()]):
+            self.assertEqual(self._post().status_code, 200)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+
+    def test_a_disabled_card_comes_back_as_a_new_lead(self):
+        """Una cliente cancellata che ricompila il modulo: prima il consenso
+        veniva registrato ma la scheda restava spenta, quindi fuori da ogni
+        lista e da ogni audience. Contatto raccolto e mai visto da nessuno."""
+        disabled = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331234567", is_active=False
+        )
+        self.assertEqual(self._post().status_code, 200)
+        disabled.refresh_from_db()
+        self.assertTrue(disabled.is_active)
+        self.assertTrue(disabled.consents["privacy"])
+        self.assertTrue(disabled.categories.filter(name="Da form").exists())
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+        self.assertTrue(ActivityLog.objects.filter(type="client.created").exists())
+
+    def test_a_lead_from_the_form_is_a_client_from_today(self):
+        self.assertEqual(self._post().status_code, 200)
+        client = Client.objects.get(salon=self.salon)
+        self.assertEqual(client.since, timezone.localdate())
+
     def test_forged_forwarded_for_does_not_reset_the_counter(self):
         """La catena X-Forwarded-For è scrivibile dal client, ma il nostro proxy
         accoda in fondo il peer che ha davvero aperto la connessione: cambiare i
@@ -451,7 +721,11 @@ class ClientGenderBirthdayApiTests(TestCase):
         body = res.json()
         self.assertEqual(body["birthday"], "1990-03-15")
         self.assertTrue(body["birthday_year_known"])
-        self.assertGreaterEqual(body["age"], 30)
+        # Età esatta, non «almeno 30»: l'asserzione larga restava verde anche
+        # con l'off-by-one del compleanno non ancora passato quest'anno.
+        today = timezone.localdate()
+        expected = today.year - 1990 - ((today.month, today.day) < (3, 15))
+        self.assertEqual(body["age"], expected)
         put = self.client.put(
             f"/api/clients/{body['id']}",
             data=json.dumps({"first_name": "Giada", "phone": "+393331112299", "birthday": "--12-24", "gender": "other"}),
@@ -591,6 +865,46 @@ class NoteAttachmentsApiTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(ClientNote.objects.count(), 0)
 
+    def test_an_extension_that_lies_about_the_type_is_refused(self):
+        """Il Content-Type lo dichiara il client. Quello che conta è come il
+        file finisce su disco: un .html servito da /media/ girerebbe sullo
+        stesso origin di /admin/."""
+        evil = SimpleUploadedFile(
+            "foto.png.html", b"<script>alert(1)</script>", content_type="image/png"
+        )
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "x", "files": [evil]}, **self.auth,
+        )
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(ClientNote.objects.count(), 0)
+        self.assertEqual(ClientNoteAttachment.objects.count(), 0)
+
+    def test_the_stored_name_is_the_servers_and_the_original_stays_on_the_card(self):
+        png = SimpleUploadedFile("prima seduta.png", b"\x89PNG\r\n\x1a\n" + b"0" * 8, content_type="image/png")
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "x", "files": [png]}, **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        attachment = ClientNoteAttachment.objects.get()
+        # sulla scheda resta il nome che l'operatrice riconosce…
+        self.assertEqual(attachment.name, "prima seduta.png")
+        # …su disco no: nome generato dal server, estensione coerente col tipo
+        stored = attachment.file.name.rsplit("/", 1)[-1]
+        self.assertNotIn("prima seduta", stored)
+        self.assertTrue(stored.endswith(".png"), stored)
+
+    def test_a_rejected_file_leaves_no_half_saved_attachment(self):
+        good = SimpleUploadedFile("buona.png", b"\x89PNG\r\n\x1a\n", content_type="image/png")
+        bad = SimpleUploadedFile("x.zip", b"PK\x03\x04", content_type="application/zip")
+        res = self.client.post(
+            f"/api/clients/{self.client_obj.id}/notes/upload",
+            data={"text": "x", "files": [good, bad]}, **self.auth,
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(ClientNoteAttachment.objects.count(), 0)
+
     def test_note_can_be_edited(self):
         note = ClientNote.objects.create(client=self.client_obj, text="vecchio")
         res = self.client.put(
@@ -657,6 +971,35 @@ class PhoneNormalizationTests(ClientsTestCase):
             create_client(self.request, ClientIn(first_name="Sofia", last_name="Bis", phone="3331234567"))
         self.assertEqual(caught.exception.status_code, 400)
 
+    def test_an_international_number_without_the_plus_is_not_prefixed_again(self):
+        """«393331234567» è E.164 scritto senza il «+», non un numero italiano.
+
+        Antependendo il prefisso diventava «+39393331234567»: una seconda
+        scheda per la stessa persona, promemoria e OTP verso un numero che non
+        esiste, e il login dell'app cliente che non riaggancia più lo storico.
+        La regola è la stessa di splitPhone nel frontend (oltre 11 cifre =
+        numero internazionale).
+        """
+        from common.phone import normalize_phone
+
+        self.assertEqual(normalize_phone("393331234567"), "+393331234567")
+        self.assertEqual(normalize_phone("39 333 1234567"), "+393331234567")
+        self.assertEqual(normalize_phone("447911123456"), "+447911123456")
+        # Sotto la soglia resta un numero nazionale, anche se comincia per 33
+        # (Francia) o 39: «3331234567» è un cellulare italiano.
+        self.assertEqual(normalize_phone("3331234567"), "+393331234567")
+        self.assertEqual(normalize_phone("3391234567"), "+393391234567")
+
+    def test_the_same_person_written_both_ways_is_one_client(self):
+        created = create_client(
+            self.request, ClientIn(first_name="Sofia", phone="+393331234567")
+        )
+        with self.assertRaises(HttpError) as caught:
+            create_client(self.request, ClientIn(first_name="Sofia", phone="393331234567"))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+        self.assertEqual(created.phone, "+393331234567")
+
     def test_lookup_finds_legacy_spellings(self):
         from common.phone import find_client_by_phone
 
@@ -708,10 +1051,13 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
         )
         self.request = SimpleNamespace(auth=no_scope)
 
-    def test_history_notes_and_sheets_are_refused(self):
+    def test_history_notes_sheets_and_appointments_are_refused(self):
         from .api import client_history
 
-        for view in (client_history, list_notes, list_sheets):
+        # list_client_appointments non lo chiedeva: le visite di una persona
+        # sono un dato della sua scheda, non dell'agenda del giorno, e da lì si
+        # leggevano nomi, servizi e importi senza il permesso «clienti».
+        for view in (client_history, list_notes, list_sheets, list_client_appointments):
             with self.assertRaises(HttpError) as caught:
                 view(self.request, self.client_obj.id)
             self.assertEqual(caught.exception.status_code, 403, view.__name__)
@@ -726,7 +1072,214 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
         )
         self.assertEqual(list_notes(owner, self.client_obj.id), [])
         self.assertEqual(list(list_sheets(owner, self.client_obj.id)), [])
+        self.assertEqual(list_client_appointments(owner, self.client_obj.id), [])
         self.assertIn("entries", client_history(owner, self.client_obj.id))
+
+
+class InputValidationApiTests(TestCase):
+    """Valori più lunghi della colonna o fuori dalle scelte del modello.
+
+    Gli schemi dichiaravano `str` nudi e nessun endpoint chiama `full_clean()`:
+    su Postgres una stringa troppo lunga usciva come 500 (`DataError` non
+    gestita), e quando ci stava restava scritto un valore che nessuna lettura
+    sa interpretare.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients"])
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331112222"
+        )
+
+    def _json(self, method, url, payload):
+        return getattr(self.client, method)(
+            url, data=json.dumps(payload), content_type="application/json", **self.auth
+        )
+
+    def test_note_visibility_outside_the_choices_is_refused(self):
+        for bad in ("da-condividere", "shared", "pubblica"):
+            res = self._json("post", f"/api/clients/{self.client_obj.id}/notes", {"text": "x", "visibility": bad})
+            self.assertEqual(res.status_code, 422, bad)
+        self.assertEqual(ClientNote.objects.count(), 0)
+
+    def test_client_language_outside_the_choices_is_refused(self):
+        res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "lang": "italiano"})
+        self.assertEqual(res.status_code, 422, res.content)
+
+    def test_reliability_out_of_range_is_refused(self):
+        res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "reliability": 5000})
+        self.assertEqual(res.status_code, 422, res.content)
+
+    def test_category_name_and_color_are_bounded(self):
+        self.assertEqual(self._json("post", "/api/clients/categories", {"name": "A" * 61}).status_code, 422)
+        self.assertEqual(
+            self._json("post", "/api/clients/categories", {"name": "VIP", "color": "rgb(255,0,0)"}).status_code, 422
+        )
+        self.assertEqual(ClientCategory.objects.count(), 0)
+
+    def test_sheet_fields_longer_than_the_column_are_refused(self):
+        res = self._json(
+            "post",
+            f"/api/clients/{self.client_obj.id}/sheets",
+            {"category": "a" * 41, "treatment": "Colore"},
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(TechnicalSheet.objects.count(), 0)
+
+
+class SalesFiguresNeedTheSalesScopeTests(TestCase):
+    """Spesa totale e incassi di ogni visita sono dati di cassa: si leggono con
+    il permesso «vendite», come la lista degli incassi (che a questi ruoli è
+    già preclusa)."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331112222"
+        )
+        from apps.sales.models import Sale
+
+        Sale.objects.create(salon=self.salon, client=self.client_obj, kind="pos", total=Decimal("80"))
+
+    def _ctx(self, scopes):
+        return SimpleNamespace(
+            auth=StaffContext(
+                user=None, salon=self.salon, membership=None, scopes=set(scopes), is_owner=False
+            )
+        )
+
+    def test_without_the_sales_scope_the_figures_are_zero(self):
+        detail = get_client(self._ctx({"clients"}), self.client_obj.id)
+        self.assertEqual(detail.total_spent, Decimal("0"))
+        self.assertEqual(detail.visits, 0)
+        self.assertIsNone(detail.last_visit)
+        # Zero e «non ti e permesso vedere» devono restare distinguibili: senza
+        # questo flag l'interfaccia mostrava «0 visite - 0 EUR spesi» e una
+        # cliente storica sembrava alla prima visita, con il rischio che
+        # l'operatrice le chiedesse la caparra riservata alle nuove.
+        self.assertTrue(detail.stats_hidden)
+
+    def test_with_the_sales_scope_the_figures_are_there(self):
+        detail = get_client(self._ctx({"clients", "sales"}), self.client_obj.id)
+        self.assertEqual(detail.total_spent, Decimal("80"))
+        self.assertEqual(detail.visits, 1)
+        self.assertFalse(detail.stats_hidden)
+
+    def test_the_owner_sees_the_figures_without_the_scope(self):
+        ctx = SimpleNamespace(
+            auth=StaffContext(
+                user=None, salon=self.salon, membership=None, scopes=set(), is_owner=True
+            )
+        )
+        detail = get_client(ctx, self.client_obj.id)
+        self.assertEqual(detail.total_spent, Decimal("80"))
+        self.assertFalse(detail.stats_hidden)
+
+    def test_the_history_hides_the_takings_too(self):
+        from .api import client_history
+
+        data = client_history(self._ctx({"clients"}), self.client_obj.id)
+        self.assertEqual(data["counts"]["sales"], 0)
+        self.assertEqual([e for e in data["entries"] if e["kind"] == "sale"], [])
+        full = client_history(self._ctx({"clients", "sales"}), self.client_obj.id)
+        self.assertEqual(full["counts"]["sales"], 1)
+
+
+class ClientStatsOnRealSalesTests(TestCase):
+    """client_stats su dati veri: finora era testata solo senza nessuna vendita."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331112222"
+        )
+
+    def _sale(self, total, line_types):
+        from apps.sales.models import Sale, SaleLine
+
+        sale = Sale.objects.create(
+            salon=self.salon, client=self.client_obj, kind="pos", total=Decimal(total)
+        )
+        for line_type in line_types:
+            SaleLine.objects.create(
+                sale=sale, line_type=line_type, qty=1, unit_price=Decimal(total), amount=Decimal(total)
+            )
+        return sale
+
+    def test_visits_and_total_spent_add_up(self):
+        self._sale("40", ["service"])
+        self._sale("25", ["product"])
+        stats = client_stats(self.client_obj)
+        self.assertEqual(stats["visits"], 2)
+        self.assertEqual(stats["total_spent"], Decimal("65"))
+        self.assertIsNotNone(stats["last_visit"])
+
+    def test_a_gift_card_bought_at_the_counter_is_not_a_visit(self):
+        """Chi regala un buono non si è seduto in poltrona. Contarlo gonfiava
+        le visite e con esse le regole caparra («sotto le N visite chiedi la
+        caparra»), che vedevano come abituale chi non era mai passata.
+        L'incasso però resta: quei soldi il salone li ha presi."""
+        self._sale("50", ["gift_card"])
+        stats = client_stats(self.client_obj)
+        self.assertEqual(stats["visits"], 0)
+        self.assertEqual(stats["total_spent"], Decimal("50"))
+
+    def test_a_visit_paid_together_with_a_gift_card_still_counts(self):
+        self._sale("70", ["service", "gift_card"])
+        self.assertEqual(client_stats(self.client_obj)["visits"], 1)
+
+
+class ClientHistoryQueryCountTests(TestCase):
+    """Lo storico non deve costare di più man mano che la cliente torna."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.ctx = SimpleNamespace(
+            auth=StaffContext(
+                user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=True
+            )
+        )
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331112222"
+        )
+        from apps.staff.models import Operator
+
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Bianchi"
+        )
+
+    def _appointments(self, how_many):
+        from apps.agenda.models import Appointment
+
+        for i in range(how_many):
+            Appointment.objects.create(
+                salon=self.salon,
+                client=self.client_obj,
+                operator=self.operator,
+                start=timezone.now() - dt.timedelta(days=i + 1),
+            )
+
+    def _queries(self, view, how_many):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self._appointments(how_many)
+        with CaptureQueriesContext(connection) as captured:
+            view(self.ctx, self.client_obj.id)
+        return len(captured)
+
+    def test_the_cost_does_not_grow_with_the_number_of_visits(self):
+        """_appointment_out senza indice regali interrogava le gift card una
+        volta per appuntamento, e `salon` non era in select_related: due query
+        in più a visita, oltre 160 per una cliente con 80 visite."""
+        from .api import client_history
+
+        for view in (list_client_appointments, client_history):
+            with self.subTest(view=view.__name__):
+                first = self._queries(view, 1)
+                grown = self._queries(view, 6)
+                self.assertEqual(grown, first, f"{view.__name__}: query in più per ogni visita")
 
 
 class PhoneLookupTests(ClientsTestCase):

@@ -50,13 +50,16 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
   const amount = Number(appt.deposit_amount || 0);
   const due = appt.deposit_due_at ? new Date(appt.deposit_due_at) : null;
   const locale = lang === 'en' ? 'en-GB' : 'it-IT';
+  // La scadenza è un'ora del SALONE: letta sull'orologio del telefono, «entro
+  // le 10:30» diventava «09:30» per chi guarda da Londra, e la cliente pagava
+  // in ritardo convinta di essere in tempo — perdendo lo slot.
   // La sola ora basta se la scadenza è oggi. Se cade domani — e con una tenuta
   // di qualche ora succede spesso — «entro le 09:30» si legge come stamattina.
-  const sameDay = due && due.toDateString() === new Date().toDateString();
+  const sameDay = due && toDateStr(appt.deposit_due_at) === todayStr();
   const dueLabel = due
     ? (sameDay
-      ? due.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
-      : due.toLocaleString(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))
+      ? due.toLocaleTimeString(locale, salonTzOpts({ hour: '2-digit', minute: '2-digit' }))
+      : due.toLocaleString(locale, salonTzOpts({ day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })))
     : null;
 
   const pay = async () => {
@@ -179,9 +182,15 @@ export function useClientAppointments() {
 
 const locale = (lang) => (lang === 'en' ? 'en-GB' : 'it-IT');
 
-/** Next n days as Date[] starting today (booking day strip). */
+/** I prossimi n giorni come Date[], a partire da OGGI IN SALONE.
+ *
+ *  Partivano da `new Date()`, cioè dal calendario del telefono: da Los Angeles
+ *  il primo chip era un giorno che per il salone è già passato e usciva sempre
+ *  vuoto; da Tokyo la striscia partiva da domani e gli orari ancora liberi di
+ *  oggi sparivano. I Date restano mezzanotte LOCALE, perché da qui in poi sono
+ *  aritmetica di giorni (etichette e toDateStr), non istanti. */
 export function nextDays(n = 14) {
-  const today = new Date();
+  const today = parseISO(todayStr());
   return Array.from({ length: n }, (_, i) => addDays(today, i));
 }
 
@@ -190,11 +199,13 @@ export function nextDays(n = 14) {
  * Le schermate di prenotazione calcolavano la striscia dei giorni una volta
  * sola: un'app lasciata aperta la sera proponeva ancora ieri come primo giorno.
  * Si controlla anche al ritorno in primo piano, perché sul telefono i timer si
- * fermano quando l'app è in secondo piano. */
+ * fermano quando l'app è in secondo piano.
+ * Il giorno è quello del SALONE: è la mezzanotte della reception a far
+ * scivolare la striscia, non quella del telefono di chi guarda. */
 export function useTodayKey() {
-  const [key, setKey] = React.useState(() => toDateStr(new Date()));
+  const [key, setKey] = React.useState(() => todayStr());
   React.useEffect(() => {
-    const tick = () => setKey((k) => { const now = toDateStr(new Date()); return now === k ? k : now; });
+    const tick = () => setKey((k) => { const now = todayStr(); return now === k ? k : now; });
     const id = setInterval(tick, 60000);
     document.addEventListener('visibilitychange', tick);
     window.addEventListener('focus', tick);

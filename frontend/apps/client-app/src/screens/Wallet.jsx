@@ -2,14 +2,21 @@
 // expiry), loyalty programs (points/threshold/progress bar).
 // Data: GET /api/marketing/client/wallet. Gift card detail → view 'giftcard'.
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur, parseISO } from '@youty/shared';
+import { Icon, ProgressBar, api, fmtEur, parseISO, salonTzOpts } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 
 export function fmtExpiry(iso, lang, t) {
   if (!iso) return t('Senza scadenza', 'No expiry');
+  // Le scadenze sono ISTANTI (DateTime lato server): vanno lette sul calendario
+  // del SALONE. Sull'orologio del telefono una gift card che scade a mezzanotte
+  // risultava scaduta il giorno prima a chi la guardava da ovest, e valida un
+  // giorno in più a chi la guardava da est.
   const d = parseISO(iso);
-  const s = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
+  const s = d.toLocaleDateString(
+    lang === 'en' ? 'en-GB' : 'it-IT',
+    salonTzOpts({ day: 'numeric', month: 'short', year: 'numeric' }),
+  ).replace(/\./g, '');
   return t('Scade il ', 'Expires ') + s;
 }
 
@@ -40,7 +47,14 @@ export default function Wallet() {
   const cards = wallet?.gift_cards || [];
   const coupons = wallet?.coupons || [];
   const loyalty = wallet?.loyalty || [];
-  const totBal = cards.reduce((s, g) => s + Number(g.balance || 0), 0);
+  // Le carte ancora da pagare in salone NON sono credito: la cassa le rifiuta
+  // finché il salone non incassa. Sommarle nel «saldo totale» prometteva alla
+  // cliente soldi che non poteva spendere. Si contano a parte, dicendo che
+  // cosa manca per attivarle.
+  const spendable = cards.filter((g) => g.payment_status !== 'unpaid');
+  const pending = cards.filter((g) => g.payment_status === 'unpaid');
+  const totBal = spendable.reduce((acc, g) => acc + Number(g.balance || 0), 0);
+  const totPending = pending.reduce((acc, g) => acc + Number(g.balance || 0), 0);
 
   return (
     <div style={{ paddingBottom: 30 }}>
@@ -65,8 +79,14 @@ export default function Wallet() {
                 <button className="press" onClick={() => setView('giftcard')} style={{ width: '100%', textAlign: 'left', borderRadius: 'var(--r-lg, 20px)', padding: '16px 18px', background: 'var(--brand)', color: 'var(--brand-on)', marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                      <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Saldo totale', 'Total balance')}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Credito utilizzabile', 'Available credit')}</div>
                       <div className="t-num" style={{ fontSize: 30, fontWeight: 800, marginTop: 2 }}>{fmtEur(totBal, lang)}</div>
+                      {totPending > 0 && (
+                        <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.82, marginTop: 4 }}>
+                          {t(`+ ${fmtEur(totPending, lang)} da attivare: paga in salone`,
+                            `+ ${fmtEur(totPending, lang)} to activate: pay in the salon`)}
+                        </div>
+                      )}
                     </div>
                     <Icon name="chevR" size={20} color="var(--brand-on)" />
                   </div>

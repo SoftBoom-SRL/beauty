@@ -21,6 +21,27 @@ TRUNK_ZERO_KEPT = {"39"}
 # accorciare senza sapere dove finisce il prefisso è peggio che non toccare.
 COUNTRY_CODES = ("39", "44", "49", "33", "34", "41", "43", "32", "31", "30", "351", "353", "420")
 
+# Cifre massime di un numero nazionale (Italia: 11, quanto il fisso più lungo).
+# Oltre questa soglia una stringa senza «+» porta già il proprio prefisso
+# internazionale: gli export dei gestionali e WhatsApp scrivono «393331234567».
+NATIONAL_MAX_DIGITS = 11
+
+
+def _already_international(digits: str) -> bool:
+    """Cifre senza «+» che sono già in forma E.164.
+
+    Servono entrambe le condizioni — prefisso noto E più lunghe di un numero
+    nazionale — perché molti numeri italiani cominciano con il prefisso di
+    qualcun altro: «3331234567» inizia per «33» (Francia) ma è un cellulare
+    italiano. È la stessa regola di `splitPhone` in
+    frontend/packages/shared/src/phone.js: se le due divergono, la stessa
+    persona diventa due schede e i promemoria partono verso un numero che non
+    esiste (39 39 333…).
+    """
+    if len(digits) <= NATIONAL_MAX_DIGITS:
+        return False
+    return any(digits.startswith(cc) for cc in COUNTRY_CODES)
+
 
 def _drop_trunk_zero(digits: str) -> str:
     """Toglie l'eventuale 0 interurbano dopo il country code, dove serve."""
@@ -43,6 +64,9 @@ def normalize_phone(raw: str, default_cc: str = "39") -> str | None:
         digits = s[1:]
     elif s.startswith("00"):
         digits = s[2:]
+    elif _already_international(s):
+        # Niente prefisso davanti: le cifre lo contengono già.
+        digits = s
     else:
         digits = default_cc + s
     digits = _drop_trunk_zero(digits)

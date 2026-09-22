@@ -37,5 +37,8 @@ class ActivityLogAdmin(ModelAdmin):
 
 @admin.register(OutboxEvent)
 class OutboxEventAdmin(ModelAdmin):
-    list_display = ("event_type", "salon", "status", "attempts", "created_at", "sent_at")
+    list_display = (
+        "event_type", "salon", "status", "attempts", "created_at", "next_attempt_at", "sent_at",
+    )
     list_filter = ("status", "event_type")
+    search_fields = ("coalesce_key",)

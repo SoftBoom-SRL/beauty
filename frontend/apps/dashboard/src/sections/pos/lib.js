@@ -1,5 +1,5 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { api, fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 
 export const round2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
 
@@ -78,6 +78,57 @@ export function paymentsError(v, due, t) {
     return t('La somma dei pagamenti non corrisponde al totale', 'Payments must add up to the total');
   }
   return null;
+}
+
+/* ---------------- buono sconto al banco ----------------
+ * Il conto accetta un `coupon_code`: i buoni del programma fedeltà erano
+ * emessi ma non spendibili, e la cassiera poteva solo scontare a mano.
+ *
+ * Il codice lo rivalida il SERVER al momento dell'incasso, ed è lui ad avere
+ * l'ultima parola. Quello che si fa qui è solo mostrare il conto giusto prima
+ * di premere «Incassa»: senza sapere lo sconto, il pagamento precompilato
+ * chiederebbe l'importo pieno e la vendita verrebbe respinta con «I pagamenti
+ * non corrispondono al totale». */
+
+/** Sconto in euro del buono su un imponibile, come lo calcola il server
+ *  (marketing.services.coupon_discount): mai più dell'imponibile — un buono da
+ *  50 € su un conto da 30 sconta 30, non trasforma la cassa in un bancomat. */
+export function couponDiscount(coupon, base) {
+  const amount = round2(base);
+  if (!coupon || !(amount > 0)) return 0;
+  const value = Number(coupon.value || 0);
+  return round2(Math.min(coupon.kind === 'percent' ? (amount * value) / 100 : value, amount));
+}
+
+/** Cerca il buono per codice e, se non è spendibile, dice PERCHÉ in una frase.
+ *  Risolve { coupon } oppure { error }: gli stessi rifiuti del server
+ *  (accounts/marketing services), detti prima del clic invece che dopo. */
+export async function findCoupon(code, { clientId = null, t }) {
+  const wanted = String(code || '').trim().toUpperCase(); // i codici sono maiuscoli
+  if (!wanted) return { error: t('Inserisci un codice', 'Enter a code') };
+  let rows = [];
+  try {
+    const res = await api.get('/api/marketing/coupons', { params: { q: wanted, limit: 20 } });
+    rows = res?.items || res || [];
+  } catch {
+    return { error: t('Non riesco a verificare il buono: riprova', 'Cannot verify the voucher: try again') };
+  }
+  const coupon = rows.find((c) => String(c.code).toUpperCase() === wanted);
+  if (!coupon) return { error: t('Coupon non trovato', 'Voucher not found') };
+  if (coupon.expires_at && parseISO(coupon.expires_at) < new Date()) {
+    return { error: t('Coupon scaduto', 'Voucher expired') };
+  }
+  if (coupon.status !== 'active') return { error: t('Coupon non più valido', 'Voucher no longer valid') };
+  // Un buono intestato vale solo per la sua cliente: al banco, su una vendita
+  // anonima, chiunque presentasse il codice di un'altra otterrebbe lo sconto.
+  if (coupon.client_id && coupon.client_id !== clientId) {
+    return {
+      error: coupon.client_name
+        ? t(`Coupon riservato a ${coupon.client_name}: intesta la vendita a lei`, `Voucher reserved for ${coupon.client_name}: assign the sale to her`)
+        : t('Coupon riservato a un\u2019altra cliente: intesta la vendita', 'Voucher reserved for another client: assign the sale'),
+    };
+  }
+  return { coupon };
 }
 
 /** "Oggi · 14:30" / "Ieri · 10:12" / "24 giu 2026 · 11:48" from an ISO datetime. */

@@ -78,19 +78,25 @@ export default function StaffPage({ id, onBack }) {
     [id],
   );
 
-  /* ---- saves ---- */
-  const buildPayload = (cycleWeeks) => ({
-    first_name: form.first_name.trim(),
-    last_name: form.last_name.trim(),
-    color: form.color,
-    role_title: form.role_title.trim(),
-    location_id: form.location_id,
-    user_id: form.user_id,
-    service_ids: form.service_ids,
-    hourly_cost: (Number(form.hourly_cost) || 0).toFixed(2),
+  /* ---- saves ----
+   * La PUT operatrice è a corpo completo, quindi il payload va costruito dalla
+   * sorgente giusta: `form` quando si salva l'Anagrafica, `detail` (i valori
+   * del server) quando si sincronizza solo la lunghezza del ciclo turni —
+   * altrimenti «Salva turni» persisteva anche le modifiche all'anagrafica che
+   * l'utente aveva lasciato a metà (costo orario azzerato, spunta «attiva»
+   * tolta) e l'operatrice spariva dall'agenda. */
+  const buildPayload = (cycleWeeks, src = form) => ({
+    first_name: String(src.first_name || '').trim(),
+    last_name: String(src.last_name || '').trim(),
+    color: src.color,
+    role_title: String(src.role_title || '').trim(),
+    location_id: src.location_id ?? null,
+    user_id: src.user_id ?? null,
+    service_ids: src.service_ids || [],
+    hourly_cost: (Number(src.hourly_cost) || 0).toFixed(2),
     cycle_weeks: cycleWeeks,
-    active: form.active,
-    order: form.order,
+    active: src.active,
+    order: src.order,
   });
 
   const saveBasics = async () => {
@@ -109,7 +115,7 @@ export default function StaffPage({ id, onBack }) {
   };
 
   const saveShifts = async () => {
-    if (savingShifts || !form) return;
+    if (savingShifts || !detail) return;
     let rows;
     try { rows = shiftsFromWeeks(weeks, t); } catch (err) {
       fireToast({ msg: err.message, icon: 'alert' });
@@ -119,7 +125,7 @@ export default function StaffPage({ id, onBack }) {
     try {
       // cycle length lives on the operator: sync it before the full-replace
       if (weeks.length !== detail.cycle_weeks) {
-        const updated = await api.put(`/api/staff/${id}`, buildPayload(weeks.length));
+        const updated = await api.put(`/api/staff/${id}`, buildPayload(weeks.length, detail));
         setDetail((d) => ({ ...d, ...updated }));
       }
       const saved = await api.put(`/api/staff/${id}/shifts`, { shifts: rows });

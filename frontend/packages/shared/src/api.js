@@ -49,8 +49,25 @@ async function parseBody(res) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
+/* Un campo d'errore → testo leggibile.
+ * Gli HttpError scritti a mano mandano `detail` come stringa, ma la
+ * validazione di schema di django-ninja manda una LISTA di dizionari pydantic:
+ * il toast finiva per stampare `[{"type":"less_than_equal","loc":[...],…}]`
+ * invece di dire cosa non andava. Si prende il primo `msg` utile. */
+function readableDetail(value) {
+  if (typeof value === 'string' && value) return value;
+  if (Array.isArray(value)) {
+    const first = value.find((e) => e && typeof e === 'object' && typeof e.msg === 'string' && e.msg);
+    if (first) return first.msg;
+  }
+  if (value !== null && value !== undefined) {
+    try { return JSON.stringify(value); } catch { return null; }
+  }
+  return null;
+}
+
 async function request(method, path, opts = {}) {
-  const { params, body, form, headers = {}, auth = true, _retried = false } = opts;
+  const { params, body, form, headers = {}, auth = true, signal, _retried = false } = opts;
   const url = API_URL + path + qs(params);
 
   const h = { ...headers };
@@ -66,7 +83,10 @@ async function request(method, path, opts = {}) {
     if (token) h['Authorization'] = 'Bearer ' + token;
   }
 
-  const res = await fetch(url, { method, headers: h, body: payload });
+  // `signal` serve a chi non puo permettersi di aspettare all'infinito: l'uscita
+  // dal profilo la usa, perche restare bloccati su una rete lenta dopo aver
+  // premuto Esci e il peggiore dei due esiti.
+  const res = await fetch(url, { method, headers: h, body: payload, signal });
 
   if (res.ok) return parseBody(res);
 
@@ -79,11 +99,11 @@ async function request(method, path, opts = {}) {
 
   const data = await parseBody(res);
   const message =
-    (data && typeof data === 'object' && (data.detail || data.message)) ||
+    (data && typeof data === 'object' && (readableDetail(data.detail) || readableDetail(data.message))) ||
     (typeof data === 'string' && data) ||
     res.statusText ||
     `HTTP ${res.status}`;
-  throw new ApiError(res.status, typeof message === 'string' ? message : JSON.stringify(message), data);
+  throw new ApiError(res.status, message, data);
 }
 
 export const api = {

@@ -116,25 +116,26 @@ class Http:
 # ---------------------------------------------------------------------------
 
 
-def read_latest_outbox(args, event_type: str) -> dict | None:
-    """Ultimo OutboxEvent di un tipo: via sqlite (DB throwaway) o manage.py shell."""
+def _read_outbox_row(args, event_type: str) -> tuple[int, dict] | None:
+    """(id, payload) dell'ultimo OutboxEvent di un tipo, o None."""
     db = Path(args.db)
     if db.exists():
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
             row = conn.execute(
-                "SELECT payload FROM core_outboxevent WHERE event_type=? ORDER BY id DESC LIMIT 1",
+                "SELECT id, payload FROM core_outboxevent WHERE event_type=? "
+                "ORDER BY id DESC LIMIT 1",
                 (event_type,),
             ).fetchone()
         finally:
             conn.close()
-        return json.loads(row[0]) if row else None
+        return (row[0], json.loads(row[1])) if row else None
     # fallback: manage.py shell (usa DATABASE_URL dell'ambiente)
     manage = Path(args.backend_dir) / "manage.py"
     code = (
         "import json;from apps.core.models import OutboxEvent;"
         f"e=OutboxEvent.objects.filter(event_type={event_type!r}).order_by('-id').first();"
-        "print('@@'+json.dumps(e.payload if e else None))"
+        "print('@@'+json.dumps([e.id, e.payload] if e else None))"
     )
     proc = subprocess.run([sys.executable, str(manage), "shell", "-c", code],
                           capture_output=True, text=True, cwd=args.backend_dir)
@@ -142,8 +143,36 @@ def read_latest_outbox(args, event_type: str) -> dict | None:
         raise StepFail(f"lettura outbox fallita: {proc.stderr.strip()[:200]}")
     for line in proc.stdout.splitlines():
         if line.startswith("@@"):
-            return json.loads(line[2:])
+            row = json.loads(line[2:])
+            return (row[0], row[1]) if row else None
     return None
+
+
+def outbox_mark(args, event_type: str) -> int:
+    """Id dell'ultimo evento di questo tipo PRIMA dell'azione da verificare.
+
+    Serve perché lo sqlite indicato da --db può non essere il database sotto
+    test (server su un altro DB, file di una corsa precedente): senza questo
+    segnaposto un evento vecchio faceva passare lo step senza che quello nuovo
+    fosse mai stato scritto — e con `seed_demo --reset` gli id ripartono da 1,
+    quindi combaciava pure l'appointment_id.
+    """
+    row = _read_outbox_row(args, event_type)
+    return row[0] if row else 0
+
+
+def read_latest_outbox(args, event_type: str, *, after_id: int | None = None) -> dict | None:
+    """Payload dell'ultimo OutboxEvent di un tipo, se è NUOVO rispetto a `after_id`."""
+    row = _read_outbox_row(args, event_type)
+    if row is None:
+        return None
+    event_id, payload = row
+    if after_id is not None and event_id <= after_id:
+        raise StepFail(
+            f"nessun OutboxEvent '{event_type}' nuovo (ultimo id {event_id} ≤ {after_id}): "
+            f"l'evento non è stato scritto, oppure --db non è il database sotto test"
+        )
+    return payload
 
 
 def find_public_service(catalog: list, name_it: str) -> dict | None:
@@ -287,6 +316,9 @@ def step_03_public_surface(api, ctx, args):
 
 
 def step_04_client_register_otp(api, ctx, args):
+    # Segnaposto prima di chiedere l'OTP: l'OTP da leggere è quello di ADESSO,
+    # non uno rimasto in giro da una corsa precedente.
+    otp_mark = outbox_mark(args, "client.otp")
     status, resp = api.post(
         "/api/auth/client/register", expect=None,
         label="POST /api/auth/client/register",
@@ -301,7 +333,7 @@ def step_04_client_register_otp(api, ctx, args):
     elif status != 200:
         raise StepFail(f"register: HTTP {status} — {short(resp)}")
 
-    otp = read_latest_outbox(args, "client.otp")
+    otp = read_latest_outbox(args, "client.otp", after_id=otp_mark)
     if not otp or _phone_digits(otp.get("phone")) != _phone_digits(APP_CLIENT_PHONE) or not otp.get("code"):
         raise StepFail(f"OTP non trovato in OutboxEvent (client.otp): {short(otp)}")
     _, auth = api.post("/api/auth/client/verify-otp",
@@ -435,6 +467,13 @@ def step_09_cross_surface_loyalty(api, ctx, args):
     if program is None:
         raise StepFail("nessun programma fedeltà attivo (il seed ne crea uno)")
 
+    # Punti PRIMA del checkout: su un DB non resettato la cliente ne ha già, e
+    # "punti > 0" restava verde anche se l'accredito avesse smesso di funzionare.
+    _, wallet_before = api.get("/api/marketing/client/wallet", token=ctx["client_token"],
+                               label="GET /api/marketing/client/wallet")
+    before = next((entry["points"] for entry in wallet_before.get("loyalty", [])
+                   if entry["program_id"] == program["id"]), 0)
+
     today = now_rome().date()
     appt = create_via_staff(api, ctx, ctx["svc_quick"],
                             [today, today + timedelta(days=1), today + timedelta(days=2)])
@@ -455,10 +494,13 @@ def step_09_cross_surface_loyalty(api, ctx, args):
                   if l["program_id"] == program["id"]), None)
     if entry is None:
         raise StepFail(f"wallet cliente senza il programma '{program['name']}': {short(wallet)}")
-    if entry["points"] <= 0:
-        raise StepFail(f"punti fedeltà non accreditati dopo il checkout: {short(entry)}")
+    if entry["points"] <= before:
+        raise StepFail(
+            f"punti fedeltà non accreditati dal checkout: erano {before}, "
+            f"ora {entry['points']} — {short(entry)}"
+        )
     return (f"programma '{program['name']}' visto dallo staff; checkout cash €{total} "
-            f"dell'appuntamento staff #{bid} → wallet APP del cliente mostra "
+            f"dell'appuntamento staff #{bid} → wallet APP del cliente passa da {before} a "
             f"{entry['points']} punti ({entry['progress_pct']}% soglia {entry['threshold']})")
 
 
@@ -486,6 +528,7 @@ def step_11_cancel_slot_freed_waitlist(api, ctx, args):
                         body={"service_id": a["service_id"], "preference": "any"},
                         label="POST /api/agenda/client/waitlist")
     wid = entry["id"]
+    freed_mark = outbox_mark(args, "slot.freed")
     _, cancelled = api.post(f"/api/agenda/client/appointments/{a['id']}/cancel",
                             token=ctx["client_token"],
                             label="POST /api/agenda/client/appointments/{id}/cancel")
@@ -496,7 +539,7 @@ def step_11_cancel_slot_freed_waitlist(api, ctx, args):
                           label="GET /api/agenda/day")
     if any(appt["id"] == a["id"] for _, appt in flatten_day(day_view)):
         raise StepFail(f"#{a['id']} ancora presente in /agenda/day dopo la cancellazione")
-    freed = read_latest_outbox(args, "slot.freed")
+    freed = read_latest_outbox(args, "slot.freed", after_id=freed_mark)
     if not freed or freed.get("appointment_id") != a["id"]:
         raise StepFail(f"OutboxEvent slot.freed non trovato per #{a['id']}: {short(freed)}")
     if wid not in freed.get("matching_waitlist", []):

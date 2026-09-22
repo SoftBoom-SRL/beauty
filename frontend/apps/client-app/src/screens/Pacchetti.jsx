@@ -1,8 +1,8 @@
 // Pacchetti.jsx — public packages with included services + price and the
 // phone-only booking CTA (as prototype).
 // Data: GET /api/catalog/public/packages (+ public services to compute the
-// original price → discount badge). NOTE: public branding exposes no salon
-// phone number, so the tel: CTA has no number (API gap, see report).
+// original price → discount badge). Il numero per il `tel:` arriva dal branding
+// pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.
 import React from 'react';
 import { Icon, api, fmtEur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
@@ -89,11 +89,22 @@ export default function Pacchetti() {
                     {off > 0 && <span className="t-sm" style={{ color: 'var(--ok)', fontWeight: 700 }}>{t(`Risparmi ${fmtEur(orig - price, lang)}`, `Save ${fmtEur(orig - price, lang)}`)}</span>}
                   </div>
 
-                  <a href={brand.phone ? `tel:${brand.phone}` : undefined} style={{ textDecoration: 'none' }}>
-                    <div className="btn btn--brand btn--block press">
-                      <Icon name="phone" size={17} color="var(--brand-on)" />{t('Chiama per prenotare', 'Call to book')}
+                  {/* Senza numero il `tel:` non è un link: il pulsante restava
+                    * pieno, colorato e cliccabile ma non faceva assolutamente
+                    * nulla. Se il salone non ha un recapito si dice dove
+                    * chiedere, invece di fingere un'azione. */}
+                  {brand.phone ? (
+                    <a href={`tel:${brand.phone}`} style={{ textDecoration: 'none' }}>
+                      <div className="btn btn--brand btn--block press">
+                        <Icon name="phone" size={17} color="var(--brand-on)" />{t('Chiama per prenotare', 'Call to book')}
+                      </div>
+                    </a>
+                  ) : (
+                    <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 'var(--r-md)', background: 'var(--paper-2)', color: 'var(--muted)' }}>
+                      <Icon name="info" size={15} color="var(--muted-2)" />
+                      {t('Chiedi in salone per prenotare questo pacchetto.', 'Ask at the salon to book this package.')}
                     </div>
-                  </a>
+                  )}
                 </div>
               );
             })}

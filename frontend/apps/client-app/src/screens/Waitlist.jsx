@@ -9,7 +9,10 @@ export default function Waitlist() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const [list, setList] = React.useState(null);
   const [error, setError] = React.useState(null);
-  const [removing, setRemoving] = React.useState(null);
+  // Insieme di id: con un solo id «in rimozione» il primo tocco bloccava in
+  // silenzio TUTTE le altre righe — che restavano attive all'aspetto ma non
+  // rispondevano più finché la prima richiesta non tornava.
+  const [removing, setRemoving] = React.useState(() => new Set());
 
   const load = React.useCallback(() => {
     api.get('/api/agenda/client/waitlist')
@@ -18,9 +21,15 @@ export default function Waitlist() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { load(); }, [load]);
 
+  const mark = (id, on) => setRemoving((s) => {
+    const next = new Set(s);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
+
   const remove = async (id) => {
-    if (removing) return;
-    setRemoving(id);
+    if (removing.has(id)) return;
+    mark(id, true);
     try {
       await api.del(`/api/agenda/client/waitlist/${id}`);
       setList((l) => (l || []).filter((w) => w.id !== id));
@@ -28,7 +37,7 @@ export default function Waitlist() {
     } catch (err) {
       errToast(err, fireToast, t);
     } finally {
-      setRemoving(null);
+      mark(id, false);
     }
   };
 
@@ -69,9 +78,9 @@ export default function Waitlist() {
                     <span className="t-sm" style={{ color: 'var(--muted-2)' }}>
                       {t('In lista dal', 'On the list since')} {fmtDayMed(w.created_at, lang)}
                     </span>
-                    <button className="press" onClick={() => remove(w.id)} disabled={removing === w.id}
-                      style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger)', opacity: removing === w.id ? 0.5 : 1 }}>
-                      {removing === w.id ? t('Rimozione…', 'Removing…') : t('Rimuovi', 'Remove')}
+                    <button className="press" onClick={() => remove(w.id)} disabled={removing.has(w.id)}
+                      style={{ fontSize: 13, fontWeight: 600, color: 'var(--danger)', opacity: removing.has(w.id) ? 0.5 : 1 }}>
+                      {removing.has(w.id) ? t('Rimozione…', 'Removing…') : t('Rimuovi', 'Remove')}
                     </button>
                   </div>
                 </div>

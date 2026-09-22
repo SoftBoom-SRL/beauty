@@ -13,7 +13,7 @@ from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Count, DateField, Q, Sum
+from django.db.models import Count, DateField, Min, Q, Sum
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
 from django.utils import timezone
 from ninja.errors import HttpError
@@ -26,6 +26,10 @@ from apps.staff.models import Operator
 
 PERIODS = {"month", "quarter", "year"}
 GRANULARITIES = {"day", "week", "month"}
+
+# Giorni massimi di un intervallo personalizzato: due anni abbondanti, cioè
+# molto più del confronto anno su anno che il titolare guarda davvero.
+MAX_RANGE_DAYS = 732
 
 ZERO = Decimal("0.00")
 
@@ -79,6 +83,13 @@ def custom_range(date_from: date_cls, date_to: date_cls) -> tuple[datetime, date
     """Intervallo esplicito [start, end) da due date INCLUSE (end = date_to + 1 giorno)."""
     if date_from > date_to:
         raise HttpError(400, "Intervallo non valido: la data iniziale è successiva a quella finale")
+    # Tetto all'ampiezza: il selettore di date non ha un anno minimo, e un
+    # "0202-01-01" produceva 666.000 giorni da scorrere uno per uno (turni,
+    # bucket, occupazione) tenendo occupato un thread del server per minuti.
+    if (date_to - date_from).days + 1 > MAX_RANGE_DAYS:
+        raise HttpError(
+            400, f"Intervallo troppo ampio: al massimo {MAX_RANGE_DAYS} giorni (circa due anni)"
+        )
     tz = timezone.get_current_timezone()
     start = timezone.make_aware(datetime.combine(date_from, time.min), tz)
     end = timezone.make_aware(datetime.combine(date_to + timedelta(days=1), time.min), tz)
@@ -251,7 +262,14 @@ def revenue_series(
     start, end = resolve_range(period, date, date_from, date_to)
     trunc = _TRUNC[granularity]
     rows = (
-        Sale.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end)
+        # Stessa base dei KPI: senza le vendite-caparra, che al checkout
+        # verrebbero contate una seconda volta dentro il conto pieno.
+        Sale.objects.filter(
+            salon=salon,
+            created_at__gte=start,
+            created_at__lt=end,
+            deposit_appointment__isnull=True,
+        )
         .annotate(bucket=trunc("created_at", output_field=DateField()))
         .values("bucket")
         .annotate(revenue=Sum("total"))
@@ -295,19 +313,77 @@ def revenue_by_category(salon, period: str, date: date_cls | None = None, date_f
 
 
 # ---------------------------------------------------------------------------
+# Clienti acquisite nel periodo
+# ---------------------------------------------------------------------------
+
+
+def _new_client_ids(salon, start: datetime, end: datetime) -> set:
+    """Clienti acquisite nel periodo [start, end).
+
+    `Client.since` è la data di acquisizione dichiarata, ma resta vuota su tutte
+    le schede storiche (e finché ogni via di creazione non la valorizza): a
+    contare solo quella, "Nuovi clienti" era strutturalmente 0 e il grafico
+    "Nuovi vs di ritorno" mostrava sempre 0% / 100%. Per le schede senza `since`
+    l'acquisizione si ricava dal primo contatto reale con il salone: la prima
+    visita in agenda o il primo scontrino.
+    """
+    ids = set(
+        Client.objects.filter(
+            salon=salon, since__gte=start.date(), since__lt=end.date()
+        ).values_list("id", flat=True)
+    )
+    # Chi è stata acquisita nel periodo ha per forza una visita o uno scontrino
+    # NEL periodo: si parte da quelle e si guarda indietro. Così il conto non
+    # scorre l'anagrafica intera a ogni apertura della dashboard.
+    seen_in_period = set(
+        Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end).values_list(
+            "client_id", flat=True
+        )
+    )
+    seen_in_period.update(
+        cid
+        for cid in Sale.objects.filter(
+            salon=salon, created_at__gte=start, created_at__lt=end
+        ).values_list("client_id", flat=True)
+        if cid
+    )
+    legacy = (
+        Client.objects.filter(salon=salon, since__isnull=True, id__in=seen_in_period)
+        .annotate(first_visit=Min("appointments__start"), first_sale=Min("sales__created_at"))
+        .values_list("id", "first_visit", "first_sale")
+    )
+    for client_id, first_visit, first_sale in legacy:
+        seen = [d for d in (first_visit, first_sale) if d is not None]
+        if seen and start <= min(seen) < end:
+            ids.add(client_id)
+    return ids
+
+
+# ---------------------------------------------------------------------------
 # KPI principali
 # ---------------------------------------------------------------------------
 
 
 def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> dict:
     start, end = resolve_range(period, date, date_from, date_to)
-    today = timezone.localdate()
     days = _dates_in_range(start, end)
 
     # --- vendite -------------------------------------------------------
     sales_qs = Sale.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end)
-    revenue = sales_qs.aggregate(total=Sum("total"))["total"] or ZERO
-    sales_count = sales_qs.count()
+    # La caparra è un anticipo, non un conto: entra in cassa il giorno in cui
+    # arriva con una vendita sua (`record_deposit_cashed`), e al checkout il
+    # servizio viene fatturato PER INTERO con l'anticipo detratto da quanto
+    # resta da pagare. Sommandole entrambe, un servizio da 100 con 30 di caparra
+    # risultava un fatturato di 130 e due scontrini invece di uno. Il fatturato
+    # è quindi il venduto (senza le caparre); la caparra torna in `cash_in`, che
+    # è il denaro davvero entrato nel periodo.
+    billed_qs = sales_qs.filter(deposit_appointment__isnull=True)
+    revenue = billed_qs.aggregate(total=Sum("total"))["total"] or ZERO
+    deposit_cashed = (
+        sales_qs.filter(deposit_appointment__isnull=False).aggregate(total=Sum("total"))["total"]
+        or ZERO
+    )
+    sales_count = billed_qs.count()
     avg_ticket = _safe_avg_money(revenue, sales_count)
     retail_revenue = (
         SaleLine.objects.filter(
@@ -337,7 +413,7 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     )
     # Caparre versate prima e detratte al checkout: denaro incassato in un altro
     # periodo, da non sommare di nuovo qui.
-    deposit_used = sales_qs.aggregate(total=Sum("deposit_deducted"))["total"] or ZERO
+    deposit_used = billed_qs.aggregate(total=Sum("deposit_deducted"))["total"] or ZERO
 
     # --- appuntamenti ----------------------------------------------------
     appts_qs = Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end)
@@ -362,33 +438,45 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     clients_2plus = sum(1 for row in per_client_counts if row["cnt"] >= 2)
     return_rate = _safe_div(clients_2plus, clients_1plus)
 
+    # Il riaggancio si misura dal PERIODO, non da oggi: con "oggi" un mese
+    # passato veniva confrontato con la rubrica di adesso e la freccia di
+    # variazione mostrava sempre un miglioramento inventato a parità di
+    # comportamento. Per il periodo in corso il riferimento è adesso, così una
+    # visita già chiusa stamattina non conta come appuntamento futuro.
+    reference = min(end, timezone.now())
     future_client_ids: set = set()
     if closed_client_ids:
         future_client_ids = set(
             Appointment.objects.filter(
-                salon=salon, client_id__in=closed_client_ids, start__date__gte=today
+                salon=salon, client_id__in=closed_client_ids, start__gte=reference
             )
-            .exclude(status__in=[_CANCELLED, _NO_SHOW])
+            .exclude(status__in=[_CANCELLED, _NO_SHOW, _CLOSED])
             .values_list("client_id", flat=True)
         )
     rebooking_rate = _safe_div(len(future_client_ids), clients_1plus)
 
-    new_client_ids = set(
-        Client.objects.filter(
-            salon=salon, since__gte=start.date(), since__lt=end.date()
-        ).values_list("id", flat=True)
-    )
+    new_client_ids = _new_client_ids(salon, start, end)
     new_clients = len(new_client_ids)
     returning_clients = len(closed_client_ids - new_client_ids)
 
     avg_frequency = _safe_div(appointments_count, clients_1plus)
 
+    # Le clienti del periodo: chi ha chiuso una visita e chi ha comprato al
+    # banco. Prima era una COUNT per categoria sull'anagrafica intera, quindi la
+    # torta "Clienti per categoria" restava identica qualunque periodo si
+    # scegliesse, accanto a KPI che invece cambiavano.
+    period_client_ids = closed_client_ids | {
+        cid for cid in sales_qs.values_list("client_id", flat=True) if cid
+    }
     clients_by_category = [
-        {
-            "category": cat.name,
-            "count": Client.objects.filter(salon=salon, is_active=True, categories=cat).count(),
-        }
-        for cat in ClientCategory.objects.filter(salon=salon).order_by("order", "id")
+        {"category": row.name, "count": row.period_clients}
+        for row in ClientCategory.objects.filter(salon=salon)
+        .annotate(
+            period_clients=Count(
+                "clients", filter=Q(clients__id__in=period_client_ids), distinct=True
+            )
+        )
+        .order_by("order", "id")
     ]
 
     return {
@@ -396,7 +484,8 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
         "gift_card_sold": gift_card_sold,
         "gift_card_redeemed": gift_card_redeemed,
         "deposit_used": deposit_used,
-        "cash_in": revenue - gift_card_redeemed - deposit_used,
+        "deposit_cashed": deposit_cashed,
+        "cash_in": revenue + deposit_cashed - gift_card_redeemed - deposit_used,
         "sales_count": sales_count,
         "avg_ticket": avg_ticket,
         "retail_revenue": retail_revenue,

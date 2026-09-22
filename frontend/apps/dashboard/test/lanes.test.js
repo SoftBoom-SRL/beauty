@@ -69,11 +69,27 @@ test('laneCss lascia sempre libero il corridoio a destra', () => {
   assert.equal(intera.left, 4);
   assert.equal(intera.right, 4 + COL_GUTTER);
 
+  // Stringhe INTERE, non sottostringhe: `(100% - 30px)` e `/ 2` compaiono
+  // identici in TUTTE le corsie, quindi gli assert su pezzi passavano anche se
+  // il numero di corsia veniva ignorato del tutto — cioè proprio nel caso che
+  // questo test dovrebbe sorvegliare.
+  const slot = `((100% - ${4 + 4 + COL_GUTTER}px) / 2)`;
+  const prima = laneCss(0, 2);
   const seconda = laneCss(1, 2);
-  assert.ok(seconda.left.includes(`${4 + 4 + COL_GUTTER}px`), seconda.left);
-  assert.ok(seconda.width.includes('/ 2'), seconda.width);
-  // anche divisa in corsie, la larghezza tolta alla colonna comprende il corridoio
-  assert.ok(seconda.width.includes(`${4 + 4 + COL_GUTTER}px`), seconda.width);
+  assert.equal(prima.left, `calc(4px + 0 * ${slot})`);
+  assert.equal(seconda.left, `calc(4px + 1 * ${slot})`);
+  // la larghezza tolta alla colonna comprende il corridoio, ed è la stessa per
+  // tutte le corsie: a cambiare dev'essere solo il punto di partenza.
+  assert.equal(prima.width, `calc(${slot} - 3px)`);
+  assert.equal(seconda.width, prima.width);
+  assert.notEqual(seconda.left, prima.left, 'due corsie diverse devono partire da punti diversi');
+
+  // Anche a larghezza fissa (la spina della visita) la corsia conta: altrimenti
+  // le spine di due appuntamenti incastrati si sovrapporrebbero sul bordo.
+  const spina = laneCss(1, 2, 5);
+  assert.equal(spina.left, seconda.left);
+  assert.equal(spina.width, 5);
+  assert.notEqual(spina.left, laneCss(0, 2, 5).left);
 });
 
 test('la spina copre tutta la visita e solo le visite multi-servizio', () => {

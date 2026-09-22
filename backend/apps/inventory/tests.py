@@ -8,9 +8,18 @@ from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.auth import StaffContext
 
-from .api import create_category, unload_product, update_category
+from .api import (
+    create_category,
+    create_product,
+    load_product,
+    send_order,
+    unload_product,
+    update_category,
+    update_order,
+    update_product,
+)
 from .models import Product, ProductCategory, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
-from .schemas import CategoryIn, MovementOut, ProductUnloadIn
+from .schemas import CategoryIn, MovementOut, ProductIn, ProductLoadIn, ProductUnloadIn
 from .services import apply_movement, generate_draft_orders, receive_order
 
 
@@ -255,3 +264,340 @@ class ReceiveOrderConcurrencyTests(TestCase):
             StockMovement.objects.filter(product=self.product, kind=StockMovement.Kind.LOAD).count(),
             1,
         )
+
+
+class ProductCrudTests(TestCase):
+    """Creazione e modifica prodotto: non erano coperte da nessun test.
+
+    Il difetto vero è nella modifica: un save() pieno riscriveva anche
+    `stock_qty` col valore letto a inizio richiesta, cancellando dalla giacenza
+    i movimenti registrati nel frattempo.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
+        self.category = ProductCategory.objects.create(salon=self.salon, name="Cura")
+        ctx = StaffContext(
+            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
+        )
+        self.request = SimpleNamespace(auth=ctx)
+
+    def _payload(self, **overrides):
+        data = {
+            "name": "Shampoo",
+            "sku": "SH-01",
+            "brand": "Davines",
+            "category_id": self.category.id,
+            "usage": "retail",
+            "supplier_id": self.supplier.id,
+            "purchase_price": Decimal("5.00"),
+            "sale_price": Decimal("12.00"),
+            "min_threshold": Decimal("3"),
+            "reorder_qty": Decimal("6"),
+        }
+        data.update(overrides)
+        return ProductIn(**data)
+
+    def test_create_product_persists_the_payload(self):
+        product = create_product(self.request, self._payload())
+        product.refresh_from_db()
+        self.assertEqual(product.salon_id, self.salon.id)
+        self.assertEqual(product.name, "Shampoo")
+        self.assertEqual(product.category_id, self.category.id)
+        self.assertEqual(product.supplier_id, self.supplier.id)
+        self.assertEqual(product.sale_price, Decimal("12.00"))
+        self.assertEqual(product.stock_qty, Decimal("0"))
+
+    def test_create_product_with_unknown_usage_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_product(self.request, self._payload(usage="inventato"))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertFalse(Product.objects.exists())
+
+    def test_update_product_changes_the_registry_fields(self):
+        product = create_product(self.request, self._payload())
+        update_product(self.request, product.id, self._payload(name="Shampoo delicato",
+                                                              sale_price=Decimal("14.00"),
+                                                              category_id=None))
+        product.refresh_from_db()
+        self.assertEqual(product.name, "Shampoo delicato")
+        self.assertEqual(product.sale_price, Decimal("14.00"))
+        self.assertIsNone(product.category_id)
+
+    def test_update_product_does_not_resurrect_the_stale_stock(self):
+        """Si apre la scheda con giacenza 10, il banco vende 3, si salva il
+        prezzo: la giacenza deve restare 7, non tornare a 10."""
+        product = create_product(self.request, self._payload())
+        apply_movement(product, StockMovement.Kind.LOAD, Decimal("10"))
+
+        stale = Product.objects.get(pk=product.pk)  # copia letta a inizio richiesta
+        apply_movement(
+            Product.objects.get(pk=product.pk), StockMovement.Kind.SALE, Decimal("-3")
+        )
+        self.assertEqual(stale.stock_qty, Decimal("10"))  # la copia è ferma a prima
+
+        update_product(self.request, stale.id, self._payload(sale_price=Decimal("15.00")))
+
+        product.refresh_from_db()
+        self.assertEqual(product.stock_qty, Decimal("7"))
+        self.assertEqual(product.sale_price, Decimal("15.00"))
+
+
+class CategoryValidationTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        ctx = StaffContext(
+            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
+        )
+        self.request = SimpleNamespace(auth=ctx)
+
+    def test_invalid_color_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_category(self.request, CategoryIn(name="Tinte", color="verde acqua"))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertFalse(ProductCategory.objects.exists())
+
+    def test_negative_order_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_category(self.request, CategoryIn(name="Tinte", order=-1))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_order_beyond_the_column_is_a_400(self):
+        with self.assertRaises(HttpError) as caught:
+            create_category(self.request, CategoryIn(name="Tinte", order=99999))
+        self.assertEqual(caught.exception.status_code, 400)
+
+
+class InvoiceUrlTests(TestCase):
+    """Il link alla fattura del carico deve essere firmato: `inventory/invoices/`
+    è un prefisso riservato e senza token la vista /media/ risponde 403."""
+
+    def test_invoice_url_carries_the_signature(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from common.media import TOKEN_PARAM, verify_media_token
+
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        supplier = Supplier.objects.create(salon=salon, name="Davines")
+        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
+        movement = apply_movement(
+            product,
+            StockMovement.Kind.LOAD,
+            Decimal("5"),
+            invoice=SimpleUploadedFile("fattura.pdf", b"%PDF-1.4", content_type="application/pdf"),
+        )
+        url = MovementOut.resolve_invoice_url(movement)
+        self.assertIn(f"?{TOKEN_PARAM}=", url)
+        self.assertTrue(verify_media_token(movement.invoice.name, url.split(f"{TOKEN_PARAM}=")[1]))
+        movement.invoice.delete(save=False)
+
+    def test_without_invoice_the_url_is_none(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        supplier = Supplier.objects.create(salon=salon, name="Davines")
+        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
+        movement = apply_movement(product, StockMovement.Kind.LOAD, Decimal("5"))
+        self.assertIsNone(MovementOut.resolve_invoice_url(movement))
+
+
+class InvoiceUploadValidationTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        supplier = Supplier.objects.create(salon=self.salon, name="Davines")
+        self.product = Product.objects.create(salon=self.salon, name="Shampoo", supplier=supplier)
+        ctx = StaffContext(
+            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
+        )
+        self.request = SimpleNamespace(auth=ctx)
+
+    def test_executable_attachment_is_refused(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        upload = SimpleUploadedFile(
+            "fattura.exe", b"MZ", content_type="application/x-msdownload"
+        )
+        with self.assertRaises(HttpError) as caught:
+            load_product(self.request, self.product.id, ProductLoadIn(qty=Decimal("1")), upload)
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(StockMovement.objects.count(), 0)
+
+    def test_oversized_attachment_is_refused(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        upload = SimpleUploadedFile("fattura.pdf", b"%PDF", content_type="application/pdf")
+        upload.size = 20 * 1024 * 1024
+        with self.assertRaises(HttpError) as caught:
+            load_product(self.request, self.product.id, ProductLoadIn(qty=Decimal("1")), upload)
+        self.assertEqual(caught.exception.status_code, 400)
+
+
+class ProductDeletionProtectsHistoryTests(TestCase):
+    """Cancellare davvero un prodotto (dall'admin) portava via i movimenti:
+    la prova contabile di che cosa è entrato e uscito dal magazzino."""
+
+    def test_a_product_with_movements_cannot_be_deleted(self):
+        from django.db.models import ProtectedError as ModelProtectedError
+
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        supplier = Supplier.objects.create(salon=salon, name="Davines")
+        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
+        apply_movement(product, StockMovement.Kind.LOAD, Decimal("5"))
+        with self.assertRaises(ModelProtectedError):
+            product.delete()
+        self.assertEqual(StockMovement.objects.count(), 1)
+
+
+class DraftOrderThresholdTests(TestCase):
+    """Giacenza esattamente pari alla soglia con reorder_qty a zero: il prodotto
+    era «sotto scorta» in elenco ma «Genera ordini» lo scartava in silenzio."""
+
+    def test_product_exactly_at_threshold_is_ordered(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        supplier = Supplier.objects.create(salon=salon, name="Davines")
+        product = Product.objects.create(
+            salon=salon, name="Balsamo", supplier=supplier,
+            stock_qty=Decimal("5"), min_threshold=Decimal("5"), reorder_qty=Decimal("0"),
+        )
+        self.assertEqual(product.stock_state, "low")
+        [order] = generate_draft_orders(salon)
+        line = order.lines.get()
+        self.assertEqual(line.product_id, product.id)
+        self.assertEqual(line.qty_ordered, Decimal("1"))
+
+
+class OrderWorkflowTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
+        self.p1 = Product.objects.create(salon=self.salon, name="Shampoo", supplier=self.supplier)
+        self.p2 = Product.objects.create(salon=self.salon, name="Balsamo", supplier=self.supplier)
+        self.order = PurchaseOrder.objects.create(salon=self.salon, supplier=self.supplier)
+        self.l1 = PurchaseOrderLine.objects.create(
+            order=self.order, product=self.p1, qty_ordered=Decimal("4")
+        )
+        self.l2 = PurchaseOrderLine.objects.create(
+            order=self.order, product=self.p2, qty_ordered=Decimal("2")
+        )
+        ctx = StaffContext(
+            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
+        )
+        self.request = SimpleNamespace(auth=ctx)
+
+    def test_update_order_is_all_or_nothing(self):
+        from .schemas import OrderLineUpdateIn, OrderUpdateIn
+
+        with self.assertRaises(HttpError) as caught:
+            update_order(
+                self.request,
+                self.order.id,
+                OrderUpdateIn(
+                    lines=[
+                        OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("9")),
+                        OrderLineUpdateIn(id=999999, qty_ordered=Decimal("1")),
+                    ]
+                ),
+            )
+        self.assertEqual(caught.exception.status_code, 404)
+        self.l1.refresh_from_db()
+        self.assertEqual(self.l1.qty_ordered, Decimal("4"))  # nulla è stato scritto
+
+    def test_update_order_applies_every_line(self):
+        from .schemas import OrderLineUpdateIn, OrderUpdateIn
+
+        update_order(
+            self.request,
+            self.order.id,
+            OrderUpdateIn(
+                lines=[
+                    OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("9")),
+                    OrderLineUpdateIn(id=self.l2.id, qty_ordered=Decimal("0")),  # riga rimossa
+                ]
+            ),
+        )
+        self.l1.refresh_from_db()
+        self.assertEqual(self.l1.qty_ordered, Decimal("9"))
+        self.assertFalse(PurchaseOrderLine.objects.filter(pk=self.l2.pk).exists())
+
+    def test_the_second_send_is_refused(self):
+        from .schemas import OrderSendIn
+
+        send_order(self.request, self.order.id, OrderSendIn())
+        stale = PurchaseOrder.objects.get(pk=self.order.pk)
+        stale.status = PurchaseOrder.Status.DRAFT  # copia letta prima dell'invio
+        with self.assertRaises(HttpError) as caught:
+            send_order(self.request, stale.id, OrderSendIn())
+        self.assertEqual(caught.exception.status_code, 400)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, PurchaseOrder.Status.SENT)
+
+    def test_update_order_refuses_a_sent_order(self):
+        from .schemas import OrderLineUpdateIn, OrderSendIn, OrderUpdateIn
+
+        send_order(self.request, self.order.id, OrderSendIn())
+        with self.assertRaises(HttpError) as caught:
+            update_order(
+                self.request,
+                self.order.id,
+                OrderUpdateIn(lines=[OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("1"))]),
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+
+
+class InventoryHttpSmokeTests(TestCase):
+    """Una richiesta HTTP vera per router: senza, un endpoint irraggiungibile
+    resterebbe verde in una suite che chiama le view come funzioni."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+        from common.auth import create_staff_tokens
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
+        user = User.objects.create_user(email="magazzino@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Magazzino", scopes=["inventory"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+
+    def test_product_create_list_and_update_over_http(self):
+        created = self.client.post(
+            "/api/inventory/products",
+            data={"name": "Shampoo", "supplier_id": self.supplier.id, "sale_price": "12.00"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        product_id = created.json()["id"]
+
+        listing = self.client.get("/api/inventory/products", **self.auth)
+        self.assertEqual(listing.status_code, 200, listing.content)
+        self.assertEqual([p["id"] for p in listing.json()["items"]], [product_id])
+
+        updated = self.client.put(
+            f"/api/inventory/products/{product_id}",
+            data={"name": "Shampoo delicato", "supplier_id": self.supplier.id,
+                  "sale_price": "13.00"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(updated.json()["name"], "Shampoo delicato")
+
+    def test_categories_over_http(self):
+        created = self.client.post(
+            "/api/inventory/categories",
+            data={"name": "Tinte", "color": "#ABCDEF"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(created.status_code, 200, created.content)
+        self.assertEqual(created.json()["color"], "#ABCDEF")
+
+        refused = self.client.post(
+            "/api/inventory/categories",
+            data={"name": "Tinte", "color": "azzurro"},
+            content_type="application/json",
+            **self.auth,
+        )
+        self.assertEqual(refused.status_code, 400, refused.content)

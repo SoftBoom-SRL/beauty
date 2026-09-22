@@ -17,7 +17,9 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
   const canSave = canWrite && !locked && Number(draft.value) > 0;
 
   const kinds = [['percent', t('Percentuale', 'Percentage')], ['amount', t('Importo', 'Amount')]];
-  const valueLabel = draft.kind === 'amount' ? '-' + fmtEur(Number(draft.value) || 0, lang) : '-' + (draft.value || 0) + '%';
+  // Number() anche sulla percentuale: aprendo un coupon esistente `value` è la
+  // stringa che manda l'API ("20.00") e l'etichetta diceva «-20.00%»
+  const valueLabel = draft.kind === 'amount' ? '-' + fmtEur(Number(draft.value) || 0, lang) : '-' + (Number(draft.value) || 0) + '%';
 
   const buildPayload = () => ({
     client_id: draft.client ? draft.client.id : null,

@@ -2,7 +2,8 @@
 // with the SAME service items AND the same operators (the move keeps them), the
 // appointment itself excluded from the busy map, then
 // POST /api/agenda/client/appointments/{id}/move.
-// The 24h-policy 400 error is surfaced inline (banner) + toast.
+// Il 400 del preavviso minimo (ore configurabili per salone) si mostra
+// inline (banner) + toast, con il testo che arriva dal server.
 import React from 'react';
 import { ApiError, Icon, api, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
@@ -46,7 +47,11 @@ export default function Sposta() {
       .then((list) => { if (alive) setSlots(list); })
       .catch((err) => { if (alive) { setSlots([]); errToast(err, fireToast, t); } });
     return () => { alive = false; };
-  }, [appt, dayIdx, done]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `days` fra le dipendenze: a mezzanotte la striscia scivola di un giorno
+    // ma senza ricaricare restavano a video gli orari del giorno prima, con lo
+    // stesso chip selezionato. Lo spostamento sarebbe finito nel giorno
+    // sbagliato (o rifiutato con un 409 incomprensibile).
+  }, [appt, dayIdx, done, days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!appt) {
     return (
@@ -85,7 +90,7 @@ export default function Sposta() {
       setDone(slot.start);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
-        setPolicyErr(err.message); // 24h policy — show it clearly inline
+        setPolicyErr(err.message); // preavviso minimo — si mostra com'è, chiaro
         fireToast({ msg: err.message, icon: 'alert' });
       } else if (err instanceof ApiError && err.status === 409) {
         fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });

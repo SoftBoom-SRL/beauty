@@ -14,7 +14,7 @@ import ScaricoManualeModal from './ScaricoManualeModal.jsx';
 
 const PAGE = 30;
 
-export default function ProdottiSub({ cats, suppliers, allProds, canWrite, refreshShared }) {
+export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, canWrite, refreshShared }) {
   const { t, lang, fireToast } = useDash();
 
   /* ---- server-side filters ---- */
@@ -104,6 +104,15 @@ export default function ProdottiSub({ cats, suppliers, allProds, canWrite, refre
         <MiniMetric label={t('Sottoscorta', 'Low stock')} value={lowCount} active={stockF === 'low'} onClick={() => { clearFilters(); setStockF('low'); }} />
         <MiniMetric label={t('Prodotti', 'Products')} value={active.length} onClick={clearFilters} />
       </div>
+      {/* le metriche si calcolano sullo snapshot: se il catalogo è più grande
+          di quanto si riesca a scaricare, meglio dirlo che mostrare cifre
+          sottostimate accanto a una tabella che conta tutto */}
+      {prodsPartial && (
+        <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--warn)', fontWeight: 600, marginBottom: 14 }}>
+          <Icon name="alert" size={14} color="var(--warn)" />
+          {t('Catalogo molto grande: le cifre qui sopra sono calcolate solo su una parte dei prodotti.', 'Very large catalogue: the figures above cover only part of the products.')}
+        </div>
+      )}
 
       {/* low-stock banner */}
       {lowCount > 0 && (

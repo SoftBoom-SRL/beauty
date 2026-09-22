@@ -4,12 +4,21 @@ import os
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-change-me")
+# Chiave di sviluppo: è nel repository, quindi chiunque lo legga può firmare un
+# JWT staff valido e un link media firmato. Il controllo più in basso impedisce
+# che sopravviva a un avvio con DEBUG spento.
+DEV_SECRET_KEY = "dev-insecure-change-me"
+# Valori da rifiutare in produzione: oltre al default del codice c'è il
+# segnaposto di .env.example, che è quello che si copia davvero per sbaglio.
+PLACEHOLDER_SECRET_KEYS = (DEV_SECRET_KEY, "change-me-in-production", "changeme")
+
+SECRET_KEY = os.getenv("SECRET_KEY", DEV_SECRET_KEY)
 DEBUG = os.getenv("DEBUG", "1") == "1"
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
 # L'healthcheck del container chiama http://127.0.0.1:8000/healthz
@@ -83,6 +92,42 @@ DATABASES = {
     )
 }
 
+# ---------------------------------------------------------------------------
+# Fail-closed dei default (non si applica in sviluppo)
+# ---------------------------------------------------------------------------
+# I default qui sopra servono a far partire `runserver` su un clone appena fatto,
+# senza nessuna variabile d'ambiente. Sono però tutti default PERMISSIVI: chiave
+# nota, host aperti, database usa e getta. Se una env si perde su Coolify
+# l'applicazione ripartiva con quei valori e l'healthcheck rispondeva «ok»: da
+# fuori il deploy sembrava riuscito mentre chiunque conoscesse il repository
+# poteva firmare un token da titolare (JWT_SECRET ripiega su SECRET_KEY) e i dati
+# finivano su uno sqlite dentro il container, cancellato al deploy successivo.
+# Meglio non partire affatto: il container resta unhealthy e il rollback di
+# Coolify tiene in piedi la versione precedente.
+if not DEBUG:
+    _misconfigured = []
+    if SECRET_KEY in PLACEHOLDER_SECRET_KEYS or len(SECRET_KEY) < 32:
+        _misconfigured.append(
+            "SECRET_KEY è un segnaposto o è troppo corta: firma i JWT staff e i link "
+            "ai media, quindi chi la indovina entra come titolare di qualunque "
+            "salone. Generane una con `openssl rand -hex 32`"
+        )
+    if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS:
+        _misconfigured.append(
+            "ALLOWED_HOSTS è aperto a qualunque host: elenca i domini veri "
+            "separati da virgola (es. api.esempio.it)"
+        )
+    if not os.getenv("DATABASE_URL"):
+        _misconfigured.append(
+            "DATABASE_URL non è impostata: senza, i dati finiscono su uno sqlite "
+            "effimero dentro il container e spariscono al prossimo deploy"
+        )
+    if _misconfigured:
+        raise ImproperlyConfigured(
+            "Configurazione di produzione incompleta (DEBUG spento):\n- "
+            + "\n- ".join(_misconfigured)
+        )
+
 # Cache su database, non in memoria: con più worker gunicorn una LocMemCache
 # darebbe a ciascuno il suo contatore, e i rate limit che ci si appoggiano non
 # limiterebbero niente (verificato in produzione: 9 invii passati su un limite
@@ -150,6 +195,15 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
+# Indirizzi da cui X-Forwarded-For è credibile, OLTRE alle reti private e a
+# localhost (vedi common.ratelimit.client_ip). Serve solo se il reverse proxy
+# sta su un'altra macchina e raggiunge il backend da un IP pubblico: senza
+# elencarlo qui, tutte le richieste che passano da lì finirebbero nello stesso
+# secchiello dei rate limit e un salone intero si bloccherebbe a vicenda.
+TRUSTED_PROXY_IPS = tuple(
+    ip.strip() for ip in os.getenv("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
+)
+
 # Cookie di sessione e CSRF solo su HTTPS fuori dallo sviluppo: sono i cookie
 # dell'admin Django, e in chiaro su una rete condivisa una sessione da titolare
 # si intercetta. In sviluppo (DEBUG=1) restano normali, altrimenti il login in
@@ -192,12 +246,26 @@ else:
     # perché la virgola compare nei quantificatori regex ({1,3}). Occhio che i
     # pannelli web raddoppiano i backslash: `\\.` in regex significa "backslash
     # letterale" e il match fallisce in silenzio.
-    CORS_ALLOWED_ORIGIN_REGEXES = os.getenv("CORS_ALLOWED_ORIGIN_REGEXES", "").split()
+    #
+    # Ancoraggio obbligatorio: django-cors-headers usa `re.match`, che verifica
+    # solo l'inizio della stringa. Senza `$` finale il pattern per
+    # `https://beauty\.esempio\.it` autorizzava anche
+    # `https://beauty.esempio.it.attaccante.it`, cioè un origin di chiunque.
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        p if p.endswith("$") else f"{p}$"
+        for p in os.getenv("CORS_ALLOWED_ORIGIN_REGEXES", "").split()
+    ]
 
 # JWT (staff dashboard + clienti web app)
 JWT_SECRET = os.getenv("JWT_SECRET", SECRET_KEY)
 JWT_ACCESS_TTL_MIN = int(os.getenv("JWT_ACCESS_TTL_MIN", "60"))
 JWT_REFRESH_TTL_DAYS = int(os.getenv("JWT_REFRESH_TTL_DAYS", "30"))
+# Token della web app cliente: un solo token, senza rinnovo. Prima ereditava la
+# durata del refresh staff, che è un'altra cosa e cambiandola cambiava anche
+# questa senza che nessuno se ne accorgesse. Chi vuole sessioni cliente più
+# corte agisce qui; disattivare la scheda cliente invalida comunque il token
+# all'istante (common.auth.ClientAuth filtra su is_active).
+JWT_CLIENT_TTL_DAYS = int(os.getenv("JWT_CLIENT_TTL_DAYS", "30"))
 
 # Stripe — opzionale: senza chiave gli endpoint pagamento rispondono 503
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
@@ -234,7 +302,13 @@ AGENDA_SLOT_STEP_MIN = 15
 # stream tiene un thread e una connessione al database finché resta aperto:
 # vale circa la metà di `--threads`, così resta sempre spazio per le richieste
 # normali. Oltre il tetto la dashboard ripiega da sola sul polling.
-SSE_MAX_CONNECTIONS = int(os.getenv("SSE_MAX_CONNECTIONS", "40"))
+#
+# Il default era 40 con `--threads 24` (backend/Dockerfile): il tetto non
+# scattava mai perché i thread finivano prima, e 24 postazioni sullo stesso
+# worker lo paralizzavano per venti minuti — agenda, POS e /media/ compresi —
+# senza che nessuno ricevesse il 503 che fa ripiegare sul polling. Se cambi
+# `--threads` nel Dockerfile, cambia anche questo: deve restarne circa la metà.
+SSE_MAX_CONNECTIONS = int(os.getenv("SSE_MAX_CONNECTIONS", "12"))
 
 # ---------------------------------------------------------------------------
 # django-unfold — tema dell'admin

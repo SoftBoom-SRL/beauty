@@ -2,7 +2,7 @@
 // "Contattato" → POST /waitlist/{id}/contacted, "Proponi" → newappt prefill.
 // NOTE: entries are created by clients from the app — no staff add-form (API is client-only).
 import React, { useEffect, useState } from 'react';
-import { api, Avatar, Icon, fmtDateIt } from '@youty/shared';
+import { api, Avatar, Icon, fmtDateIt, toDateStr } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { initialsOf, prefLabel, toastErr, wlDaysWaiting } from '../lib.js';
@@ -97,7 +97,7 @@ export default function WaitlistModal({ onClose }) {
                       <Icon name="clock" size={11} color="var(--muted-2)" />{prefLabel(w, t)}
                     </span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: 'var(--muted)', background: 'var(--surface-2)', padding: '3px 8px', borderRadius: 99 }}>
-                      {t('Dal', 'Since')} {fmtDateIt(w.created_at.slice(0, 10), { weekday: false })}{days > 0 ? ` · ${days}g` : ''}
+                      {t('Dal', 'Since')} {fmtDateIt(toDateStr(w.created_at), { weekday: false })}{days > 0 ? ` · ${days}g` : ''}
                     </span>
                   </div>
                   {canWrite && (

@@ -164,9 +164,12 @@ export function normalizePhone(value) {
   return joinPhone(iso2, national);
 }
 
-/** 6–15 cifre totali (prefisso incluso): abbastanza per scartare refusi. */
+/** Numero che il backend saprebbe normalizzare: 7–15 cifre col prefisso e
+ *  nessuno 0 iniziale. La regola è la stessa di `backend/common/phone.py`
+ *  (`[1-9]\d{6,14}`) e deve restare tale: qui bastavano 6 cifre, così quattro
+ *  cifre digitate per sbaglio superavano il controllo, la registrazione
+ *  riusciva, il salone pagava un SMS verso un numero inesistente e la cliente
+ *  restava bloccata sulla schermata del codice con una scheda fantasma. */
 export function isPlausiblePhone(value) {
-  const { dial, national } = splitPhone(value);
-  const total = (dial + digitsOnly(national)).length;
-  return total >= 6 && total <= 15;
+  return /^\+[1-9]\d{6,14}$/.test(normalizePhone(value));
 }

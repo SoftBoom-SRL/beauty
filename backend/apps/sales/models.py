@@ -21,10 +21,28 @@ class Sale(models.Model):
         blank=True,
         related_name="sale",
     )
+    # Caparra di un appuntamento registrata come incasso a sé: entra in cassa il
+    # giorno in cui arriva, non quello del conto finale (al checkout viene poi
+    # detratta con `deposit_deducted`, così il denaro si conta una volta sola).
+    # Non si può riusare `appointment`, che resta libero per il checkout dello
+    # stesso appuntamento; il vincolo uno-a-uno impedisce che due webhook
+    # consegnati insieme registrino due volte la stessa caparra.
+    deposit_appointment = models.OneToOneField(
+        "agenda.Appointment",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deposit_sale",
+    )
     client = models.ForeignKey(
         "clients.Client", on_delete=models.SET_NULL, null=True, blank=True, related_name="sales"
     )
+    # `total` è quanto il conto vale DAVVERO: le righe meno il buono sconto
+    # eventualmente presentato al banco. Lo sconto resta scritto qui accanto
+    # perché lo scontrino lo mostra e il titolare vuole sapere quanto regala il
+    # programma fedeltà; il coupon consumato punta a questa vendita.
     total = models.DecimalField(max_digits=10, decimal_places=2)
+    coupon_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     deposit_deducted = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"

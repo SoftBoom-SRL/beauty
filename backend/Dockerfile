@@ -19,11 +19,26 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-RUN chmod +x entrypoint.sh && mkdir -p media staticfiles
+# Utente senza privilegi: questo container è l'unico che scrive su disco file
+# arrivati da fuori (logo, foto delle schede tecniche, allegati), quindi non
+# deve girare come root. `media/` e `staticfiles/` vanno creati e assegnati
+# PRIMA di USER: collectstatic gira a ogni avvio e gli upload atterrano in
+# media/, che a runtime è un volume montato sopra questa cartella.
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --create-home app \
+ && chmod +x entrypoint.sh \
+ && mkdir -p media staticfiles \
+ && chown -R app:app /app
+
+USER app
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+# start-period generoso: il primo avvio su database vuoto fa migrate +
+# createcachetable + collectstatic prima ancora di aprire la porta, e con 40s
+# l'healthcheck falliva tre volte prima che gunicorn esistesse — il container
+# entrava in ciclo di riavvii proprio al primo deploy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]

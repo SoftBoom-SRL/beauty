@@ -1,6 +1,6 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
 // KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, lineAmount, methodLabel, money, opName, saleDateLabel } from './lib.js';
@@ -35,28 +35,37 @@ export default function HistoryTab() {
     q: qDeb || null, operator_id: opId || null, limit: LIMIT, offset,
   });
 
+  /* Biglietto della richiesta in corso: ogni fetch lo incrementa e scarta la
+   * propria risposta se nel frattempo ne è partita un'altra. Senza, premendo
+   * «Carica altre vendite» e cambiando subito il filtro operatrice, le 50
+   * vendite della vecchia operatrice finivano in coda alla lista nuova, con un
+   * conteggio in testata che non corrispondeva. */
+  const reqSeq = useRef(0);
+
   useEffect(() => {
-    let dead = false;
+    const seq = ++reqSeq.current;
     setLoading(true);
     setOpenId(null);
     api.get('/api/sales/', { params: params(0) })
-      .then((r) => { if (!dead) { setData(r); setItems(r.items || []); } })
+      .then((r) => { if (seq === reqSeq.current) { setData(r); setItems(r.items || []); } })
       .catch((err) => {
-        if (dead) return;
+        if (seq !== reqSeq.current) return;
         setData({ count: 0, kpi: { revenue: 0, count: 0, items_count: 0 } });
         setItems([]);
         fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
       })
-      .finally(() => { if (!dead) setLoading(false); });
-    return () => { dead = true; };
+      .finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [kind, dateFrom, dateTo, qDeb, opId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
+    const seq = ++reqSeq.current;
     setLoadingMore(true);
     try {
       const r = await api.get('/api/sales/', { params: params(items.length) });
+      if (seq !== reqSeq.current) return;
       setItems((l) => [...l, ...(r.items || [])]);
     } catch (err) {
+      if (seq !== reqSeq.current) return;
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
     } finally {
       setLoadingMore(false);

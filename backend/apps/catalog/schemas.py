@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Optional
 
 from ninja import Schema
 from pydantic import Field
@@ -18,7 +19,10 @@ class CategoryOut(Schema):
 class CategoryIn(Schema):
     name_it: str
     name_en: str = ""
-    color: str = "#E0E7FF"
+    # Assente = «non toccare il colore». Con il default a "#E0E7FF" bastava
+    # rinominare una categoria da un modulo che non manda il campo per
+    # riportarne il colore al grigio di fabbrica.
+    color: Optional[str] = None
     order: int = 0
 
 
@@ -79,7 +83,9 @@ class PackageIn(Schema):
     description: str = ""
     price: Decimal = Field(..., ge=0)
     active: bool = True
-    items: list[PackageItemIn] = []
+    # Assente = «non toccare le righe». Con il default a [] un PUT che cambiava
+    # solo il prezzo svuotava il pacchetto dei servizi inclusi.
+    items: Optional[list[PackageItemIn]] = None
 
 
 class PackageOut(Schema):

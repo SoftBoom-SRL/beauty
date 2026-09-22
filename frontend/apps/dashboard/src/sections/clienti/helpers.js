@@ -28,9 +28,17 @@ export function initialsOf(name) {
     .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 }
 
-/* Build a FULL ClientIn payload from a ClientOut/ClientDetailOut + patch.
- * PUT /api/clients/{id} takes the whole ClientIn (unset fields fall back to
- * schema defaults), so partial bodies would clobber data — always send it all. */
+/* Costruisce il corpo ClientIn da un ClientOut/ClientDetailOut + patch.
+ *
+ * Si mandano tutti i campi che lo schema accetta: il PUT applica solo quelli
+ * presenti nel corpo, ma un corpo parziale lascerebbe fuori i campi che il
+ * modulo mostra e l'operatrice crede di aver confermato.
+ *
+ * Gli identificativi Stripe NON sono più fra questi e non vanno rimessi: lo
+ * schema li ha tolti apposta perché il server li scrive da sé quando la carta
+ * viene registrata davvero, e accettarli dal client permetteva di copiare la
+ * carta della cliente A sulla scheda B e addebitarle un no-show. Continuare a
+ * mandarli non serviva a niente: venivano ignorati. */
 export function toClientIn(c, patch = {}) {
   return {
     first_name: c.first_name,
@@ -47,19 +55,10 @@ export function toClientIn(c, patch = {}) {
     since: c.since || null,
     consents: { ...(c.consents || {}) },
     whatsapp_reminders: !!c.whatsapp_reminders,
-    stripe_customer_id: c.stripe_customer_id || '',
-    stripe_payment_method_id: c.stripe_payment_method_id || '',
     deposit_always: !!c.deposit_always,
     is_active: c.is_active !== false,
     ...patch,
   };
-}
-
-/* The list/marketing `q` filters match single fields (icontains on first OR
- * last name) — a full name with a space matches nothing. Query with the most
- * selective single word, then filter exactly by client id on the caller side. */
-export function clientQueryWord(c) {
-  return (c.last_name || c.first_name || c.full_name || '').trim().split(/\s+/).pop() || '';
 }
 
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */

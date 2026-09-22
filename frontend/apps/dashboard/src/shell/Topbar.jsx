@@ -1,4 +1,11 @@
-// Topbar.jsx — real date, section title, client search, notifications, "Nuova" menu, avatar.
+// Topbar.jsx — real date, section title, client search, notifications, pulsante
+// «Prenota», avatar.
+//
+// Il pulsante di creazione è UNO in tutta l'app: in agenda ce n'erano due (questo
+// e un «+ Prenota» nella barra della sezione) e facevano la stessa cosa. La parte
+// larga prenota subito — un clic, non un menu da aprire — e la freccetta tiene le
+// creazioni meno frequenti. In agenda il giorno proposto è quello che si sta
+// guardando (ctx.agendaDate), non oggi.
 import React, { useEffect, useRef, useState } from 'react';
 import { Avatar, EmptyState, Icon, fmtDateIt } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
@@ -33,7 +40,10 @@ function useClickAway(ref, open, onClose) {
 }
 
 export default function Topbar() {
-  const { t, lang, tab, setTab, search, setSearch, openModal, session, live } = useDash();
+  const { t, lang, tab, setTab, search, setSearch, openModal, session, live, agendaDate } = useDash();
+  /* In agenda si prenota sul giorno che si ha davanti; altrove il drawer decide
+   * da sé (oggi). */
+  const openBooking = () => openModal('newappt', { prefill: agendaDate ? { date: agendaDate } : {} });
   const [notifOpen, setNotifOpen] = useState(false);
   const [newMenu, setNewMenu] = useState(false);
   const notifRef = useRef(null);
@@ -70,18 +80,25 @@ export default function Topbar() {
         {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} t={t} lang={lang} events={live?.events || []} myId={session?.user?.id} streamOk={!!live?.streamOk} />}
       </div>
 
-      {/* "Nuova" quick-create menu */}
-      <div ref={newRef} style={{ position: 'relative' }}>
-        <button className="dk-btn dk-btn--clay" onClick={() => setNewMenu((o) => !o)} aria-expanded={newMenu}>
-          <Icon name="plus" size={18} color="#fff" />{t('Nuova', 'New')}
-          <Icon name="chevD" size={15} color="#fff" style={{ marginLeft: 2, transform: newMenu ? 'rotate(180deg)' : 'none', transition: 'transform 140ms' }} />
+      {/* creazione: azione diretta + freccetta per il resto */}
+      <div ref={newRef} style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
+        <button className="dk-btn dk-btn--clay" onClick={openBooking}
+          title={t('Nuova prenotazione (N)', 'New booking (N)')}
+          style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0, paddingRight: 14 }}>
+          <Icon name="plus" size={18} color="#fff" />{t('Prenota', 'Book')}
+        </button>
+        <button className="dk-btn dk-btn--clay" onClick={() => setNewMenu((o) => !o)} aria-expanded={newMenu}
+          aria-label={t('Altre creazioni', 'More to create')}
+          style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, padding: '0 10px', marginLeft: 1, boxShadow: 'inset 1px 0 0 rgba(255,255,255,0.28)' }}>
+          <Icon name="chevD" size={15} color="#fff" style={{ transform: newMenu ? 'rotate(180deg)' : 'none', transition: 'transform 140ms' }} />
         </button>
         {newMenu && (
           <React.Fragment>
             <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 71, width: 280, padding: 6, boxShadow: 'var(--sh-pop)' }}>
               {[
-                { icon: 'calendar', title: t('Nuovo appuntamento', 'New appointment'), sub: t('Prenotazione telefonica in agenda', 'Phone booking in the agenda'), act: () => openModal('newappt') },
-                { icon: 'user', title: t('Nuovo cliente', 'New client'), sub: t('Inserimento manuale in anagrafica', 'Manual entry in the client book'), act: () => openModal('newclient') },
+                // il cliente creato da qui serve quasi sempre a prenotare:
+                // salvata la scheda, si prosegue con l'appuntamento (afterSave)
+                { icon: 'user', title: t('Nuovo cliente', 'New client'), sub: t('Si crea la scheda e si prosegue con la prenotazione', 'Create the profile, then continue with the booking'), act: () => openModal('newclient', { afterSave: 'book' }) },
               ].map((o, i) => (
                 <button key={i} className="dk-row" onClick={() => { setNewMenu(false); o.act(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '11px 11px', borderRadius: 10, textAlign: 'left' }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={o.icon} size={18} color="var(--clay-ink)" /></div>

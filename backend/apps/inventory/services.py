@@ -14,6 +14,16 @@ from ninja.errors import HttpError
 from .models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement
 
 
+def _lock_salon(salon) -> None:
+    """Serializza dentro la transazione corrente le scritture di magazzino del salone.
+
+    Va chiamata DENTRO un `atomic()`. Su SQLite è un no-op.
+    """
+    from apps.core.models import Salon  # lazy: core non dipende da inventory
+
+    list(Salon.objects.select_for_update().filter(pk=salon.pk).values_list("id", flat=True))
+
+
 def apply_movement(
     product,
     kind,
@@ -100,8 +110,18 @@ def generate_draft_orders(salon, author=None):
     orders: list[PurchaseOrder] = []
     by_supplier: dict[int, PurchaseOrder] = {}
     with transaction.atomic():
+        # «Cerco la bozza del fornitore» e «la creo» non sono atomici di per sé:
+        # due click su «Genera ordini» producevano due bozze per lo stesso
+        # fornitore e le righe raddoppiate (PurchaseOrderLine non ha un vincolo
+        # di unicità su (order, product)). Il lock sulla riga del salone fa
+        # attendere il secondo. Su SQLite è un no-op, ma lì si scrive in serie.
+        _lock_salon(salon)
         for product in products:
-            qty = product.reorder_qty or (product.min_threshold - product.stock_qty)
+            # Sotto soglia con reorder_qty a zero e giacenza ESATTAMENTE pari
+            # alla soglia la differenza è zero: il prodotto risultava «low» in
+            # elenco ma «Genera ordini» lo scartava in silenzio. Si riordina
+            # almeno una confezione.
+            qty = product.reorder_qty or (product.min_threshold - product.stock_qty) or Decimal("1")
             if qty <= 0:
                 continue
             order = by_supplier.get(product.supplier_id)

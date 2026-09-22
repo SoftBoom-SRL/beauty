@@ -4,6 +4,8 @@ from typing import Optional
 
 from ninja import Schema
 
+from common.media import signed_media_url
+
 
 class OkOut(Schema):
     ok: bool = True
@@ -167,7 +169,10 @@ class MovementOut(Schema):
 
     @staticmethod
     def resolve_invoice_url(obj):
-        return obj.invoice.url if obj.invoice else None
+        # `inventory/invoices/` è un prefisso riservato in common/media.py: senza
+        # token firmato la vista /media/ risponde 403 e il link della fattura
+        # nello storico di magazzino non apriva mai nulla.
+        return signed_media_url(obj.invoice) if obj.invoice else None
 
     @staticmethod
     def resolve_author_name(obj):

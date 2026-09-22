@@ -1,4 +1,5 @@
 export { default as DkModal } from './DkModal.jsx';
+export { default as DkPanel } from './DkPanel.jsx';
 export { default as DkDrawer } from './DkDrawer.jsx';
 export { default as DkToast } from './DkToast.jsx';
 export { default as DkSeg } from './DkSeg.jsx';

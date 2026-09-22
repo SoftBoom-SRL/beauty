@@ -1,6 +1,8 @@
+import re
 from decimal import Decimal
 from typing import Optional
 
+from django.db import transaction
 from django.db.models import Case, F, IntegerField, ProtectedError, Q, Value, When
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -44,6 +46,24 @@ UNLOAD_KINDS = {
     StockMovement.Kind.TRANSFER,
 }
 
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
+# PositiveSmallIntegerField: sopra questo valore il database rifiuta la riga, e
+# al cliente arriva un 500 invece del 400 che gli spiega cosa ha sbagliato.
+MAX_CATEGORY_ORDER = 32767
+
+# La fattura del carico finisce in uno storage servito da noi: senza un tetto
+# alla dimensione e un elenco di formati, il campo «allega fattura» è un
+# caricamento libero di file arbitrari (stesso controllo di clients/api.py).
+INVOICE_TYPES = (
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+)
+INVOICE_MAX_BYTES = 15 * 1024 * 1024
+
 
 def _products_qs(ctx):
     return Product.objects.filter(salon=ctx.salon).select_related("category", "supplier")
@@ -60,9 +80,37 @@ def _apply_product_payload(product: Product, ctx, data: ProductIn) -> Product:
         setattr(product, name, value)
     product.supplier = supplier
     product.category = category
-    product.salon = ctx.salon
-    product.save()
+    if product.pk is None:
+        product.salon = ctx.salon
+        product.save()
+        return product
+    # In modifica si scrivono SOLO i campi anagrafici arrivati nel payload.
+    # `models.Product` dichiara che `stock_qty` non va mai scritta direttamente:
+    # un save() pieno la riportava al valore letto a inizio richiesta, e i
+    # movimenti registrati nel frattempo (una vendita al banco mentre si
+    # correggeva il prezzo) sparivano dalla giacenza pur restando nello storico.
+    product.save(update_fields=[*payload.keys(), "supplier", "category", "updated_at"])
     return product
+
+
+def _validate_category_in(data: CategoryIn) -> None:
+    """Colore e ordine arrivano dal client e finiscono grezzi in colonne strette.
+
+    Senza questo controllo un colore di venti caratteri o un ordine negativo non
+    sono un errore della richiesta ma un errore del database: 500 e nessuna
+    spiegazione a chi sta compilando il modulo.
+    """
+    if not (0 <= data.order <= MAX_CATEGORY_ORDER):
+        raise HttpError(400, "Ordine della categoria non valido")
+    if data.color is not None and not _HEX_COLOR_RE.match((data.color or "").strip()):
+        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+
+
+def _validate_invoice(upload: UploadedFile) -> None:
+    if (upload.content_type or "").lower() not in INVOICE_TYPES:
+        raise HttpError(400, f"Formato fattura non supportato: {upload.name} (PDF o immagine)")
+    if upload.size > INVOICE_MAX_BYTES:
+        raise HttpError(400, f"Fattura troppo grande: {upload.name} (max 15 MB)")
 
 
 # ---- Prodotti ----------------------------------------------------------------
@@ -182,6 +230,8 @@ def load_product(
     product = salon_get(Product, ctx, product_id)
     if data.qty <= 0:
         raise HttpError(422, "La quantità da caricare deve essere positiva")
+    if invoice is not None:
+        _validate_invoice(invoice)
     movement = apply_movement(
         product,
         kind=StockMovement.Kind.LOAD,
@@ -411,11 +461,12 @@ def list_categories(request):
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
+    _validate_category_in(data)
     return ProductCategory.objects.create(
         salon=ctx.salon,
         name=data.name,
         order=data.order,
-        color=data.color or "#E0E7FF",
+        color=(data.color or "#E0E7FF").strip(),
     )
 
 
@@ -423,11 +474,12 @@ def create_category(request, data: CategoryIn):
 def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
+    _validate_category_in(data)
     category = salon_get(ProductCategory, ctx, category_id)
     category.name = data.name
     category.order = data.order
     if data.color is not None:
-        category.color = data.color
+        category.color = data.color.strip()
     category.save()
     return category
 
@@ -488,17 +540,29 @@ def update_order(request, order_id: int, data: OrderUpdateIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     order = salon_get(PurchaseOrder, ctx, order_id)
-    if order.status != PurchaseOrder.Status.DRAFT:
-        raise HttpError(400, "Solo le bozze d'ordine sono modificabili")
-    for row in data.lines:
-        line = order.lines.filter(pk=row.id).first()
-        if line is None:
-            raise HttpError(404, "Riga d'ordine non trovata")
-        if row.qty_ordered <= 0:
-            line.delete()
-        else:
-            line.qty_ordered = row.qty_ordered
-            line.save(update_fields=["qty_ordered"])
+    # Tutto o niente: prima si risolvono TUTTE le righe, poi si scrive. Applicarle
+    # una per una lasciava l'ordine a metà quando l'ultima riga era sconosciuta —
+    # 404 al client, ma le quantità precedenti già cambiate a magazzino.
+    with transaction.atomic():
+        if (
+            PurchaseOrder.objects.select_for_update()
+            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
+            .first()
+            is None
+        ):
+            raise HttpError(400, "Solo le bozze d'ordine sono modificabili")
+        rows = []
+        for row in data.lines:
+            line = order.lines.filter(pk=row.id).first()
+            if line is None:
+                raise HttpError(404, "Riga d'ordine non trovata")
+            rows.append((line, row.qty_ordered))
+        for line, qty_ordered in rows:
+            if qty_ordered <= 0:
+                line.delete()
+            else:
+                line.qty_ordered = qty_ordered
+                line.save(update_fields=["qty_ordered"])
     log_activity(
         ctx.salon,
         "order.updated",
@@ -514,18 +578,29 @@ def send_order(request, order_id: int, data: OrderSendIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     order = salon_get(PurchaseOrder, ctx, order_id)
-    if order.status != PurchaseOrder.Status.DRAFT:
-        raise HttpError(400, "L'ordine è già stato inviato")
-    lines = list(order.lines.select_related("product"))
-    if not lines:
-        raise HttpError(400, "Impossibile inviare un ordine senza righe")
     method = data.method or order.supplier.order_method
     if method not in Supplier.OrderMethod.values:
         raise HttpError(400, "Metodo d'invio non valido")
-    order.status = PurchaseOrder.Status.SENT
-    order.sent_method = method
-    order.sent_at = timezone.now()
-    order.save(update_fields=["status", "sent_method", "sent_at", "updated_at"])
+    # Come in `receive_order`: lo stato si guarda sulla riga BLOCCATA e riletta,
+    # non sulla copia arrivata con la richiesta. Due schermate aperte sullo
+    # stesso ordine mandavano altrimenti due volte la stessa ordinazione al
+    # fornitore, che spediva la merce due volte.
+    with transaction.atomic():
+        locked = (
+            PurchaseOrder.objects.select_for_update()
+            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
+            .first()
+        )
+        if locked is None:
+            raise HttpError(400, "L'ordine è già stato inviato")
+        order = locked
+        lines = list(order.lines.select_related("product"))
+        if not lines:
+            raise HttpError(400, "Impossibile inviare un ordine senza righe")
+        order.status = PurchaseOrder.Status.SENT
+        order.sent_method = method
+        order.sent_at = timezone.now()
+        order.save(update_fields=["status", "sent_method", "sent_at", "updated_at"])
     emit_event(
         ctx.salon,
         "supplier.order",

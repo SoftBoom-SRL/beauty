@@ -4,6 +4,7 @@ import datetime as dt
 import uuid
 
 from django.conf import settings
+from django.contrib.auth.hashers import check_password as verify_password
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
@@ -58,6 +59,27 @@ class User(AbstractUser):
     def __str__(self):
         return self.email
 
+    def set_password(self, raw_password):
+        """Cambiare la password invalida le sessioni aperte, da qualunque strada.
+
+        L'incremento stava solo nell'endpoint volontario /staff/password. Ma la
+        password si cambia anche dall'admin Django (form «cambia password»),
+        con `manage.py changepassword` e da qualunque script: per quelle strade
+        token_version non si muoveva, quindi l'account compromesso restava
+        compromesso — chi aveva il refresh (30 giorni) se ne faceva dare uno
+        nuovo all'infinito, cioè proprio nello scenario che motiva il cambio
+        password. Qui vale sempre, perché tutti passano da set_password.
+
+        Eccezione: il re-hash automatico di Django (`check_password` riscrive
+        l'hash quando cambiano i parametri dell'hasher) chiama set_password con
+        la STESSA password. Non è un cambio di credenziale e non deve sloggare
+        nessuno, per questo si confronta con l'hash precedente.
+        """
+        previous = self.password
+        super().set_password(raw_password)
+        if previous and not verify_password(raw_password, previous):
+            self.token_version = (self.token_version or 0) + 1
+
 
 class Role(models.Model):
     """Ruolo con permessi per ambito (vedi common.permissions.SCOPES)."""
@@ -93,6 +115,50 @@ class Membership(models.Model):
 
     def __str__(self):
         return f"{self.user} @ {self.salon}" + (" (titolare)" if self.is_owner else "")
+
+
+class StaffRefreshToken(models.Model):
+    """Un refresh staff vivo: una riga per accesso, revocabile.
+
+    I JWT sono stateless: finché non scadono valgono, e il refresh dura 30
+    giorni. Senza questa tabella un refresh esfiltrato valeva per un mese, il
+    rinnovo ne coniava uno nuovo ogni volta senza invalidare il precedente
+    (sessione scorrevole infinita) e il titolare che «disconnetteva» il telefono
+    smarrito non otteneva niente, perché non esisteva nessun posto dove dire che
+    quel token non vale più. Ora il refresh porta un identificativo (`jti`) che
+    deve corrispondere a una riga viva: rinnovando si revoca quella spesa e se
+    ne crea una nuova (rotazione), e l'uscita revoca senza aspettare la
+    scadenza.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="refresh_tokens"
+    )
+    salon = models.ForeignKey(
+        "core.Salon", on_delete=models.CASCADE, related_name="staff_refresh_tokens"
+    )
+    jti = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    # Vero quando la riga è stata chiusa perché il token è stato SPESO in un
+    # rinnovo, falso quando l'ha chiusa un'uscita o un cambio password. La
+    # differenza conta: al rinnovo si concedono pochi secondi di tolleranza per
+    # le schede multiple della dashboard, all'uscita no — chi esce deve essere
+    # fuori subito.
+    rotated = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "salon", "revoked_at"])]
+
+    def __str__(self):
+        stato = "revocato" if self.revoked_at else "attivo"
+        return f"Sessione {self.user_id} ({stato})"
+
+    @property
+    def is_live(self) -> bool:
+        return self.revoked_at is None and self.expires_at > timezone.now()
 
 
 def default_invitation_expiry():

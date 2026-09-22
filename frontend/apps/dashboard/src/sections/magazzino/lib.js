@@ -44,6 +44,8 @@ export const UNIT_OPTIONS = ['pz', 'flaconi', 'tubi', 'ml', 'g', 'vasetti', 'con
 
 /* ---- numbers: the API sends decimals as strings ("3.00") ---- */
 export const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+/** arrotondamento commerciale ai centesimi (l'EPSILON evita 8.414999…) */
+export const round2 = (x) => Math.round((num(x) + Number.EPSILON) * 100) / 100;
 export const fmtQty = (x, lang) => num(x).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT');
 /** fmtEur renders 0 as "Gratis" — for stock values we want €0 */
 export const eur0 = (n, lang, fmtEur) => (num(n) === 0 ? '€0' : fmtEur(num(n), lang));
@@ -51,11 +53,15 @@ export const eur0 = (n, lang, fmtEur) => (num(n) === 0 ? '€0' : fmtEur(num(n),
 /** unit purchase cost net of the supplier discount */
 export const unitCost = (p) => (p ? num(p.purchase_price) * (1 - num(p.purchase_discount_pct) / 100) : 0);
 
-/** net / VAT / total for an order line */
+/** Imponibile / IVA / totale di una riga d'ordine.
+ *  Ogni importo è arrotondato ai centesimi: uno sconto fornitore del 15% su
+ *  9,90 € dà 8,415 €, e senza arrotondare il totale a video non coincideva con
+ *  la somma delle righe stampate sul PDF mandato al fornitore. */
 export function orderLineMath(qty, cost, vatRate) {
-  const net = num(qty) * num(cost);
-  const vat = (net * num(vatRate)) / 100;
-  return { net, vat, total: net + vat };
+  const unit = round2(cost);
+  const net = round2(num(qty) * unit);
+  const vat = round2((net * num(vatRate)) / 100);
+  return { unit, net, vat, total: round2(net + vat) };
 }
 
 /** ISO datetime → "3 lug · 14:30" */
@@ -102,12 +108,25 @@ export function openOrderPrint({ salonName, order, supplier, lines, lang }) {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let net = 0;
   let vat = 0;
+  let unknown = 0;
+  // Le righe d'ordine dell'API portano `product_name`: leggendo solo `l.name`
+  // la colonna Prodotto del PDF partiva vuota, e il fornitore riceveva un
+  // buono d'ordine con quantità e prezzi ma senza dire di cosa.
+  const lineName = (l) => l.product_name || l.name || '';
   const rows = lines.map((l) => {
+    // riga senza prezzo noto (prodotto non più a catalogo): meglio un trattino
+    // che uno 0,00 € spedito al fornitore come se fosse un omaggio
+    if (l.cost == null) {
+      unknown++;
+      return `<tr><td>${esc(lineName(l))}${l.sku ? ' <span class="sku">· ' + esc(l.sku) + '</span>' : ''}</td>` +
+        `<td class="r">${fmtQty(l.qty, lang)}${l.unit ? ' ' + esc(l.unit) : ''}</td>` +
+        '<td class="r">—</td><td class="r">—</td><td class="r">—</td></tr>';
+    }
     const m = orderLineMath(l.qty, l.cost, l.vat);
-    net += m.net; vat += m.vat;
-    return `<tr><td>${esc(l.name)}${l.sku ? ' <span class="sku">· ' + esc(l.sku) + '</span>' : ''}</td>` +
+    net = round2(net + m.net); vat = round2(vat + m.vat);
+    return `<tr><td>${esc(lineName(l))}${l.sku ? ' <span class="sku">· ' + esc(l.sku) + '</span>' : ''}</td>` +
       `<td class="r">${fmtQty(l.qty, lang)}${l.unit ? ' ' + esc(l.unit) : ''}</td>` +
-      `<td class="r">${eur(l.cost)}</td><td class="r">${num(l.vat)}%</td><td class="r">${eur(m.total)}</td></tr>`;
+      `<td class="r">${eur(m.unit)}</td><td class="r">${num(l.vat)}%</td><td class="r">${eur(m.total)}</td></tr>`;
   }).join('');
   const contact = supplier
     ? (supplier.order_method === 'whatsapp' ? (supplier.phone || supplier.email) : (supplier.email || supplier.phone))
@@ -133,7 +152,8 @@ export function openOrderPrint({ salonName, order, supplier, lines, lang }) {
     <div class="head"><div><h1>${esc(salonName || '')}</h1><div class="muted">${tt("Buono d'ordine", 'Purchase order')} · ${today}</div></div><div class="muted r">${tt('Rif.', 'Ref.')} PO-${order.id}</div></div>
     <div class="to"><div class="lbl">${tt('Fornitore', 'Supplier')}</div><div class="name">${esc(order.supplier_name)}</div>${contact ? '<div class="muted">' + esc(contact) + '</div>' : ''}</div>
     <table><thead><tr><th>${tt('Prodotto', 'Product')}</th><th class="r">${tt('Quantità', 'Qty')}</th><th class="r">${tt('Prezzo un.', 'Unit price')}</th><th class="r">IVA</th><th class="r">${tt('Totale', 'Total')}</th></tr></thead><tbody>${rows}</tbody></table>
-    <div class="tot"><div class="row"><span class="muted">${tt('Imponibile', 'Net')}</span><span>${eur(net)}</span></div><div class="row"><span class="muted">IVA</span><span>${eur(vat)}</span></div><div class="row grand"><span>${tt('Totale', 'Total')}</span><span>${eur(net + vat)}</span></div></div>
+    ${unknown ? '<div class="muted" style="margin-top:10px">' + esc(tt(`${unknown} righe senza prezzo a catalogo: da concordare con il fornitore, non incluse nei totali.`, `${unknown} lines with no catalogue price: to be agreed with the supplier, not included in the totals.`)) + '</div>' : ''}
+    <div class="tot"><div class="row"><span class="muted">${tt('Imponibile', 'Net')}</span><span>${eur(net)}</span></div><div class="row"><span class="muted">IVA</span><span>${eur(vat)}</span></div><div class="row grand"><span>${tt('Totale', 'Total')}</span><span>${eur(round2(net + vat))}</span></div></div>
     <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };</script>
   </body></html>`;
   const w = window.open('', '_blank');

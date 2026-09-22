@@ -10,7 +10,7 @@ export * as clientAuth from './clientAuth.js';
 
 export { SALON_SLUG, resolveSalonSlug } from './salon.js';
 
-export { LangProvider, useT, makeT } from './i18n.jsx';
+export { LangProvider, useT, makeT, storedLang } from './i18n.jsx';
 
 export {
   fmtEur, timeLabel, fmtDur,

@@ -101,6 +101,12 @@ def _resolve_salon(org: str, email: str, email_verified: bool) -> tuple[Salon | 
 def login_with_link_code(code: str) -> dict:
     identity = yc.redeem_link_code(code)
     org = str(identity.get("org_id") or "")
+    if not org:
+        # Stesso controllo che fa già il connect (api.py): senza organizzazione
+        # non c'è nulla da collegare, e proseguire significava provisionare un
+        # salone nuovo e vuoto a OGNI accesso — più la riga di connessione
+        # riscritta con yourang_org_id="", che spegne il routing dei webhook.
+        raise ValueError("Identità Yourang senza organizzazione")
     email = (identity.get("email") or "").strip()
     if not email:
         raise ValueError("Email non disponibile dall'identità Yourang")
@@ -122,6 +128,14 @@ def login_with_link_code(code: str) -> dict:
             is_owner=not Membership.objects.filter(salon=salon).exists(),
         )
 
+    # Un'org serve UN salone: lo stesso guard del connect. Il caso normale lo
+    # copre già _resolve_salon (org mappata → quel salone), questo ferma la
+    # corsa fra due accessi simultanei prima che gli eventi finiscano nel salone
+    # sbagliato; il vincolo unico parziale sul modello è la rete di sicurezza.
+    taken = YourangConnection.objects.filter(yourang_org_id=org).exclude(salon=salon).first()
+    if taken:
+        raise ValueError("Questa organizzazione Yourang è già collegata a un altro salone")
+
     # Connessione Yourang del salone. Nessun token da salvare: li custodisce il
     # proxy. Nessuna registrazione webhook: il consenso provisiona l'endpoint
     # (client+org) verso /hooks/<slug>, e il proxy rifiuta comunque quella rotta.
@@ -132,13 +146,19 @@ def login_with_link_code(code: str) -> dict:
     conn.last_error = ""
     conn.save()
     try:
-        sync_clients(conn)
-        sync_services(conn)
+        clients = sync_clients(conn)
+        services = sync_services(conn)
         conn.last_sync_at = timezone.now()
-        conn.save(update_fields=["last_sync_at"])
+        # Gli errori della prima sync restano visibili sulla connessione: senza,
+        # la dashboard dice "Connesso" e nessuno sa che non è arrivato nulla.
+        errors = clients.errors + services.errors
+        conn.last_error = (
+            f"Sincronizzazione parziale: {'; '.join(errors[:3])}"[:500] if errors else ""
+        )
+        conn.save(update_fields=["last_sync_at", "last_error"])
     except Exception as exc:  # noqa: BLE001
         logger.exception("Yourang initial sync failed (login)")
-        conn.last_error = str(exc)
+        conn.last_error = str(exc)[:500]
         conn.save(update_fields=["last_error"])
 
     tokens = create_staff_tokens(user, salon)

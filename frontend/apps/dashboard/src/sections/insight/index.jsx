@@ -101,8 +101,11 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
   }, [period, mode, applied, granularity, isCustom, fireToast, t]);
 
   // fmtEur(0) says "Gratis" (price convention) — for KPI money we want "€0".
+  // Niente arrotondamento all'euro prima di formattare: con i centesimi a
+  // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
+  // cifra precisa e sbagliata.
   const eur = useCallback((n) => {
-    const v = Math.round(Number(n) || 0);
+    const v = Number(n) || 0;
     return v === 0 ? '€0' : fmtEur(v, lang);
   }, [lang]);
   const allKpis = useMemo(() => buildAllKpis(kpis, prevKpis, t, lang, eur), [kpis, prevKpis, t, lang, eur]);

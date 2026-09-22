@@ -40,12 +40,18 @@ export function subscribe(fn) {
 }
 
 /** POST /api/auth/client/register — creates the client and issues an OTP.
- *  payload: { salon_slug, first_name, last_name, phone, email?, lang? } */
+ *  payload: { salon_slug, first_name, last_name, phone, email?, lang? }
+ *  400 "Numero di telefono già registrato" se il numero è GIÀ in anagrafica,
+ *  attivo o disattivato che sia: chi chiama non può distinguere i due casi. */
 export function register(payload) {
   return api.post('/api/auth/client/register', payload, { auth: false });
 }
 
-/** POST /api/auth/client/request-otp — 404 "Numero non registrato" if unknown, 429 if too many. */
+/** POST /api/auth/client/request-otp — 200 SEMPRE, 429 se si supera il tetto.
+ *  Il 200 non dice se il numero è in anagrafica e non deve dirlo: rispondere
+ *  404 sugli sconosciuti faceva dell'endpoint un oracolo, e chi ciclava i
+ *  numeri si ricavava la rubrica del salone. Quindi da qui NON si deduce che
+ *  la cliente è nuova: la registrazione è una scelta esplicita di chi entra. */
 export function requestOtp(salonSlug, phone) {
   return api.post('/api/auth/client/request-otp', { salon_slug: salonSlug, phone }, { auth: false });
 }

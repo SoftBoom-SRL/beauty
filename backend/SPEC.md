@@ -42,6 +42,13 @@ il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.ser
   `visit.completed`, `loyalty.reward`, `communication.send`, `supplier.order`,
   `automation.updated`, `automation.triggered`. Payload: id + dati utili a Yourang
   (nome cliente, telefono, lingua, orari ISO).
+- **Ritardo di sicurezza**: gli eventi dell'agenda passano da
+  `agenda.services.emit_appointment_event`, che li TRATTIENE per
+  `SalonSettings.automation_delay_seconds` (30 di serie, 0 = subito) con una
+  `coalesce_key` per oggetto. Due eventi trattenuti sullo stesso appuntamento si
+  fondono in uno solo: prenotare e correggere l'orario un istante dopo manda un
+  messaggio, non due, e quello che «torna indietro» annulla non parte affatto.
+  Gli eventi immediati (OTP, link di pagamento) NON si ritardano.
 - **Condizioni E/O** (deposito, automazioni): JSON `{"op":"and|or","rules":[{"field","cmp","value"}]}`,
   valutate con `common.conditions.evaluate(conditions, facts)`;
   facts standard da `apps.clients.services.client_facts(client)`.
@@ -267,6 +274,12 @@ finestre lavorabili in minuti per quella data = turno del weekday
   supplier_cost/product_cost da Service (snapshot corrente); labor = Σ(duration/60 × operator.hourly_cost);
   → {revenue, supplier_cost, product_cost, labor_cost, margin, margin_pct}.
 - CRUD `/pauses` (scope agenda).
+- GET `/undo` (scope agenda) → i gesti che CHI CHIEDE può ancora annullare
+  (`agenda.UndoEntry`, ultimi 20, finestra di 10 minuti, solo i propri).
+  POST `/undo` {entry_id?} → rimette le cose com'erano (`agenda.undo.perform`):
+  ripristina l'istantanea, cancella ciò che il gesto aveva creato e ferma i
+  messaggi non ancora partiti; 409 se nel frattempo qualcuno ha toccato le
+  stesse righe o il conto è passato in cassa.
 - GET `/waitlist` (scope agenda) → entries attive con cliente/servizio.
   POST `/waitlist/{id}/contacted` → status contacted, log.
 - GET `/availability?date=&items=<JSON>` (staff_auth) → get_free_slots.
