@@ -74,7 +74,11 @@ const SEED = (day) => [
 const STORE = new Map();
 const dayOf = (isoStart) => String(isoStart).slice(0, 10);
 const appointmentsOf = (day) => {
-  if (!STORE.has(day)) STORE.set(day, SEED(day));
+  // La giornata finta è UNA: gli altri giorni nascono vuoti, e si riempiono solo
+  // con quello che ci si sposta davvero. Seminarli tutti creava un secondo
+  // appuntamento con lo stesso id a ogni giorno visitato, e dopo uno
+  // spostamento di data non si capiva più quale fosse quello vero.
+  if (!STORE.has(day)) STORE.set(day, day === TODAY ? SEED(day) : []);
   return STORE.get(day);
 };
 export const APPOINTMENTS = (day) => appointmentsOf(day);
@@ -137,7 +141,8 @@ export function editAppointment(id, body) {
         service_id: raw.service_id, service_name: s?.name_it || '',
         operator_id: opId, operator_name: opName(opId),
         duration_min: raw.duration_min || previous?.duration_min || s?.duration_min || 30,
-        soak_min: previous ? previous.soak_min : (s?.soak_min || 0),
+        // l'attesa dopo il servizio si può scrivere, come sul server
+        soak_min: Number.isInteger(raw.soak_min) ? raw.soak_min : (previous ? previous.soak_min : (s?.soak_min || 0)),
         price: previous ? previous.price : (s?.price || '0.00'),
         order: 0,
       };
@@ -179,7 +184,7 @@ export const WEEK = (startIso) => {
   return [...Array(7)].map((_, i) => {
     const d = new Date(base); d.setDate(base.getDate() + i);
     const day = iso(d);
-    const appts = day === TODAY || i === 1 || i === 3 ? appointmentsOf(day) : [];
+    const appts = appointmentsOf(day);
     return { date: day, count: appts.length, by_status: {}, appointments: appts.map(compact) };
   });
 };

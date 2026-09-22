@@ -1,6 +1,6 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, minutesOfDay, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtDateIt, minutesOfDay, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
@@ -322,6 +322,21 @@ export default function AgendaSection() {
     } finally { setPending(null); }
   };
 
+  /* Appuntamento aperto nel pannello: con quello a video, un clic su uno spazio
+   * libero vuol dire «spostalo qui» — è il gesto della cliente che chiama per
+   * spostare, e prima bisognava indovinare l'orario e scriverlo a mano. */
+  const openAppt = modal?.name === 'apptdetail' ? (modal.props?.appointment ?? null) : null;
+  const moveOpenApptHere = async (a, opId, startMin) => {
+    setSlotMenu(null);
+    await moveAppt(a, startMin, opId);
+    try {
+      // il pannello si riapre sui dati freschi, altrimenti resterebbe a mostrare
+      // l'orario di prima mentre in griglia il blocco è già altrove
+      const fresh = await api.get(`/api/agenda/appointments/${a.id}`);
+      openModal('apptdetail', { appointment: fresh, onMutate: refetchAll, onShowDate: setDate });
+    } catch { /* il pannello resta com'è: la griglia è comunque aggiornata */ }
+  };
+
   /* Rilascio sopra un giorno della striscia: stesso orario, giorno nuovo. */
   const moveApptToDate = async (a, iso, startMin, opts = {}) => {
     if (!canWrite) { noWrite(); return; }
@@ -599,7 +614,7 @@ export default function AgendaSection() {
 
         {/* body — day / week / month */}
         {calView === 'week' ? (
-          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} />
+          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} />
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (
@@ -651,7 +666,7 @@ export default function AgendaSection() {
                 opPalette={opPalette}
                 onHover={onHover}
                 onLeave={() => setHover(null)}
-                onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll })}
+                onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll, onShowDate: setDate })}
                 onInvalidDrop={onInvalidDrop}
                 onDropOnDate={moveApptToDate}
                 onDragChange={setDragOn}
@@ -684,7 +699,7 @@ export default function AgendaSection() {
             released={released}
             onRestore={(a) => restoreReleased(a)}
             onRebook={(a) => openNewAppt({ clientId: a.client?.id, clientName: a.client?.full_name, serviceIds: (a.items || []).map((i) => i.service_id), date })}
-            onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll })}
+            onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll, onShowDate: setDate })}
             onOpenLog={() => { setDeepLink && setDeepLink('log-today'); setTab('impostazioni'); }}
             onOpenWaitlist={() => openModal('waitlist')}
             onOpenOpportunity={() => openModal('opportunity')}
@@ -743,6 +758,18 @@ export default function AgendaSection() {
               </div>
             ) : (
               <React.Fragment>
+                {/* Col dettaglio aperto, il primo gesto è spostare QUELLA
+                    cliente: si sfogliano i giorni dal pannello e si clicca lo
+                    spazio giusto, senza passare da nessun'altra schermata. */}
+                {openAppt && (
+                  <button className="dk-row" onClick={() => moveOpenApptHere(openAppt, slotMenu.opId, slotMenu.startMin)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="calendar" size={15} color="var(--clay-ink)" /></div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t(`Sposta qui ${firstName(openAppt.client?.full_name)}`, `Move ${firstName(openAppt.client?.full_name)} here`)}</div>
+                      <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t(`da ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aMin(openAppt.start))}`, `from ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aMin(openAppt.start))}`)}</div>
+                    </div>
+                  </button>
+                )}
                 <button className="dk-row" onClick={() => { const m = slotMenu; setSlotMenu(null); openNewAppt({ operatorId: m.opId, start: isoAtMin(date, m.startMin), date }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="plus" size={15} color="var(--clay-ink)" /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>

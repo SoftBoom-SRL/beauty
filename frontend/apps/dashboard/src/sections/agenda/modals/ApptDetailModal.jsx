@@ -21,7 +21,7 @@ const timeCellCss = {
   outline: 'none', background: 'var(--surface)', color: 'var(--ink)',
 };
 
-export default function ApptDetailModal({ appointment, onMutate, onClose }) {
+export default function ApptDetailModal({ appointment, onMutate, onClose, onShowDate }) {
   const { t, lang, operators, opColors, services, serviceCategories, settings, session, fireToast, openModal, setTab, setDeepLink, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
   const [appt, setAppt] = useState(appointment);
@@ -141,42 +141,63 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const [movingBusy, setMovingBusy] = useState(false);
   useEffect(() => { setTimeDraft(null); }, [appt?.start]);
 
+  /* ---- giorno da guardare -------------------------------------------------
+   * «La cliente chiama e vuole spostare»: si sfogliano i giorni da qui e
+   * l'agenda di fianco li mostra man mano (giorno o settimana, quella che è
+   * aperta). Finché non si preme «Sposta», non si è ancora toccato niente. */
+  const [viewDate, setViewDate] = useState(() => toDateStr(appointment?.start));
+  useEffect(() => { setViewDate(toDateStr(appt?.start)); }, [appt?.start]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showDate = (iso) => {
+    if (!iso) return;
+    setViewDate(iso);
+    onShowDate?.(iso);     // l'agenda accanto si sposta su quel giorno
+  };
+  const shiftViewDate = (days) => {
+    const d = parseISO(viewDate);
+    d.setDate(d.getDate() + days);
+    showDate(toDateStr(d));
+  };
+
   /* `opts.base` è l'appuntamento da cui si parte: serve all'«Annulla», che
    * scatta quando in pagina c'è già la versione spostata — senza, il confronto
    * «è cambiato qualcosa?» guardava la copia vecchia e l'annullamento non
    * faceva niente. */
-  async function applyMove({ startMin, operatorId }, opts = {}) {
+  async function applyMove({ startMin, operatorId, dateIso }, opts = {}) {
     if (movingBusy) return;
     const base = opts.base || appt;
+    const baseDate = toDateStr(base.start);
+    const day = dateIso || baseDate;
     const from = minutesOfDay(base.start);
     const target = startMin ?? from;
     const toOp = operatorId ?? base.operator_id;
     const reassigned = toOp !== base.operator_id;
-    if (target === from && !reassigned) return;
+    if (target === from && !reassigned && day === baseDate) return;
     setMovingBusy(true);
     try {
       const res = await api.post(`/api/agenda/appointments/${base.id}/move`, {
-        start: isoAtMin(toDateStr(base.start), target),
+        start: isoAtMin(day, target),
         ...(reassigned ? { operator_id: toOp, from_operator_id: base.operator_id } : {}),
         force: !!opts.force,
       });
       setAppt(res);
       const who = operators.find((x) => x.id === toOp);
+      const when = day === baseDate ? timeLabel(target) : `${fmtDateIt(day)} · ${timeLabel(target)}`;
       fireToast({
         msg: reassigned
-          ? t(`Passato a ${who?.first_name || ''}, ${timeLabel(target)}`, `Moved to ${who?.first_name || ''}, ${timeLabel(target)}`)
-          : t(`Spostato alle ${timeLabel(target)}`, `Moved to ${timeLabel(target)}`),
+          ? t(`Passato a ${who?.first_name || ''}, ${when}`, `Moved to ${who?.first_name || ''}, ${when}`)
+          : t(`Spostato · ${when}`, `Moved · ${when}`),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
-        undoFn: () => applyMove({ startMin: from, operatorId: base.operator_id }, { force: true, base: res }),
+        undoFn: () => applyMove({ startMin: from, operatorId: base.operator_id, dateIso: baseDate }, { force: true, base: res }),
       });
+      onShowDate?.(day);     // l'agenda resta su quello che si è appena fatto
       onMutate?.();
     } catch (err) {
       // Slot occupato o fuori turno: si scrive lo stesso, come in griglia — chi
       // sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
         setMovingBusy(false);
-        await applyMove({ startMin, operatorId }, { ...opts, base, force: true });
+        await applyMove({ startMin, operatorId, dateIso }, { ...opts, base, force: true });
         return;
       }
       setTimeDraft(null);
@@ -231,21 +252,36 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
   const eligibleOps = (serviceId) => operators.filter((op) => (op.service_ids || []).includes(serviceId));
   const svcDisplayName = (it) => { const s = svcOf(it.service_id); return s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : (it.name || it.service_name || ''); };
-  const itemsSig = (list) => JSON.stringify((list || []).map((i) => [i.id ?? null, i.service_id, i.operator_id ?? null, Number(i.duration_min) || 0]));
+  const itemsSig = (list) => JSON.stringify((list || []).map((i) => [i.id ?? null, i.service_id, i.operator_id ?? null, Number(i.duration_min) || 0, Number(i.soak_min) || 0]));
   const itemsDirty = itemsSig(editItems) !== itemsSig(appt.items);
   const editTotal = editItems.reduce((s, it) => s + Number(it.price || 0), 0);
   /* Orario di ogni riga: i servizi sono in fila dall'inizio della visita, posa
    * compresa. Serve a vedere subito che cosa slitta quando si cambia una durata
    * o si aggiunge un trattamento. */
+  /* `to` è la fine del LAVORO (quando l'operatrice ha finito); `gap` è quello
+   * che viene dopo — la posa di un colore o il buco che il salone vuole
+   * lasciare — e il servizio successivo comincia di là. Tenerli separati è ciò
+   * che permette di scrivere un'ora di fine senza trascinarsi dietro il
+   * trattamento dopo. */
   const itemSpans = (() => {
     let cursor = startMin;
     return editItems.map((it) => {
       const from = cursor;
-      const to = cursor + Math.max(0, parseInt(it.duration_min, 10) || 0) + (it.soak_min || 0);
-      cursor = to;
-      return { from, to };
+      const to = from + Math.max(0, parseInt(it.duration_min, 10) || 0);
+      const gap = Math.max(0, parseInt(it.soak_min, 10) || 0);
+      cursor = to + gap;
+      return { from, to, gap, next: cursor };
     });
   })();
+  /* Attesa fra un servizio e l'altro: è un avviso, non un divieto. Il listino
+   * dice quanta posa ha il trattamento (il colore ne ha 30): quello che c'è in
+   * più è un buco voluto, e come tale si segnala. */
+  const catalogSoak = (it) => svcOf(it.service_id)?.soak_min || 0;
+  const gapNotes = editItems.map((it, i) => {
+    if (i >= editItems.length - 1) return null;     // dopo l'ultimo non c'è nulla da aspettare
+    const extra = (itemSpans[i].gap || 0) - catalogSoak(it);
+    return extra > 0 ? { index: i, minutes: extra, gap: itemSpans[i].gap } : null;
+  }).filter(Boolean);
 
   /* Il servizio aggiunto va alla STESSA persona della visita, se è abilitata:
    * «prima disponibile» faceva scegliere al server una collega qualsiasi, e
@@ -263,14 +299,21 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.max(5, parseInt(x.duration_min, 10) || 5) } : x)));
   const setItemOperator = (key, opId) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
 
+  const setItemGap = (key, minutes) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, soak_min: Math.max(0, minutes) } : x)));
+
   /* ---- ora di inizio e di fine di OGNI servizio ----------------------------
-   * I trattamenti di una visita sono in fila: il primo comincia quando comincia
-   * la visita, ognuno degli altri quando finisce quello prima. Quindi scrivere
-   * un orario vuol dire spostare un confine, e lo si fa senza calcoli:
-   * - fine di un servizio  → cambia la sua durata (quelli dopo slittano);
-   * - inizio del primo     → sposta tutta la visita (come in griglia);
-   * - inizio di un altro   → allunga o accorcia quello che lo precede.
-   * Il minimo resta cinque minuti: un servizio da zero non esiste. */
+   * Ogni trattamento ha il suo orario, e fra uno e l'altro ci può essere un
+   * buco: prima la fine di un servizio era per forza l'inizio del successivo, e
+   * allungare il colore trascinava la piega senza chiedere niente. Adesso:
+   * - fine di un servizio  → cambia la sua durata, l'attesa dopo resta com'è
+   *   (quindi il trattamento dopo slitta di conseguenza);
+   * - inizio di un altro   → allarga o stringe l'ATTESA prima di lui, senza
+   *   toccare la durata di quello che lo precede. Il buco che resta è scritto
+   *   in chiaro, con un tasto per chiuderlo: è un avviso, non un divieto;
+   * - inizio del primo     → sposta tutta la visita (come in griglia).
+   * L'unico limite vero: un servizio non può cominciare prima che finisca
+   * quello prima (una persona sola non fa due cose insieme). Per farli davvero
+   * in contemporanea si trascina il servizio nella colonna di una collega. */
   const draftOf = (key, side, value) => rowDrafts[`${key}:${side}`] ?? timeLabel(value);
   const setDraft = (key, side, v) => setRowDrafts((m) => ({ ...m, [`${key}:${side}`]: v }));
   const clearDraft = (key, side) => setRowDrafts((m) => { const n = { ...m }; delete n[`${key}:${side}`]; return n; });
@@ -279,8 +322,16 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
     const it = editItems[index], span = itemSpans[index];
     clearDraft(it.key, 'to');
     if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
-    const active = hmToMin(hm) - span.from - (it.soak_min || 0);
-    setItemDuration(it.key, String(Math.max(5, active)));
+    const active = Math.max(5, hmToMin(hm) - span.from);
+    setItemDuration(it.key, String(active));
+    const next = editItems[index + 1];
+    if (next && span.gap > 0) {
+      fireToast({
+        msg: t(`${svcDisplayName(next)} slitta alle ${timeLabel(span.from + active + span.gap)}: fra i due restano ${span.gap} minuti di attesa`,
+          `${svcDisplayName(next)} shifts to ${timeLabel(span.from + active + span.gap)}: ${span.gap} minutes of waiting remain between them`),
+        icon: 'clock',
+      });
+    }
   };
   const commitItemStart = async (index, hm) => {
     const it = editItems[index];
@@ -296,8 +347,16 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
       return;
     }
     const prev = editItems[index - 1], prevSpan = itemSpans[index - 1];
-    const active = wanted - prevSpan.from - (prev.soak_min || 0);
-    setItemDuration(prev.key, String(Math.max(5, active)));
+    const gap = wanted - prevSpan.to;
+    if (gap < 0) {
+      fireToast({
+        msg: t(`${svcDisplayName(it)} non può cominciare prima che finisca ${svcDisplayName(prev)} (${timeLabel(prevSpan.to)}): per farli insieme trascinalo nella colonna di una collega`,
+          `${svcDisplayName(it)} cannot start before ${svcDisplayName(prev)} ends (${timeLabel(prevSpan.to)}): to run them together drag it into a colleague's column`),
+        icon: 'alert',
+      });
+      return;
+    }
+    setItemGap(prev.key, gap);
   };
 
   /* Un solo salvataggio per servizi e nota, e sta nel piede del pannello: il
@@ -316,6 +375,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             service_id: it.service_id,
             operator_id: it.operator_id ?? null,
             duration_min: Math.max(5, parseInt(it.duration_min, 10) || 5),
+            // l'attesa dopo il servizio: posa del listino o buco voluto
+            soak_min: Math.max(0, parseInt(it.soak_min, 10) || 0),
           })),
         } : {}),
         ...(noteDirty ? { note } : {}),
@@ -572,6 +633,31 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                 <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.7, marginTop: 3 }}>{fmtDur(appt.total_duration_min, lang)} · {t('fino alle', 'until')} {timeLabel(endMin)}</div>
               </div>
             </div>
+            {/* Il giorno: si sfoglia da qui e l'agenda di fianco segue, così la
+                cliente al telefono sente «giovedì alle dieci ho posto» mentre
+                lo si sta guardando davvero. Finché non si preme «Sposta»,
+                l'appuntamento non si muove. */}
+            {canMove && (
+              <div style={{ marginTop: 11, paddingTop: 10, borderTop: '1px dashed rgba(17,24,39,0.16)', display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                <div className="t-meta" style={{ fontSize: 10, color: 'var(--ink-2)', opacity: 0.7 }}>{t('Giorno', 'Day')}</div>
+                <button className="dk-iconbtn" onClick={() => shiftViewDate(-1)} title={t('Giorno prima', 'Previous day')} aria-label={t('Giorno prima', 'Previous day')}
+                  style={{ width: 26, height: 26, borderRadius: 8, background: 'rgba(255,255,255,0.65)', border: 'none' }}><Icon name="chevL" size={13} /></button>
+                <input type="date" value={viewDate} onChange={(e) => showDate(e.target.value)}
+                  aria-label={t('Giorno da guardare', 'Day to look at')}
+                  style={{ border: '1px solid rgba(17,24,39,0.18)', borderRadius: 9, padding: '4px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', fontWeight: 600, outline: 'none', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer' }} />
+                <button className="dk-iconbtn" onClick={() => shiftViewDate(1)} title={t('Giorno dopo', 'Next day')} aria-label={t('Giorno dopo', 'Next day')}
+                  style={{ width: 26, height: 26, borderRadius: 8, background: 'rgba(255,255,255,0.65)', border: 'none' }}><Icon name="chevR" size={13} /></button>
+                {viewDate !== dateStr ? (
+                  <button className="dk-btn dk-btn--clay" disabled={movingBusy} style={{ height: 30, fontSize: 12, padding: '0 11px' }}
+                    onClick={() => applyMove({ dateIso: viewDate })}
+                    title={t('Sposta l’appuntamento a questo giorno, alla stessa ora', 'Move the appointment to this day, at the same time')}>
+                    <Icon name="calendar" size={13} color="#fff" />{t(`Sposta a ${fmtDateIt(viewDate, { weekday: false })}`, `Move to ${fmtDateIt(viewDate, { weekday: false })}`)}
+                  </button>
+                ) : (
+                  <span className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.7 }}>{t('sfoglia i giorni: l’agenda ti segue', 'browse the days: the agenda follows')}</span>
+                )}
+              </div>
+            )}
             {/* passare la visita a un'altra persona: un tocco, senza uscire di qui */}
             {canMove && visitOps.length > 1 && (
               <div style={{ marginTop: 11, paddingTop: 10, borderTop: '1px dashed rgba(17,24,39,0.16)' }}>
@@ -758,16 +844,15 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           <Icon name="x" size={14} />
                         </button>
                       </div>
-                      {/* Ora di inizio e di fine, scrivibili: i servizi sono in
-                          fila, quindi spostare un confine allunga o accorcia il
-                          vicino e quelli dopo slittano — si vede subito qui
-                          sotto, riga per riga. */}
+                      {/* Ora di inizio e di fine, scrivibili. Fra un servizio e
+                          l'altro ci può essere un'attesa: la riga qui sotto la
+                          dice e offre di chiuderla, senza imporre niente. */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
                         <input type="time" step={300} value={draftOf(it.key, 'from', span ? span.from : startMin)}
                           onChange={(e) => setDraft(it.key, 'from', e.target.value)}
                           onBlur={(e) => commitItemStart(i, e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
-                          title={i === 0 ? t('Inizio della visita: cambiarlo sposta tutti i servizi', 'Start of the visit: changing it moves every service') : t('Inizio: sposta il confine col servizio precedente', 'Start: moves the boundary with the previous service')}
+                          title={i === 0 ? t('Inizio della visita: cambiarlo sposta tutti i servizi', 'Start of the visit: changing it moves every service') : t('Inizio: allarga o stringe l’attesa prima di questo servizio', 'Start: widens or narrows the wait before this service')}
                           aria-label={t('Ora di inizio del servizio', 'Service start time')}
                           style={timeCellCss} />
                         <span className="t-sm" style={{ color: 'var(--muted-2)' }}>→</span>
@@ -775,7 +860,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           onChange={(e) => setDraft(it.key, 'to', e.target.value)}
                           onBlur={(e) => commitItemEnd(i, e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
-                          title={it.soak_min ? t('Fine, posa compresa', 'End, soak included') : t('Fine del servizio', 'End of the service')}
+                          title={t('Fine del lavoro: quello che viene dopo è attesa', 'End of the work: what follows is waiting')}
                           aria-label={t('Ora di fine del servizio', 'Service end time')}
                           style={timeCellCss} />
                         <NumInput integer min={5} value={it.duration_min} emptyValue=""
@@ -783,10 +868,35 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           aria-label={t('Durata in minuti', 'Duration in minutes')}
                           style={{ width: 48, marginLeft: 4, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
                         <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('min', 'min')}</span>
-                        {it.soak_min > 0 && (
-                          <span className="t-sm" style={{ color: 'var(--muted-2)' }} title={t('Fase di posa: l’operatrice è libera', 'Soak phase: the stylist is free')}>+ {it.soak_min}′ {t('posa', 'soak')}</span>
-                        )}
                       </div>
+                      {/* Attesa dopo questo servizio: la posa del listino è
+                          normale (grigia), quella in più è un buco voluto e si
+                          dice in ambra — con il tasto per chiuderlo. Nessuno
+                          impedisce di lasciarlo. */}
+                      {i < editItems.length - 1 && span && (span.gap > 0 || gapNotes.some((g) => g.index === i)) && (() => {
+                        const extra = span.gap - catalogSoak(it);
+                        const warn = extra > 0;
+                        return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginLeft: 16, padding: '5px 9px', borderRadius: 9, background: warn ? 'var(--warn-tint)' : 'var(--surface)', border: '1px dashed ' + (warn ? 'color-mix(in srgb, var(--warn) 45%, transparent)' : 'var(--hair)') }}>
+                            <Icon name={warn ? 'alert' : 'clock'} size={13} color={warn ? 'var(--warn)' : 'var(--muted-2)'} />
+                            <span className="t-sm" style={{ flex: 1, minWidth: 0, color: warn ? 'var(--warn)' : 'var(--muted)', fontWeight: warn ? 600 : 500 }}>
+                              {catalogSoak(it) > 0 && !warn
+                                ? t(`${span.gap} minuti di posa, poi ${svcDisplayName(editItems[i + 1])}`, `${span.gap} minutes of soak, then ${svcDisplayName(editItems[i + 1])}`)
+                                : t(`${span.gap} minuti di attesa prima di ${svcDisplayName(editItems[i + 1])}`, `${span.gap} minutes of waiting before ${svcDisplayName(editItems[i + 1])}`)}
+                            </span>
+                            {/* «Chiudi il buco» solo per l'attesa in più: la
+                                posa del listino non è un buco, è il colore che
+                                deve fare il suo tempo. */}
+                            {warn && (
+                              <button type="button" onClick={() => setItemGap(it.key, catalogSoak(it))}
+                                title={t('Riporta il servizio successivo subito dopo questo', 'Bring the next service right after this one')}
+                                style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'transparent', border: 'none', cursor: 'pointer', flexShrink: 0 }}>
+                                {t('Chiudi il buco', 'Close the gap')}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
                         {eligible.length > 0 ? (
                           <React.Fragment>

@@ -26,7 +26,7 @@ export default function DayGrid({
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
-  const { t, lang, settings, modal, operators: allOperators } = useDash();
+  const { t, lang, settings, modal, operators: allOperators, services: allServices } = useDash();
   /* Appuntamento aperto nel pannello di dettaglio: il suo blocco resta cerchiato
    * in agenda, così si vede sempre su cosa si sta intervenendo. */
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -60,6 +60,15 @@ export default function DayGrid({
     if (!op || !Array.isArray(op.service_ids) || !op.service_ids.length) return true;
     return op.service_ids.includes(serviceId);
   };
+  /* La fascia tratteggiata sotto un servizio è la posa del listino oppure
+   * l'attesa che il salone ha lasciato di proposito prima del trattamento
+   * dopo: chiamarla «POSA» in tutti e due i casi faceva cercare un colore che
+   * non c'era. */
+  const soakLabel = (item) => (
+    ((allServices || []).find((s) => s.id === item.service_id)?.soak_min || 0) >= (item.soak_min || 0)
+      ? t('POSA', 'SOAK')
+      : t('ATTESA', 'WAIT')
+  );
   const skillVerdict = (opId, blocks) => {
     const bad = blocks.find((b) => !canDo(opId, b.item.service_id));
     if (!bad) return null;
@@ -623,6 +632,7 @@ export default function DayGrid({
                           dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
                           highlight={b.apptId === openApptId}
                           color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
+                          soakLabel={soakLabel(b.item)}
                           onDown={(e) => onItemDown(e, b)}
                           onResizeDown={(e) => onItemResizeDown(e, b)}
                           onHover={dragging ? null : onHover} onLeave={onLeave}
@@ -709,7 +719,7 @@ function closedIntervals(windows) {
 const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, isLast, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -758,8 +768,8 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
     >
       {/* fase di posa: parte inferiore tratteggiata/più chiara — operatrice NON impegnata */}
       {soak > 0 && (
-        <div title={t('Fase di posa', 'Soak phase')} style={{ position: 'absolute', left: 0, right: 0, top: active * PXM, bottom: 0, background: 'repeating-linear-gradient(135deg, rgba(255,255,255,0.62) 0 6px, rgba(255,255,255,0.14) 6px 12px)', borderTop: '1px dashed rgba(17,24,39,0.28)', borderRadius: '0 0 12px 12px', pointerEvents: 'none', display: 'grid', placeItems: 'center', zIndex: 1 }}>
-          {soak * PXM > 20 && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-2)', opacity: 0.7 }}>{t('POSA', 'SOAK')}</span>}
+        <div title={soakLabel === t('ATTESA', 'WAIT') ? t('Attesa prima del trattamento successivo: l’operatrice è libera', 'Wait before the next treatment: the stylist is free') : t('Fase di posa', 'Soak phase')} style={{ position: 'absolute', left: 0, right: 0, top: active * PXM, bottom: 0, background: 'repeating-linear-gradient(135deg, rgba(255,255,255,0.62) 0 6px, rgba(255,255,255,0.14) 6px 12px)', borderTop: '1px dashed rgba(17,24,39,0.28)', borderRadius: '0 0 12px 12px', pointerEvents: 'none', display: 'grid', placeItems: 'center', zIndex: 1 }}>
+          {soak * PXM > 20 && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-2)', opacity: 0.7 }}>{soakLabel || t('POSA', 'SOAK')}</span>}
         </div>
       )}
       {isFirst && appt.deposit_status === 'paid' && (

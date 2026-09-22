@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -288,7 +288,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   async function openDetail(appt) {
     try {
       const full = await api.get(`/api/agenda/appointments/${appt.id}`);
-      openModal('apptdetail', { appointment: full, onMutate: refetchWeek });
+      // `onShowDate`: sfogliando i giorni dal pannello, la settimana mostrata
+      // segue (la vista si ricava dalla stessa data della sezione).
+      openModal('apptdetail', { appointment: full, onMutate: refetchWeek, onShowDate });
     } catch (err) { toastErr(err, t, fireToast); }
   }
 
