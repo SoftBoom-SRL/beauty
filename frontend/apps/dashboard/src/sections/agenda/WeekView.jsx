@@ -8,12 +8,12 @@
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
 // che segue il cursore. Il 409 del server («occupato / fuori turno») apre un popover
 // di conferma che ripete la POST con `force: true`, come nella vista giorno.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
-  DK_START, DK_END, PXM, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
+  DK_START, DK_END, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
   GRID_LINE_STYLE, gridMarks, opSegments, serviceBands,
 } from './lib.js';
 
@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate, ghost, ghostDate }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -67,6 +67,39 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     return () => { alive = false; };
   }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* Zoom: stessa scala e stesso gesto della vista giorno (⌘/ctrl + rotella o
+   * pinch del trackpad), tenendo fermo il minuto che si stava guardando. */
+  const zoomAnchor = useRef(null);
+  const lastZoom = useRef(zoom);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const prev = lastZoom.current;
+    if (!el || prev === zoom) return;
+    lastZoom.current = zoom;
+    const body = el.querySelector('[data-daycol]')?.parentElement;
+    if (!body) return;
+    const top0 = body.offsetTop;
+    const offset = zoomAnchor.current?.offset ?? el.clientHeight / 2;
+    zoomAnchor.current = null;
+    const minute = DK_START + (el.scrollTop + offset - top0) / (PXM * prev);
+    el.scrollTop = (minute - DK_START) * (PXM * zoom) + top0 - offset;
+  }, [zoom]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !onZoom) return undefined;
+    const onWheel = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      zoomAnchor.current = { offset: e.clientY - el.getBoundingClientRect().top };
+      // valore precedente dallo stato: il pinch manda una raffica di eventi
+      // nello stesso istante, e partendo tutti dallo stesso numero se ne
+      // sarebbe sentito uno solo
+      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [onZoom]);
+
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
   // Esc annulla il drag; pointerup/pointercancel su window:
   // se la capture non è supportata o il rilascio avviene fuori dall'area, il drag
@@ -89,9 +122,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     };
   }, []);
 
+  const pxm = PXM * (zoom || 1);   // scala scelta da chi guarda (zoom personale)
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
   const marks = gridMarks(step);   // ora piena / mezz'ora / quarti (solo passo 15)
-  const gridH = (DK_END - DK_START) * PXM;
+  const gridH = (DK_END - DK_START) * pxm;
   const today = todayStr();
   // L'ora arriva dal contenitore, che la aggiorna ogni 30 secondi: ricalcolarla
   // qui la legava al momento del render, e bastava che nient'altro cambiasse
@@ -192,7 +226,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     d.cx = e.clientX; d.cy = e.clientY;
     const dy = e.clientY - d.startY, dx = e.clientX - d.startX;
     const { dayIdx, opId } = targetFromX(e.clientX);
-    const rawMin = d.orig + dy / PXM;
+    const rawMin = d.orig + dy / pxm;
     let ns = Math.round(rawMin / step) * step;
     const snap = bestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d);
     d.snap = snap && snap.min !== ns ? snap : null;
@@ -303,7 +337,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   };
   const minutesFrom = (clientY, el) => {
     const rect = el.getBoundingClientRect();
-    const raw = DK_START + (clientY - rect.top) / PXM;
+    const raw = DK_START + (clientY - rect.top) / pxm;
     return Math.max(DK_START, Math.min(DK_END - step, Math.round(raw / step) * step));
   };
 
@@ -427,9 +461,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
         <div style={{ width: GUTTER_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
           {hours.map((h) => (
             <React.Fragment key={h}>
-              <div className="tabnum" style={{ position: 'absolute', top: (h * 60 - DK_START) * PXM - 7, right: 7, fontSize: 10, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }}>{String(h).padStart(2, '0')}:00</div>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * PXM, right: 0, width: 5, ...GRID_LINE_STYLE.hour }} />
-              {h < 20 && <div className="tabnum" style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * PXM - 6, right: 7, fontSize: 8.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }}>:30</div>}
+              <div className="tabnum" style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm - 7, right: 7, fontSize: 10, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }}>{String(h).padStart(2, '0')}:00</div>
+              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm, right: 0, width: 5, ...GRID_LINE_STYLE.hour }} />
+              {h < 20 && 30 * pxm > 16 && <div className="tabnum" style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * pxm - 6, right: 7, fontSize: 8.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }}>:30</div>}
             </React.Fragment>
           ))}
         </div>
@@ -445,8 +479,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
               onDoubleClick={(e) => onDayAreaClick(e, d.date)}
               style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, position: 'relative', borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
               {/* righe orarie: sotto i blocchi (z 2), sopra lo sfondo; pointer-events none per non disturbare drag e click */}
-              {marks.map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * PXM, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
-              {isToday && nowMinLive >= DK_START && nowMinLive <= DK_END && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - DK_START) * PXM, height: 2, background: '#F4708A', zIndex: 6, pointerEvents: 'none' }} />}
+              {marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12))
+                .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
+              {isToday && nowMinLive >= DK_START && nowMinLive <= DK_END && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - DK_START) * pxm, height: 2, background: '#F4708A', zIndex: 6, pointerEvents: 'none' }} />}
               {d.dayOps.map((o) => {
                 // il blocco trascinato esce dalla sua corsia: al suo posto la traccia, e riappare dove punta il cursore
                 const opList = d.list.filter((a) => a.operator_id === o.id && !(dragging && a.id === dg.id));
@@ -462,14 +497,14 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
                     onClick={(e) => onEmptyClick(e, o.id, d.date)}
                     style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
                   >
-                    {isOrigin && <div className="dk-drag-ghost" style={{ top: (dg.orig - DK_START) * PXM + 1, height: (dg.obj.endMin - dg.obj.startMin) * PXM - 2, left: 1, right: 1, borderRadius: 6 }} />}
+                    {isOrigin && <div className="dk-drag-ghost" style={{ top: (dg.orig - DK_START) * pxm + 1, height: (dg.obj.endMin - dg.obj.startMin) * pxm - 2, left: 1, right: 1, borderRadius: 6 }} />}
                     {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
                         che si sta guardando: dove finirebbe, alla sua ora. Non
                         intercetta il puntatore — il clic passa sotto. */}
                     {ghost && d.date === ghostDate && ghostSpans.filter((g) => g.opId === o.id).map((g) => (
                       <div key={'ghost' + g.key} style={{
                         position: 'absolute', left: 1, right: 1,
-                        top: (g.startMin - DK_START) * PXM + 1, height: g.dur * PXM - 2,
+                        top: (g.startMin - DK_START) * pxm + 1, height: g.dur * pxm - 2,
                         borderRadius: 6, border: '2px dashed var(--clay)',
                         background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
                         pointerEvents: 'none', zIndex: 5, overflow: 'hidden', padding: '2px 4px',
@@ -480,7 +515,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
                     {weekLayout(opList).map((a) => {
                       const lc = a._laneCount || 1, lane = a._lane || 0;
                       return (
-                        <WeekBlock
+                        <WeekBlock pxm={pxm}
                           key={a.id} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                           left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
                           onDown={(e) => onBlockDown(e, a, i)}
@@ -488,11 +523,11 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
                         />
                       );
                     })}
-                    {isTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
+                    {isTarget && <WeekBlock pxm={pxm} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
                   </div>
                 );
               })}
-              {looseTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
+              {looseTarget && <WeekBlock pxm={pxm} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
             </div>
           );
         })}
@@ -526,8 +561,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
  * sinistra e nell'intestazione della sotto-colonna. Indicatori caparra dovuta /
  * gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, canWrite, t, onDown, onHover, onLeave }) {
-  const h = (a.endMin - a.startMin) * PXM;
+function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, pxm = PXM, canWrite, t, onDown, onHover, onLeave }) {
+  const h = (a.endMin - a.startMin) * pxm;
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
   const segs = opSegments(a);
@@ -559,7 +594,7 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false,
       onMouseEnter={(e) => onHover && onHover(a, e.currentTarget)}
       onMouseLeave={() => onLeave && onLeave()}
       style={{
-        position: 'absolute', top: (a.startMin - DK_START) * PXM + 1, height: h - 2, left, width, boxSizing: 'border-box',
+        position: 'absolute', top: (a.startMin - DK_START) * pxm + 1, height: h - 2, left, width, boxSizing: 'border-box',
         borderRadius: 6, overflow: 'hidden', padding: '3px 5px 3px 8px',
         background: svcTint((a.items || [])[0]),
         border: moving ? '2px solid var(--ink)' : 'none',

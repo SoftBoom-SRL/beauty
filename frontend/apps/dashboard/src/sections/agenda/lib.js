@@ -3,7 +3,28 @@ import { ApiError, fmtEur, isoAtMin, minutesOfDay, parseISO, timeLabel, toDateSt
 
 export const DK_START = 8 * 60;   // grid 08:00
 export const DK_END = 20 * 60;    // grid 20:00
-export const PXM = 1.35;          // px per minute
+export const PXM = 1.35;          // px per minute (zoom 1)
+
+/* ---- Zoom delle viste calendario -------------------------------------------
+ * Quanto è alta un'ora sullo schermo. È una preferenza PERSONALE della
+ * postazione, non del salone: chi sta al banco su un monitor grande vuole
+ * vedere la giornata intera, chi lavora su un portatile vuole leggere i
+ * quarti d'ora. Non tocca MAI la fascia di prenotazione (Impostazioni →
+ * intervallo slot), che resta una regola del salone: qui si cambia solo la
+ * scala del disegno, come fanno i calendari professionali (Fresha ha uno
+ * "zoom" personale a cursore, Vagaro la spaziatura delle righe più il pinch,
+ * Apple "quante ore vedere per schermata").
+ * I passi sono moltiplicatori di PXM; «adatta» calcola un valore libero. */
+export const ZOOM_STEPS = [0.5, 0.65, 0.8, 1, 1.25, 1.6, 2];
+export const ZOOM_MIN = 0.4;
+export const ZOOM_MAX = 2.5;
+export const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(z) || 1));
+/** Passo successivo (dir +1) o precedente (dir −1) a partire da un valore libero. */
+export function zoomStep(current, dir) {
+  const z = clampZoom(current);
+  if (dir > 0) return clampZoom(ZOOM_STEPS.find((s) => s > z + 0.001) ?? ZOOM_MAX);
+  return clampZoom([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? ZOOM_MIN);
+}
 export const COLW = 158;          // min operator column width
 
 export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];

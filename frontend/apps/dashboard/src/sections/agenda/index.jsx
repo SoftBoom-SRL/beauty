@@ -5,6 +5,7 @@ import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
   isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay,
+  DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
 } from './lib.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
@@ -32,6 +33,34 @@ export default function AgendaSection() {
     setRailOpenRaw(v);
     try { localStorage.setItem('dk-agenda-rail', v ? '1' : '0'); } catch { /* ignore */ }
   };
+
+  /* ---- zoom delle viste giorno/settimana ----------------------------------
+   * Preferenza della POSTAZIONE, non del salone: resta su questo computer e
+   * non tocca l'intervallo di prenotazione (Impostazioni), che è una regola di
+   * tutti. Come i calendari professionali: cursore personale su Fresha,
+   * spaziatura righe e pinch su Vagaro, «quante ore per schermata» su Apple. */
+  const [zoom, setZoomRaw] = useState(() => {
+    try { return clampZoom(parseFloat(localStorage.getItem('dk-agenda-zoom')) || 1); } catch { return 1; }
+  });
+  /* Il valore precedente si legge dallo stato, non dalla chiusura: premendo due
+   * volte «+» in fretta il secondo clic partiva dallo stesso numero del primo e
+   * non faceva niente. */
+  const setZoom = useCallback((z) => {
+    setZoomRaw((prev) => clampZoom(typeof z === 'function' ? z(prev) : z));
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem('dk-agenda-zoom', String(zoom)); } catch { /* ignore */ }
+  }, [zoom]);
+  /* «Adatta»: la giornata intera in una schermata, senza scorrere. Si misura
+   * l'area visibile della griglia — è lei che detta quanto ci sta. */
+  const fitZoom = useCallback(() => {
+    const el = document.querySelector('.dk-tl-cols')?.closest('.scroll')
+      || document.querySelector('[data-daycol]')?.closest('.scroll');
+    if (!el) return;
+    const body = el.querySelector('.dk-tl-cols')?.parentElement || el.querySelector('[data-daycol]')?.parentElement;
+    const disponibile = el.clientHeight - (body ? body.offsetTop : 0) - 8;
+    if (disponibile > 60) setZoom(disponibile / ((DK_END - DK_START) * PXM));
+  }, [setZoom]);
 
   /* ---- real "now" (updated every 30s) ---- */
   const [nowMin, setNowMin] = useState(() => nowMinutes());
@@ -168,17 +197,22 @@ export default function AgendaSection() {
    * apriva sopra la prenotazione singola. */
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key !== 'n' && e.key !== 'N') return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      // Zoom da tastiera senza modificatori: ⌘+ e ⌘− sono del browser e
+      // ingrandirebbero tutta la pagina, che qui non è quello che serve.
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((z) => zoomStep(z, 1)); return; }
+      if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom((z) => zoomStep(z, -1)); return; }
+      if (e.key === '0') { e.preventDefault(); setZoom(1); return; }
+      if (e.key !== 'n' && e.key !== 'N') return;
       if (modal || groupOpen) return;   // il drawer di gruppo non è un modale del registry
       e.preventDefault();
       openNewAppt({ date });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openNewAppt, date, modal, groupOpen]);
+  }, [openNewAppt, date, modal, groupOpen, setZoom]);
 
   /* ---- torna indietro ----
    * Un gesto sbagliato si disfa da qui: il server rimette i dati com'erano e,
@@ -607,6 +641,24 @@ export default function AgendaSection() {
               </button>
             </React.Fragment>
           )}
+          {/* Zoom: quanto è alta un'ora sullo schermo. Sta accanto al selettore
+              di vista perché è la stessa famiglia di gesti — «quanto ne vedo».
+              Nel mese non ha senso: lì non c'è una linea del tempo da stirare,
+              e il comando sparisce invece di restare lì a non fare niente. */}
+          {calView !== 'month' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 12, padding: 4, flexShrink: 0 }}>
+              <button className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 9, fontSize: 17, fontWeight: 700, lineHeight: 1 }} disabled={zoom <= ZOOM_MIN + 0.001}
+                onClick={() => setZoom((z) => zoomStep(z, -1))} title={t('Rimpicciolisci: più ore sullo schermo (tasto −, o ⌘ e rotella)', 'Zoom out: more hours on screen (− key, or ⌘ and wheel)')} aria-label={t('Rimpicciolisci', 'Zoom out')}>−</button>
+              <button onClick={() => setZoom(1)} title={t('Torna alla scala normale (0)', 'Back to normal scale (0)')}
+                className="tabnum" style={{ minWidth: 44, padding: '0 4px', height: 30, borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: Math.abs(zoom - 1) < 0.01 ? 'var(--muted)' : 'var(--ink)' }}>
+                {Math.round(zoom * 100)}%
+              </button>
+              <button className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 9, fontSize: 17, fontWeight: 700, lineHeight: 1 }} disabled={zoom >= ZOOM_MAX - 0.001}
+                onClick={() => setZoom((z) => zoomStep(z, 1))} title={t('Ingrandisci: ore più alte, si leggono i quarti (tasto +, o ⌘ e rotella)', 'Zoom in: taller hours, quarters readable (+ key, or ⌘ and wheel)')} aria-label={t('Ingrandisci', 'Zoom in')}>+</button>
+              <button onClick={fitZoom} style={{ height: 30, padding: '0 9px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'var(--ink-2)' }}
+                title={t('Adatta: tutta la giornata in una schermata, senza scorrere', 'Fit: the whole day in one screen, no scrolling')}>{t('Adatta', 'Fit')}</button>
+            </div>
+          )}
           {/* view selector: Giorno / Settimana / Mese */}
           <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 12, padding: 4, flexShrink: 0 }}>
             {[['day', 'Giorno', 'Day'], ['week', 'Settimana', 'Week'], ['month', 'Mese', 'Month']].map(([v, it, en]) => {
@@ -618,7 +670,7 @@ export default function AgendaSection() {
 
         {/* body — day / week / month */}
         {calView === 'week' ? (
-          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} />
+          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (
@@ -656,6 +708,8 @@ export default function AgendaSection() {
               <DayGrid
                 rows={visibleRows}
                 ghost={ghostAppt}
+                zoom={zoom}
+                onZoom={setZoom}
                 allRows={allRows}
                 date={date}
                 pickMode={pickMode}
