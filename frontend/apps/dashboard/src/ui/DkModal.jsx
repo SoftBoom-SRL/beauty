@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
+import { useEscLayer } from './layers.js';
 import { Icon } from '@youty/shared';
 
 /**
@@ -9,13 +10,9 @@ import { Icon } from '@youty/shared';
  */
 export default function DkModal({ open, onClose, title, sub, children, width, foot }) {
   const downOnScrim = useRef(false);
-  // Esc chiude (senza rubare l'evento a chi lo gestisce già, es. un drawer annidato)
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose?.(); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  // Esc chiude solo la finestra in primo piano (vedi layers.js): prima vinceva
+  // quella aperta per prima, cioè quella sotto.
+  useEscLayer(open, () => onClose?.());
   if (!open) return null;
   return (
     <div

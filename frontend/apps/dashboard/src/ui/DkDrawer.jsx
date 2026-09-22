@@ -1,16 +1,13 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
+import { useEscLayer } from './layers.js';
 
 /** Drawer laterale su scrim. Stessa regola del DkModal: chiude solo se il
  *  pointer è sceso E risalito sullo scrim (niente chiusure da selezione testo). */
 export default function DkDrawer({ open, onClose, children }) {
   const downOnScrim = useRef(false);
-  // Esc chiude (senza rubare l'evento a chi lo gestisce già, es. un drawer annidato)
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose?.(); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  // Esc chiude solo la finestra in primo piano (vedi layers.js): prima vinceva
+  // quella aperta per prima, cioè quella sotto.
+  useEscLayer(open, () => onClose?.());
   if (!open) return null;
   return (
     <div

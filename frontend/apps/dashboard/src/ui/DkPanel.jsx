@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useEscLayer } from './layers.js';
 import { Icon } from '@youty/shared';
 
 /**
@@ -15,11 +16,8 @@ import { Icon } from '@youty/shared';
  * `foot` resta sempre visibile in fondo (le azioni non si cercano scorrendo).
  */
 export default function DkPanel({ title, sub, onClose, foot, width = 560, children, head }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose?.(); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Esc chiude il pannello solo se è lui in primo piano (vedi layers.js)
+  useEscLayer(true, () => onClose?.());
 
   /* Finché è aperto, l'area di lavoro si restringe di tanto quanto il pannello
    * (vedi .dk-with-panel): se restasse sotto, il pannello coprirebbe proprio
