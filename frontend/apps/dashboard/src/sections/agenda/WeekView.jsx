@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate, ghost, ghostDate }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -325,6 +325,19 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     openAt(dayIso, minutesFrom(e.clientY, e.currentTarget), targetFromX(e.clientX).opId);
   }
 
+  /* I servizi dell'appuntamento aperto, in fila dalla sua ora: servono a
+   * disegnarne l'ombra sul giorno che si sta guardando. */
+  const ghostSpans = (() => {
+    if (!ghost) return [];
+    let cursor = minutesOfDay(ghost.start);
+    return (ghost.items || []).map((it, i) => {
+      const dur = (it.duration_min || 0) + (it.soak_min || 0);
+      const span = { key: it.id ?? i, opId: it.operator_id ?? ghost.operator_id, startMin: cursor, dur: Math.max(10, dur) };
+      cursor += dur;
+      return span;
+    });
+  })();
+
   const dg = drag.current;
   const dragging = !!(dg && dg.moved);
   // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
@@ -450,6 +463,20 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
                     style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
                   >
                     {isOrigin && <div className="dk-drag-ghost" style={{ top: (dg.orig - DK_START) * PXM + 1, height: (dg.obj.endMin - dg.obj.startMin) * PXM - 2, left: 1, right: 1, borderRadius: 6 }} />}
+                    {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
+                        che si sta guardando: dove finirebbe, alla sua ora. Non
+                        intercetta il puntatore — il clic passa sotto. */}
+                    {ghost && d.date === ghostDate && ghostSpans.filter((g) => g.opId === o.id).map((g) => (
+                      <div key={'ghost' + g.key} style={{
+                        position: 'absolute', left: 1, right: 1,
+                        top: (g.startMin - DK_START) * PXM + 1, height: g.dur * PXM - 2,
+                        borderRadius: 6, border: '2px dashed var(--clay)',
+                        background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
+                        pointerEvents: 'none', zIndex: 5, overflow: 'hidden', padding: '2px 4px',
+                      }}>
+                        <div className="tabnum" style={{ fontSize: 9, fontWeight: 800, color: 'var(--clay-ink)' }}>{timeLabel(g.startMin)}</div>
+                      </div>
+                    ))}
                     {weekLayout(opList).map((a) => {
                       const lc = a._laneCount || 1, lane = a._lane || 0;
                       return (

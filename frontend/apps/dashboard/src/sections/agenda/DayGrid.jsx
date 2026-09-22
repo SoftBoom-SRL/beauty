@@ -22,7 +22,7 @@ import {
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
-  picker, setPicker, setOpColor, opPalette, pickMode,
+  picker, setPicker, setOpColor, opPalette, pickMode, ghost,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
@@ -582,6 +582,32 @@ export default function DayGrid({
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
                   <div className="dk-drag-ghost" style={{ top: (d.orig - DK_START) * PXM + 1.5, height: d.obj.duration_min * PXM - 3 }} />
                 )}
+                {/* Ombra dell'appuntamento aperto nel pannello mentre si sfoglia
+                    un altro giorno: dove andrebbe a finire, alla sua ora e nella
+                    colonna di chi lo fa. Serve a inquadrare il posto con lo
+                    sguardo invece di calcolarlo. Non intercetta il puntatore:
+                    il clic passa sotto e apre il menu dello slot, che offre
+                    «Sposta qui». */}
+                {ghost && itemBlocks(ghost).filter((b) => b.opId === o.id).map((b, gi) => (
+                  <div key={'ghost' + b.item.id}
+                    style={{
+                      position: 'absolute', left: 4, right: 4,
+                      top: (b.startMin - DK_START) * PXM + 1.5, height: b.dur * PXM - 3,
+                      borderRadius: 12, border: '2px dashed var(--clay)',
+                      background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
+                      pointerEvents: 'none', zIndex: 6, overflow: 'hidden',
+                      padding: '5px 9px', display: 'flex', flexDirection: 'column', gap: 1,
+                    }}>
+                    <span className="tabnum" style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--clay-ink)', letterSpacing: '0.04em' }}>
+                      {timeLabel(b.startMin)}{gi === 0 ? ' · ' + t('qui', 'here') : ''}
+                    </span>
+                    {b.dur * PXM > 34 && (
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {firstName(ghost.client?.full_name || ghost.client_name)} · {b.item.service_name}
+                      </span>
+                    )}
+                  </div>
+                ))}
                 {/* Corsie: due appuntamenti sovrapposti (un incastro forzato) devono
                     stare AFFIANCATI. Disegnati a tutta larghezza, il secondo copriva
                     il primo e l'incastro diventava impossibile da leggere. */}

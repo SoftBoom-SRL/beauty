@@ -326,6 +326,10 @@ export default function AgendaSection() {
    * libero vuol dire «spostalo qui» — è il gesto della cliente che chiama per
    * spostare, e prima bisognava indovinare l'orario e scriverlo a mano. */
   const openAppt = modal?.name === 'apptdetail' ? (modal.props?.appointment ?? null) : null;
+  /* Ombra dell'appuntamento aperto: mentre dal pannello si sfogliano i
+   * giorni, si vede dove andrebbe a finire — alla sua ora, nella colonna di
+   * chi lo fa. Sul suo giorno non serve: lì c'è il blocco vero, cerchiato. */
+  const ghostAppt = openAppt && toDateStr(openAppt.start) !== date ? openAppt : null;
   const moveOpenApptHere = async (a, opId, startMin) => {
     setSlotMenu(null);
     await moveAppt(a, startMin, opId);
@@ -614,7 +618,7 @@ export default function AgendaSection() {
 
         {/* body — day / week / month */}
         {calView === 'week' ? (
-          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} />
+          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} />
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (
@@ -651,6 +655,7 @@ export default function AgendaSection() {
             ) : (
               <DayGrid
                 rows={visibleRows}
+                ghost={ghostAppt}
                 allRows={allRows}
                 date={date}
                 pickMode={pickMode}
