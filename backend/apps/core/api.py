@@ -73,6 +73,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "timezone": django_settings.TIME_ZONE,
         "deposit_hold_minutes": s.deposit_hold_minutes,
         "deposit_reminder_minutes": s.deposit_reminder_minutes,
+        "automation_delay_seconds": s.automation_delay_seconds,
         "cancel_reasons": [str(x) for x in (s.cancel_reasons or [])],
         "no_show_reasons": [str(x) for x in (s.no_show_reasons or [])],
         "stripe_connected": bool(s.stripe_account_id),
@@ -110,6 +111,9 @@ _SETTINGS_INT_RANGES = {
     "flexible_reward_pct": (0, 100),
     "deposit_hold_minutes": (0, 7 * 24 * 60),
     "deposit_reminder_minutes": (0, 7 * 24 * 60),
+    # Oltre i dieci minuti non è più un ritardo di sicurezza: è un messaggio che
+    # la cliente riceve quando non se lo aspetta più.
+    "automation_delay_seconds": (0, 600),
 }
 _BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_OPENING_HOURS_CHARS = 500

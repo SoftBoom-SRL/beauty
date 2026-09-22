@@ -189,3 +189,46 @@ export const SALON = {
   locations: [{ id: 1, name: 'Sede principale', is_default: true }],
   settings: { timezone: 'Europe/Rome', slot_interval_min: 15, currency: 'EUR' },
 };
+
+/* ---- «torna indietro» ------------------------------------------------------
+ * Il ripristino vero lo fa il server (apps/agenda/undo.py): qui basta uno
+ * storico in memoria, per vedere il tasto accendersi, la frase che ne esce e
+ * l'appuntamento che torna al suo posto. */
+const UNDO = [];
+let undoSeq = 1;
+
+/** Fotografa l'appuntamento PRIMA di toccarlo. La chiama l'anteprima nelle rotte. */
+export function rememberUndo(id, label) {
+  const a = findAppt(id);
+  if (!a) return;
+  UNDO.unshift({
+    id: undoSeq++,
+    label,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 10 * 60000).toISOString(),
+    kind: 'move',
+    snap: { id: a.id, start: a.start, operator_id: a.operator_id, items: JSON.parse(JSON.stringify(a.items)) },
+  });
+  UNDO.splice(20);
+}
+
+export const UNDO_STACK = () => UNDO.map(({ snap, ...rest }) => rest);
+
+export function undoLast(entryId) {
+  const index = entryId ? UNDO.findIndex((e) => e.id === entryId) : 0;
+  if (index < 0 || !UNDO.length) return { __status: 404, detail: 'Non c’è niente da annullare' };
+  const [entry] = UNDO.splice(index, 1);
+  const a = findAppt(entry.snap.id);
+  if (!a) return { __status: 409, detail: 'L’appuntamento non esiste più' };
+  const before = dayOf(a.start);
+  a.start = entry.snap.start;
+  a.operator_id = entry.snap.operator_id;
+  a.items = entry.snap.items;
+  recompute(a);
+  const after = dayOf(a.start);
+  if (after !== before) {
+    STORE.set(before, appointmentsOf(before).filter((x) => x.id !== a.id));
+    appointmentsOf(after).push(a);
+  }
+  return { ok: true, label: entry.label, date: after, appointment_ids: [a.id] };
+}

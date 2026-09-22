@@ -24,7 +24,8 @@ from common.permissions import require_scope
 from common.utils import salon_get
 
 from . import services
-from .models import Appointment, Pause, WaitlistEntry
+from . import undo as undo_log
+from .models import Appointment, Pause, UndoEntry, WaitlistEntry
 from .schemas import (
     MAX_ITEMS_PER_REQUEST,
     AppointmentCreateIn,
@@ -43,6 +44,9 @@ from .schemas import (
     SlotOut,
     SplitIn,
     SplitOut,
+    UndoIn,
+    UndoOut,
+    UndoResultOut,
     WaitlistIn,
     WaitlistOut,
 )
@@ -222,6 +226,11 @@ def _maybe_deposit_link(appointment) -> None:
         ensure_deposit_link(appointment)
     except Exception:  # pragma: no cover - dipende da Stripe
         logger.exception("Link caparra non creato per l'appuntamento %s", appointment.id)
+
+
+def _pause_label(action: str, pause) -> str:
+    """«Pausa spostata · Laura, 13:00» — la frase che compare in «torna indietro»."""
+    return f"{action} · {_operator_name(pause.operator)}, {timezone.localtime(pause.start):%H:%M}"
 
 
 def _pause_out(pause) -> dict:
@@ -754,6 +763,49 @@ def get_appointment(request, appointment_id: int):
     return _appointment_out(appointment)
 
 
+# ---- Torna indietro ------------------------------------------------------------
+
+
+def _undo_out(entry) -> dict:
+    return {
+        "id": entry.id,
+        "kind": entry.kind,
+        "label": entry.label,
+        "created_at": entry.created_at,
+        "expires_at": entry.created_at
+        + dt.timedelta(minutes=undo_log.UNDO_WINDOW_MINUTES),
+    }
+
+
+@router.get("/undo", auth=staff_auth, response=list[UndoOut])
+def list_undo(request):
+    """Cosa può ancora annullare CHI CHIEDE, dal gesto più recente."""
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    return [_undo_out(entry) for entry in undo_log.stack(ctx.salon, ctx.user)]
+
+
+@router.post("/undo", auth=staff_auth, response=UndoResultOut)
+def undo_last(request, data: UndoIn):
+    """Rimette le cose com'erano prima dell'ultimo gesto (o di quello indicato).
+
+    Il 409 qui non è un errore da nascondere: dice che nel frattempo è cambiato
+    qualcosa — una collega ha spostato lo stesso appuntamento, il conto è andato
+    in cassa — e va mostrato così com'è a chi ha premuto il tasto.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    entries = undo_log.stack(ctx.salon, ctx.user)
+    entry = (
+        next((e for e in entries if e.id == data.entry_id), None)
+        if data.entry_id
+        else (entries[0] if entries else None)
+    )
+    if entry is None:
+        raise HttpError(404, "Non c'è niente da annullare")
+    return undo_log.perform(entry, actor=ctx.user)
+
+
 # ---- Pause (staff) -------------------------------------------------------------
 
 
@@ -798,6 +850,14 @@ def create_pause(request, data: PauseIn):
         actor=ctx.user,
         payload={"pause_id": pause.id, "start": pause.start.isoformat()},
     )
+    undo_log.record(
+        ctx.salon,
+        kind=UndoEntry.Kind.PAUSE_CREATE,
+        label=_pause_label("Pausa aggiunta", pause),
+        actor=ctx.user,
+        after={"pauses": [undo_log.pause_snapshot(pause)]},
+        created={"pauses": [pause.id]},
+    )
     return _pause_out(pause)
 
 
@@ -810,6 +870,7 @@ def update_pause(request, pause_id: int, data: PauseIn):
     from apps.staff.models import Operator  # lazy
 
     operator = salon_get(Operator, ctx, data.operator_id)
+    before = undo_log.pause_snapshot(pause)
     with transaction.atomic():
         services.lock_salon(ctx.salon)  # stesso lock delle prenotazioni
         pause.operator = operator
@@ -824,6 +885,14 @@ def update_pause(request, pause_id: int, data: PauseIn):
         actor=ctx.user,
         payload={"pause_id": pause.id, "start": pause.start.isoformat()},
     )
+    undo_log.record(
+        ctx.salon,
+        kind=UndoEntry.Kind.PAUSE_UPDATE,
+        label=_pause_label("Pausa spostata", pause),
+        actor=ctx.user,
+        before={"pauses": [before]},
+        after={"pauses": [undo_log.pause_snapshot(pause)]},
+    )
     return _pause_out(pause)
 
 
@@ -834,6 +903,8 @@ def delete_pause(request, pause_id: int):
     pause = salon_get(Pause, ctx, pause_id)
     operator_name = _operator_name(pause.operator)
     start = pause.start.isoformat()
+    label = _pause_label("Pausa rimossa", pause)
+    before = undo_log.pause_snapshot(pause)
     pause.delete()
     log_activity(
         ctx.salon,
@@ -841,6 +912,13 @@ def delete_pause(request, pause_id: int):
         f"Pausa di {operator_name} rimossa",
         actor=ctx.user,
         payload={"pause_id": pause_id, "start": start},
+    )
+    undo_log.record(
+        ctx.salon,
+        kind=UndoEntry.Kind.PAUSE_DELETE,
+        label=label,
+        actor=ctx.user,
+        before={"pauses": [before]},
     )
     return OkOut()
 

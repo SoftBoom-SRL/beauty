@@ -44,6 +44,13 @@ class ItemEditIn(Schema):
     service_id: int
     operator_id: Optional[int] = None   # None = first eligible free operator
     duration_min: Optional[int] = None  # None = keep the duration already booked
+    # Attesa DOPO il servizio: la posa di un colore, o semplicemente il buco che
+    # il salone vuole lasciare prima del trattamento successivo (la cliente
+    # resta lì, l'operatrice nel frattempo è libera — è la stessa cosa per
+    # l'agenda). Senza questo campo i servizi di una visita erano per forza
+    # attaccati, e chiudere il buco era l'unica scelta possibile.
+    # None = quella già sulla visita (o del listino, per le voci nuove).
+    soak_min: Optional[int] = Field(None, ge=0, le=12 * 60)
 
 
 class AppointmentCreateIn(Schema):
@@ -258,3 +265,27 @@ class MarginOut(Schema):
 
 class OkOut(Schema):
     ok: bool = True
+
+
+class UndoIn(Schema):
+    # Nessun id = l'ultima azione annullabile di chi sta chiedendo.
+    entry_id: Optional[int] = None
+
+
+class UndoOut(Schema):
+    """Un gesto ancora annullabile, come lo mostra il tasto «torna indietro»."""
+
+    id: int
+    kind: str
+    label: str
+    created_at: dt.datetime
+    expires_at: dt.datetime
+
+
+class UndoResultOut(Schema):
+    ok: bool = True
+    label: str
+    # Giorno da mostrare in agenda dopo l'annullamento: il gesto può aver
+    # riportato l'appuntamento su un'altra data.
+    date: Optional[str] = None
+    appointment_ids: list[int] = []

@@ -46,6 +46,10 @@ class SettingsOut(Schema):
     # Caparra con scadenza (0 = disattiva) e sollecito (0 = nessuno), in minuti.
     deposit_hold_minutes: int = 0
     deposit_reminder_minutes: int = 0
+    # Secondi di attesa prima che un'automazione dell'agenda parta davvero
+    # (0 = subito). Serve a non mandare due messaggi quando si corregge
+    # l'appuntamento appena inserito.
+    automation_delay_seconds: int = 30
     # Motivazioni personalizzate (vuote = predefinite della dashboard).
     cancel_reasons: list[str] = []
     no_show_reasons: list[str] = []
@@ -71,6 +75,7 @@ class SettingsIn(Schema):
     privacy_policy_url: Optional[str] = None
     deposit_hold_minutes: Optional[int] = None
     deposit_reminder_minutes: Optional[int] = None
+    automation_delay_seconds: Optional[int] = None
     cancel_reasons: Optional[list[str]] = None
     no_show_reasons: Optional[list[str]] = None
 

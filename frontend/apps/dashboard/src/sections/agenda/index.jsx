@@ -47,6 +47,8 @@ export default function AgendaSection() {
   const [waitlist, setWaitlist] = useState([]);
   const [summary, setSummary] = useState(null);
   const [released, setReleased] = useState([]);   // slot liberati per caparra non pagata: «da richiamare»
+  const [undoStack, setUndoStack] = useState([]); // gesti annullabili, dal più recente
+  const [undoing, setUndoing] = useState(false);
 
   /* Numero di sequenza condiviso con l'effetto di caricamento: una risposta
    * lenta di un altro giorno non deve sovrascrivere quello che si sta guardando
@@ -68,9 +70,14 @@ export default function AgendaSection() {
     if (my === daySeq.current && forDate === dateRef.current) setDayData(rows);
   }, [date, locationId]);
   const fetchWaitlist = useCallback(() => api.get('/api/agenda/waitlist').then(setWaitlist).catch(() => {}), []);
+  /* «Torna indietro»: la pila dei gesti che CHI GUARDA può ancora annullare.
+   * Arriva dal server perché l'annullamento è vero — rimette a posto i dati e
+   * ferma i messaggi non ancora partiti — e perché deve rifiutarsi di
+   * sovrascrivere quello che nel frattempo ha fatto un'altra postazione. */
+  const fetchUndo = useCallback(() => api.get('/api/agenda/undo').then(setUndoStack).catch(() => {}), []);
   const fetchSummary = useCallback(() => api.get('/api/sales/today-summary').then(setSummary).catch(() => {}), []);
   const fetchReleased = useCallback(() => api.get('/api/agenda/released').then(setReleased).catch(() => {}), []);
-  const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased]);
+  const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
 
   useEffect(() => {
     const my = ++daySeq.current;
@@ -79,7 +86,7 @@ export default function AgendaSection() {
       .then((rows) => { if (my === daySeq.current) setDayData(rows); })
       .catch((err) => { if (my === daySeq.current) { setDayData([]); toastErr(err, t, fireToast); } });
   }, [date, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchWaitlist(); fetchSummary(); fetchReleased(); }, [fetchWaitlist, fetchSummary, fetchReleased]);
+  useEffect(() => { fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
 
   /* live: quando un'altra postazione tocca l'agenda, ricarica (debounce breve) */
   /* Il cleanup NON deve annullare il debounce: `live` cambia identità a ogni
@@ -173,6 +180,47 @@ export default function AgendaSection() {
     return () => window.removeEventListener('keydown', onKey);
   }, [openNewAppt, date, modal, groupOpen]);
 
+  /* ---- torna indietro ----
+   * Un gesto sbagliato si disfa da qui: il server rimette i dati com'erano e,
+   * se il messaggio alla cliente non è ancora partito, lo ferma. Non chiede
+   * conferme (in agenda non se ne chiedono): se non si può più tornare
+   * indietro lo dice il server, e l'avviso riporta il suo motivo. */
+  const undoLast = useCallback(async (entryId) => {
+    if (!canWrite) { noWrite(); return; }
+    if (undoing) return;
+    setUndoing(true);
+    try {
+      const res = await api.post('/api/agenda/undo', entryId ? { entry_id: entryId } : {});
+      // Il gesto può aver riportato l'appuntamento su un altro giorno: senza
+      // questo salto si annullava «a vuoto», con la griglia ferma dov'era.
+      if (res.date && res.date !== dateRef.current) setDate(res.date);
+      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
+      else toastErr(err, t, fireToast);
+    } finally {
+      setUndoing(false);
+      refetchAll();
+    }
+  }, [canWrite, noWrite, undoing, fireToast, t, refetchAll]);
+
+  /* ⌘Z / Ctrl+Z: la scorciatoia che tutti provano d'istinto. Non ruba il tasto
+   * a chi sta scrivendo in un campo né a un modale aperto, dove annullerebbe
+   * una cosa diversa da quella che si ha davanti. */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      if ((e.key || '').toLowerCase() !== 'z') return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (modal || groupOpen) return;
+      e.preventDefault();
+      undoLast();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undoLast, modal, groupOpen]);
+
   /* ---- mutations (drag & drop, pauses) ---- */
   const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
   /* Forzatura: lo staff può andare oltre le regole (fuori turno, centro chiuso,
@@ -211,11 +259,14 @@ export default function AgendaSection() {
         msg: where + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
         undo: opts.undo === false ? undefined : t('Annulla', 'Undo'),
-        // Per tornare indietro i servizi rifanno la strada al contrario: quelli
-        // ora nella colonna d'arrivo (`opId`) tornano a quella di partenza.
-        undoFn: opts.undo === false ? undefined : () => moveAppt(a, fromMin, fromOp, { undo: false, fromOp: reassigned ? opId : fromOp }),
+        // Passa dal «torna indietro» del server, non da uno spostamento al
+        // contrario: così l'orario torna quello di prima E il messaggio alla
+        // cliente, se non è ancora partito, non parte affatto. Rifare la strada
+        // al contrario ne avrebbe invece fatti partire due.
+        undoFn: opts.undo === false ? undefined : () => undoLast(),
       });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
         // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
@@ -256,8 +307,11 @@ export default function AgendaSection() {
         msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`)
           + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'scissors',
+        undo: t('Annulla', 'Undo'),
+        undoFn: () => undoLast(),
       });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
         await splitItem(appt, item, startMin, opId, { ...opts, force: true });
@@ -272,8 +326,6 @@ export default function AgendaSection() {
   const moveApptToDate = async (a, iso, startMin, opts = {}) => {
     if (!canWrite) { noWrite(); return; }
     if (iso === date) { moveAppt(a, startMin, a.operator_id); return; }
-    const fromIso = date;
-    const fromMin = aMin(a.start);
     try {
       // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
       // libero non lascia l'appuntamento marcato «forzato» senza motivo.
@@ -284,17 +336,7 @@ export default function AgendaSection() {
           + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
         undo: t('Annulla', 'Undo'),
-        undoFn: async () => {
-          // Si torna al posto di prima senza forzare; si forza solo se nel
-          // frattempo qualcuno ha occupato quello slot.
-          const back = { start: isoAtMin(fromIso, fromMin) };
-          try {
-            await api.post(`/api/agenda/appointments/${a.id}/move`, back);
-          } catch {
-            await api.post(`/api/agenda/appointments/${a.id}/move`, { ...back, force: true }).catch(() => {});
-          }
-          refetchAll();
-        },
+        undoFn: () => undoLast(),
       });
       refetchAll();
     } catch (err) {
@@ -346,8 +388,6 @@ export default function AgendaSection() {
   };
 
   const movePause = async (p, startMin, opId, opts = {}) => {
-    const fromMin = aMin(p.start);
-    const fromOp = p.operator_id;
     setPending({ kind: 'pause', id: p.id, startMin, opId });
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
@@ -356,10 +396,11 @@ export default function AgendaSection() {
           msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)) + (opts.warn ? ' · ' + opts.warn : ''),
           icon: opts.warn ? 'alert' : 'clock',
           undo: t('Annulla', 'Undo'),
-          undoFn: () => movePause(p, fromMin, fromOp, { undo: false }),
+          undoFn: () => undoLast(),
         });
       }
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
@@ -370,6 +411,7 @@ export default function AgendaSection() {
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
@@ -377,8 +419,9 @@ export default function AgendaSection() {
   const deletePause = async (p) => {
     try {
       await api.del(`/api/agenda/pauses/${p.id}`);
-      fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x' });
+      fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: () => undoLast() });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); }
   };
 
@@ -394,6 +437,7 @@ export default function AgendaSection() {
       await api.put(`/api/agenda/appointments/${appt.id}`, { items, force: !!opts.force });
       fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
       // Allungare un trattamento mentre accanto c'è un'altra cliente (o oltre
       // l'orario di chiusura) rispondeva «Orario non più disponibile» e il
@@ -418,6 +462,7 @@ export default function AgendaSection() {
         icon: 'clock',
       });
       await fetchDay();
+      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); }
   };
 
@@ -522,6 +567,22 @@ export default function AgendaSection() {
           <div style={{ flex: 1, minWidth: 0 }} />
           {canWrite && (
             <React.Fragment>
+              {/* Torna indietro. Sta qui, sempre allo stesso posto, e non compare
+                * e scompare: chi ha appena sbagliato un gesto deve trovarlo dove
+                * si aspetta, non cercarlo. Spento quando non c'è niente da
+                * annullare, con l'ultima azione scritta nel suggerimento. */}
+              <button
+                className="dk-btn dk-btn--soft"
+                style={{ height: 40, flexShrink: 0, opacity: undoStack.length && !undoing ? 1 : 0.4, cursor: undoStack.length && !undoing ? 'pointer' : 'default' }}
+                disabled={!undoStack.length || undoing}
+                onClick={() => undoLast(undoStack[0]?.id)}
+                aria-label={t('Torna indietro', 'Undo')}
+                title={(undoStack[0]
+                  ? t(`Torna indietro · ${undoStack[0].label}`, `Undo · ${undoStack[0].label}`)
+                  : t('Niente da annullare', 'Nothing to undo')) + '  (⌘Z)'}
+              >
+                <Icon name="undo" size={16} />{t('Indietro', 'Undo')}
+              </button>
               <button className="dk-btn dk-btn--soft" style={{ height: 40, flexShrink: 0 }} onClick={() => setGroupOpen(true)} title={t('Prenota più clienti insieme', 'Book several clients together')}>
                 <Icon name="clients" size={16} />{t('Gruppo', 'Group')}
               </button>

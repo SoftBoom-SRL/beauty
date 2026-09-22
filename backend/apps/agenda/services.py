@@ -21,10 +21,17 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import DepositRule
-from apps.core.services import emit_event, log_activity
+from apps.core.services import (
+    automation_delay_seconds,
+    emit_event,
+    held_events,
+    log_activity,
+    supersede_events,
+)
 from common.conditions import evaluate
 
-from .models import Appointment, AppointmentService, Pause, WaitlistEntry
+from . import undo as undo_log
+from .models import Appointment, AppointmentService, Pause, UndoEntry, WaitlistEntry
 
 logger = logging.getLogger("youty.agenda")
 
@@ -686,8 +693,17 @@ def resolve_items_edit(
             if isinstance(raw_duration, int) and not isinstance(raw_duration, bool) and raw_duration > 0
             else default_duration
         )
-        # posa e prezzo: dallo snapshot se la voce esisteva, dal listino se è nuova
-        soak = previous.soak_min if previous is not None else (service.soak_min or 0)
+        # Posa/attesa: si può scrivere (`soak_min`), perché è il buco fra un
+        # servizio e il successivo e lo decide il salone. Se non arriva vale lo
+        # snapshot della visita, o il listino per le voci nuove. Il prezzo no:
+        # quello resta sempre quello concordato con la cliente.
+        raw_soak = raw.get("soak_min")
+        default_soak = previous.soak_min if previous is not None else (service.soak_min or 0)
+        soak = (
+            raw_soak
+            if isinstance(raw_soak, int) and not isinstance(raw_soak, bool) and raw_soak >= 0
+            else default_soak
+        )
         price = previous.price if previous is not None else service.price
         eligible_ids = set(service.operators.values_list("id", flat=True))
         end = cursor + duration_min
@@ -832,6 +848,138 @@ def _event_payload(appointment: Appointment) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Eventi verso Yourang: ritardo di sicurezza e fusione
+# ---------------------------------------------------------------------------
+#
+# Al banco si corregge quello che si è appena fatto: si inserisce la cliente,
+# la si guarda in griglia e la si sposta di mezz'ora. Se l'evento partisse
+# nell'istante stesso, alla cliente arriverebbero due messaggi a venti secondi
+# di distanza — la conferma sbagliata e poi lo spostamento. Gli eventi
+# dell'appuntamento vengono quindi TRATTENUTI qualche secondo
+# (`SalonSettings.automation_delay_seconds`, 30 di serie) e quelli ancora
+# trattenuti sullo stesso appuntamento si fondono in uno solo, con i dati
+# dell'ultimo gesto. È anche ciò che rende «torna indietro» silenzioso: annullare
+# entro la finestra non manda niente a nessuno.
+
+# Quando due eventi si fondono resta il più alto di questa scala: la conferma di
+# un appuntamento appena nato batte lo spostamento, perché la cliente non ha
+# ancora ricevuto nulla e quello che le serve è la conferma, con l'orario buono.
+_EVENT_PRIORITY = {
+    "appointment.created": 40,
+    "appointment.moved": 30,
+    "appointment.updated": 20,
+    "appointment.checked_in": 10,
+}
+# Eventi finali: azzerano quelli trattenuti invece di fondersi con loro.
+_TERMINAL_EVENTS = ("appointment.cancelled", "appointment.no_show")
+# Tutto ciò che racconta l'appuntamento ALLA CLIENTE, e che quindi si fonde.
+# `slot.freed` parla alla lista d'attesa: è un altro discorso e un'altra chiave.
+_CLIENT_EVENTS = tuple(_EVENT_PRIORITY) + _TERMINAL_EVENTS
+# La trattenuta si allunga a ogni correzione, ma non all'infinito: dopo questo
+# multiplo del ritardo, contato dal primo gesto, il messaggio parte comunque.
+MAX_HOLD_FACTOR = 4
+
+
+def appointment_event_key(appointment_id) -> str:
+    return f"appointment:{appointment_id}"
+
+
+def slot_event_key(appointment_id) -> str:
+    return f"slot:{appointment_id}"
+
+
+def _extended_hold(event, delay: int):
+    """Nuova scadenza della trattenuta: `delay` da adesso, col tetto dal primo gesto."""
+    now = timezone.now()
+    return min(
+        now + dt.timedelta(seconds=delay),
+        event.created_at + dt.timedelta(seconds=delay * MAX_HOLD_FACTOR),
+    )
+
+
+def emit_appointment_event(appointment: Appointment, event_type: str, payload: dict | None = None):
+    """Accoda un evento dell'appuntamento fondendolo con quelli ancora trattenuti.
+
+    Ritorna l'evento che partirà (nuovo o aggiornato), oppure None quando non
+    deve partire più niente: è il caso dell'appuntamento inserito per errore e
+    annullato subito dopo, di cui la cliente non ha mai saputo nulla.
+    """
+    salon = appointment.salon
+    payload = _event_payload(appointment) if payload is None else payload
+    key = appointment_event_key(appointment.id)
+    delay = automation_delay_seconds(salon)
+    if delay <= 0:
+        return emit_event(salon, event_type, payload, coalesce_key=key)
+
+    held = [e for e in held_events(salon, key, lock=True) if e.event_type in _CLIENT_EVENTS]
+    if held and event_type in _CLIENT_EVENTS:
+        if event_type in _TERMINAL_EVENTS:
+            supersede_events(held)
+            if any(e.event_type == "appointment.created" for e in held):
+                # La conferma non era ancora partita: per il mondo fuori dal
+                # salone quell'appuntamento non è mai esistito. Annunciarne
+                # l'annullamento significherebbe raccontare un appuntamento che
+                # la cliente non ha mai saputo di avere.
+                return None
+        else:
+            keep = max(held, key=lambda e: _EVENT_PRIORITY.get(e.event_type, 0))
+            supersede_events([e for e in held if e.id != keep.id])
+            if _EVENT_PRIORITY.get(event_type, 0) > _EVENT_PRIORITY.get(keep.event_type, 0):
+                keep.event_type = event_type
+            keep.payload = payload
+            keep.next_attempt_at = _extended_hold(keep, delay)
+            keep.save(update_fields=["event_type", "payload", "next_attempt_at"])
+            return keep
+    return emit_event(salon, event_type, payload, delay_seconds=delay, coalesce_key=key)
+
+
+def suppress_slot_events(salon, appointment_id) -> int:
+    """Toglie di mezzo l'annuncio alla lista d'attesa, se non è ancora partito.
+
+    Serve quando lo slot in realtà non si è liberato: l'appuntamento è tornato
+    dov'era, oppure non è mai esistito davvero.
+    """
+    return supersede_events(list(held_events(salon, slot_event_key(appointment_id), lock=True)))
+
+
+def revert_held_events(appointment: Appointment, *, fallback_event: str = "") -> None:
+    """Rimette a posto i messaggi dopo un «torna indietro» (vedi `undo.perform`).
+
+    - conferma non ancora partita → si aggiorna con lo stato ripristinato: alla
+      cliente arriva un messaggio solo, quello giusto;
+    - spostamento o modifica non ancora partiti → spariscono, perché per chi sta
+      fuori dal salone non è successo niente;
+    - niente in attesa, cioè messaggio già partito → si manda la rettifica.
+    """
+    salon = appointment.salon
+    # Lo slot non si è più liberato: alla lista d'attesa non si dice nulla.
+    suppress_slot_events(salon, appointment.id)
+    key = appointment_event_key(appointment.id)
+    held = [e for e in held_events(salon, key, lock=True) if e.event_type in _CLIENT_EVENTS]
+    if not held:
+        if fallback_event:
+            emit_appointment_event(appointment, fallback_event)
+        return
+    keep = max(held, key=lambda e: _EVENT_PRIORITY.get(e.event_type, 0))
+    if keep.event_type == "appointment.created":
+        supersede_events([e for e in held if e.id != keep.id])
+        keep.payload = _event_payload(appointment)
+        keep.save(update_fields=["payload"])
+    else:
+        supersede_events(held)
+
+
+def _announce_freed_slot(event) -> bool:
+    """Lo slot liberato si annuncia solo se qualcuno sapeva che era occupato.
+
+    Con la conferma ancora trattenuta l'appuntamento è esistito solo dentro il
+    salone: avvisare la lista d'attesa che «si è liberato» un orario che nessuno
+    ha mai visto occupato è solo rumore.
+    """
+    return event is not None and event.event_type != "appointment.created"
+
+
 def snapshot_items(appointment: Appointment, resolved: list[tuple]) -> None:
     """Crea gli AppointmentService con snapshot durata/posa/prezzo dal listino."""
     for index, (service, operator) in enumerate(resolved):
@@ -936,7 +1084,15 @@ def create_appointment(
             "forced": force,
         },
     )
-    emit_event(salon, "appointment.created", _event_payload(appointment))
+    emit_appointment_event(appointment, "appointment.created")
+    undo_log.record(
+        salon,
+        kind=UndoEntry.Kind.CREATE,
+        label=f"Nuovo appuntamento di {client.full_name}",
+        actor=actor,
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        created={"appointments": [appointment.id]},
+    )
     return appointment
 
 
@@ -964,6 +1120,7 @@ def edit_appointment(
     ricomparire in agenda una visita annullata da un'altra postazione.
     """
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     changed = ["updated_at"]
     if note is not None:
         appointment.note = note
@@ -1009,7 +1166,15 @@ def edit_appointment(
     )
     # Cambiando i servizi cambia anche l'ora di fine: senza questo evento il
     # promemoria alla cliente continuava a riportare la durata vecchia.
-    emit_event(appointment.salon, "appointment.updated", _event_payload(appointment))
+    emit_appointment_event(appointment, "appointment.updated")
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.EDIT,
+        label=f"Modifica dell'appuntamento di {appointment.client.full_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+    )
     return appointment
 
 
@@ -1083,6 +1248,7 @@ def move_appointment(
     if not allow_past and new_start < timezone.now():
         raise HttpError(400, "Non è possibile spostare l'appuntamento a un orario già passato")
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     old_start = appointment.start
     old_operator_id = appointment.operator_id
 
@@ -1146,12 +1312,21 @@ def move_appointment(
             "forced": force,
         },
     )
-    emit_event(
-        appointment.salon,
+    event = emit_appointment_event(
+        appointment,
         "appointment.moved",
         {**_event_payload(appointment), "old_start": old_start.isoformat()},
     )
-    free_slot_event(appointment, start=old_start, operator_id=old_operator_id)
+    if _announce_freed_slot(event):
+        free_slot_event(appointment, start=old_start, operator_id=old_operator_id)
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.MOVE,
+        label=f"Spostamento dell'appuntamento di {appointment.client.full_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+    )
     return appointment
 
 
@@ -1178,6 +1353,7 @@ def split_appointment(
     Ritorna (originale aggiornato, nuovo appuntamento).
     """
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     items = list(appointment.items.select_related("service", "operator").order_by("order", "id"))
     if len(items) < 2:
         raise HttpError(400, "L'appuntamento ha un solo servizio: usa «Sposta»")
@@ -1263,14 +1439,29 @@ def split_appointment(
             "forced": force,
         },
     )
-    emit_event(appointment.salon, "appointment.updated", _event_payload(appointment))
-    emit_event(appointment.salon, "appointment.created", _event_payload(created))
+    emit_appointment_event(appointment, "appointment.updated")
+    emit_appointment_event(created, "appointment.created")
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.SPLIT,
+        label=f"Stacco di {service.name_it} dall'appuntamento di {client_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={
+            "appointments": [
+                undo_log.appointment_snapshot(appointment),
+                undo_log.appointment_snapshot(created),
+            ]
+        },
+        created={"appointments": [created.id]},
+    )
     return appointment, created
 
 
 @transaction.atomic
 def check_in(appointment: Appointment, *, actor=None) -> Appointment:
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     appointment.status = Appointment.Status.CHECKED_IN
     appointment.save(update_fields=["status", "updated_at"])
     log_activity(
@@ -1280,13 +1471,22 @@ def check_in(appointment: Appointment, *, actor=None) -> Appointment:
         actor=actor,
         payload={"appointment_id": appointment.id},
     )
-    emit_event(appointment.salon, "appointment.checked_in", _event_payload(appointment))
+    emit_appointment_event(appointment, "appointment.checked_in")
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.STATUS,
+        label=f"Check-in di {appointment.client.full_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+    )
     return appointment
 
 
 @transaction.atomic
 def start_appointment(appointment: Appointment, *, actor=None) -> Appointment:
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     appointment.status = Appointment.Status.IN_PROGRESS
     appointment.save(update_fields=["status", "updated_at"])
     log_activity(
@@ -1296,6 +1496,14 @@ def start_appointment(appointment: Appointment, *, actor=None) -> Appointment:
         actor=actor,
         payload={"appointment_id": appointment.id},
     )
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.STATUS,
+        label=f"Inizio trattamento di {appointment.client.full_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+    )
     return appointment
 
 
@@ -1303,6 +1511,7 @@ def start_appointment(appointment: Appointment, *, actor=None) -> Appointment:
 def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> Appointment:
     """No-show: stato + deposito paid->forfeited. L'addebito Stripe è di sales."""
     _lock_and_reload(appointment)
+    before = undo_log.appointment_snapshot(appointment)
     appointment.status = Appointment.Status.NO_SHOW
     appointment.cancel_reason = reason or ""
     if appointment.deposit_status == Appointment.DepositStatus.PAID:
@@ -1317,12 +1526,19 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         actor=actor,
         payload={"appointment_id": appointment.id, "reason": reason},
     )
-    emit_event(
-        appointment.salon,
-        "appointment.no_show",
-        {**_event_payload(appointment), "reason": reason},
+    event = emit_appointment_event(
+        appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason}
     )
-    free_slot_event(appointment)
+    if _announce_freed_slot(event):
+        free_slot_event(appointment)
+    undo_log.record(
+        appointment.salon,
+        kind=UndoEntry.Kind.NO_SHOW,
+        label=f"No-show di {appointment.client.full_name}",
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+    )
     return appointment
 
 
@@ -1347,6 +1563,7 @@ def cancel_appointment(
     """
     with transaction.atomic():
         _lock_and_reload(appointment)
+        before = undo_log.appointment_snapshot(appointment)
         late = by_client and appointment.start - timezone.now() < dt.timedelta(
             hours=settings.CLIENT_MOVE_CANCEL_MIN_HOURS
         )
@@ -1376,12 +1593,25 @@ def cancel_appointment(
             actor=actor,
             payload={"appointment_id": appointment.id, "reason": reason, "late": late},
         )
-        emit_event(
-            appointment.salon,
+        event = emit_appointment_event(
+            appointment,
             "appointment.cancelled",
             {**_event_payload(appointment), "reason": reason, "late": late},
         )
-        free_slot_event(appointment)
+        if _announce_freed_slot(event):
+            free_slot_event(appointment)
+        # L'annullamento della CLIENTE dall'app non entra nello storico della
+        # postazione: chi sta al banco non deve poter rimettere in agenda una
+        # visita che la cliente ha disdetto.
+        if not by_client:
+            undo_log.record(
+                appointment.salon,
+                kind=UndoEntry.Kind.CANCEL,
+                label=f"Annullamento dell'appuntamento di {appointment.client.full_name}",
+                actor=actor,
+                before={"appointments": [before]},
+                after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+            )
     if appointment.deposit_status == Appointment.DepositStatus.REFUND_DUE:
         settle_deposit_refund(appointment, actor=actor)
     return appointment
@@ -1830,7 +2060,7 @@ def restore_released(appointment: Appointment, *, actor=None, force: bool = Fals
         actor=actor,
         payload={"appointment_id": appointment.id, "forced": force},
     )
-    emit_event(appointment.salon, "appointment.created", _event_payload(appointment))
+    emit_appointment_event(appointment, "appointment.created")
     return appointment
 
 
@@ -1839,6 +2069,11 @@ def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):
 
     Compatibilità: entry attiva, stesso servizio di uno degli item e operatrice
     non indicata oppure tra quelle coinvolte nell'appuntamento.
+
+    Anche questo evento è trattenuto qualche secondo e si fonde col precedente
+    dello stesso appuntamento: spostare due volte di fila un blocco proponeva lo
+    stesso orario due volte alla lista d'attesa, e riportarlo dov'era lo
+    proponeva pur non essendosi liberato niente.
     """
     start = start or appointment.start
     operator_id = operator_id or appointment.operator_id
@@ -1855,14 +2090,17 @@ def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):
         .filter(Q(operator__isnull=True) | Q(operator_id__in=operator_ids))
         .values_list("id", flat=True)
     )
+    key = slot_event_key(appointment.id)
+    delay = automation_delay_seconds(appointment.salon)
+    payload = {
+        "appointment_id": appointment.id,
+        "start": start.isoformat(),
+        "duration_min": sum(item.duration_min for item in items),
+        "operator_id": operator_id,
+        "matching_waitlist": list(matching),
+    }
+    if delay > 0:
+        supersede_events(list(held_events(appointment.salon, key, lock=True)))
     return emit_event(
-        appointment.salon,
-        "slot.freed",
-        {
-            "appointment_id": appointment.id,
-            "start": start.isoformat(),
-            "duration_min": sum(item.duration_min for item in items),
-            "operator_id": operator_id,
-            "matching_waitlist": list(matching),
-        },
+        appointment.salon, "slot.freed", payload, delay_seconds=delay, coalesce_key=key
     )

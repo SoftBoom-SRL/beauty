@@ -10,8 +10,10 @@ import json
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.db import models
 from django.test import TestCase
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
@@ -78,6 +80,19 @@ class AgendaTestBase(TestCase):
         return patch(
             "apps.staff.services.shift_windows",
             side_effect=lambda operator, date: mapping.get(operator.id, []),
+        )
+
+    def _no_automation_delay(self):
+        """Eventi verso Yourang senza trattenuta: uno per gesto, come prima.
+
+        Serve ai test che guardano un evento specifico mentre creano e
+        modificano nello stesso istante: col ritardo di serie quei due gesti si
+        fondono in un evento solo (è il punto di `AutomationDelayTests`).
+        """
+        from apps.core.models import SalonSettings
+
+        SalonSettings.objects.update_or_create(
+            salon=self.salon, defaults={"automation_delay_seconds": 0}
         )
 
 
@@ -896,6 +911,43 @@ class AppointmentEditApiTests(AgendaTestBase):
         self.assertEqual(resp.status_code, 200, resp.content)
         appointment.refresh_from_db()
         self.assertFalse(appointment.forced)
+
+    # (g) buco voluto fra un servizio e l'altro: l'attesa si scrive (`soak_min`)
+    # e la visita si allunga, senza che i due trattamenti debbano stare attaccati.
+    def test_put_can_leave_a_gap_between_two_services(self):
+        appointment = self._make(
+            [
+                {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                {"service_id": self.svc30.id, "operator_id": self.op1.id},
+            ]
+        )
+        first, second = appointment.items.order_by("order")
+        payload = {
+            "items": [
+                {"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id, "soak_min": 20},
+                {"id": second.id, "service_id": self.svc30.id, "operator_id": self.op1.id},
+            ],
+        }
+        with self._windows(self.mapping):
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        body = resp.json()
+        self.assertEqual(body["items"][0]["soak_min"], 20)
+        # 60 + 20 di attesa + 30: il secondo servizio comincia venti minuti dopo
+        self.assertEqual(body["total_duration_min"], 110)
+        # e il prezzo non si tocca: l'attesa non si paga
+        self.assertEqual(body["total_price"], "80.00")
+
+    def test_put_keeps_the_booked_soak_when_not_sent(self):
+        appointment = self._make([{"service_id": self.svc60.id, "operator_id": self.op1.id}])
+        item = appointment.items.get()
+        item.soak_min = 25
+        item.save(update_fields=["soak_min"])
+        payload = {"items": [{"id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id}]}
+        with self._windows(self.mapping):
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["items"][0]["soak_min"], 25)
 
     def test_put_empty_items_400(self):
         appointment = self._make(
@@ -2134,6 +2186,7 @@ class StaleCopyEditTests(AgendaTestBase):
     def test_a_service_added_now_takes_todays_price(self):
         from .services import create_appointment, edit_appointment
 
+        self._no_automation_delay()
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = create_appointment(
                 self.salon, self.client_obj,
@@ -2516,6 +2569,7 @@ class WaitlistTests(AgendaTestBase):
         )
 
     def test_a_freed_slot_names_the_people_waiting_for_that_service(self):
+        self._no_automation_delay()
         mine = WaitlistEntry.objects.create(
             salon=self.salon, client=self.client_obj, service=self.svc60, operator=self.op1
         )
@@ -2818,3 +2872,300 @@ class PublicAvailabilityContentTests(AgendaTestBase):
         self.assertTrue(
             all(a["operator_id"] == self.op1.id for s in slots for a in s["assignment"])
         )
+
+
+class AutomationDelayTests(AgendaTestBase):
+    """Un gesto corretto un istante dopo non deve diventare due messaggi.
+
+    Gli eventi dell'appuntamento restano trattenuti qualche secondo; finché
+    sono lì si fondono con quelli successivi, e alla cliente arriva soltanto
+    l'ultimo stato — o niente, se il gesto viene annullato.
+    """
+
+    def setUp(self):
+        self.user = self._staff_user()
+
+    def _staff_user(self):
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        return user
+
+    def _book(self, hour=10, **kwargs):
+        return create_appointment(
+            self.salon, self.client_obj,
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+            _aware(self.day, hour), via="dashboard", actor=self.user, **kwargs,
+        )
+
+    def _deliverable(self):
+        """Eventi che un worker consegnerebbe adesso."""
+        now = timezone.now()
+        return list(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
+            .filter(models.Q(next_attempt_at__isnull=True) | models.Q(next_attempt_at__lte=now))
+            .order_by("id")
+        )
+
+    def test_the_confirmation_waits_before_leaving(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            self._book()
+        event = OutboxEvent.objects.get(event_type="appointment.created")
+        self.assertIsNotNone(event.next_attempt_at)
+        self.assertGreater(event.next_attempt_at, timezone.now())
+        self.assertEqual(self._deliverable(), [])  # nessuno lo consegna ancora
+
+    def test_moving_right_after_booking_sends_one_message(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 15), actor=self.user)
+        alive = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
+        self.assertEqual(alive.count(), 1)
+        event = alive.get()
+        # resta la CONFERMA, con l'orario buono: la cliente non ha ancora
+        # ricevuto niente, quindi non c'è nessuno spostamento da raccontarle
+        self.assertEqual(event.event_type, "appointment.created")
+        self.assertEqual(event.payload["start"], _aware(self.day, 15).isoformat())
+        self.assertEqual(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.SUPERSEDED).count(), 0
+        )
+
+    def test_cancelling_right_after_booking_sends_nothing(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            cancel_appointment(appointment, actor=self.user)
+        self.assertFalse(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING).exists()
+        )
+        # e nemmeno alla lista d'attesa: quello slot non si è mai occupato
+        self.assertFalse(OutboxEvent.objects.filter(event_type="slot.freed").exists())
+
+    def test_cancelling_a_known_appointment_still_speaks(self):
+        """Se la conferma è già partita, l'annullamento si comunica eccome."""
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            OutboxEvent.objects.update(status=OutboxEvent.Status.SENT, sent_at=timezone.now())
+            cancel_appointment(appointment, actor=self.user)
+        pending = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
+        self.assertEqual(
+            set(pending.values_list("event_type", flat=True)),
+            {"appointment.cancelled", "slot.freed"},
+        )
+
+    def test_a_salon_can_turn_the_delay_off(self):
+        self._no_automation_delay()
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 15), actor=self.user)
+        types = list(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
+            .values_list("event_type", flat=True)
+        )
+        self.assertIn("appointment.created", types)
+        self.assertIn("appointment.moved", types)
+        self.assertEqual(self._deliverable(), list(OutboxEvent.objects.order_by("id")))
+
+    def test_the_hold_does_not_stretch_forever(self):
+        """Chi continua a ritoccare non rimanda il messaggio all'infinito."""
+        from .services import MAX_HOLD_FACTOR
+
+        SalonSettings.objects.update_or_create(
+            salon=self.salon, defaults={"automation_delay_seconds": 30}
+        )
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            event = OutboxEvent.objects.get(event_type="appointment.created")
+            # come se la conferma fosse stata accodata parecchi minuti fa
+            OutboxEvent.objects.filter(id=event.id).update(
+                created_at=timezone.now() - dt.timedelta(minutes=5)
+            )
+            move_appointment(appointment, _aware(self.day, 15), actor=self.user)
+        event.refresh_from_db()
+        self.assertLessEqual(
+            event.next_attempt_at,
+            event.created_at + dt.timedelta(seconds=30 * MAX_HOLD_FACTOR),
+        )
+
+    def test_a_delivered_event_is_never_merged(self):
+        """Un evento già tentato può essere arrivato: non si tocca più."""
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            OutboxEvent.objects.update(attempts=1, next_attempt_at=timezone.now() + dt.timedelta(minutes=1))
+            move_appointment(appointment, _aware(self.day, 15), actor=self.user)
+        created = OutboxEvent.objects.get(event_type="appointment.created")
+        self.assertEqual(created.payload["start"], _aware(self.day, 10).isoformat())
+        self.assertTrue(OutboxEvent.objects.filter(event_type="appointment.moved").exists())
+        self.assertFalse(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.SUPERSEDED).exists()
+        )
+
+
+class UndoTests(AgendaTestBase):
+    """«Torna indietro»: il gesto sbagliato si disfa, e senza avvisare nessuno."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        self.user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=self.user, salon=self.salon, role=self.role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
+        }
+
+    def _other_staff(self):
+        from apps.accounts.models import Membership, User
+
+        other = User.objects.create_user(email="collega@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=other, salon=self.salon, role=self.role)
+        return other
+
+    def _book(self, hour=10, actor=None):
+        return create_appointment(
+            self.salon, self.client_obj,
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+            _aware(self.day, hour), via="dashboard", actor=actor or self.user,
+        )
+
+    def _undo(self, body=None):
+        return self.client.post(
+            "/api/agenda/undo",
+            data=json.dumps(body or {}),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_a_wrong_move_goes_back_where_it_was(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 16), actor=self.user)
+            res = self._undo()
+        self.assertEqual(res.status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.start, _aware(self.day, 10))
+        # la conferma non era ancora partita: resta una sola, con l'orario vero
+        alive = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
+        self.assertEqual(alive.count(), 1)
+        self.assertEqual(
+            parse_datetime(alive.get().payload["start"]), _aware(self.day, 10)
+        )
+
+    def test_undoing_a_booking_makes_it_disappear(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            res = self._undo()
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Appointment.objects.filter(id=appointment.id).exists())
+        self.assertFalse(
+            OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING).exists()
+        )
+
+    def test_undoing_a_booking_already_confirmed_warns_the_client(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            OutboxEvent.objects.update(status=OutboxEvent.Status.SENT, sent_at=timezone.now())
+            res = self._undo()
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(Appointment.objects.filter(id=appointment.id).exists())
+        self.assertTrue(
+            OutboxEvent.objects.filter(
+                event_type="appointment.cancelled", status=OutboxEvent.Status.PENDING
+            ).exists()
+        )
+
+    def test_undo_brings_back_a_cancelled_appointment(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            cancel_appointment(appointment, reason="sbaglio mio", actor=self.user)
+            res = self._undo()
+        self.assertEqual(res.status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(appointment.cancel_reason, "")
+
+    def test_undo_puts_back_the_services_of_a_detached_one(self):
+        from .services import split_appointment
+
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="dashboard", actor=self.user,
+            )
+            item = appointment.items.order_by("order").last()
+            _, created = split_appointment(
+                appointment, item_id=item.id, new_start=_aware(self.day, 17), actor=self.user
+            )
+            res = self._undo()
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Appointment.objects.filter(id=created.id).exists())
+        self.assertEqual(appointment.items.count(), 2)
+
+    def test_undo_restores_a_removed_break(self):
+        from apps.staff.models import Operator  # noqa: F401 (documenta il contesto)
+
+        pause = Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 13), duration_min=60
+        )
+        res = self.client.delete(f"/api/agenda/pauses/{pause.id}", **self.auth)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self._undo().status_code, 200)
+        back = Pause.objects.get(id=pause.id)
+        self.assertEqual(back.start, _aware(self.day, 13))
+        self.assertEqual(back.duration_min, 60)
+
+    def test_a_colleague_cannot_be_undone(self):
+        other = self._other_staff()
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            self._book(actor=other)
+        self.assertEqual(self.client.get("/api/agenda/undo", **self.auth).json(), [])
+        self.assertEqual(self._undo().status_code, 404)
+
+    def test_what_someone_else_changed_is_not_overwritten(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 16), actor=self.user)
+            # una collega, da un'altra postazione, lo sposta ancora
+            move_appointment(appointment, _aware(self.day, 18), actor=self._other_staff())
+            res = self._undo({"entry_id": self.client.get("/api/agenda/undo", **self.auth).json()[0]["id"]})
+        self.assertEqual(res.status_code, 409)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.start, _aware(self.day, 18))
+
+    def test_too_late_to_go_back(self):
+        from .models import UndoEntry
+
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 16), actor=self.user)
+        UndoEntry.objects.update(
+            created_at=timezone.now() - dt.timedelta(minutes=30)
+        )
+        self.assertEqual(self.client.get("/api/agenda/undo", **self.auth).json(), [])
+        self.assertEqual(self._undo().status_code, 404)
+
+    def test_the_till_wins(self):
+        """Conto chiuso: non si torna indietro, si dice perché."""
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 16), actor=self.user)
+        Appointment.objects.filter(id=appointment.id).update(
+            status=Appointment.Status.CLOSED
+        )
+        res = self._undo()
+        self.assertEqual(res.status_code, 409)
+
+    def test_the_stack_goes_back_more_than_one_step(self):
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appointment = self._book()
+            move_appointment(appointment, _aware(self.day, 16), actor=self.user)
+            move_appointment(appointment, _aware(self.day, 18), actor=self.user)
+            self.assertEqual(self._undo().status_code, 200)
+            self.assertEqual(self._undo().status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.start, _aware(self.day, 10))

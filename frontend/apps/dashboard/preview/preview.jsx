@@ -9,7 +9,7 @@ import Topbar from '../src/shell/Topbar.jsx';
 import { useDash } from '../src/ctx.jsx';
 import DkModals from '../src/modals/DkModals.jsx';
 import DkToast from '../src/ui/DkToast.jsx';
-import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment } from './fixtures.js';
+import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment, rememberUndo, UNDO_STACK, undoLast } from './fixtures.js';
 import '../src/styles/styles.css';
 import '../src/styles/desktop.css';
 import '../src/styles/app.css';
@@ -30,11 +30,20 @@ const routes = [
     ? { id: 95, full_name: 'Nuova Cliente', phone: '+39 333 000 0000', categories: [] }
     : { items: [{ id: 90, full_name: 'Marta Rossi', phone: '+39 333 111 2233' }] })],
   // spostamento (trascinamento, o orario/operatrice cambiati dal pannello)
-  [/\/api\/agenda\/appointments\/\d+\/move$/, (u, init) => moveAppointment(Number(u.pathname.split('/')[4]), JSON.parse(init.body || '{}'))],
+  [/\/api\/agenda\/appointments\/\d+\/move$/, (u, init) => {
+    const id = Number(u.pathname.split('/')[4]);
+    rememberUndo(id, 'Spostamento dell’appuntamento');
+    return moveAppointment(id, JSON.parse(init.body || '{}'));
+  }],
+  // «torna indietro»: la pila e l'annullamento (GET elenca, POST annulla)
+  [/\/api\/agenda\/undo$/, (u, init) => ((init?.method || 'GET') === 'POST'
+    ? undoLast(JSON.parse(init.body || '{}').entry_id)
+    : UNDO_STACK())],
   // GET il dettaglio, PUT le modifiche a servizi e nota
   [/\/api\/agenda\/appointments\/\d+$/, (u, init) => {
     const id = Number(u.pathname.split('/').pop());
-    return (init?.method || 'GET') === 'PUT' ? editAppointment(id, JSON.parse(init.body || '{}')) : APPOINTMENT(id);
+    if ((init?.method || 'GET') === 'PUT') { rememberUndo(id, 'Modifica dell’appuntamento'); return editAppointment(id, JSON.parse(init.body || '{}')); }
+    return APPOINTMENT(id);
   }],
   [/\/api\/agenda\/day/, (u) => DAY_ROWS(u.searchParams.get('date') || TODAY)],
   [/\/api\/agenda\/week/, (u) => WEEK(u.searchParams.get('start'))],

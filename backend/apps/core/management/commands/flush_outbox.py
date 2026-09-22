@@ -71,15 +71,20 @@ def _redacted(payload):
 
 
 def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
-    """Cancella gli eventi consegnati più vecchi di `days` giorni.
+    """Cancella gli eventi consegnati (o sostituiti) più vecchi di `days` giorni.
 
     Restavano per sempre, con dentro numeri di telefono e nomi delle clienti.
     Quelli falliti non si toccano: servono a capire cosa è andato storto.
+    I `superseded` — mai partiti perché fusi con un evento successivo o
+    annullati con «torna indietro» — hanno gli stessi dati dentro e seguono la
+    stessa sorte, contati dalla data di creazione visto che non sono mai stati
+    consegnati.
     """
     now = now or timezone.now()
+    cutoff = now - timezone.timedelta(days=days)
     deleted, _ = OutboxEvent.objects.filter(
-        status=OutboxEvent.Status.SENT,
-        sent_at__lt=now - timezone.timedelta(days=days),
+        Q(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
+        | Q(status=OutboxEvent.Status.SUPERSEDED, created_at__lt=cutoff)
     ).delete()
     return deleted
 
