@@ -14,6 +14,13 @@ const NOSHOW_REASONS = [['cliente', 'Mancata presenza', 'No-show'], ['salute', '
 const CANCEL_REASONS = [['cliente', 'Richiesta cliente', 'Client request'], ['salute', 'Malattia', 'Illness'], ['agenda', 'Sovrapposizione', 'Schedule clash'], ['altro', 'Altro', 'Other']];
 const customReasons = (list, fallback) => (Array.isArray(list) && list.length ? list.map((r, i) => ['c' + i, r, r]) : fallback);
 
+/* campo orario di una riga servizio: stretto, tabellare, come gli altri numeri */
+const timeCellCss = {
+  width: 92, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 6px',
+  fontSize: 12.5, fontFamily: 'var(--mono, monospace)', fontWeight: 700, textAlign: 'center',
+  outline: 'none', background: 'var(--surface)', color: 'var(--ink)',
+};
+
 export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const { t, lang, operators, opColors, services, serviceCategories, settings, session, fireToast, openModal, setTab, setDeepLink, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
@@ -110,7 +117,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const [addingSvc, setAddingSvc] = useState(false);
   const [savingItems, setSavingItems] = useState(false);
   const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
-  useEffect(() => { setEditItems(mkEditItems(appt?.items)); setAddingSvc(false); }, [appt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // orari di riga mentre si digitano (vedi commitItemStart / commitItemEnd)
+  const [rowDrafts, setRowDrafts] = useState({});
+  useEffect(() => { setEditItems(mkEditItems(appt?.items)); setAddingSvc(false); setRowDrafts({}); }, [appt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Il servizio appena aggiunto finisce in fondo alla lista, spesso sotto il
    * bordo del pannello: lo si porta in vista e lo si illumina un istante, così
@@ -253,6 +262,43 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const setItemDuration = (key, raw) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: raw === '' ? '' : Math.max(0, parseInt(raw, 10) || 0) } : x)));
   const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.max(5, parseInt(x.duration_min, 10) || 5) } : x)));
   const setItemOperator = (key, opId) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
+
+  /* ---- ora di inizio e di fine di OGNI servizio ----------------------------
+   * I trattamenti di una visita sono in fila: il primo comincia quando comincia
+   * la visita, ognuno degli altri quando finisce quello prima. Quindi scrivere
+   * un orario vuol dire spostare un confine, e lo si fa senza calcoli:
+   * - fine di un servizio  → cambia la sua durata (quelli dopo slittano);
+   * - inizio del primo     → sposta tutta la visita (come in griglia);
+   * - inizio di un altro   → allunga o accorcia quello che lo precede.
+   * Il minimo resta cinque minuti: un servizio da zero non esiste. */
+  const draftOf = (key, side, value) => rowDrafts[`${key}:${side}`] ?? timeLabel(value);
+  const setDraft = (key, side, v) => setRowDrafts((m) => ({ ...m, [`${key}:${side}`]: v }));
+  const clearDraft = (key, side) => setRowDrafts((m) => { const n = { ...m }; delete n[`${key}:${side}`]; return n; });
+
+  const commitItemEnd = (index, hm) => {
+    const it = editItems[index], span = itemSpans[index];
+    clearDraft(it.key, 'to');
+    if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
+    const active = hmToMin(hm) - span.from - (it.soak_min || 0);
+    setItemDuration(it.key, String(Math.max(5, active)));
+  };
+  const commitItemStart = async (index, hm) => {
+    const it = editItems[index];
+    clearDraft(it.key, 'from');
+    if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
+    const wanted = hmToMin(hm);
+    if (index === 0) {
+      // è l'inizio della visita: si sposta tutto. Prima si salva quello che c'è
+      // in sospeso, altrimenti la risposta del server lo cancellerebbe.
+      if (wanted === startMin) return;
+      if (dirty) await saveChanges();
+      applyMove({ startMin: Math.max(0, Math.min(23 * 60 + 55, wanted)) });
+      return;
+    }
+    const prev = editItems[index - 1], prevSpan = itemSpans[index - 1];
+    const active = wanted - prevSpan.from - (prev.soak_min || 0);
+    setItemDuration(prev.key, String(Math.max(5, active)));
+  };
 
   /* Un solo salvataggio per servizi e nota, e sta nel piede del pannello: il
    * pulsante viveva in fondo alla lista dei servizi, cioè fuori dallo schermo
@@ -712,16 +758,34 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           <Icon name="x" size={14} />
                         </button>
                       </div>
+                      {/* Ora di inizio e di fine, scrivibili: i servizi sono in
+                          fila, quindi spostare un confine allunga o accorcia il
+                          vicino e quelli dopo slittano — si vede subito qui
+                          sotto, riga per riga. */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
+                        <input type="time" step={300} value={draftOf(it.key, 'from', span ? span.from : startMin)}
+                          onChange={(e) => setDraft(it.key, 'from', e.target.value)}
+                          onBlur={(e) => commitItemStart(i, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+                          title={i === 0 ? t('Inizio della visita: cambiarlo sposta tutti i servizi', 'Start of the visit: changing it moves every service') : t('Inizio: sposta il confine col servizio precedente', 'Start: moves the boundary with the previous service')}
+                          aria-label={t('Ora di inizio del servizio', 'Service start time')}
+                          style={timeCellCss} />
+                        <span className="t-sm" style={{ color: 'var(--muted-2)' }}>→</span>
+                        <input type="time" step={300} value={draftOf(it.key, 'to', span ? span.to : startMin)}
+                          onChange={(e) => setDraft(it.key, 'to', e.target.value)}
+                          onBlur={(e) => commitItemEnd(i, e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+                          title={it.soak_min ? t('Fine, posa compresa', 'End, soak included') : t('Fine del servizio', 'End of the service')}
+                          aria-label={t('Ora di fine del servizio', 'Service end time')}
+                          style={timeCellCss} />
                         <NumInput integer min={5} value={it.duration_min} emptyValue=""
                           onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
                           aria-label={t('Durata in minuti', 'Duration in minutes')}
-                          style={{ width: 52, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
-                        <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('minuti', 'minutes')}</span>
-                        {/* dove cade il servizio nella giornata: i servizi sono
-                            in fila dall'inizio della visita, e cambiando una
-                            durata slittano tutti quelli dopo */}
-                        {span && <span className="tabnum t-sm" style={{ color: 'var(--muted-2)', marginLeft: 'auto' }}>{timeLabel(span.from)}–{timeLabel(span.to)}</span>}
+                          style={{ width: 48, marginLeft: 4, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
+                        <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('min', 'min')}</span>
+                        {it.soak_min > 0 && (
+                          <span className="t-sm" style={{ color: 'var(--muted-2)' }} title={t('Fase di posa: l’operatrice è libera', 'Soak phase: the stylist is free')}>+ {it.soak_min}′ {t('posa', 'soak')}</span>
+                        )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
                         {eligible.length > 0 ? (

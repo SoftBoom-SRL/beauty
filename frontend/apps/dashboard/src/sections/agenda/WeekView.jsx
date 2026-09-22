@@ -502,7 +502,9 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false,
     const col = it && itemColor
       ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
       : null;
-    return `color-mix(in srgb, ${col || colorOf(a.operator_id)} 45%, #FFFFFF)`;
+    // stessa resa della vista giorno (82%): un colore mezzo slavato qui e pieno
+    // là non si riconosce come lo stesso trattamento
+    return `color-mix(in srgb, ${col || colorOf(a.operator_id)} 82%, #FFFFFF)`;
   };
   const textZ = { position: 'relative', zIndex: 2 };
   return (

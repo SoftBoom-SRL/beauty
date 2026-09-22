@@ -413,6 +413,13 @@ def agenda_week(request, start: str, location_id: int = None):
                         "gifts": _gifts_out(a, gifts),
                         "items": [
                             {
+                                # `service_id` serve al COLORE: in settimana ogni
+                                # servizio è disegnato nella tinta della sua
+                                # categoria, e senza l'id la dashboard non può
+                                # risalire al listino — ripiegava sul colore
+                                # dell'operatrice e i trattamenti diventavano
+                                # tutti uguali.
+                                "service_id": it.service_id,
                                 "operator_id": it.operator_id,
                                 "duration_min": it.duration_min,
                                 "soak_min": it.soak_min,

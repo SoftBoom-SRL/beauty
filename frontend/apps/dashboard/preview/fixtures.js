@@ -158,13 +158,29 @@ export const DAY_ROWS = (day) => OPERATORS.map((o) => ({
   pauses: o.id === 1 ? [{ id: 700, operator_id: 1, start: at(day, 13, 0), duration_min: 60, note: 'pranzo' }] : [],
 }));
 
+/* La settimana ha un payload PIÙ POVERO del giorno (vedi agenda_week in
+ * apps/agenda/api.py): niente oggetto cliente, niente prezzi per riga. Qui si
+ * riproduce esattamente quello, altrimenti l'anteprima è più generosa del
+ * server e un campo che manca davvero si scopre solo in salone — è già successo
+ * col colore dei servizi, che senza `service_id` ripiegava sull'operatrice. */
+const compact = (a) => ({
+  id: a.id, start: a.start, client_name: a.client_name, client_phone: a.client_phone,
+  operator_id: a.operator_id, status: a.status, duration_min: a.total_duration_min,
+  total_price: a.total_price, forced: a.forced, deposit_status: a.deposit_status,
+  note: a.note, gifts: a.gifts || [],
+  items: a.items.map((it) => ({
+    service_id: it.service_id, operator_id: it.operator_id,
+    duration_min: it.duration_min, soak_min: it.soak_min, service_name: it.service_name,
+  })),
+});
+
 export const WEEK = (startIso) => {
   const base = new Date(startIso + 'T00:00');
   return [...Array(7)].map((_, i) => {
     const d = new Date(base); d.setDate(base.getDate() + i);
     const day = iso(d);
     const appts = day === TODAY || i === 1 || i === 3 ? appointmentsOf(day) : [];
-    return { date: day, count: appts.length, by_status: {}, appointments: appts };
+    return { date: day, count: appts.length, by_status: {}, appointments: appts.map(compact) };
   });
 };
 
