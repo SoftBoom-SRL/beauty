@@ -252,7 +252,11 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
   // `excludeItemId`: serve allo stacco, dove si muove UN servizio solo. Gli
   // altri della stessa visita restano dov'erano e occupano davvero quel tempo,
   // quindi non si può escludere l'intero appuntamento come in uno spostamento.
-  const { excludeApptId = null, excludeItemId = null, excludePauseId = null, nowMin = null, t = (it) => it, rows = null } = opts;
+  // `sameClientId`: i trattamenti della STESSA cliente non si fanno concorrenza.
+  // Nail art sopra la manicure in posa è una seduta sola, non uno scontro di
+  // agenda: segnalarla come «occupata» costringeva a forzare un incastro che
+  // incastro non è.
+  const { excludeApptId = null, excludeItemId = null, excludePauseId = null, nowMin = null, sameClientId = null, t = (it) => it, rows = null } = opts;
   const endMin = startMin + Math.max(durMin || 0, 1);
   const win = (row?.windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const winLabel = win.map(([a, b]) => `${timeLabel(a)}–${timeLabel(b)}`).join(' · ');
@@ -296,6 +300,7 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
   }
   for (const a of candidates) {
     if (excludeApptId != null && a.id === excludeApptId) continue;
+    if (sameClientId != null && a.client?.id === sameClientId) continue;
     if (a.status === 'cancelled' || a.status === 'no_show') continue;
     for (const b of itemBlocks(a)) {
       if (excludeItemId != null && b.item.id === excludeItemId) continue;

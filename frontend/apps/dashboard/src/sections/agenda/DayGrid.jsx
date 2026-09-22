@@ -1,14 +1,17 @@
 // DayGrid — multi-operator day timeline 08:00–20:00.
 // Ogni SERVIZIO di una visita è un blocco a sé, nella colonna della sua operatrice,
 // all'orario concatenato dallo start della visita, colorato per categoria di servizio.
-// Drag di un blocco = sposta l'intera visita; trascinando il bordo inferiore si
-// modifica la durata di QUEL servizio. Le pause restano blocchi spostabili/ridimensionabili.
+// Drag di un blocco = sposta QUEL servizio, da solo: un'operatrice in ritardo
+// passa un trattamento alla collega senza altri passaggi. Per muovere tutta la
+// visita insieme si trascina la spina scura sul bordo sinistro, che è lì a
+// mostrare quali blocchi sono la stessa visita. Trascinando il bordo inferiore
+// si modifica la durata di QUEL servizio. Le pause restano blocchi
+// spostabili/ridimensionabili.
 //
 // Feedback durante il drag: traccia tratteggiata dell'origine, colonna di
-// destinazione evidenziata, badge con orario + esito (libero / occupato / fuori
-// turno) calcolato lato client (explainSlot) PRIMA di chiamare il server; un
-// rilascio non valido non parte nemmeno. Al passaggio del mouse su uno spazio
-// vuoto compare l'orario snappato con la disponibilità di quell'operatrice.
+// destinazione evidenziata, badge con orario di arrivo. Niente indicatore al
+// passaggio del mouse: chi lavora in salone conosce i propri orari, e la
+// striscia sotto il cursore era solo rumore su una griglia già piena.
 import React, { useEffect, useRef, useState } from 'react';
 import { Avatar, Icon, fmtDur, timeLabel, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
@@ -23,12 +26,14 @@ export default function DayGrid({
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
-  const { t, lang, settings } = useDash();
+  const { t, lang, settings, modal } = useDash();
+  /* Appuntamento aperto nel pannello di dettaglio: il suo blocco resta cerchiato
+   * in agenda, così si vede sempre su cosa si sta intervenendo. */
+  const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
   const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
   const drag = useRef(null);
   const justDragged = useRef(false);                 // sopprime il click che segue un rilascio
   const [, force] = useState(0);
-  const [hint, setHint] = useState(null);            // { opId, m } slot sotto il cursore
   const scrollRef = useRef(null);
 
   const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
@@ -52,6 +57,14 @@ export default function DayGrid({
   const allPauses = dataRows.flatMap((r) => r.pauses);
 
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
+  /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
+   * un'ora che in quel momento non è sullo schermo, e il contesto serviva
+   * proprio lì. */
+  useEffect(() => {
+    if (!openApptId) return;
+    const el = scrollRef.current?.querySelector(`[data-appt="${openApptId}"]`);
+    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [openApptId]);
   // Esc annulla il drag in corso
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && drag.current) { drag.current = null; document.body.classList.remove('dk-dragging'); force((x) => x + 1); } };
@@ -89,19 +102,22 @@ export default function DayGrid({
   function beginDrag(e, d) {
     drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
-    setHint(null);
   }
 
-  // Drag di un blocco-servizio → sposta l'INTERA visita.
-  // Con `detach` parte invece dalla presa con le forbici: si stacca QUEL
-  // servizio e si porta dove lo si lascia. Prima l'unica strada era aprire
-  // l'appuntamento e passare dal riquadro «Stacca e sposta»: troppi passaggi
-  // per chi lo fa dieci volte al giorno.
-  function onItemDown(e, block, { detach = false } = {}) {
+  // Drag di un blocco-servizio → muove QUEL servizio e basta.
+  // Prima muoveva tutta la visita e per spostarne uno solo bisognava prima
+  // capire le forbici, poi staccare, poi spostare: tre gesti per la cosa più
+  // frequente della giornata (l'operatrice è in ritardo, un trattamento passa
+  // alla collega). Ora il singolo servizio è il caso normale e la visita
+  // intera si muove dalla spina (`whole`), che è anche il segno di cosa tiene
+  // insieme i blocchi.
+  function onItemDown(e, block, { whole = false } = {}) {
     if (!canWrite) return;
     if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
-    if (detach) e.stopPropagation();
+    e.stopPropagation();
+    // Con un servizio solo «staccare» non vuol dire niente: è la visita.
+    const detach = !whole && (block.appt.items || []).length > 1;
     beginDrag(e, {
       kind: 'item', apptId: block.apptId, itemId: block.item.id, block, detach,
       startY: e.clientY, orig: block.startMin, origOp: block.opId,
@@ -151,7 +167,7 @@ export default function DayGrid({
       const row = rowOf(d.nop);
       if (!row) return null;
       return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
-        excludeItemId: d.itemId, nowMin, t, rows: dataRows,
+        excludeItemId: d.itemId, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows,
       });
     }
     const delta = d.ns - d.orig;
@@ -162,7 +178,7 @@ export default function DayGrid({
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
       // orario già passato mentre il menu sullo stesso slot lo vietava.
-      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, nowMin, t, rows: dataRows });
+      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows });
       if (!r.ok) return r;
       if (r.code === 'soak') warn = r;
     }
@@ -309,20 +325,13 @@ export default function DayGrid({
     return { startMin: aStartMin(p), opId: p.operator_id };
   };
 
-  /* slot sotto il cursore (solo senza drag): orario snappato + disponibilità */
-  function onColHover(e, opId) {
-    if (drag.current || !canWrite) { if (hint) setHint(null); return; }
-    if (e.target !== e.currentTarget) { if (hint) setHint(null); return; }
-    const rect = e.currentTarget.getBoundingClientRect();
-    const raw = DK_START + (e.clientY - rect.top) / PXM;
-    const m = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
-    if (!hint || hint.opId !== opId || hint.m !== m) setHint({ opId, m });
-  }
-  const clearHint = () => { if (hint) setHint(null); };
-
   const d = drag.current;
   const dragging = d && d.moved && d.mode !== 'resize';
-  const verdictTone = (v) => (!v ? '' : !v.ok ? 'bad' : v.code === 'soak' ? 'warn' : 'ok');
+  // Nessuno slot è vietato: fuori turno, sovrapposizione e fase di posa sono
+  // AVVISI, non divieti. Chi sta al banco incastra dove vuole — il rilascio
+  // «non valido» finisce in onInvalidDrop, che scrive lo stesso forzando — e il
+  // rosso raccontava un blocco che non esiste. Il tono massimo è l'ambra.
+  const verdictTone = (v) => (!v ? '' : v.ok && v.code !== 'soak' ? 'ok' : 'warn');
 
   return (
     <div
@@ -419,15 +428,11 @@ export default function DayGrid({
             const closed = closedIntervals(row.windows);
             const isTarget = dragging && d.nop === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
-            const h = hint && hint.opId === o.id ? hint : null;
-            const hv = h ? explainSlot(row, h.m, step, { nowMin, t, rows: dataRows }) : null;
             return (
               <div
                 key={o.id}
-                className={isTarget ? (tone === 'bad' ? 'dk-col--target-bad' : 'dk-col--target') : ''}
+                className={isTarget ? (tone === 'warn' ? 'dk-col--target-warn' : 'dk-col--target') : ''}
                 title={undefined}
-                onPointerMove={(e) => onColHover(e, o.id)}
-                onPointerLeave={clearHint}
                 onClick={(e) => {
                   if (e.target !== e.currentTarget) return;
                   if (justDragged.current || drag.current) return;
@@ -457,14 +462,6 @@ export default function DayGrid({
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
                   <div className="dk-drag-ghost" style={{ top: (d.orig - DK_START) * PXM + 1.5, height: d.obj.duration_min * PXM - 3 }} />
                 )}
-                {/* slot sotto il cursore */}
-                {h && !dragging && (
-                  <div className={'dk-slot-hint dk-slot-hint--' + (hv.ok ? (hv.code === 'soak' ? 'warn' : 'ok') : 'bad')} style={{ top: (h.m - DK_START) * PXM + 1, height: Math.max(step * PXM - 2, 16) }}>
-                    <Icon name={hv.ok ? (pickMode ? 'check' : 'plus') : 'x'} size={11} stroke={2.6} />
-                    <span>{timeLabel(h.m)}</span>
-                    <span style={{ fontWeight: 600, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>· {hv.ok && pickMode ? t('Usa questo orario', 'Use this time') : hv.label}</span>
-                  </div>
-                )}
                 {/* Corsie: due appuntamenti sovrapposti (un incastro forzato) devono
                     stare AFFIANCATI. Disegnati a tutta larghezza, il secondo copriva
                     il primo e l'incastro diventava impossibile da leggere. */}
@@ -479,25 +476,43 @@ export default function DayGrid({
                           non dentro le card perché ogni servizio ha il colore della sua
                           categoria — due barre diverse non legano niente — e perché i
                           3 px di stacco fra le card la spezzerebbero. */}
-                      {visitSpines(placed).map((sp) => (
-                        <div key={'sp' + sp.apptId} title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi`, `One visit for ${sp.client}: ${sp.count} services`)}
-                          style={{
-                            position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 5),
-                            top: (sp.startMin - DK_START) * PXM + 1.5,
-                            height: (sp.endMin - sp.startMin) * PXM - 3,
-                            background: 'rgba(17,24,39,0.55)', borderRadius: '12px 0 0 12px',
-                            pointerEvents: 'none', zIndex: 4,
-                          }} />
-                      ))}
+                      {visitSpines(placed).map((sp) => {
+                        // La spina è anche la MANIGLIA della visita: premendo qui
+                        // si trascinano insieme tutti i servizi, mentre il corpo
+                        // di un blocco ne muove uno solo. Serve un blocco di
+                        // riferimento per far partire il drag: va bene il primo
+                        // della visita in questa colonna.
+                        const ref = placed.find(({ b }) => b.apptId === sp.apptId);
+                        const tall = (sp.endMin - sp.startMin) * PXM > 46;
+                        return (
+                          <div key={'sp' + sp.apptId}
+                            onPointerDown={ref && canWrite ? (e) => onItemDown(e, ref.b, { whole: true }) : undefined}
+                            title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi · trascina qui per spostarli tutti insieme`, `One visit for ${sp.client}: ${sp.count} services · drag here to move them all together`)}
+                            style={{
+                              position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 12),
+                              top: (sp.startMin - DK_START) * PXM + 1.5,
+                              height: (sp.endMin - sp.startMin) * PXM - 3,
+                              background: 'rgba(17,24,39,0.55)', borderRadius: '12px 0 0 12px',
+                              pointerEvents: dragging || !canWrite ? 'none' : 'auto',
+                              cursor: canWrite ? 'grab' : 'default', touchAction: 'none',
+                              display: 'grid', placeItems: 'center', gap: 3, alignContent: 'center',
+                              zIndex: 4,
+                            }}>
+                            {tall && [0, 1, 2].map((i) => (
+                              <span key={i} style={{ width: 3, height: 3, borderRadius: 99, background: 'rgba(255,255,255,0.75)' }} />
+                            ))}
+                          </div>
+                        );
+                      })}
                       {/* service blocks (each in its operator's column) */}
                       {placed.map(({ b, pos, lane, laneCount }) => (
                         <ItemBlock
                           key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
                           lane={lane} laneCount={laneCount}
                           dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
+                          highlight={b.apptId === openApptId}
                           color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
                           onDown={(e) => onItemDown(e, b)}
-                          onDetachDown={(e) => onItemDown(e, b, { detach: true })}
                           onResizeDown={(e) => onItemResizeDown(e, b)}
                           onHover={dragging ? null : onHover} onLeave={onLeave}
                           onSlotMenu={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows: dataRows }))}
@@ -548,8 +563,8 @@ export default function DayGrid({
         const multi = d.kind === 'item' && !detach && (d.block.appt.items || []).length > 1;
         const who = multi ? opName(d.origOp) : opName(d.nop);
         return (
-          <div className={'dk-drag-badge' + (tone === 'bad' ? ' dk-drag-badge--bad' : tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
-            <Icon name={tone === 'bad' ? 'x' : tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
+          <div className={'dk-drag-badge' + (tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
+            <Icon name={tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
             <span className="tabnum">{timeLabel(start)}–{timeLabel(start + durMin)}</span>
             <span>· {who}</span>
             {v && <small>· {v.label}</small>}
@@ -574,10 +589,10 @@ function closedIntervals(windows) {
   return out.filter(([s, e]) => e > s);
 }
 
-const TONE_BORDER = { ok: 'var(--ok)', bad: 'var(--danger)', warn: 'var(--warn)' };
+const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, t, lang, canWrite, onDown, onDetachDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, isLast, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -595,6 +610,7 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
   const textZ = { position: 'relative', zIndex: 2 };
   return (
     <div
+      data-appt={appt.id}
       onPointerDown={(e) => onDown(e)}
       onContextMenu={(e) => {
         // Sopra un appuntamento il clic sinistro apre quello esistente, quindi
@@ -606,8 +622,8 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
         onSlotMenu(startMin, e.clientX, e.clientY);
       }}
       title={grouped
-        ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare tutta la visita, o usa le forbici in alto a sinistra per staccare solo questo`,
-            `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move the whole visit, or use the scissors at top left to detach this one`)
+        ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare solo questo, o trascina la barra scura a sinistra per spostare tutta la visita`,
+            `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move just this one, or drag the dark bar on the left to move the whole visit`)
         : undefined}
       onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
       style={{
@@ -616,7 +632,8 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
         // leggibile sopra gli altri.
         ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
-        boxShadow: dragging ? 'var(--sh-pop)' : '0 1px 3px rgba(17,24,39,0.12)', padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
+        boxShadow: dragging ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : '0 1px 3px rgba(17,24,39,0.12)',
+        zIndex: highlight && !dragging ? 3 : undefined, padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', zIndex: dragging ? 20 : 2, transform: dragging ? 'scale(1.03)' : 'none',
         opacity: appt.status === 'no_show' ? 0.5 : dragging ? 0.92 : 1, transition: dragging ? 'none' : 'box-shadow 150ms',
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,
@@ -628,29 +645,12 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
           {soak * PXM > 20 && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-2)', opacity: 0.7 }}>{t('POSA', 'SOAK')}</span>}
         </div>
       )}
-      {/* Presa per staccare: si trascina QUESTO servizio fuori dalla visita. Il
-          corpo del blocco continua a spostare tutta la visita insieme. Sta sopra
-          la spina, scura e con le forbici, perché si veda che c'è: un'area
-          trasparente non la troverebbe nessuno. */}
-      {grouped && canWrite && !dragging && (
-        <div
-          onPointerDown={(e) => onDetachDown && onDetachDown(e)}
-          title={t('Trascina per staccare questo servizio e spostarlo da solo', 'Drag to detach this service and move it on its own')}
-          style={{
-            position: 'absolute', left: 0, top: 0, width: 17, height: 21, zIndex: 6,
-            background: 'rgba(17,24,39,0.62)', borderRadius: '12px 0 7px 0',
-            cursor: 'grab', touchAction: 'none', display: 'grid', placeItems: 'center',
-          }}
-        >
-          <Icon name="scissors" size={11} color="#fff" stroke={2.2} />
-        </div>
-      )}
       {isFirst && appt.deposit_status === 'paid' && (
         <div title={t('Caparra incassata', 'Deposit collected')} style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 7, background: 'var(--surface)', border: '1.5px solid var(--ok)', display: 'grid', placeItems: 'center', boxShadow: '0 1px 2px rgba(17,24,39,0.12)', zIndex: 3 }}>
           <Icon name="wallet" size={13} color="var(--ok)" stroke={2} />
         </div>
       )}
-      <div style={{ ...textZ, fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, paddingLeft: grouped && canWrite ? 10 : 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>{item.service_name}</div>
+      <div style={{ ...textZ, fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, paddingLeft: grouped ? 14 : 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>{item.service_name}</div>
       <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 1, flexShrink: 0 }}>
         {showStatusDot && <span title={sm.label} style={{ width: 7, height: 7, borderRadius: 99, background: sm.color, flexShrink: 0 }} />}
         <span className="tabnum" style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{dragging ? '–' + timeLabel(startMin + active + soak) : ''}</span>
@@ -747,7 +747,7 @@ export function ApptHoverCard({ hover, t, lang, operators, colorOf, hints = 'day
         <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 2, fontSize: 11.5 }}>
           {hints === 'week'
             ? t('Clic: dettaglio · Trascina: sposta, anche su un altro giorno', 'Click: details · Drag: move, to another day too')
-            : t('Clic: dettaglio · Trascina: sposta · Bordo inferiore: durata', 'Click: details · Drag: move · Bottom edge: duration')}
+            : t('Clic: dettaglio · Trascina: sposta questo servizio · Barra a sinistra: tutta la visita', 'Click: details · Drag: move this service · Left bar: the whole visit')}
         </div>
       </div>
     </div>

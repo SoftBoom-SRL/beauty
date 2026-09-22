@@ -16,7 +16,7 @@ export default function AgendaSection() {
   const {
     t, lang, operators, services, serviceCategories, hasScope,
     openModal, modal, fireToast, opColors, setOpColor, opPalette,
-    setTab, setDeepLink, showRevenue, live, setAgendaPick, settings, session, locationId,
+    setTab, setDeepLink, showRevenue, live, setAgendaPick, setAgendaDate, settings, session, locationId,
   } = useDash();
   const canWrite = hasScope('agenda');
   const noWrite = useCallback(() => fireToast({ msg: t('Il tuo ruolo non ha il permesso “agenda”: puoi solo consultare', 'Your role lacks the “agenda” permission: read only'), icon: 'lock' }), [fireToast, t]);
@@ -40,6 +40,7 @@ export default function AgendaSection() {
     return () => clearInterval(id);
   }, []);
   const isToday = date === todayStr();
+  useEffect(() => { setAgendaDate(date); return () => setAgendaDate(null); }, [date, setAgendaDate]);
 
   /* ---- day data ---- */
   const [dayData, setDayData] = useState(null);   // null = first load → skeleton
@@ -175,12 +176,10 @@ export default function AgendaSection() {
   /* ---- mutations (drag & drop, pauses) ---- */
   const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
   /* Forzatura: lo staff può andare oltre le regole (fuori turno, centro chiuso,
-   * sovrapposizione). Chi lavora qui tutti i giorni SA quando sta incastrando
-   * una cliente: chiedergli conferma ogni volta è una finestra da chiudere, non
-   * una protezione. Quindi si sposta e basta, con force=true, e l'avviso arriva
-   * dopo — con «Annulla» per rimettere tutto com'era. La conferma resta solo
-   * dove l'azione non è un semplice spostamento reversibile. */
-  const [forceAsk, setForceAsk] = useState(null);
+   * sovrapposizione) e non gli viene chiesto niente, mai. Chi lavora qui tutti
+   * i giorni SA quando sta incastrando una cliente: ogni conferma era una
+   * finestra da chiudere, non una protezione. Si scrive e basta, con
+   * force=true, e resta l'avviso normale con «Annulla». */
   // Trascinamento in corso in vista giorno: accende i giorni in alto come
   // bersaglio, altrimenti nessuno immagina di poterci lasciare sopra un blocco.
   const [dragOn, setDragOn] = useState(false);
@@ -207,11 +206,7 @@ export default function AgendaSection() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
         // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
-        await moveAppt(a, startMin, opId, {
-          ...opts,
-          force: true,
-          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
-        });
+        await moveAppt(a, startMin, opId, { ...opts, force: true });
         return;
       }
       if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
@@ -252,11 +247,7 @@ export default function AgendaSection() {
       await fetchDay();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
-        await splitItem(appt, item, startMin, opId, {
-          ...opts,
-          force: true,
-          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
-        });
+        await splitItem(appt, item, startMin, opId, { ...opts, force: true });
         return;
       }
       toastErr(err, t, fireToast);
@@ -295,10 +286,7 @@ export default function AgendaSection() {
       refetchAll();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
-        await moveApptToDate(a, iso, startMin, {
-          force: true,
-          warn: t('forzato: orario occupato o fuori turno', 'forced: busy or off shift'),
-        });
+        await moveApptToDate(a, iso, startMin, { force: true });
         return;
       }
       toastErr(err, t, fireToast);
@@ -306,28 +294,25 @@ export default function AgendaSection() {
     }
   };
 
-  /* rilascio giudicato non valido dal client (DayGrid non chiama il server):
-   * si esegue lo stesso, forzando, e lo si dice nell'avviso. */
+  /* Rilascio fuori dalle regole (fuori turno, sopra un'altra cliente): il
+   * blocco va dove è stato lasciato, punto. L'avviso raccontava ogni volta che
+   * si stava «forzando» qualcosa — al banco lo sanno già, e il toast copriva
+   * l'agenda nel momento di punta. Resta l'avviso normale dello spostamento,
+   * con «Annulla». */
   const onInvalidDrop = (verdict, d, intent) => {
-    const label = t('Non spostato · ', 'Not moved · ') + verdict.label + (verdict.detail ? ' · ' + verdict.detail : '');
-    if (!canWrite || !intent) { fireToast({ msg: label, icon: 'alert' }); return; }
+    if (!canWrite || !intent) {
+      fireToast({ msg: verdict.label + (verdict.detail ? ' · ' + verdict.detail : ''), icon: 'alert' });
+      return;
+    }
     if (intent.kind === 'split') {
       // Senza questo ramo lo stacco su uno slot non valido non faceva NULLA: il
       // blocco tornava al suo posto e non succedeva niente.
-      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, {
-        force: true,
-        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
-      });
+      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, { force: true });
     } else if (intent.kind === 'appt') {
-      moveAppt(intent.appt, intent.newApptStart, intent.opArg, {
-        force: true,
-        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
-      });
+      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force: true });
     } else if (intent.kind === 'pause') {
-      movePause(intent.pause, intent.startMin, intent.opId, {
-        warn: t('forzato: ' + verdict.label.toLowerCase(), 'forced: ' + verdict.label.toLowerCase()),
-      });
-    } else fireToast({ msg: label, icon: 'alert' });
+      movePause(intent.pause, intent.startMin, intent.opId);
+    }
   };
 
   /* «da richiamare»: ripristino di uno slot liberato per caparra non pagata */
@@ -337,13 +322,11 @@ export default function AgendaSection() {
       fireToast({ msg: t(`Appuntamento di ${firstName(a.client?.full_name)} ripristinato`, `${firstName(a.client?.full_name)}'s appointment restored`), icon: 'check' });
       refetchAll();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !force) {
-        setForceAsk({
-          title: t('Lo slot non è più libero', 'The slot is no longer free'),
-          detail: t('Ripristinare comunque l’appuntamento nello stesso orario (sovrapposizione)?', 'Restore the appointment at the same time anyway (overlap)?'),
-          run: () => restoreReleased(a, true),
-        });
-      } else toastErr(err, t, fireToast);
+      // Lo slot nel frattempo si è riempito: si rimette comunque dov'era. Chi
+      // preme «ripristina» ha già deciso, e la barra di conferma era l'ennesima
+      // finestra da chiudere.
+      if (err instanceof ApiError && err.status === 409 && !force) { restoreReleased(a, true); return; }
+      toastErr(err, t, fireToast);
     }
   };
 
@@ -520,9 +503,6 @@ export default function AgendaSection() {
               <button className="dk-btn dk-btn--soft" style={{ height: 40, flexShrink: 0 }} onClick={() => setGroupOpen(true)} title={t('Prenota più clienti insieme', 'Book several clients together')}>
                 <Icon name="clients" size={16} />{t('Gruppo', 'Group')}
               </button>
-              <button className="dk-btn dk-btn--clay" style={{ height: 40, flexShrink: 0 }} onClick={() => openNewAppt({ date })} title={t('Nuova prenotazione (N)', 'New booking (N)')}>
-                <Icon name="plus" size={16} color="#fff" />{t('Prenota', 'Book')}
-              </button>
             </React.Fragment>
           )}
           {/* view selector: Giorno / Settimana / Mese */}
@@ -636,21 +616,6 @@ export default function AgendaSection() {
 
       {hover && <ApptHoverCard hover={hover} t={t} lang={lang} operators={operators} colorOf={colorOf} />}
 
-      {/* conferma di forzatura: barra fissa in basso, indipendente dal punto di rilascio */}
-      {forceAsk && (
-        <div role="alertdialog" aria-label={forceAsk.title} className="dk-card" style={{ position: 'fixed', left: '50%', bottom: 28, transform: 'translateX(-50%)', zIndex: 130, width: 'min(600px, 92vw)', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: 'var(--sh-pop)', border: '1px solid color-mix(in srgb, var(--warn) 40%, transparent)' }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--warn-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={18} color="var(--warn)" /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{forceAsk.title}</div>
-            <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2, lineHeight: 1.4 }}>{forceAsk.detail}</div>
-          </div>
-          <button className="dk-btn dk-btn--ghost" style={{ height: 36 }} onClick={() => setForceAsk(null)}>{t('Annulla', 'Cancel')}</button>
-          <button className="dk-btn dk-btn--clay" style={{ height: 36 }} autoFocus onClick={() => { const run = forceAsk.run; setForceAsk(null); run(); }}>
-            <Icon name="check" size={15} color="#fff" />{t('Sposta comunque', 'Move anyway')}
-          </button>
-        </div>
-      )}
-
       {/* slot menu — new appointment / add break */}
       {slotMenu && (
         <React.Fragment>
@@ -658,12 +623,17 @@ export default function AgendaSection() {
           <div className="dk-card" style={{ position: 'fixed', boxSizing: 'border-box', top: Math.min(slotMenu.y, window.innerHeight - (slotMenu.mode === 'break' ? 300 : 130)), left: Math.min(slotMenu.x, window.innerWidth - 246), zIndex: 96, width: 234, padding: 6, boxShadow: 'var(--sh-pop)', overflow: 'hidden' }}>
             <div style={{ padding: '8px 10px 6px' }}>
               <div className="t-meta">{firstName((operators.find((o) => o.id === slotMenu.opId) || {}).first_name)} · {timeLabel(slotMenu.startMin)}</div>
-              {slotMenu.verdict && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 12.5, fontWeight: 700, color: slotMenu.verdict.ok ? (slotMenu.verdict.code === 'soak' ? 'var(--warn)' : 'var(--ok)') : 'var(--danger)' }}>
-                  <Icon name={slotMenu.verdict.ok ? 'check' : 'x'} size={13} stroke={2.6} color="currentColor" />
-                  <span>{slotMenu.verdict.label}</span>
-                </div>
-              )}
+              {/* Lo slot «non libero» resta prenotabile: qui si avvisa in ambra,
+                  non si vieta in rosso. */}
+              {slotMenu.verdict && (() => {
+                const free = slotMenu.verdict.ok && slotMenu.verdict.code !== 'soak';
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5, fontSize: 12.5, fontWeight: 700, color: free ? 'var(--ok)' : 'var(--warn)' }}>
+                    <Icon name={free ? 'check' : 'alert'} size={13} stroke={2.6} color="currentColor" />
+                    <span>{slotMenu.verdict.label}</span>
+                  </div>
+                );
+              })()}
               {slotMenu.verdict?.detail && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2, fontSize: 12 }}>{slotMenu.verdict.detail}</div>}
             </div>
             {slotMenu.mode === 'break' ? (

@@ -25,7 +25,9 @@ const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
 export default function WeekView({ weekStart, operators, colorOf, nowMin = null, onOpenDay, onNewAppt }) {
-  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId } = useDash();
+  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
+  // come in vista giorno: il blocco aperto nel pannello resta cerchiato
+  const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
   const canWrite = hasScope('agenda');
   const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
@@ -40,6 +42,9 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
   const drag = useRef(null);                // active drag { id, obj, ns, nop, dayIdx, moved, ... }
   const justDragged = useRef(false);        // suppress the click that follows a drop
   const onUpRef = useRef(null);             // ultimo onUp (chiusura fresca) per il fallback su window
+  /* Apre la nuova prenotazione una volta sola: il doppio clic manda due click
+   * più un dblclick, e senza questa guardia il drawer si rimontava tre volte. */
+  const lastOpen = useRef({ at: 0, key: '' });
 
   // reusable refetch (no skeleton flash) — used after a move and passed to the detail modal
   const refetchWeek = useCallback(() => (
@@ -248,20 +253,41 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     } catch (err) { toastErr(err, t, fireToast); }
   }
 
+  const openAt = (dayIso, minutes, opId) => {
+    const key = `${dayIso}|${minutes}|${opId || ''}`;
+    const now = Date.now();
+    if (lastOpen.current.key === key && now - lastOpen.current.at < 700) return;
+    lastOpen.current = { at: now, key };
+    onNewAppt && onNewAppt({ operatorId: opId || undefined, start: isoAtMin(dayIso, minutes), date: dayIso });
+  };
+  const minutesFrom = (clientY, el) => {
+    const rect = el.getBoundingClientRect();
+    const raw = DK_START + (clientY - rect.top) / PXM;
+    return Math.max(DK_START, Math.min(DK_END - step, Math.round(raw / step) * step));
+  };
+
   function onEmptyClick(e, opId, date) {
     if (e.target !== e.currentTarget) return;   // only the empty sub-column background, not a block
     if (justDragged.current || drag.current || !canWrite) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const raw = DK_START + (e.clientY - rect.top) / PXM;
-    const minutes = Math.max(DK_START, Math.min(DK_END - step, Math.round(raw / step) * step));
-    onNewAppt && onNewAppt({ operatorId: opId, start: isoAtMin(date, minutes), date });
+    openAt(date, minutesFrom(e.clientY, e.currentTarget), opId);
+  }
+
+  /* Clic (e doppio clic) sulla colonna del GIORNO, non su una sotto-colonna.
+   * Un giorno senza appuntamenti non ha nessuna sotto-colonna — le si disegna
+   * solo per le operatrici che lavorano quel giorno — quindi non c'era proprio
+   * niente da cliccare: il doppio clic su un giorno libero non apriva nulla, ed
+   * era il gesto più naturale per prenotare. L'operatrice, se il punto cade in
+   * una sotto-colonna, la si ricava dalla x; altrimenti la sceglie il drawer. */
+  function onDayAreaClick(e, dayIso) {
+    if (justDragged.current || drag.current || !canWrite) return;
+    if (e.target.closest('[data-appt]')) return;   // sopra un appuntamento: quello si apre col clic
+    openAt(dayIso, minutesFrom(e.clientY, e.currentTarget), targetFromX(e.clientX).opId);
   }
 
   const dg = drag.current;
   const dragging = !!(dg && dg.moved);
   // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
   const movingObj = dragging ? { ...dg.obj, operator_id: dg.nop, startMin: dg.ns, endMin: dg.ns + (dg.obj.endMin - dg.obj.startMin) } : null;
-  const blockTitle = (a, o) => `${a.client_name} · ${timeLabel(a.startMin)}${o ? ' · ' + o.first_name : ''}${a.forced ? ' · ' + t('Inserito forzando le regole', 'Booked overriding the rules') : ''}`;
 
   /* Il payload della settimana è più compatto di quello del giorno: qui si
    * riporta alla forma che la scheda di anteprima già sa leggere, così la
@@ -360,7 +386,10 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
           // destinazione senza sotto-colonna per l'operatrice (giorno vuoto): il blocco si mostra a tutta larghezza
           const looseTarget = isTargetDay && !d.dayOps.some((o) => o.id === dg.nop);
           return (
-            <div key={i} data-daycol={i} className={looseTarget ? 'dk-col--target' : ''} style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, position: 'relative', borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', display: 'flex' }}>
+            <div key={i} data-daycol={i} className={looseTarget ? 'dk-col--target' : ''}
+              onClick={(e) => { if (e.target === e.currentTarget) onDayAreaClick(e, d.date); }}
+              onDoubleClick={(e) => onDayAreaClick(e, d.date)}
+              style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, position: 'relative', borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
               {/* righe orarie: sotto i blocchi (z 2), sopra lo sfondo; pointer-events none per non disturbare drag e click */}
               {marks.map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * PXM, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
               {isToday && nowMinLive >= DK_START && nowMinLive <= DK_END && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - DK_START) * PXM, height: 2, background: '#F4708A', zIndex: 6, pointerEvents: 'none' }} />}
@@ -377,7 +406,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
                     data-op={o.id}
                     className={isTarget ? 'dk-col--target' : ''}
                     onClick={(e) => onEmptyClick(e, o.id, d.date)}
-                    title={canWrite ? t('Clicca uno spazio libero', 'Click a free slot') : undefined}
                     style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
                   >
                     {isOrigin && <div className="dk-drag-ghost" style={{ top: (dg.orig - DK_START) * PXM + 1, height: (dg.obj.endMin - dg.obj.startMin) * PXM - 2, left: 1, right: 1, borderRadius: 6 }} />}
@@ -385,8 +413,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
                       const lc = a._laneCount || 1, lane = a._lane || 0;
                       return (
                         <WeekBlock
-                          key={a.id} a={a} lc={lc} colorOf={colorOf} canWrite={canWrite} t={t}
-                          title={blockTitle(a, o)}
+                          key={a.id} a={a} lc={lc} colorOf={colorOf} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                           left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
                           onDown={(e) => onBlockDown(e, a, i)}
                           onHover={openHover} onLeave={closeHover}
@@ -428,7 +455,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
  * operatrice se la visita è multi-servizio), sfondo derivato dal colore ma più
  * chiaro, indicatori forced / caparra dovuta / gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, t, title, onDown, onHover, onLeave }) {
+function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight = false, canWrite, t, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * PXM;
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
@@ -441,16 +468,16 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, canWrite, 
   const flags = !!(a.forced || depositDue || gifts);
   return (
     <div
+      data-appt={a.id}
       onPointerDown={onDown}
       onMouseEnter={(e) => onHover && onHover(a, e.currentTarget)}
       onMouseLeave={() => onLeave && onLeave()}
-      title={title}
       style={{
         position: 'absolute', top: (a.startMin - DK_START) * PXM + 1, height: h - 2, left, width, boxSizing: 'border-box',
         borderRadius: 6, overflow: 'hidden', padding: '3px 5px 3px 8px',
         background: `color-mix(in srgb, ${colorOf(a.operator_id)} 40%, #FFFFFF)`,
         border: moving ? '2px solid var(--ink)' : 'none',
-        boxShadow: moving ? 'var(--sh-pop)' : '0 1px 2px rgba(17,24,39,0.1)',
+        boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : '0 1px 2px rgba(17,24,39,0.1)',
         transform: moving ? 'scale(1.03)' : 'none', transition: moving ? 'none' : 'box-shadow 150ms',
         opacity: a.status === 'no_show' ? 0.5 : moving ? 0.92 : 1,
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none',

@@ -235,6 +235,10 @@ export function DashboardProvider({ children }) {
   const [deepLink, setDeepLink] = useState(null);     // e.g. 'log-today' (agenda cash-up → activity log)
   // slot scelto in agenda mentre il drawer "nuova prenotazione" è aperto:
   // { operatorId, start, date, nonce } — il drawer lo applica al volo.
+  /* Giorno che l'agenda sta mostrando: il pulsante «Prenota» vive nella barra in
+   * alto ed è lo stesso da ogni sezione, ma in agenda deve proporre il giorno che
+   * si ha davanti, non oggi. */
+  const [agendaDate, setAgendaDate] = useState(null);
   const [agendaPick, setAgendaPickRaw] = useState(null);
   const pickSeq = useRef(0);
   const setAgendaPick = useCallback((p) => setAgendaPickRaw(p ? { ...p, nonce: ++pickSeq.current } : null), []);
@@ -314,6 +318,7 @@ export function DashboardProvider({ children }) {
     selClient, setSelClient,
     deepLink, setDeepLink,
     agendaPick, setAgendaPick,
+    agendaDate, setAgendaDate,
     showRevenue, setShowRevenue,
     opColors, setOpColor, opPalette: OP_FALLBACK_PALETTE,
   };

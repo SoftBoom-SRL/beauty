@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
+import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
@@ -17,8 +18,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const { t, lang, operators, opColors, services, serviceCategories, settings, session, fireToast, openModal, setTab, setDeepLink, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
   const [appt, setAppt] = useState(appointment);
-  const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel' | 'split'
-  const [splitItem, setSplitItem] = useState(null); // item da staccare (flow 'split')
+  const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel'
   const [reason, setReason] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -246,23 +246,14 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
     );
   }
 
-  /* ---- SPLIT flow: stacca un servizio e lo sposta (anche in un altro giorno) ---- */
-  if (flow === 'split' && splitItem) {
-    return (
-      <SplitFlow appt={appt} item={splitItem} t={t} lang={lang} fireToast={fireToast} operators={operators}
-        onBack={() => { setFlow(null); setSplitItem(null); }} onClose={onClose}
-        onDone={(res) => { setAppt(res.original); setFlow(null); setSplitItem(null); onMutate?.(); }} />
-    );
-  }
-
   /* ---- NO-SHOW flow ---- */
   if (flow === 'noshow') {
     return (
-      <DkModal open onClose={onClose} title={t('Segna no-show', 'Mark no-show')} sub={`${appt.client?.full_name} · ${timeLabel(startMin)}`} width={460}
+      <DkPanel onClose={onClose} title={t('Segna no-show', 'Mark no-show')} sub={`${appt.client?.full_name} · ${timeLabel(startMin)}`}
         foot={
           <React.Fragment>
             <button className="dk-btn dk-btn--ghost" onClick={() => setFlow(null)}>{t('Indietro', 'Back')}</button>
-            <button className="dk-btn" disabled={busy} onClick={() => destroy('no-show')} style={{ background: 'var(--danger)', color: '#fff' }}>
+            <button className="dk-btn dk-btn--danger-solid" disabled={busy} onClick={() => destroy('no-show')}>
               <Icon name="alert" size={16} color="#fff" />{t('Conferma no-show', 'Confirm no-show')}
             </button>
           </React.Fragment>
@@ -272,18 +263,18 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
           <FlowSteps steps={noShowSteps(appt, matchCount, t, lang)} />
         </div>
         <ReasonPicker reasons={noShowReasons} />
-      </DkModal>
+      </DkPanel>
     );
   }
 
   /* ---- CANCEL flow ---- */
   if (flow === 'cancel') {
     return (
-      <DkModal open onClose={onClose} title={t('Cancella appuntamento', 'Cancel appointment')} sub={`${appt.client?.full_name} · ${timeLabel(startMin)}`} width={460}
+      <DkPanel onClose={onClose} title={t('Cancella appuntamento', 'Cancel appointment')} sub={`${appt.client?.full_name} · ${timeLabel(startMin)}`}
         foot={
           <React.Fragment>
             <button className="dk-btn dk-btn--ghost" onClick={() => { setFlow(null); setReason(null); setReasonNote(''); }}>{t('Indietro', 'Back')}</button>
-            <button className="dk-btn" disabled={!reason || busy} onClick={() => destroy('cancel')} style={{ background: 'var(--danger)', color: '#fff', opacity: reason ? 1 : 0.4 }}>
+            <button className="dk-btn dk-btn--danger-solid" disabled={!reason || busy} onClick={() => destroy('cancel')} style={{ opacity: reason ? 1 : 0.4 }}>
               <Icon name="x" size={16} color="#fff" />{t('Conferma cancellazione', 'Confirm cancellation')}
             </button>
           </React.Fragment>
@@ -293,13 +284,57 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
           <FlowSteps steps={cancelSteps(appt, lateCancel, matchCount, t, lang)} />
         </div>
         <ReasonPicker reasons={cancelReasons} />
-      </DkModal>
+      </DkPanel>
     );
   }
 
-  /* ---- DETAIL (default) ---- */
+  /* ---- DETTAGLIO (predefinito) ----
+   * Pannello laterale e non finestra centrata: l'agenda resta visibile di fianco
+   * e il blocco su cui si sta intervenendo è evidenziato, così non si perde mai
+   * di vista il contesto (a schermo stretto il pannello prende tutto). */
   return (
-    <DkModal open onClose={onClose} title={appt.client?.full_name} sub={`${fmtDateIt(dateStr)} · ${timeLabel(startMin)}–${timeLabel(endMin)}`} width={840}>
+    <DkPanel onClose={onClose} title={appt.client?.full_name} sub={`${fmtDateIt(dateStr)} · ${timeLabel(startMin)}–${timeLabel(endMin)}`}
+      foot={<React.Fragment>          {/* Le azioni comuni stanno qui sotto, sempre in vista: chi apre un
+              appuntamento nove volte su dieci deve far entrare la cliente,
+              incassare o spostarlo, e prima bisognava scorrere per trovarle.
+              Una sola azione piena (clay): quella che fa avanzare il lavoro. */}
+          {!terminal && canWrite && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {appt.status === 'confirmed' && (
+                <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, width: '100%' }} onClick={checkIn}>
+                  <Icon name="check" size={18} color="#fff" />{t('Check-in', 'Check in')}
+                </button>
+              )}
+              {appt.status === 'checked_in' && (
+                <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, width: '100%' }} onClick={startAppt}>
+                  <Icon name="play" size={17} color="#fff" />{t('Inizia trattamento', 'Start treatment')}
+                </button>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--soft')} style={{ flex: 1, height: 42 }} onClick={() => openModal('sell', { appointment: appt, onDone: onMutate })}>
+                  <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />{t('Incassa', 'Check out')}
+                </button>
+                <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={() => setFlow('reschedule')}>
+                  <Icon name="calendar" size={16} />{t('Riprogramma', 'Reschedule')}
+                </button>
+              </div>
+            </div>
+          )}
+          {/* Tolgono qualcosa: colore proprio (rosso di contorno), in fondo e
+              più piccole. Prima erano due scritte grigie come il resto. */}
+          {!terminal && canWrite && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
+                onClick={() => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); }}>
+                <Icon name="alert" size={14} color="var(--danger)" />No-show
+              </button>
+              <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
+                onClick={() => { setFlow('cancel'); setReason(null); setReasonNote(''); }}>
+                <Icon name="x" size={14} color="var(--danger)" />{t('Cancella', 'Cancel booking')}
+              </button>
+            </div>
+          )}
+      </React.Fragment>}>
       {/* client meta bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <Avatar initials={initialsOf(appt.client?.full_name)} size={40} />
@@ -311,7 +346,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             {(clientDetail?.categories || []).slice(0, 2).map((c) => (
               <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
             ))}
-            {clientDetail && <span className="t-sm" style={{ color: 'var(--muted)' }}>{clientDetail.visits} {t('visite', 'visits')} · {fmtMoney(clientDetail.total_spent, lang)}</span>}
+            {/* Lo storico si scrive solo se c'è: «visite · €0» era una riga che
+                non diceva niente, e sulla scheda di una cliente nuova sembrava
+                un errore. */}
+            {clientDetail?.visits > 0 && <span className="t-sm" style={{ color: 'var(--muted)' }}>{clientDetail.visits} {t('visite', 'visits')} · {fmtMoney(clientDetail.total_spent, lang)}</span>}
           </div>
           {appt.client?.phone && <a href={'tel:' + appt.client.phone} className="tabnum" style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', textDecoration: 'none' }}>{appt.client.phone}</a>}
         </div>
@@ -319,9 +357,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
         <button className="dk-btn dk-btn--soft" style={{ height: 38, fontSize: 13, padding: '0 14px' }} onClick={openClient}>{t('Apri scheda cliente', 'Open client')}</button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
-        {/* LEFT — who */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Una colonna: il pannello è stretto e le due colonne del vecchio modale
+          restavano sbilanciate, una piena e una mezza vuota. `order` mette per
+          primo quello che si guarda per primo — i servizi — senza spostare il
+          codice. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* chi e quando */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, order: 2 }}>
           {/* operator hero */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16, background: `color-mix(in srgb, ${col} 26%, #FFFFFF)` }}>
             <Avatar initials={o?.initials || initialsOf((appt.items || [])[0]?.operator_name)} size={50} color={col} ring />
@@ -440,8 +482,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
           </div>
         </div>
 
-        {/* RIGHT — what & actions */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 16, borderRadius: 16, border: '1px solid var(--hair)', background: 'color-mix(in srgb, var(--surface-2) 45%, transparent)' }}>
+        {/* che cosa si fa */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, order: 1 }}>
           {/* services — read-only when terminal / no write scope, editable otherwise */}
           {!itemsEditable ? (
             <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
@@ -463,14 +505,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
           ) : (
             <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
               {/* Con più servizi la visita è una sola cosa in agenda: va detto
-                  qui, insieme al modo per dividerla. Senza questa riga l'unico
-                  indizio era un'icona muta accanto al servizio. */}
+                  qui, insieme al modo per muoverne uno solo. */}
               {(appt.items || []).length > 1 && (
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10, padding: '8px 10px', borderRadius: 10, background: 'var(--surface)', border: '1px dashed var(--hair)' }}>
                   <Icon name="calendar" size={14} color="var(--muted)" style={{ flexShrink: 0, marginTop: 1 }} />
                   <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.35 }}>
                     <b>{t(`${(appt.items || []).length} servizi in un'unica visita`, `${(appt.items || []).length} services in one visit`)}</b>{' — '}
-                    {t('trascinandola in agenda si spostano tutti insieme. Per spostarne uno solo, usa «Stacca».', 'dragging it in the agenda moves them together. To move just one, use “Detach”.')}
+                    {t('in agenda trascina un servizio per spostare solo quello, o la barra scura a sinistra per spostarli tutti insieme.', 'in the agenda drag one service to move just that one, or the dark bar on its left to move them all together.')}
                   </div>
                 </div>
               )}
@@ -488,22 +529,17 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           {svcDisplayName(it)}
                           {(appt.gifts || []).some((g) => g.service_id === it.service_id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
                         </span>
-                        {!isNew && (appt.items || []).length > 1 && (
-                          <button className="dk-btn dk-btn--ghost" title={t('Stacca questo servizio e spostalo in un altro orario o giorno', 'Detach this service and move it to another time or day')} onClick={() => { const orig = (appt.items || []).find((x) => x.id === it.id); if (orig) { setSplitItem(orig); setFlow('split'); } }} style={{ height: 28, padding: '0 8px', borderRadius: 8, flexShrink: 0, fontSize: 12, fontWeight: 700, gap: 5 }}>
-                            <Icon name="calendar" size={13} />{t('Stacca', 'Detach')}
-                          </button>
-                        )}
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-                          <NumInput integer min={5} value={it.duration_min} emptyValue=""
-                            onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
-                            aria-label={t('Durata in minuti', 'Duration in minutes')}
-                            style={{ width: 48, border: '1px solid var(--hair)', borderRadius: 8, padding: '4px 6px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
-                          <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('min', 'min')}</span>
-                        </div>
-                        <span className="t-num" style={{ fontSize: 13, fontWeight: 700, flexShrink: 0, minWidth: 46, textAlign: 'right' }}>{fmtEur(Number(it.price), lang)}</span>
+                        <span className="t-num" style={{ fontSize: 13.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(it.price), lang)}</span>
                         <button className="dk-iconbtn" title={t('Rimuovi servizio', 'Remove service')} onClick={() => removeServiceItem(it.key)} style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }}>
                           <Icon name="x" size={14} />
                         </button>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16 }}>
+                        <NumInput integer min={5} value={it.duration_min} emptyValue=""
+                          onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
+                          aria-label={t('Durata in minuti', 'Duration in minutes')}
+                          style={{ width: 52, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
+                        <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('minuti', 'minutes')}</span>
                       </div>
                       {isNew && eligible.length > 0 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16 }}>
@@ -562,59 +598,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             </div>
           )}
 
-          {/* lifecycle actions */}
-          {!terminal && canWrite && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              {appt.status === 'confirmed' && (
-                <button className="dk-btn dk-btn--clay" disabled={busy} style={{ gridColumn: '1 / -1', height: 48 }} onClick={checkIn}>
-                  <Icon name="check" size={18} color="#fff" />{t('Check-in', 'Check in')}
-                </button>
-              )}
-              {appt.status === 'checked_in' && (
-                <button className="dk-btn dk-btn--clay" disabled={busy} style={{ gridColumn: '1 / -1', height: 48 }} onClick={startAppt}>
-                  <Icon name="play" size={17} color="#fff" />{t('Inizia trattamento', 'Start treatment')}
-                </button>
-              )}
-              <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--ghost')} style={{ gridColumn: '1 / -1', height: appt.status === 'in_progress' ? 48 : 44 }} onClick={() => openModal('sell', { appointment: appt, onDone: onMutate })}>
-                <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />{t('Vai al checkout', 'Go to checkout')}
-              </button>
-              <button className="dk-btn dk-btn--soft" style={{ gridColumn: '1 / -1' }} onClick={() => setFlow('reschedule')}>
-                <Icon name="calendar" size={16} />{t('Riprogramma', 'Reschedule')}
-              </button>
-            </div>
-          )}
-          {terminal && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '11px 13px', borderRadius: 12, background: appt.auto_released ? 'var(--warn-tint)' : sm.tint }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <Icon name={appt.auto_released ? 'alert' : sm.icon} size={16} color={appt.auto_released ? 'var(--warn)' : sm.color} />
-                <span style={{ fontWeight: 700, fontSize: 13.5, color: appt.auto_released ? 'var(--warn)' : sm.color }}>{appt.auto_released ? t('Slot liberato: caparra non pagata in tempo', 'Slot freed: deposit not paid in time') : sm.label}</span>
-                {appt.cancel_reason && !appt.auto_released && <span className="t-sm" style={{ color: 'var(--muted)', marginLeft: 'auto' }}>{appt.cancel_reason}</span>}
-              </div>
-              {appt.auto_released && canWrite && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <button className="dk-btn dk-btn--soft" disabled={busy} style={{ height: 32, fontSize: 12.5 }} onClick={() => restoreReleased(false)}><Icon name="refresh" size={14} />{t('Ripristina', 'Restore')}</button>
-                  <button className="dk-btn dk-btn--ghost" disabled={busy} style={{ height: 32, fontSize: 12.5 }} onClick={() => restoreReleased(true)} title={t('Anche se lo slot è stato occupato (sovrapposizione)', 'Even if the slot has been taken (overlap)')}>{t('Ripristina comunque', 'Restore anyway')}</button>
-                  {appt.client?.phone && <a href={'tel:' + appt.client.phone} className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5, textDecoration: 'none' }}><Icon name="phone" size={14} />{t('Chiama', 'Call')}</a>}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* downgraded destructive actions */}
-      {!terminal && canWrite && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, paddingTop: 14, marginTop: 14, borderTop: '1px solid var(--hair)' }}>
-          <button onClick={() => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 8px' }}>
-            <Icon name="alert" size={15} color="var(--muted)" />No-show
-          </button>
-          <span style={{ width: 1, height: 16, background: 'var(--hair)' }} />
-          <button onClick={() => { setFlow('cancel'); setReason(null); setReasonNote(''); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: 'var(--muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '6px 8px' }}>
-            <Icon name="x" size={15} color="var(--muted)" />{t('Cancella appuntamento', 'Cancel appointment')}
-          </button>
-        </div>
-      )}
-    </DkModal>
+    </DkPanel>
   );
 }
 
@@ -662,12 +649,12 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
   const anyRecommended = (slots || []).some((s) => s.recommended) && (slots || []).some((s) => s.recommended === false);
 
   return (
-    <DkModal open onClose={onClose} title={t('Riprogramma', 'Reschedule')} sub={`${appt.client?.full_name} · ${t('attuale', 'currently')} ${fmtDateIt(apptDay, { weekday: false })} ${timeLabel(aStartMin(appt))}`} width={560}
+    <DkPanel onClose={onClose} title={t('Riprogramma', 'Reschedule')} sub={`${appt.client?.full_name} · ${t('attuale', 'currently')} ${fmtDateIt(apptDay, { weekday: false })} ${timeLabel(aStartMin(appt))}`}
       foot={
         <React.Fragment>
           <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
-          <button className={'dk-btn ' + (needForce ? 'dk-btn--soft' : 'dk-btn--clay')} disabled={!selStart || busy} onClick={() => move(false)} style={needForce ? { border: '1px solid var(--warn)' } : undefined}>
-            <Icon name={needForce ? 'alert' : 'calendar'} size={16} color={needForce ? 'var(--warn)' : '#fff'} />{needForce ? t('Sposta comunque', 'Move anyway') : t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
+          <button className="dk-btn dk-btn--clay" disabled={!selStart || busy} onClick={() => move(false)}>
+            <Icon name="calendar" size={16} color="#fff" />{t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
           </button>
         </React.Fragment>
       }>
@@ -716,98 +703,6 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
           <span className="t-sm" style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{t(`Le ${timeLabel(minutesOfDay(selStart))} non sono fra gli orari liberi: l’appuntamento verrà spostato comunque e segnato come forzato.`, `${timeLabel(minutesOfDay(selStart))} is not a free time: the appointment will be moved anyway and marked as forced.`)}</span>
         </div>
       )}
-    </DkModal>
-  );
-}
-
-/* ---- stacca un servizio: nuovo appuntamento della stessa cliente, altro orario/giorno ---- */
-function SplitFlow({ appt, item, t, lang, fireToast, operators, onBack, onClose, onDone }) {
-  const [date, setDate] = useState(toDateStr(appt.start));   // giorno del salone
-  const [slots, setSlots] = useState(null);
-  const [selStart, setSelStart] = useState(null);
-  const [manual, setManual] = useState('');
-  const [needForce, setNeedForce] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const items = [{ service_id: item.service_id, operator_id: item.operator_id }];
-  const op = operators.find((o) => o.id === item.operator_id);
-
-  useEffect(() => {
-    let alive = true;
-    setSlots(null); setSelStart(null); setNeedForce(false);
-    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id } })
-      .then((res) => { if (alive) setSlots(res); })
-      .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
-    return () => { alive = false; };
-  }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const applyManual = () => {
-    if (!manual) return;
-    const minutes = hmToMin(manual);
-    const exact = (slots || []).find((s) => minutesOfDay(s.start) === minutes);
-    setSelStart(exact ? exact.start : isoAtMin(date, minutes));
-    setNeedForce(!exact);
-  };
-
-  async function split() {
-    if (!selStart || busy) return;
-    setBusy(true);
-    try {
-      const res = await api.post(`/api/agenda/appointments/${appt.id}/split`, { item_id: item.id, start: selStart, force: needForce });
-      fireToast({ msg: t(`${item.service_name} spostato: ${fmtDateIt(toDateStr(selStart), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`, `${item.service_name} moved: ${fmtDateIt(toDateStr(selStart), { weekday: false })} ${timeLabel(minutesOfDay(selStart))}`), icon: 'calendar' });
-      onDone(res);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) { setNeedForce(true); fireToast({ msg: t('Orario occupato o fuori turno: puoi forzare con «Sposta comunque»', 'Time busy or off shift: you can override with “Move anyway”'), icon: 'alert' }); }
-      else toastErr(err, t, fireToast);
-    } finally { setBusy(false); }
-  }
-
-  return (
-    <DkModal open onClose={onClose} title={t('Stacca e sposta', 'Detach & move')} sub={`${item.service_name} · ${fmtDur(item.duration_min, lang)} · ${op ? op.first_name : ''}`} width={560}
-      foot={
-        <React.Fragment>
-          <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
-          <button className={'dk-btn ' + (needForce ? 'dk-btn--soft' : 'dk-btn--clay')} disabled={!selStart || busy} onClick={split} style={needForce ? { border: '1px solid var(--warn)' } : undefined}>
-            <Icon name={needForce ? 'alert' : 'calendar'} size={16} color={needForce ? 'var(--warn)' : '#fff'} />{needForce ? t('Sposta comunque', 'Move anyway') : t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
-          </button>
-        </React.Fragment>
-      }>
-      <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12, lineHeight: 1.45 }}>
-        {t('Il servizio diventa un appuntamento a sé della stessa cliente; gli altri servizi restano all’orario attuale. La caparra resta sull’appuntamento originale.', 'The service becomes its own appointment for the same client; the other services stay at the current time. The deposit stays on the original appointment.')}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '11px 14px', borderRadius: 12, border: '1px solid var(--hair)', background: 'var(--surface)' }}>
-        <Icon name="calendar" size={17} color="var(--clay-ink)" />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 1 }}>{t('Nuova data', 'New date')}</div>
-          <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmtDateIt(date)}</div>
-        </div>
-        <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
-      </div>
-      <div className="t-meta" style={{ marginBottom: 9 }}>{t('Orari liberi per', 'Free times for')} {op ? op.first_name : t('l’operatrice', 'the stylist')}</div>
-      {slots === null ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{[...Array(10)].map((_, i) => <div key={i} className="skel" style={{ width: 56, height: 30, borderRadius: 8 }} />)}</div>
-      ) : slots.length ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {slots.map((s) => {
-            const sel = s.start === selStart;
-            return (
-              <button key={s.start} onClick={() => { setSelStart(s.start); setNeedForce(false); }} className="tabnum" style={{ padding: '5px 9px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1.5px solid ' + (sel ? 'var(--ink)' : 'var(--hair)'), background: sel ? 'var(--ink)' : 'var(--surface)', color: sel ? '#fff' : 'var(--ink)', opacity: s.recommended === false && !sel ? 0.55 : 1 }}>
-                {timeLabel(minutesOfDay(s.start))}
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>{t('Nessuno slot libero in questa data', 'No free slot on this date')}</div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, border: '1px dashed var(--line-strong)', marginTop: 14, flexWrap: 'wrap' }}>
-        <Icon name="clock" size={16} color="var(--muted)" />
-        <div style={{ flex: 1, minWidth: 160 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>{t('Orario a mano', 'Type a time')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Fuori turno o sovrapposto: si sposta forzando.', 'Off shift or overlapping: moved with override.')}</div>
-        </div>
-        <input type="time" value={manual} onChange={(e) => setManual(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyManual(); } }} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--mono, monospace)', fontWeight: 700, outline: 'none', width: 110 }} />
-        <button className="dk-btn dk-btn--soft" disabled={!manual} style={{ height: 34, fontSize: 12.5 }} onClick={applyManual}>{t('Usa', 'Use')}</button>
-      </div>
-    </DkModal>
+    </DkPanel>
   );
 }

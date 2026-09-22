@@ -19,7 +19,14 @@
 .dk-salon:hover { background: rgba(255,255,255,0.11); }
 
 /* Main */
-.dk-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; }
+.dk-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; transition: padding-right 220ms var(--ease-emph); }
+/* Pannello laterale aperto (DkPanel): l'area di lavoro si restringe della sua
+   larghezza, così l'agenda resta INTERA di fianco e si continua a vedere il
+   blocco su cui si sta intervenendo. Sotto i 1100 px non c'è spazio per due
+   cose accanto: il pannello copre e basta. */
+@media (min-width: 1100px) {
+  body.dk-with-panel .dk-main { padding-right: var(--dk-panel-w, 560px); }
+}
 .dk-top { height: var(--top-h); flex-shrink: 0; background: rgba(247,243,238,0.86); backdrop-filter: blur(18px); border-bottom: 1px solid var(--hair); display: flex; align-items: center; gap: 18px; padding: 0 30px; z-index: 40; }
 .dk-content { flex: 1; overflow-y: auto; min-height: 0; position: relative; }
 .dk-content::-webkit-scrollbar { width: 10px; }
@@ -45,6 +52,15 @@
 .dk-btn--ghost:hover { background: var(--surface-2); }
 .dk-btn--soft { background: var(--paper-2); color: var(--ink); }
 .dk-btn--soft:hover { background: #e8dfd3; }
+/* Azione che TOGLIE qualcosa (cancella, no-show, elimina): riconoscibile a colpo
+   d'occhio ma mai invitante — contorno rosso su fondo chiaro, non un pulsante
+   pieno che attira il dito nel momento sbagliato. */
+.dk-btn--danger { background: var(--surface); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }
+.dk-btn--danger:hover { background: var(--danger-tint); }
+/* Rosso pieno: SOLO la conferma finale dentro un flusso distruttivo già scelto
+   («conferma cancellazione»), dove è l'azione principale di quella schermata. */
+.dk-btn--danger-solid { background: var(--danger); color: #fff; }
+.dk-btn--danger-solid:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
 .dk-row { transition: background 130ms var(--ease); cursor: pointer; }
 .dk-row:hover { background: var(--surface-2); }
 
@@ -216,23 +232,45 @@
 .dk-slot--on { background: var(--ink); border-color: var(--ink); color: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent); }
 
 /* ============================================================
+   Che cosa vuol dire un colore
+   ------------------------------------------------------------
+   Questo è uno strumento di lavoro: davanti a un pulsante si deve
+   sapere cosa succede premendolo, senza leggerlo due volte. Un
+   colore, un significato, ovunque nell'app.
+
+   - clay pieno (.dk-btn--clay)  l'azione che fa avanzare il lavoro.
+                                 UNA per schermata: check-in, inizia,
+                                 incassa, crea, salva.
+   - soft (.dk-btn--soft)        azione frequente ma non decisiva:
+                                 riprogramma, apri scheda, gruppo.
+   - ghost (.dk-btn--ghost)      terziaria, indietro, annulla la finestra.
+   - danger (.dk-btn--danger)    toglie qualcosa: cancella, no-show.
+   - ambra (--warn)              SOLO avvisi e stati (caparra da versare,
+                                 fuori turno). Mai un pulsante da premere.
+   - salvia (--ok)               SOLO conferme e stati raggiunti
+                                 (incassato, arrivata). Mai un invito.
+   - rosso pieno (--danger-solid) solo la conferma finale di un flusso
+                                 distruttivo già scelto.
+   ============================================================ */
+
+/* ============================================================
    Agenda — feedback drag & drop e indicatore slot
    ============================================================ */
 .dk-dragging, .dk-dragging * { cursor: grabbing !important; user-select: none; }
 .dk-drag-badge { position: fixed; z-index: 96; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 7px 11px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 700; box-shadow: var(--sh-pop); white-space: nowrap; animation: dkPop 120ms var(--ease-emph); }
-.dk-drag-badge--bad { background: var(--danger); }
 .dk-drag-badge--warn { background: var(--warn); }
 .dk-drag-badge small { font-weight: 500; opacity: 0.85; }
 .dk-drag-ghost { position: absolute; left: 4px; right: 4px; border-radius: 12px; border: 1.5px dashed color-mix(in srgb, var(--ink) 35%, transparent); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 6%, transparent) 0 6px, transparent 6px 12px); pointer-events: none; z-index: 1; }
 .dk-col--target { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ink) 40%, transparent); }
-.dk-col--target-bad { box-shadow: inset 0 0 0 2px var(--danger); }
+/* Colonna bersaglio «fuori regola»: ambra, mai rossa — l'incastro si può
+   sempre fare, l'agenda lo segnala e basta. */
+.dk-col--target-warn { box-shadow: inset 0 0 0 2px var(--warn); }
 /* Sopra i blocchi (z 2): l'indicatore compare solo passando su spazio libero
    della colonna — compreso il corridoio a destra di un appuntamento — e lì deve
    essere leggibile per intero, non sbucare per venti pixel da dietro una card. */
 .dk-slot-hint { position: absolute; left: 4px; right: 4px; border-radius: 8px; pointer-events: none; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; border: 1.5px dashed transparent; }
 .dk-slot-hint--ok { background: color-mix(in srgb, var(--ok) 16%, #fff); border-color: var(--ok); color: var(--ok); }
-.dk-slot-hint--bad { background: color-mix(in srgb, var(--danger) 12%, #fff); border-color: var(--danger); color: var(--danger); }
-.dk-slot-hint--warn { background: color-mix(in srgb, var(--warn) 14%, #fff); border-color: var(--warn); color: var(--warn); }
+.dk-slot-hint--warn { background: color-mix(in srgb, var(--warn) 22%, #fff); border-color: var(--warn); color: color-mix(in srgb, var(--warn) 80%, var(--ink)); }
 .dk-closed-label { position: absolute; left: 0; right: 0; text-align: center; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); pointer-events: none; z-index: 1; }
 
 /* pulsante primario "quasi disabilitato": cliccabile per spiegare cosa manca */

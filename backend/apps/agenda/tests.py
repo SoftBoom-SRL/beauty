@@ -486,6 +486,77 @@ class CreateAppointmentTests(AgendaTestBase):
         self.assertEqual(appointment.created_via, "app")
 
 
+class ClientOverlapTests(AgendaTestBase):
+    """Due trattamenti sulla STESSA cliente nella stessa fascia.
+
+    In salone è una seduta sola (la nail art mentre asciuga la manicure), non un
+    conflitto: dallo scrittoio deve passare senza forzature e senza marchiare
+    l'appuntamento come «forzato». Per una cliente diversa resta un conflitto.
+    """
+
+    def test_same_client_can_overlap_from_the_desk(self):
+        mapping = {self.op1.id: [(8 * 60, 20 * 60)]}
+        items = [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
+        with self._windows(mapping):
+            first = create_appointment(
+                self.salon, self.client_obj, items, _aware(self.day, 10), via="dashboard"
+            )
+            second = create_appointment(
+                self.salon,
+                self.client_obj,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10, 30),
+                via="dashboard",
+                client_overlap_ok=True,
+            )
+        self.assertNotEqual(first.id, second.id)
+        self.assertFalse(second.forced)   # non è una forzatura: è la stessa seduta
+
+    def test_another_client_still_collides(self):
+        from apps.clients.models import Client
+
+        other = Client.objects.create(
+            salon=self.salon, first_name="Elena", last_name="Neri", phone="+390000000002"
+        )
+        mapping = {self.op1.id: [(8 * 60, 20 * 60)]}
+        items = [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
+        with self._windows(mapping):
+            create_appointment(
+                self.salon, self.client_obj, items, _aware(self.day, 10), via="dashboard"
+            )
+            with self.assertRaises(HttpError) as caught:
+                create_appointment(
+                    self.salon,
+                    other,
+                    items,
+                    _aware(self.day, 10, 30),
+                    via="dashboard",
+                    client_overlap_ok=True,
+                )
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_move_over_own_other_visit(self):
+        """Spostare una visita sopra un'altra della stessa cliente: passa e non è «forzata»."""
+        mapping = {self.op1.id: [(8 * 60, 20 * 60)]}
+        with self._windows(mapping):
+            morning = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+            evening = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+                _aware(self.day, 15), via="dashboard",
+            )
+            moved = move_appointment(
+                evening, _aware(self.day, 10, 15), client_overlap_ok=True
+            )
+        self.assertEqual(moved.start, _aware(self.day, 10, 15))
+        self.assertFalse(moved.forced)
+        self.assertEqual(morning.start, _aware(self.day, 10))
+
+
 class CancelAppointmentTests(AgendaTestBase):
     def _make(self, start, deposit_status=Appointment.DepositStatus.PAID):
         return Appointment.objects.create(

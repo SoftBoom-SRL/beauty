@@ -27,8 +27,14 @@ const Cons = ({ label, sub, on, onChange }) => (
   </div>
 );
 
-export default function NewClientModal({ client, onClose, onSaved }) {
-  const { t, lang, clientCategories, fireToast, setSelClient, setTab, tab } = useDash();
+/** `afterSave`:
+ *  - 'profile' (predefinito): finito, si apre la scheda in anagrafica;
+ *  - 'book': si torna alla prenotazione con la cliente appena creata già
+ *    scelta. Chi apre «Nuova → Nuovo cliente» sta quasi sempre prendendo un
+ *    appuntamento al telefono: mandarlo in anagrafica gli faceva perdere il
+ *    filo, e l'appuntamento non veniva più creato. */
+export default function NewClientModal({ client, onClose, onSaved, afterSave = 'profile' }) {
+  const { t, lang, clientCategories, fireToast, setSelClient, setTab, tab, openModal } = useDash();
   const isEdit = !!client?.id;
   const [f, setF] = useState(() => ({
     first: client?.first_name || '', last: client?.last_name || '', phone: client?.phone || '',
@@ -71,11 +77,18 @@ export default function NewClientModal({ client, onClose, onSaved }) {
           catch { /* il cliente esiste: la nota non deve far fallire il flusso */ }
         }
         fireToast({ msg: t(`Cliente ${saved.full_name} creato`, `Client ${saved.full_name} created`), icon: 'check' });
-        setSelClient(saved.id);
-        if (tab !== 'clienti') setTab('clienti');
+        if (afterSave !== 'book') {
+          setSelClient(saved.id);
+          if (tab !== 'clienti') setTab('clienti');
+        }
       }
       onSaved?.(saved);
       onClose();
+      // L'apertura va DOPO la chiusura: i due aggiornamenti finiscono nello
+      // stesso giro e l'ultimo vince, altrimenti il drawer si chiuderebbe da solo.
+      if (!isEdit && afterSave === 'book') {
+        openModal('newappt', { prefill: { clientId: saved.id, clientName: saved.full_name } });
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : t('Errore di rete', 'Network error');
       setErr(msg);

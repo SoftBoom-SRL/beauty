@@ -6,7 +6,7 @@
 // servizio, orario: se l'orario richiesto non è disponibile, spiega PERCHÉ e
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO, depositMeta, statusMeta } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { toastErr, fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
@@ -54,7 +54,6 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
    * marcata «forzata»: straordinario o "ci incastriamo" sono decisioni del salone. */
   const [manualTime, setManualTime] = useState('');
   const [forceCreate, setForceCreate] = useState(false);
-  const [conflict, setConflict] = useState(null); // 409 dal server: proposta «crea comunque»
 
   /* ---- servizi ---- */
   const seq = useRef(1);
@@ -121,7 +120,12 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
           if (prev && res.some((s) => s.start === prev)) return prev;
           if (req?.startMin != null) {
             const exact = res.find((s) => minutesOfDay(s.start) === req.startMin);
-            if (exact) return exact.start;
+            if (exact) { setForceCreate(false); return exact.start; }
+            // Fuori turno o sopra un'altra cliente: si prende lo stesso. Prima
+            // restava tutto vuoto e bisognava scovare «Inserisci comunque» per
+            // riscrivere l'ora che si era appena cliccata in agenda.
+            setForceCreate(true);
+            return isoAtMin(date, req.startMin);
           }
           return null;
         });
@@ -152,7 +156,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       detail = t('Abilita il servizio in Staff oppure scegli un’altra operatrice', 'Enable the service in Staff or pick another stylist');
     } else if (reqOp && dayRows) {
       const row = dayRows.find((r) => r.operator.id === reqOp.id);
-      const v = row ? explainSlot(row, req.startMin, totalDur || step, { nowMin: isToday ? nowMin : null, t, rows: dayRows }) : null;
+      const v = row ? explainSlot(row, req.startMin, totalDur || step, { nowMin: isToday ? nowMin : null, sameClientId: client?.id ?? null, t, rows: dayRows }) : null;
       if (v && !v.ok) { label = `${reqOp.first_name}: ${v.label}`; detail = v.detail; }
       else label = t(`${reqOp.first_name} non è libera per tutta la durata (${fmtDur(totalDur, lang)})`, `${reqOp.first_name} isn't free for the whole duration (${fmtDur(totalDur, lang)})`);
     } else if (!reqOp) {
@@ -165,13 +169,12 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       .slice(0, 4)
       .sort((a, b) => minutesOfDay(a.start) - minutesOfDay(b.start));
     return { ok: false, label, detail, alternatives };
-  }, [req, reqOp, items, slots, dayRows, totalDur, isToday, nowMin, lang, step]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [req, reqOp, items, slots, dayRows, totalDur, isToday, nowMin, lang, step, client]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- nota / flessibile / invio ---- */
   const [note, setNote] = useState('');
   const [flexible, setFlexible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [created, setCreated] = useState(null);
   const clientRef = useRef(null), svcRef = useRef(null), timeRef = useRef(null);
 
   const missing = [
@@ -201,7 +204,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     }
     if (saving) return;
     setSaving(true);
-    setConflict(null);
+   
     const forced = forceCreate || force === true;
     try {
       const res = await api.post('/api/agenda/appointments', {
@@ -209,15 +212,30 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
         start: selStart, note, flexible, location_id: locationId, force: forced,
       });
-      setCreated(res);
-      fireToast({ msg: t(`Appuntamento creato per ${firstName(client.full_name)}`, `Appointment created for ${firstName(client.full_name)}`) + (forced ? t(' · forzato', ' · forced') : ''), icon: 'check' });
+      // La prenotazione è fatta: il drawer si chiude e basta. Prima restava una
+      // schermata di riepilogo con «Chiudi», un clic in più su un'azione già
+      // conclusa e visibile in agenda.
+      const link = res?.deposit_status === 'required' ? res.deposit_payment_link : null;
+      fireToast({
+        msg: t(`${timeLabel(minutesOfDay(res.start))} · appuntamento creato per ${firstName(client.full_name)}`, `${timeLabel(minutesOfDay(res.start))} · appointment created for ${firstName(client.full_name)}`)
+          + (res?.deposit_status === 'required' ? t(' · caparra da versare', ' · deposit due') : ''),
+        icon: 'check',
+        // unica cosa che si perdeva chiudendo subito: il link della caparra
+        undo: link ? t('Copia link caparra', 'Copy deposit link') : undefined,
+        undoFn: link ? () => { navigator.clipboard?.writeText(link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); } : undefined,
+      });
       onCreated?.(res);
+      onClose?.();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !forced) {
-        // lo slot non è (più) libero: la scelta è dello staff — cambiare orario o forzare
-        setConflict({ start: selStart });
-        api.get('/api/agenda/availability', { params: { date, location_id: locationId, items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } }).then(setSlots).catch(() => {});
-      } else toastErr(err, t, fireToast);
+        // Lo slot non è (più) libero: chi prenota al banco ha già deciso, quindi
+        // si scrive comunque invece di aprire un riquadro «crea comunque» che
+        // costava un giro in più nel momento peggiore della giornata.
+        setSaving(false);
+        await create(true);
+        return;
+      }
+      toastErr(err, t, fireToast);
     } finally { setSaving(false); }
   }
 
@@ -230,25 +248,9 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     setSelStart(exact ? exact.start : iso);
     setForceCreate(!exact);
     setShowAll(false);
-    setConflict(null);
+   
   };
-  const pickSlot = (start) => { setSelStart(start); setForceCreate(false); setConflict(null); setShowAll(false); };
-  /* motivo per cui l'orario manuale non è regolare (stesse regole del client) */
-  const manualVerdict = useMemo(() => {
-    if (!forceCreate || !selStart || !dayRows) return null;
-    const first = items[0];
-    const opId = first?.operator_id || req?.operatorId || null;
-    const row = opId ? dayRows.find((r) => r.operator.id === opId) : null;
-    if (!row) return { label: t('Nessuna operatrice libera a quest’ora o fuori dagli orari del centro', 'No stylist free at this time or outside salon hours'), detail: '' };
-    return explainSlot(row, minutesOfDay(selStart), totalDur || step, { nowMin: isToday ? nowMin : null, t, rows: dayRows });
-  }, [forceCreate, selStart, dayRows, items, req, totalDur, step, isToday, nowMin]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function resetForm() {
-    setCreated(null); setClient(null); setItems([]); setSelStart(null); setSlots([]);
-    setNote(''); setFlexible(false); setShowAll(true); setReq(null);
-    setManualTime(''); setForceCreate(false); setConflict(null);
-  }
-
+  const pickSlot = (start) => { setSelStart(start); setForceCreate(false); setShowAll(false); };
   const inputCss = { border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13.5, padding: '9px 11px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' };
 
   /* ---- chrome del drawer ---- */
@@ -265,70 +267,6 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       {foot && <div style={{ padding: '12px 22px 14px', borderTop: '1px solid var(--hair)', background: 'var(--surface-2)' }}>{foot}</div>}
     </div>
   );
-
-  /* ---- esito ---- */
-  if (created) {
-    const dm = depositMeta(created.deposit_status, t);
-    const sm = statusMeta(created.status, t);
-    return shell({
-      title: t('Prenotazione creata', 'Booking created'),
-      sub: created.client?.full_name,
-      foot: (
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-          <button className="dk-btn dk-btn--ghost" onClick={resetForm}><Icon name="plus" size={16} />{t('Un’altra prenotazione', 'Another booking')}</button>
-          <button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>
-        </div>
-      ),
-      children: (
-        <React.Fragment>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 14, background: 'var(--ok-tint)', marginBottom: 14 }}>
-            <div style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--ok)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="check" size={19} color="#fff" stroke={2.6} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>{timeLabel(minutesOfDay(created.start))}–{timeLabel(minutesOfDay(created.end))} · {dateLabel}</div>
-              <div className="t-sm" style={{ color: 'var(--muted)' }}>{(created.items || []).map((i) => `${i.service_name} (${firstName(i.operator_name)})`).join(' + ')}</div>
-            </div>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: sm.color, background: sm.tint, padding: '3px 9px', borderRadius: 99, flexShrink: 0 }}>{sm.label}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 12, background: 'var(--surface-2)', marginBottom: 10 }}>
-            <span style={{ fontWeight: 700 }}>{t('Totale', 'Total')}</span>
-            <span className="t-num" style={{ fontSize: 17, fontWeight: 700 }}>{fmtMoney(created.total_price, lang)}</span>
-          </div>
-          {created.forced && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 12, background: 'var(--warn-tint)', marginBottom: 10 }}>
-              <Icon name="alert" size={16} color="var(--warn)" />
-              <span className="t-sm" style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{t('Inserito forzando le regole (fuori turno o sovrapposizione): resta evidenziato in agenda.', 'Inserted overriding the rules (off shift or overlap): it stays highlighted in the agenda.')}</span>
-            </div>
-          )}
-          {dm ? (
-            <div style={{ padding: '11px 14px', borderRadius: 12, background: created.deposit_status === 'paid' ? 'var(--ok-tint)' : 'var(--warn-tint)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Icon name="wallet" size={17} color={dm.color} />
-                <span style={{ flex: 1, fontWeight: 700, fontSize: 13.5, color: dm.color }}>{dm.label}</span>
-                <span className="t-num" style={{ fontWeight: 700 }}>{fmtEur(Number(created.deposit_amount), lang)}</span>
-              </div>
-              {created.deposit_status === 'required' && (
-                <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.45 }}>
-                  {created.deposit_payment_link
-                    ? t('Link di pagamento inviato alla cliente.', 'Payment link sent to the client.')
-                    : t('Nessun link di pagamento: i pagamenti online non sono configurati (Impostazioni → Pagamenti). La caparra si incassa in salone.', 'No payment link: online payments are not configured (Settings → Payments). The deposit is collected in the salon.')}
-                  {created.deposit_due_at && (
-                    <span> {t('Da pagare entro le', 'Due by')} <b className="tabnum">{new Date(created.deposit_due_at).toLocaleTimeString(lang === 'en' ? 'en-GB' : 'it-IT', { hour: '2-digit', minute: '2-digit' })}</b>{t(', poi lo slot si libera e la cliente resta fra i «da richiamare».', ', then the slot is freed and the client stays in the “to call back” list.')}</span>
-                  )}
-                  {created.deposit_payment_link && (
-                    <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12, marginTop: 8 }} onClick={() => { navigator.clipboard?.writeText(created.deposit_payment_link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); }}>
-                      <Icon name="copy" size={13} />{t('Copia link di pagamento', 'Copy payment link')}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '2px 4px' }}>{t('Nessuna caparra richiesta', 'No deposit required')}</div>
-          )}
-        </React.Fragment>
-      ),
-    });
-  }
 
   /* ---- sola lettura ---- */
   if (!canWrite) {
@@ -379,7 +317,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
         <button className="dk-btn dk-btn--clay" aria-disabled={!ready} onClick={create} style={{ flex: 1 }} title={missing.length ? t('Manca: ', 'Missing: ') + missing.map((m) => m.label).join(', ') : ''}>
           <Icon name="plus" size={17} color="#fff" />
-          {saving ? t('Creazione…', 'Creating…') : missing.length ? t('Manca ', 'Missing ') + missing.map((m) => m.label).join(' · ') : (forceCreate ? t('Crea forzando', 'Create overriding') : t('Crea prenotazione', 'Create booking')) + ' · ' + fmtMoney(totalPrice, lang)}
+          {saving ? t('Creazione…', 'Creating…') : missing.length ? t('Manca ', 'Missing ') + missing.map((m) => m.label).join(' · ') : t('Crea prenotazione', 'Create booking') + ' · ' + fmtMoney(totalPrice, lang)}
         </button>
       </div>
     </React.Fragment>
@@ -511,12 +449,15 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
                   <button type="button" onClick={() => setShowAll((v) => !v)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{showAll ? t('Nascondi altri', 'Hide others') : t('Altri orari', 'Other times')}</button>
                 </div>
               ) : (
-                <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--danger-tint)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)', marginBottom: 10 }}>
+                /* Ambra e non rosso: l'orario chiesto si può prendere lo stesso
+                   (il pulsante «Inserisci comunque» è qui sotto), quindi questo
+                   pannello avvisa, non nega. */
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--warn-tint)', border: '1px solid color-mix(in srgb, var(--warn) 40%, transparent)', marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--danger)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="x" size={16} color="#fff" stroke={2.6} /></div>
+                    <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--warn)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={16} color="#fff" stroke={2.6} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}><span className="tabnum">{timeLabel(req.startMin)}</span> · {t('non disponibile', 'not available')}</div>
-                      <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>{reqStatus.label}</div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}><span className="tabnum">{timeLabel(req.startMin)}</span> · {t('non libero, si prenota lo stesso', 'not free, booking anyway')}</div>
+                      <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600 }}>{reqStatus.label}</div>
                       {reqStatus.detail && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{reqStatus.detail}</div>}
                     </div>
                   </div>
@@ -526,16 +467,6 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{reqStatus.alternatives.map((s) => <SlotChip key={s.start} s={s} />)}</div>
                     </div>
                   )}
-                  {/* L'orario chiesto resta una scelta possibile: è quello che si
-                      voleva. Prima il pannello elencava tutto TRANNE quello —
-                      alternative, altra operatrice, tutti gli orari — e per
-                      incastrare una cliente sopra un'altra bisognava scoprire da
-                      soli il campo «Orario a mano» più in basso e riscrivere la
-                      stessa ora. */}
-                  <button type="button" className="dk-btn dk-btn--soft" style={{ height: 34, fontSize: 12.5, marginTop: 10 }}
-                    onClick={() => { setSelStart(isoAtMin(date, req.startMin)); setForceCreate(true); setShowAll(false); setConflict(null); }}>
-                    <Icon name="plus" size={14} />{t(`Inserisci comunque alle ${timeLabel(req.startMin)}`, `Insert anyway at ${timeLabel(req.startMin)}`)}
-                  </button>
                   <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
                     {reqOp && <button type="button" onClick={() => { setReq((r) => ({ ...r, operatorId: null })); setItems((l) => l.map((it) => ({ ...it, operator_id: null }))); }} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{t('Chiunque sia libera a quest’ora', 'Anyone free at this time')}</button>}
                     <button type="button" onClick={() => setShowAll(true)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{t('Tutti gli orari del giorno', 'All times today')}</button>
@@ -544,28 +475,6 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
               )
             )}
 
-            {conflict && (
-              <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--danger-tint)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)', marginBottom: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <Icon name="alert" size={16} color="var(--danger)" />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{t(`Le ${timeLabel(minutesOfDay(conflict.start))} non sono più libere`, `${timeLabel(minutesOfDay(conflict.start))} is no longer free`)}</div>
-                    <div className="t-sm" style={{ color: 'var(--ink-2)' }}>{t('Qualcuno ha appena occupato lo slot, oppure è fuori turno. Puoi scegliere un altro orario o inserire comunque.', 'Someone just took the slot, or it is off shift. Pick another time or insert anyway.')}</div>
-                  </div>
-                  <button type="button" className="dk-btn dk-btn--soft" style={{ height: 32, fontSize: 12.5 }} onClick={() => { setForceCreate(true); create(true); }}>{t('Crea comunque', 'Create anyway')}</button>
-                </div>
-              </div>
-            )}
-            {forceCreate && selStart && !conflict && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--warn-tint)', border: '1px solid color-mix(in srgb, var(--warn) 40%, transparent)', marginBottom: 10 }}>
-                <Icon name="alert" size={16} color="var(--warn)" style={{ marginTop: 1, flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13.5 }}><span className="tabnum">{timeLabel(minutesOfDay(selStart))}</span> · {t('fuori dalle regole', 'outside the rules')}{manualVerdict?.label ? ' · ' + manualVerdict.label : ''}</div>
-                  <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2 }}>{t('Verrà inserito comunque (straordinario o incastro) e resterà evidenziato come forzato.', 'It will be inserted anyway (overtime or squeeze-in) and stay highlighted as forced.')}</div>
-                </div>
-                <button type="button" onClick={() => { setSelStart(null); setForceCreate(false); setShowAll(true); }} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', flexShrink: 0 }}>{t('Scegli un orario libero', 'Pick a free time')}</button>
-              </div>
-            )}
             {slots === null ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{[...Array(10)].map((_, i) => <div key={i} className="skel" style={{ width: 58, height: 32, borderRadius: 9 }} />)}</div>
             ) : (showAll || (!reqStatus && !selStart)) && slots.length ? (
@@ -617,7 +526,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
             <Icon name="clock" size={16} color="var(--muted)" style={{ flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 170 }}>
               <div style={{ fontWeight: 700, fontSize: 13 }}>{t('Orario a mano', 'Type a time')}</div>
-              <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Anche fuori turno o sopra un’altra prenotazione: resta segnato come forzato.', 'Even off shift or over another booking: it stays marked as forced.')}</div>
+              <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Anche fuori turno o sopra un’altra prenotazione.', 'Even off shift or over another booking.')}</div>
             </div>
             <input type="time" value={manualTime} step={step * 60} onChange={(e) => setManualTime(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyManualTime(); } }} aria-label={t('Orario manuale', 'Manual time')} style={{ ...inputCss, width: 112, padding: '7px 9px', fontFamily: 'var(--mono, monospace)', fontWeight: 700 }} />
             <button type="button" className="dk-btn dk-btn--soft" style={{ height: 36, fontSize: 12.5 }} disabled={!manualTime} onClick={applyManualTime}>{t('Usa', 'Use')}</button>

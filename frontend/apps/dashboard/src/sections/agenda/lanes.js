@@ -61,17 +61,17 @@ export function laneLayout(placed) {
   }));
 }
 
-/** Striscia sempre libera sul lato destro di ogni colonna.
+/** Corridoio libero sul lato destro della colonna.
  *
- *  Un appuntamento disegnato da bordo a bordo non lascia un pixel su cui
- *  passare il mouse: per aggiungerne un altro alla stessa ora non c'era dove
- *  cliccare. Questo corridoio resta scoperto, mostra l'indicatore dell'orario
- *  al passaggio e apre il menu dello slot al clic.
+ *  Valeva 22 px, per lasciare dove cliccare accanto a un appuntamento. Ma i
+ *  blocchi restavano schiacciati a sinistra con una fascia vuota sempre
+ *  presente, e la colonna sembrava mal disegnata. Ora i blocchi riempiono la
+ *  colonna: per prenotare sopra un appuntamento c'è il tasto destro sul blocco,
+ *  che apre il menu dello slot a quell'ora.
  */
-export const COL_GUTTER = 22;
+export const COL_GUTTER = 0;
 
-/** left/width di una corsia dentro la colonna (4 px di margine, 3 px fra corsie,
- *  più il corridoio libero a destra). */
+/** left/width di una corsia dentro la colonna (4 px di margine, 3 px fra corsie). */
 export function laneCss(lane = 0, laneCount = 1, fixedWidth = null) {
   const right = 4 + COL_GUTTER;
   if (laneCount <= 1) {

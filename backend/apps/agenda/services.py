@@ -93,7 +93,12 @@ def _is_free(windows, busy, start: int, end: int, allow_soak: bool = False) -> b
     return not _overlaps(blocking, start, end)
 
 
-def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) -> dict:
+def _busy_map(
+    salon,
+    day: dt.date,
+    exclude_appointment_id: int | None = None,
+    ignore_client_id: int | None = None,
+) -> dict:
     """Intervalli occupati per operatrice: {op_id: [(start_min, end_min, hard), ...]}.
 
     Due livelli per ogni AppointmentService concatenato da `start`:
@@ -101,6 +106,12 @@ def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) ->
     - POSA    (fine attivo .. +soak_min), se soak_min>0 -> hard=False (soft)
     Le pause manuali sono sempre hard. Considera solo gli appuntamenti attivi
     (status non cancelled/no_show).
+
+    `ignore_client_id`: gli appuntamenti di QUELLA cliente non occupano niente.
+    Serve ai gesti dello staff, dove due trattamenti sulla stessa persona nella
+    stessa seduta (nail art mentre asciuga la manicure) sono una cosa normale e
+    non un conflitto da forzare. Non si passa mai dall'app cliente: là due
+    prenotazioni sovrapposte sarebbero un errore, non una scelta.
 
     Si legge anche il giorno PRECEDENTE: un appuntamento serale lungo (o con
     posa) può finire dopo mezzanotte, e la coda occupa l'operatrice in questo
@@ -119,6 +130,8 @@ def _busy_map(salon, day: dt.date, exclude_appointment_id: int | None = None) ->
     )
     if exclude_appointment_id:
         appointments = appointments.exclude(id=exclude_appointment_id)
+    if ignore_client_id:
+        appointments = appointments.exclude(client_id=ignore_client_id)
     for appointment in appointments:
         offset = _minutes_local(appointment.start)
         if timezone.localtime(appointment.start).date() != day:
@@ -501,6 +514,7 @@ def resolve_items(
     exclude_appointment_id: int | None = None,
     location=None,
     force: bool = False,
+    ignore_client_id: int | None = None,
 ) -> list[tuple]:
     """Risolve e valida la sequenza richiesta a partire da `start`.
 
@@ -527,7 +541,12 @@ def resolve_items(
     day = local.date()
     cursor = local.hour * 60 + local.minute
 
-    busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
+    busy = _busy_map(
+        salon,
+        day,
+        exclude_appointment_id=exclude_appointment_id,
+        ignore_client_id=ignore_client_id,
+    )
     operators = list(_operators_qs(salon, location))
     operator_by_id = {op.id: op for op in operators}
     windows_cache: dict[int, list] = {}
@@ -707,6 +726,7 @@ def _validate_segments(
     segments: list[tuple],
     *,
     exclude_appointment_id: int | None = None,
+    ignore_client_id: int | None = None,
 ) -> None:
     """Valida una sequenza già assegnata: segments = [(active_min, soak_min, operator)].
 
@@ -725,7 +745,12 @@ def _validate_segments(
     local = timezone.localtime(start)
     day = local.date()
     cursor = local.hour * 60 + local.minute
-    busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
+    busy = _busy_map(
+        salon,
+        day,
+        exclude_appointment_id=exclude_appointment_id,
+        ignore_client_id=ignore_client_id,
+    )
     windows_cache: dict[int, list] = {}
     for active_min, soak_min, operator in segments:
         end = cursor + active_min
@@ -844,17 +869,24 @@ def create_appointment(
     location=None,
     allow_past: bool = True,
     force: bool = False,
+    client_overlap_ok: bool = False,
 ) -> Appointment:
     """Crea l'appuntamento rivalidando che lo slot sia libero (altrimenti 409).
 
     allow_past=False (app cliente): un orario già trascorso è rifiutato con 400.
     Lo staff può invece registrare a posteriori un appuntamento già avvenuto.
     force=True (solo staff): ignora turni, orari del centro e sovrapposizioni.
+    `client_overlap_ok=True` (gesti dello staff in agenda): due trattamenti
+    sulla stessa cliente possono stare nella stessa fascia — è una seduta sola,
+    non un conflitto — e l'appuntamento NON viene marcato come forzato.
     """
     if not allow_past and start < timezone.now():
         raise HttpError(400, "Non è possibile prenotare un orario già passato")
     lock_salon(salon)
-    resolved = resolve_items(salon, items, start, location=location, force=force)
+    resolved = resolve_items(
+        salon, items, start, location=location, force=force,
+        ignore_client_id=client.id if client_overlap_ok else None,
+    )
 
     total_price = sum((service.price for service, _ in resolved), start=Decimal("0"))
     deposit = compute_deposit(salon, client, total_price)
@@ -1008,6 +1040,7 @@ def move_appointment(
     actor=None,
     force: bool = False,
     allow_past: bool = True,
+    client_overlap_ok: bool = False,
 ) -> Appointment:
     """Sposta l'appuntamento (items con lo stesso delta, essendo sequenziali da start).
 
@@ -1017,6 +1050,9 @@ def move_appointment(
     force=True (solo staff): salta la rivalidazione di turno e sovrapposizioni.
     allow_past=False (app cliente): come in creazione, un orario già trascorso è
     rifiutato. Lo staff può invece sistemare a posteriori un orario sbagliato.
+    `client_overlap_ok=True` (gesti dello staff in agenda): due trattamenti
+    sulla stessa cliente possono stare nella stessa fascia — è una seduta sola,
+    non un conflitto — e l'appuntamento NON viene marcato come forzato.
     """
     if not allow_past and new_start < timezone.now():
         raise HttpError(400, "Non è possibile spostare l'appuntamento a un orario già passato")
@@ -1046,6 +1082,7 @@ def move_appointment(
                 for item, op in zip(items, target_operators)
             ],
             exclude_appointment_id=appointment.id,
+            ignore_client_id=appointment.client_id if client_overlap_ok else None,
         )
     else:
         appointment.forced = True
@@ -1096,6 +1133,7 @@ def split_appointment(
     operator=None,
     actor=None,
     force: bool = False,
+    client_overlap_ok: bool = False,
 ) -> tuple[Appointment, Appointment]:
     """Stacca UN servizio da un appuntamento multi-servizio e lo sposta altrove
     (anche in un altro giorno), come appuntamento a sé della stessa cliente.
@@ -1103,6 +1141,9 @@ def split_appointment(
     Il servizio staccato mantiene durata, posa e prezzo dello snapshot; gli altri
     restano concatenati dall'orario originale. La caparra resta sull'appuntamento
     di partenza. Con force=True si salta la verifica di disponibilità.
+    `client_overlap_ok=True` (gesti dello staff in agenda): due trattamenti
+    sulla stessa cliente possono stare nella stessa fascia — è una seduta sola,
+    non un conflitto — e l'appuntamento NON viene marcato come forzato.
     Ritorna (originale aggiornato, nuovo appuntamento).
     """
     _lock_and_reload(appointment)
@@ -1158,11 +1199,14 @@ def split_appointment(
     )
 
     if not force:
-        # il servizio staccato non deve finire sopra nulla (nemmeno sopra i
-        # servizi rimasti nella visita di partenza)
+        # il servizio staccato non deve finire sopra nulla — ma i servizi della
+        # STESSA cliente (compresi quelli rimasti nella visita di partenza) non
+        # contano come ostacolo quando lo staff sta spostando a mano.
+        ignore_client = appointment.client_id if client_overlap_ok else None
         _validate_segments(
             appointment.salon, new_start, [(duration_min, soak_min, target)],
             exclude_appointment_id=created.id,
+            ignore_client_id=ignore_client,
         )
         # togliendo il primo servizio la catena residua scala indietro: va
         # rivalidata, altrimenti si sovrappone a chi occupava quell'orario
@@ -1171,6 +1215,7 @@ def split_appointment(
             appointment.start,
             [(it.duration_min, it.soak_min, it.operator) for it in remaining],
             exclude_appointment_id=appointment.id,
+            ignore_client_id=ignore_client,
         )
 
     client_name = appointment.client.full_name

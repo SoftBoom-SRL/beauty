@@ -546,6 +546,7 @@ def create_appointment(request, data: AppointmentCreateIn):
         note=data.note,
         location=_get_location(ctx, data.location_id),
         force=data.force,
+        client_overlap_ok=True,
     )
     _maybe_deposit_link(appointment)
     return _appointment_out(appointment)
@@ -563,7 +564,8 @@ def move_appointment(request, appointment_id: int, data: MoveIn):
 
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
     appointment = services.move_appointment(
-        appointment, data.start, operator=operator, actor=ctx.user, force=data.force
+        appointment, data.start, operator=operator, actor=ctx.user, force=data.force,
+        client_overlap_ok=True,
     )
     return _appointment_out(appointment)
 
@@ -580,7 +582,8 @@ def split_appointment(request, appointment_id: int, data: SplitIn):
 
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
     original, created = services.split_appointment(
-        appointment, data.item_id, data.start, operator=operator, actor=ctx.user, force=data.force
+        appointment, data.item_id, data.start, operator=operator, actor=ctx.user, force=data.force,
+        client_overlap_ok=True,
     )
     return {"original": _appointment_out(original), "created": _appointment_out(created)}
 
