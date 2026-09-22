@@ -22,7 +22,9 @@ export const OPERATORS = [
 
 export const SERVICES = [
   { id: 10, name_it: 'Manicure gel', name_en: 'Gel manicure', duration_min: 60, soak_min: 0, price: '35.00', category_id: 100, active: true, operators: SVC_OPS[10] },
-  { id: 11, name_it: 'Nail art', name_en: 'Nail art', duration_min: 30, soak_min: 0, price: '15.00', category_id: 100, active: true, operators: SVC_OPS[11] },
+  // 20 minuti: la durata che NON cade sulle fasce da 15 — serve a provare
+  // l'aggancio al vicino durante il trascinamento
+  { id: 11, name_it: 'Nail art', name_en: 'Nail art', duration_min: 20, soak_min: 0, price: '15.00', category_id: 100, active: true, operators: SVC_OPS[11] },
   { id: 12, name_it: 'Colore', name_en: 'Colour', duration_min: 45, soak_min: 30, price: '60.00', category_id: 101, active: true, operators: SVC_OPS[12] },
   { id: 13, name_it: 'Piega', name_en: 'Blow-dry', duration_min: 30, soak_min: 0, price: '25.00', category_id: 101, active: true, operators: SVC_OPS[13] },
 ];
@@ -51,12 +53,12 @@ const SEED = (day) => [
     items: [item(9001, SERVICES[2], 1, 0), item(9002, SERVICES[3], 1, 1)],
   },
   {
-    id: 502, start: at(day, 11, 30), end: at(day, 12, 30), operator_id: 3, status: 'confirmed',
+    id: 502, start: at(day, 11, 30), end: at(day, 11, 50), operator_id: 3, status: 'confirmed',
     client: { id: 91, full_name: 'Lucia Bianchi', phone: '+39 347 555 8899' },
     client_name: 'Lucia Bianchi', client_phone: '+39 347 555 8899',
-    total_duration_min: 60, duration_min: 60, total_price: '35.00', note: '',
+    total_duration_min: 20, duration_min: 20, total_price: '15.00', note: '',
     deposit_status: 'required', deposit_amount: '10.00', forced: false, gifts: [],
-    items: [item(9003, SERVICES[0], 3, 0)],
+    items: [item(9003, SERVICES[1], 3, 0)],   // Nail art: 20 minuti, 11:30–11:50
   },
   {
     id: 503, start: at(day, 14, 0), end: at(day, 15, 0), operator_id: 2, status: 'checked_in',

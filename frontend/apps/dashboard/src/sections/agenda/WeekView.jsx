@@ -165,14 +165,39 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
   }
 
+  /* Aggancio al vicino, come in vista giorno: con trattamenti che non cadono
+   * sulle fasce (venti minuti, venticinque) lo scatto alla griglia lasciava
+   * sempre un ritaglio invendibile fra un appuntamento e l'altro. */
+  const snapTol = Math.min(8, Math.max(4, Math.floor(step / 2) - 1));
+  function bestSnap(rawMin, day, opId, d) {
+    if (!day) return null;
+    const span = Math.max(0, d.obj.endMin - d.obj.startMin);
+    let best = null;
+    const consider = (min, label) => {
+      const dist = Math.abs(min - rawMin);
+      if (dist > snapTol || (best && dist >= best.dist)) return;
+      best = { min, dist, label };
+    };
+    for (const a of day.list) {
+      if (a.id === d.id || a.operator_id !== opId) continue;
+      consider(a.endMin, a.client_name);                 // ci si attacca sotto
+      consider(a.startMin - span, a.client_name);        // ci si attacca sopra
+    }
+    return best;
+  }
+
   function onMove(e) {
     const d = drag.current;
     if (!d || !canWrite) return;
     d.cx = e.clientX; d.cy = e.clientY;
     const dy = e.clientY - d.startY, dx = e.clientX - d.startX;
-    let ns = Math.round((d.orig + dy / PXM) / step) * step;
-    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
     const { dayIdx, opId } = targetFromX(e.clientX);
+    const rawMin = d.orig + dy / PXM;
+    let ns = Math.round(rawMin / step) * step;
+    const snap = bestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d);
+    d.snap = snap && snap.min !== ns ? snap : null;
+    if (snap) ns = snap.min;
+    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
     d.ns = ns;
     d.dayIdx = dayIdx == null ? d.origDayIdx : dayIdx;
     d.hoverOp = opId;
@@ -445,6 +470,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
             {day && <span>{t(DOW_IT[dg.dayIdx], DOW_EN[dg.dayIdx])} {parseISO(day.date).getDate()}</span>}
             {op && <span>· {op.first_name}</span>}
             <span className="tabnum">· {timeLabel(movingObj.startMin)}–{timeLabel(movingObj.endMin)}</span>
+            {dg.snap && <small>· {t(`attaccato a ${dg.snap.label}`, `snapped to ${dg.snap.label}`)}</small>}
           </div>
         );
       })()}

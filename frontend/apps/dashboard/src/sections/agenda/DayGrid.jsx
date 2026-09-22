@@ -169,6 +169,73 @@ export default function DayGrid({
     });
   }
 
+  /* ---- Aggancio ai vicini --------------------------------------------------
+   * Le fasce dell'agenda sono di 15 minuti, i trattamenti no: un servizio da 20
+   * finisce alle 09:20 e il blocco trascinato sotto si fermava alle 09:15 o alle
+   * 09:30, lasciando ogni volta un buco che nessuno può vendere. Qui, oltre alla
+   * griglia, si guardano i BORDI di quello che c'è nella colonna: la fine di ciò
+   * che sta sopra (ci si attacca di testa), l'inizio di ciò che sta sotto (ci si
+   * attacca di coda), la fine della fase attiva di un colore in posa — dove
+   * l'operatrice è libera davvero — e gli estremi del turno. Se uno di questi è
+   * più vicino della tolleranza, vince sulla griglia: il blocco si incastra.
+   */
+  // Tolleranza un filo sotto la metà della fascia: abbastanza da "chiamare" il
+  // blocco, non tanto da rubare le posizioni normali della griglia.
+  const snapTol = Math.min(8, Math.max(4, Math.floor(step / 2) - 1));  // minuti
+  function anchorsFor(opId, d) {
+    const out = [];
+    const skip = (b) => (d.kind !== 'item' ? false : d.detach ? b.item.id === d.itemId : b.apptId === d.apptId);
+    for (const b of allBlocks) {
+      if (b.opId !== opId || skip(b)) continue;
+      out.push({ min: b.startMin + b.dur, side: 'after', label: b.item.service_name });
+      if (b.soakMin > 0) out.push({ min: b.startMin + b.activeMin, side: 'after', label: t(`posa di ${b.item.service_name}`, `${b.item.service_name} soak`) });
+      out.push({ min: b.startMin, side: 'before', label: b.item.service_name });
+    }
+    for (const p of allPauses) {
+      if (p.operator_id !== opId || (d.kind === 'pause' && p.id === d.id)) continue;
+      const ps = aStartMin(p);
+      out.push({ min: ps + (p.duration_min || 0), side: 'after', label: t('pausa', 'break') });
+      out.push({ min: ps, side: 'before', label: t('pausa', 'break') });
+    }
+    (rowOf(opId)?.windows || []).forEach(([a, b]) => {
+      out.push({ min: hmToMin(a), side: 'after', label: t('inizio turno', 'shift start') });
+      out.push({ min: hmToMin(b), side: 'before', label: t('fine turno', 'shift end') });
+    });
+    return out;
+  }
+  /** Quanto occupa, in colonna, quello che si sta trascinando. */
+  function dragSpan(d) {
+    if (d.kind === 'pause') return d.obj.duration_min || 0;
+    if (d.detach) return d.block.dur || 0;
+    const group = itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp);
+    if (!group.length) return d.block.dur || 0;
+    return Math.max(...group.map((b) => b.startMin + b.dur)) - Math.min(...group.map((b) => b.startMin));
+  }
+  /** Fine agganciata più vicina a `rawEnd` (allungando un blocco): ci si ferma
+   *  dove comincia quello che sta sotto, senza lasciare un ritaglio invendibile. */
+  function bestSnapEnd(rawEnd, d, opId) {
+    let best = null;
+    for (const a of anchorsFor(opId, d)) {
+      if (a.side !== 'before') continue;
+      const dist = Math.abs(a.min - rawEnd);
+      if (dist > snapTol || (best && dist >= best.dist)) continue;
+      best = { min: a.min, dist, label: a.label, side: 'before' };
+    }
+    return best;
+  }
+  /** Inizio agganciato più vicino a `rawMin`, o null se nessuno è abbastanza vicino. */
+  function bestSnap(rawMin, d, opId) {
+    const span = dragSpan(d);
+    let best = null;
+    for (const a of anchorsFor(opId, d)) {
+      const start = a.side === 'after' ? a.min : a.min - span;
+      const dist = Math.abs(start - rawMin);
+      if (dist > snapTol) continue;
+      if (!best || dist < best.dist) best = { min: start, dist, label: a.label, side: a.side };
+    }
+    return best;
+  }
+
   /* esito del rilascio, calcolato sui dati in pagina (stesse regole del backend) */
   function validateDrag(d) {
     if (!d || d.mode === 'resize') return null;
@@ -220,16 +287,30 @@ export default function DayGrid({
     d.cx = e.clientX; d.cy = e.clientY;
     if (d.mode === 'resize') {
       const dy = e.clientY - d.startY;
-      let nd = Math.round((d.origDur + dy / PXM) / 5) * 5;
+      const rawDur = d.origDur + dy / PXM;
+      let nd = Math.round(rawDur / 5) * 5;
+      // anche allungando ci si attacca al vicino: la fine del blocco (posa
+      // compresa) va a combaciare con l'inizio di quello che c'è sotto
+      const soak = d.block?.soakMin || 0;
+      const snap = bestSnapEnd(d.orig + rawDur + soak, d, d.block.opId);
+      d.snap = null;
+      if (snap) {
+        const snapped = snap.min - d.orig - soak;
+        if (snapped >= 5) { nd = snapped; d.snap = snap; }
+      }
       nd = Math.max(5, Math.min(DK_END - d.orig, nd));
       d.ndur = nd; d.moved = d.moved || Math.abs(dy) > 2;
       force((x) => x + 1);
       return;
     }
     const dy = e.clientY - d.startY;
-    let ns = Math.round((d.orig + dy / PXM) / step) * step;
-    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
+    const rawMin = d.orig + dy / PXM;
     const nop = colFromX(e.clientX) ?? d.origOp;
+    let ns = Math.round(rawMin / step) * step;
+    const snap = bestSnap(rawMin, d, nop);
+    d.snap = snap && snap.min !== ns ? snap : null;
+    if (snap) ns = snap.min;
+    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
     d.ns = ns; d.nop = nop;
     const wasMoved = d.moved;
     d.moved = d.moved || Math.abs(dy) > 4 || nop !== d.origOp;
@@ -600,6 +681,9 @@ export default function DayGrid({
             <Icon name={tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
             <span className="tabnum">{timeLabel(start)}–{timeLabel(start + durMin)}</span>
             <span>· {opName(d.nop)}</span>
+            {/* l'aggancio si deve vedere mentre si trascina, altrimenti sembra
+                che la griglia abbia "sbagliato" lo scatto */}
+            {d.snap && <small>· {t(`attaccato a ${d.snap.label}`, `snapped to ${d.snap.label}`)}</small>}
             {v && <small>· {v.label}</small>}
             {moving && d.nop !== d.origOp && <small>· {t(`${group} serviz${group === 1 ? 'io' : 'i'} di ${opName(d.origOp)}`, `${group} service${group === 1 ? '' : 's'} from ${opName(d.origOp)}`)}</small>}
           </div>
