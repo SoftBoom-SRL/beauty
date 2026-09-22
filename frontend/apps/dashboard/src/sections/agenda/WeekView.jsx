@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, nowMin = null, onOpenDay, onNewAppt }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -114,19 +114,22 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     if (pendingSrc && pending.dayIdx === i) {
       list.push({ ...pendingSrc, operator_id: pending.nop, startMin: pending.ns, endMin: pending.ns + (pendingSrc.duration_min || 0) });
     }
-    // Anche le operatrici non più in elenco (disattivate) che hanno ancora
-    // appuntamenti: altrimenti il giorno li CONTA ma non li mostra da nessuna
-    // parte, e la cliente si presenta a un orario che in agenda non esiste.
-    const dayOps = operators.filter((o) => list.some((a) => a.operator_id === o.id));
-    const known = new Set(dayOps.map((o) => o.id));
+    // TUTTE le operatrici, ogni giorno, anche dove non hanno niente in agenda:
+    // le sotto-colonne sono il posto dove si clicca per prenotare, e disegnarle
+    // solo dove c'era già lavoro lasciava i giorni liberi — quelli su cui si
+    // prenota di più — senza nulla da cliccare e senza modo di dire a chi.
+    // In coda restano le operatrici non più in elenco (disattivate) che hanno
+    // ancora appuntamenti: altrimenti il giorno li CONTA ma non li mostra da
+    // nessuna parte, e la cliente si presenta a un orario che in agenda non esiste.
+    const known = new Set(operators.map((o) => o.id));
     const orphans = [];
     list.forEach((a) => {
-      if (a.operator_id && !known.has(a.operator_id) && !operators.some((o) => o.id === a.operator_id)) {
+      if (a.operator_id && !known.has(a.operator_id)) {
         known.add(a.operator_id);
         orphans.push({ id: a.operator_id, first_name: t('Non più in team', 'No longer on the team'), last_name: '', inactive: true });
       }
     });
-    return { ...d, list, dayOps: dayOps.concat(orphans) };
+    return { ...d, list, dayOps: operators.concat(orphans) };
   });
   const dayWidth = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
 
@@ -157,7 +160,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
       orig: appt.startMin, origOp: appt.operator_id, origDayIdx: dayIdx,
       ns: appt.startMin, nop: appt.operator_id, dayIdx, hoverOp: null, moved: false,
-      multi: (appt.items || []).length > 1,   // visita multi-servizio: operatrice fissa, come in DayGrid
     };
     // il contenitore riceve TUTTI gli eventi fino al rilascio, anche fuori dall'area o sopra altri blocchi
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
@@ -174,7 +176,9 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     d.ns = ns;
     d.dayIdx = dayIdx == null ? d.origDayIdx : dayIdx;
     d.hoverOp = opId;
-    d.nop = d.multi || opId == null ? d.origOp : opId;
+    // anche una visita con più servizi passa di mano: cambiano operatrice i
+    // servizi della colonna di partenza (from_operator_id), come in vista giorno
+    d.nop = opId == null ? d.origOp : opId;
     const wasMoved = d.moved;
     d.moved = d.moved || Math.abs(dy) > 4 || Math.abs(dx) > 4;
     if (d.moved && !wasMoved) { document.body.classList.add('dk-dragging'); setHover(null); }
@@ -215,7 +219,7 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
     const day = dayData[d.dayIdx];
     if (!day) return;
     const body = { start: isoAtMin(day.date, d.ns) };
-    if (d.nop != null && d.nop !== d.origOp) body.operator_id = d.nop;
+    if (d.nop != null && d.nop !== d.origOp) { body.operator_id = d.nop; body.from_operator_id = d.origOp; }
     if (opts.force) body.force = true;
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
@@ -413,18 +417,18 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
                       const lc = a._laneCount || 1, lane = a._lane || 0;
                       return (
                         <WeekBlock
-                          key={a.id} a={a} lc={lc} colorOf={colorOf} canWrite={canWrite} t={t} highlight={a.id === openApptId}
+                          key={a.id} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                           left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
                           onDown={(e) => onBlockDown(e, a, i)}
                           onHover={openHover} onLeave={closeHover}
                         />
                       );
                     })}
-                    {isTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
+                    {isTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
                   </div>
                 );
               })}
-              {looseTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
+              {looseTarget && <WeekBlock a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
             </div>
           );
         })}
@@ -441,7 +445,6 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
             {day && <span>{t(DOW_IT[dg.dayIdx], DOW_EN[dg.dayIdx])} {parseISO(day.date).getDate()}</span>}
             {op && <span>· {op.first_name}</span>}
             <span className="tabnum">· {timeLabel(movingObj.startMin)}–{timeLabel(movingObj.endMin)}</span>
-            {dg.multi && dg.hoverOp != null && dg.hoverOp !== dg.origOp && <small>· {t('visita multi-servizio: operatrice fissa', 'multi-service visit: stylist fixed')}</small>}
           </div>
         );
       })()}
@@ -451,11 +454,14 @@ export default function WeekView({ weekStart, operators, colorOf, nowMin = null,
 }
 
 /* ---------- blocco appuntamento della settimana ----------
- * Striscia verticale a sinistra nel colore dell'operatrice (segmentata per
- * operatrice se la visita è multi-servizio), sfondo derivato dal colore ma più
- * chiaro, indicatori forced / caparra dovuta / gift come nella vista giorno.
+ * Sfondo nel colore del SERVIZIO (categoria), come in vista giorno: il colore
+ * deve dire che lavoro è anche qui — con la tinta dell'operatrice tutti i
+ * blocchi di una colonna erano identici e il tipo di trattamento si scopriva
+ * solo passandoci sopra. Chi lo fa resta scritto nella striscia verticale a
+ * sinistra e nell'intestazione della sotto-colonna. Indicatori forced / caparra
+ * dovuta / gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight = false, canWrite, t, onDown, onHover, onLeave }) {
+function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, canWrite, t, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * PXM;
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
@@ -466,6 +472,13 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight 
   const gifts = (a.gifts || []).length;   // il payload settimana può non avere `gifts`
   const depositDue = a.deposit_status === 'required';
   const flags = !!(a.forced || depositDue || gifts);
+  const svcTint = (it) => {
+    const col = it && itemColor
+      ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
+      : null;
+    return `color-mix(in srgb, ${col || colorOf(a.operator_id)} 45%, #FFFFFF)`;
+  };
+  const textZ = { position: 'relative', zIndex: 2 };
   return (
     <div
       data-appt={a.id}
@@ -475,7 +488,7 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight 
       style={{
         position: 'absolute', top: (a.startMin - DK_START) * PXM + 1, height: h - 2, left, width, boxSizing: 'border-box',
         borderRadius: 6, overflow: 'hidden', padding: '3px 5px 3px 8px',
-        background: `color-mix(in srgb, ${colorOf(a.operator_id)} 40%, #FFFFFF)`,
+        background: svcTint((a.items || [])[0]),
         border: moving ? '2px solid var(--ink)' : 'none',
         boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : '0 1px 2px rgba(17,24,39,0.1)',
         transform: moving ? 'scale(1.03)' : 'none', transition: moving ? 'none' : 'box-shadow 150ms',
@@ -485,33 +498,35 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight 
       }}
     >
       {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi. */}
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
+      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none', zIndex: 2 }}>
         {segs.map((s, k) => (
           <div key={k} style={{ flex: s.w, background: colorOf(s.opId), borderTop: multi && k > 0 ? '1.5px solid var(--surface)' : 'none' }} />
         ))}
       </div>
       {/* La visita divisa nei suoi servizi: in settimana è UN riquadro, e due o
-          tre servizi dentro restavano un blocco unico. Una riga a ogni stacco,
-          in proporzione alla durata. I nomi no: la sottocolonna è larga quaranta
-          pixel e finirebbero sopra quello della cliente — stanno nell'anteprima
-          al passaggio del mouse. */}
-      {bands.slice(1).map((b, k) => (
+          tre servizi dentro restavano un blocco unico. Ogni fascia prende il
+          colore della sua categoria, in proporzione alla durata: si legge a
+          colpo d'occhio che una visita è colore + piega. I nomi no: la
+          sottocolonna è larga quaranta pixel e finirebbero sopra quello della
+          cliente — stanno nell'anteprima al passaggio del mouse. */}
+      {bands.map((b, k) => (
         <div key={k} style={{
-          position: 'absolute', left: multi ? 4 : 3, right: 0, top: `${b.fromPct}%`,
-          borderTop: '1px dashed rgba(17,24,39,0.45)', pointerEvents: 'none', zIndex: 1,
+          position: 'absolute', left: multi ? 4 : 3, right: 0, top: `${b.fromPct}%`, height: `${b.toPct - b.fromPct}%`,
+          background: svcTint(b), borderTop: k > 0 ? '1px dashed rgba(17,24,39,0.35)' : 'none',
+          pointerEvents: 'none', zIndex: 1,
         }} />
       ))}
       {flags && (
-        <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 1 }}>
+        <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 3 }}>
           {a.forced && <span title={t('Inserito forzando le regole', 'Booked overriding the rules')} style={{ display: 'grid' }}><Icon name="alert" size={10} color="var(--warn)" stroke={2.6} /></span>}
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
           {gifts > 0 && <span title={t('Gift card', 'Gift card')} style={{ display: 'grid' }}><Icon name="gift" size={10} color="var(--ink-2)" stroke={2.2} /></span>}
         </div>
       )}
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
-      {last && h > 30 && lc < 3 && <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
+      <div style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
+      {last && h > 30 && lc < 3 && <div style={{ ...textZ, fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
       {h > 44 && (
-        <div className="tabnum" style={{ fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div className="tabnum" style={{ ...textZ, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
           <span>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</span>
           {multi && (
             <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
@@ -524,7 +539,7 @@ function WeekBlock({ a, lc = 1, left, width, colorOf, moving = false, highlight 
       {/* blocco troppo basso per la riga dell'orario: il conteggio va comunque detto */}
       {multi && h <= 44 && (
         <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
-          style={{ position: 'absolute', bottom: 2, right: 3, fontWeight: 800, fontSize: 9, color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px', pointerEvents: 'none' }}>
+          style={{ position: 'absolute', bottom: 2, right: 3, zIndex: 3, fontWeight: 800, fontSize: 9, color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px', pointerEvents: 'none' }}>
           ×{nServices}
         </span>
       )}

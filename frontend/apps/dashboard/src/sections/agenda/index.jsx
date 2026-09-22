@@ -186,12 +186,23 @@ export default function AgendaSection() {
 
   const moveAppt = async (a, startMin, opId, opts = {}) => {
     const fromMin = aMin(a.start);
-    const fromOp = a.operator_id;
-    if (startMin === undefined || (startMin === fromMin && opId === fromOp)) return;
-    setPending({ kind: 'appt', id: a.id, startMin, opId });
+    /* Colonna di PARTENZA del gesto: non è per forza quella dell'operatrice
+     * principale. Una visita può avere i servizi divisi fra due colleghe, e
+     * trascinando il gruppo di una devono cambiare mano i SUOI servizi — è
+     * quello che dice `from_operator_id` al server. */
+    const fromOp = opts.fromOp ?? a.operator_id;
+    const reassigned = opId != null && opId !== fromOp;
+    if (startMin === undefined || (startMin === fromMin && !reassigned)) return;
+    setPending({ kind: 'appt', id: a.id, startMin, opId, fromOp });
     try {
-      await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(date, startMin), operator_id: opId, force: !!opts.force });
-      const reassigned = opId !== fromOp;
+      await api.post(`/api/agenda/appointments/${a.id}/move`, {
+        start: isoAtMin(date, startMin),
+        // L'operatrice si manda solo se cambia davvero: mandarla sempre faceva
+        // rivalidare l'idoneità anche a un semplice spostamento d'orario, e un
+        // servizio tolto dall'elenco della collega bloccava il trascinamento.
+        ...(reassigned ? { operator_id: opId, from_operator_id: fromOp } : {}),
+        force: !!opts.force,
+      });
       const opName = firstName((operators.find((o) => o.id === opId) || {}).first_name || '');
       const where = reassigned
         ? t(`Spostato a ${opName}, ${timeLabel(startMin)}`, `Moved to ${opName}, ${timeLabel(startMin)}`)
@@ -200,7 +211,9 @@ export default function AgendaSection() {
         msg: where + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
         undo: opts.undo === false ? undefined : t('Annulla', 'Undo'),
-        undoFn: opts.undo === false ? undefined : () => moveAppt(a, fromMin, fromOp, { undo: false }),
+        // Per tornare indietro i servizi rifanno la strada al contrario: quelli
+        // ora nella colonna d'arrivo (`opId`) tornano a quella di partenza.
+        undoFn: opts.undo === false ? undefined : () => moveAppt(a, fromMin, fromOp, { undo: false, fromOp: reassigned ? opId : fromOp }),
       });
       await fetchDay();
     } catch (err) {
@@ -300,7 +313,9 @@ export default function AgendaSection() {
    * l'agenda nel momento di punta. Resta l'avviso normale dello spostamento,
    * con «Annulla». */
   const onInvalidDrop = (verdict, d, intent) => {
-    if (!canWrite || !intent) {
+    // L'idoneità non si forza: il server rifiuta comunque (400) e forzare qui
+    // voleva dire una chiamata sicuramente persa. Si dice perché, e basta.
+    if (verdict.code === 'skill' || !canWrite || !intent) {
       fireToast({ msg: verdict.label + (verdict.detail ? ' · ' + verdict.detail : ''), icon: 'alert' });
       return;
     }
@@ -309,7 +324,7 @@ export default function AgendaSection() {
       // blocco tornava al suo posto e non succedeva niente.
       splitItem(intent.appt, intent.item, intent.startMin, intent.opId, { force: true });
     } else if (intent.kind === 'appt') {
-      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force: true });
+      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force: true, fromOp: intent.fromOp });
     } else if (intent.kind === 'pause') {
       movePause(intent.pause, intent.startMin, intent.opId);
     }
@@ -369,19 +384,26 @@ export default function AgendaSection() {
 
   // #1 — resize del bordo inferiore di un blocco = nuova durata di QUEL servizio.
   // Invia l'intera lista item (il backend onora duration_min per item e non ritocca la caparra).
-  const resizeItem = async (appt, item, newDur) => {
+  const resizeItem = async (appt, item, newDur, opts = {}) => {
     if (!newDur || newDur === item.duration_min) return;
     try {
       const items = (appt.items || []).map((it) => ({
         id: it.id, service_id: it.service_id, operator_id: it.operator_id,
         duration_min: it.id === item.id ? newDur : it.duration_min,
       }));
-      await api.put(`/api/agenda/appointments/${appt.id}`, { items });
+      await api.put(`/api/agenda/appointments/${appt.id}`, { items, force: !!opts.force });
       fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
       await fetchDay();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Orario non più disponibile', 'Time no longer available'), icon: 'alert' });
-      else toastErr(err, t, fireToast);
+      // Allungare un trattamento mentre accanto c'è un'altra cliente (o oltre
+      // l'orario di chiusura) rispondeva «Orario non più disponibile» e il
+      // blocco tornava com'era: al banco si allunga e basta, come per gli
+      // spostamenti. Si riprova forzando, una volta sola.
+      if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
+        await resizeItem(appt, item, newDur, { force: true });
+        return;
+      }
+      toastErr(err, t, fireToast);
       await fetchDay().catch(() => {});
     }
   };
@@ -516,7 +538,7 @@ export default function AgendaSection() {
 
         {/* body — day / week / month */}
         {calView === 'week' ? (
-          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} />
+          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} />
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (

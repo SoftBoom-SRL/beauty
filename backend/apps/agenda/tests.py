@@ -837,6 +837,66 @@ class AppointmentEditApiTests(AgendaTestBase):
         appointment.refresh_from_db()
         self.assertEqual(appointment.items.get().duration_min, 30)
 
+    # (f) allungare accanto a un incastro già forzato: senza force è 409, con
+    # force si scrive (è il trascinamento del bordo inferiore in vista giorno).
+    def test_put_force_lets_a_treatment_grow_over_a_neighbour(self):
+        appointment = self._make(
+            [{"service_id": self.svc30.id, "operator_id": self.op1.id}], start_hour=10
+        )
+        # incastro forzato sulla stessa operatrice alle 10:30
+        with self._windows(self.mapping):
+            neighbour = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10, 30), via="dashboard", force=True,
+            )
+        item = appointment.items.get()
+        payload = {
+            "items": [{
+                "id": item.id, "service_id": self.svc30.id,
+                "operator_id": self.op1.id, "duration_min": 90,   # 10:00-11:30, sopra il vicino
+            }],
+        }
+        with self._windows(self.mapping):
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
+            self.assertEqual(resp.status_code, 409, resp.content)
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", {**payload, "force": True})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.items.get().duration_min, 90)
+        self.assertTrue(appointment.forced)
+        # il vicino non è stato toccato
+        neighbour.refresh_from_db()
+        self.assertEqual(neighbour.items.get().duration_min, 30)
+
+    def test_put_force_never_bypasses_eligibility(self):
+        appointment = self._make(
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
+        )
+        item = appointment.items.get()
+        payload = {
+            "items": [{"id": item.id, "service_id": self.svc60.id, "operator_id": self.op2.id}],
+            "force": True,
+        }
+        with self._windows({**self.mapping, self.op2.id: [(8 * 60, 20 * 60)]}):
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
+        self.assertEqual(resp.status_code, 400, resp.content)
+
+    def test_put_without_force_never_marks_the_visit_as_forced(self):
+        appointment = self._make(
+            [{"service_id": self.svc30.id, "operator_id": self.op1.id}]
+        )
+        item = appointment.items.get()
+        payload = {
+            "items": [{"id": item.id, "service_id": self.svc30.id, "operator_id": self.op1.id, "duration_min": 45}],
+            "force": True,   # chiesto, ma non serve: lo slot è libero
+        }
+        with self._windows(self.mapping):
+            resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        appointment.refresh_from_db()
+        self.assertFalse(appointment.forced)
+
     def test_put_empty_items_400(self):
         appointment = self._make(
             [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
@@ -1151,6 +1211,89 @@ class ForcedBookingTests(AgendaTestBase):
         appointment.refresh_from_db()
         self.assertEqual(timezone.localtime(appointment.start).hour, 19)
         self.assertTrue(appointment.forced)
+
+
+class MoveWholeVisitToAnotherOperatorTests(AgendaTestBase):
+    """Trascinando in un'altra colonna il gruppo di servizi, cambiano mano quelli
+    della colonna di partenza — non sempre quelli dell'operatrice principale."""
+
+    def setUp(self):
+        self.op2.services.add(self.svc60, self.svc30)
+        self.wide = {self.op1.id: [(8 * 60, 20 * 60)], self.op2.id: [(8 * 60, 20 * 60)]}
+
+    def _visit(self, op_first, op_second, hour=10):
+        with self._windows(self.wide):
+            return create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": op_first.id},
+                    {"service_id": self.svc30.id, "operator_id": op_second.id},
+                ],
+                _aware(self.day, hour), via="dashboard",
+            )
+
+    def test_all_the_services_follow_the_main_operator(self):
+        visit = self._visit(self.op1, self.op1)
+        with self._windows(self.wide):
+            moved = move_appointment(visit, _aware(self.day, 12), operator=self.op2)
+        self.assertEqual(moved.operator_id, self.op2.id)
+        self.assertEqual(
+            {item.operator_id for item in moved.items.all()}, {self.op2.id}
+        )
+        self.assertEqual(timezone.localtime(moved.start).hour, 12)
+
+    def test_only_the_dragged_column_changes_hands(self):
+        """La visita è divisa fra due operatrici: si sposta il gruppo di op2."""
+        visit = self._visit(self.op1, self.op2)
+        with self._windows(self.wide):
+            moved = move_appointment(
+                visit, visit.start, operator=self.op1, from_operator=self.op2
+            )
+        by_service = {item.service_id: item.operator_id for item in moved.items.all()}
+        self.assertEqual(by_service[self.svc60.id], self.op1.id)
+        self.assertEqual(by_service[self.svc30.id], self.op1.id)
+        # la principale non cambia: a cambiare colonna sono stati i servizi della collega
+        self.assertEqual(moved.operator_id, self.op1.id)
+
+    def test_the_main_operator_stays_when_a_colleague_column_moves(self):
+        visit = self._visit(self.op2, self.op1)   # principale = op2
+        self.assertEqual(visit.operator_id, self.op2.id)
+        with self._windows(self.wide):
+            moved = move_appointment(
+                visit, visit.start, operator=self.op2, from_operator=self.op1
+            )
+        self.assertEqual(moved.operator_id, self.op2.id)
+        self.assertEqual({item.operator_id for item in moved.items.all()}, {self.op2.id})
+
+    def test_an_unqualified_operator_is_refused(self):
+        self.op2.services.clear()
+        visit = self._visit(self.op1, self.op1)
+        with self._windows(self.wide), self.assertRaises(HttpError) as caught:
+            move_appointment(visit, visit.start, operator=self.op2)
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_the_endpoint_passes_the_source_column(self):
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="spina@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        visit = self._visit(self.op1, self.op2)
+        with self._windows(self.wide):
+            res = self.client.post(
+                f"/api/agenda/appointments/{visit.id}/move",
+                data=json.dumps({
+                    "start": visit.start.isoformat(),
+                    "operator_id": self.op1.id,
+                    "from_operator_id": self.op2.id,
+                }),
+                content_type="application/json", **auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(
+            {item["operator_id"] for item in res.json()["items"]}, {self.op1.id}
+        )
 
 
 class SplitAppointmentTests(AgendaTestBase):

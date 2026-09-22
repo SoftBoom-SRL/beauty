@@ -70,6 +70,12 @@ class ClientAppointmentCreateIn(Schema):
 class MoveIn(Schema):
     start: dt.datetime
     operator_id: Optional[int] = None
+    # Colonna di PARTENZA del gesto in agenda: i servizi di quell'operatrice
+    # passano a `operator_id`. Senza, la riassegnazione toccava sempre e solo i
+    # servizi dell'operatrice principale, e trascinare in un'altra colonna il
+    # gruppo di servizi affidato a una collega spostava quelli sbagliati.
+    # Assente = l'operatrice principale, come prima.
+    from_operator_id: Optional[int] = None
     force: bool = False
 
     _start_aware = aware_start_validator()
@@ -111,6 +117,11 @@ class DepositCashedIn(Schema):
 class AppointmentUpdateIn(Schema):
     items: Optional[list[ItemEditIn]] = Field(None, max_length=MAX_ITEMS_PER_REQUEST)
     note: Optional[str] = None
+    # Come in creazione e spostamento: lo staff può andare oltre le regole.
+    # Allungare un trattamento mentre accanto c'è un incastro forzato è un gesto
+    # normale al banco, e senza questo l'agenda rispondeva «Orario non più
+    # disponibile» a un trascinamento che deve solo scrivere.
+    force: bool = False
 
 
 class PauseIn(Schema):

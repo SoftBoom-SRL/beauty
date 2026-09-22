@@ -26,7 +26,7 @@ export default function DayGrid({
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
-  const { t, lang, settings, modal } = useDash();
+  const { t, lang, settings, modal, operators: allOperators } = useDash();
   /* Appuntamento aperto nel pannello di dettaglio: il suo blocco resta cerchiato
    * in agenda, così si vede sempre su cosa si sta intervenendo. */
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -51,6 +51,24 @@ export default function DayGrid({
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
   const rowOf = (opId) => dataRows.find((r) => r.operator.id === opId);
   const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
+  /* Abilitazione al servizio (Staff → servizi dell'operatrice). Il server
+   * rifiuta con un 400 la riassegnazione a chi non è abilitata: meglio dirlo
+   * durante il trascinamento, quando si può ancora scegliere un'altra colonna.
+   * Se l'elenco manca (payload vecchio) non si blocca niente. */
+  const canDo = (opId, serviceId) => {
+    const op = (allOperators || []).find((x) => x.id === opId);
+    if (!op || !Array.isArray(op.service_ids) || !op.service_ids.length) return true;
+    return op.service_ids.includes(serviceId);
+  };
+  const skillVerdict = (opId, blocks) => {
+    const bad = blocks.find((b) => !canDo(opId, b.item.service_id));
+    if (!bad) return null;
+    return {
+      ok: false, code: 'skill',
+      label: t(`${opName(opId)} non fa ${bad.item.service_name}`, `${opName(opId)} does not do ${bad.item.service_name}`),
+      detail: t('Abilita il servizio in Staff', 'Enable the service in Staff'),
+    };
+  };
 
   // tutti i blocchi-servizio del giorno (ogni appuntamento compare una volta nel payload)
   const allBlocks = dataRows.flatMap((r) => r.appointments).flatMap((a) => itemBlocks(a));
@@ -159,21 +177,32 @@ export default function DayGrid({
       return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows: dataRows }) : null;
     }
     const appt = d.block.appt;
-    const multi = (appt.items || []).length > 1;
     if (d.detach) {
       // Si muove solo questo servizio: validarlo come se si spostasse tutta la
       // visita dava un verdetto su uno spostamento che non sta avvenendo, e lo
       // stacco veniva rifiutato senza che succedesse niente.
       const row = rowOf(d.nop);
       if (!row) return null;
+      if (d.nop !== d.origOp) {
+        const skill = skillVerdict(d.nop, [d.block]);
+        if (skill) return skill;
+      }
       return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
         excludeItemId: d.itemId, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows,
       });
     }
     const delta = d.ns - d.orig;
+    // Cambio di colonna: cambiano mano i servizi della colonna di PARTENZA —
+    // quelli che la spina tiene insieme lì — mentre quelli affidati ad altre
+    // colleghe restano dove sono (stessa regola del server, from_operator_id).
+    const moved = itemBlocks(appt).filter((b) => b.opId === d.origOp);
+    if (d.nop !== d.origOp) {
+      const skill = skillVerdict(d.nop, moved);
+      if (skill) return skill;
+    }
     let warn = null;
     for (const b of itemBlocks(appt)) {
-      const opId = !multi && b.item.id === d.itemId ? d.nop : b.opId;
+      const opId = b.opId === d.origOp ? d.nop : b.opId;
       const row = rowOf(opId);
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
@@ -269,12 +298,11 @@ export default function DayGrid({
     if (d.kind === 'item' && d.detach) {
       intent = { kind: 'split', appt: d.block.appt, item: d.block.item, startMin: d.ns, opId: d.nop };
     } else if (d.kind === 'item') {
-      // la visita si sposta così che il servizio trascinato finisca dove lasciato
+      // la visita si sposta così che il servizio trascinato finisca dove lasciato;
+      // in un'altra colonna cambiano mano i servizi della colonna di partenza
       const appt = d.block.appt;
       const newApptStart = d.apptStart + (d.ns - d.orig);
-      const multi = (appt.items || []).length > 1;
-      const opArg = multi ? appt.operator_id : d.nop; // riassegnazione operatrice solo su visita mono-servizio
-      intent = { kind: 'appt', appt, newApptStart, opArg };
+      intent = { kind: 'appt', appt, newApptStart, opArg: d.nop, fromOp: d.origOp };
     } else {
       intent = { kind: 'pause', pause: d.obj, startMin: d.ns, opId: d.nop };
     }
@@ -284,7 +312,7 @@ export default function DayGrid({
       return; // il blocco torna al suo posto: nessuna chiamata al server
     }
     if (intent.kind === 'split') onSplitItem(intent.appt, intent.item, intent.startMin, intent.opId);
-    else if (intent.kind === 'appt') onMoveAppt(intent.appt, intent.newApptStart, intent.opArg);
+    else if (intent.kind === 'appt') onMoveAppt(intent.appt, intent.newApptStart, intent.opArg, { fromOp: intent.fromOp });
     else onMovePause(intent.pause, intent.startMin, intent.opId);
   }
 
@@ -298,9 +326,10 @@ export default function DayGrid({
         if (d.itemId !== block.item.id) return { startMin: block.startMin, opId: block.opId, ...phases };
         return { startMin: d.ns, opId: d.nop, ...phases, dragging: true, verdict: d.verdict };
       }
-      // sposta tutti i blocchi della stessa visita del delta trascinato
+      // sposta tutti i blocchi della stessa visita del delta trascinato; quelli
+      // della colonna di partenza seguono anche il cambio di operatrice
       const startMin = d.itemId === block.item.id ? d.ns : block.startMin + (d.ns - d.orig);
-      const opId = d.itemId === block.item.id ? ((block.appt.items || []).length > 1 ? block.opId : d.nop) : block.opId;
+      const opId = block.opId === d.origOp ? d.nop : block.opId;
       return { startMin, opId, ...phases, dragging: true, verdict: d.verdict };
     }
     if (d && d.kind === 'item' && d.mode === 'resize' && d.apptId === block.apptId) {
@@ -313,7 +342,8 @@ export default function DayGrid({
       return { startMin: block.startMin, opId: block.opId, ...phases };
     }
     if (pending && pending.kind === 'appt' && pending.id === block.apptId) {
-      return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId: (block.appt.items || []).length > 1 ? block.opId : pending.opId, ...phases };
+      const opId = pending.fromOp != null && block.opId === pending.fromOp ? pending.opId : block.opId;
+      return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId, ...phases };
     }
     return { startMin: block.startMin, opId: block.opId, ...phases };
   };
@@ -487,7 +517,7 @@ export default function DayGrid({
                         return (
                           <div key={'sp' + sp.apptId}
                             onPointerDown={ref && canWrite ? (e) => onItemDown(e, ref.b, { whole: true }) : undefined}
-                            title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi · trascina qui per spostarli tutti insieme`, `One visit for ${sp.client}: ${sp.count} services · drag here to move them all together`)}
+                            title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi · trascina qui per spostarli tutti insieme, anche in un'altra colonna`, `One visit for ${sp.client}: ${sp.count} services · drag here to move them all together, to another column too`)}
                             style={{
                               position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 12),
                               top: (sp.startMin - DK_START) * PXM + 1.5,
@@ -558,17 +588,20 @@ export default function DayGrid({
           : detach ? d.block.dur
             : (d.block.appt.total_duration_min || d.block.dur);
         const start = (d.kind === 'pause' || detach) ? d.ns : d.apptStart + (d.ns - d.orig);
-        // la nota «operatrice fissa» non vale per lo stacco: lì la riassegnazione
-        // avviene davvero.
-        const multi = d.kind === 'item' && !detach && (d.block.appt.items || []).length > 1;
-        const who = multi ? opName(d.origOp) : opName(d.nop);
+        // Quanti servizi cambiano mano: trascinando la spina di una visita
+        // divisa fra due colleghe si muove il gruppo di QUESTA colonna, e senza
+        // dirlo sembrava che partisse tutta la visita.
+        const group = d.kind === 'item' && !detach
+          ? itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp).length
+          : 1;
+        const moving = d.kind === 'item' && !detach && group < (d.block.appt.items || []).length;
         return (
           <div className={'dk-drag-badge' + (tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
             <Icon name={tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
             <span className="tabnum">{timeLabel(start)}–{timeLabel(start + durMin)}</span>
-            <span>· {who}</span>
+            <span>· {opName(d.nop)}</span>
             {v && <small>· {v.label}</small>}
-            {multi && d.nop !== d.origOp && <small>· {t('visita multi-servizio: operatrice fissa', 'multi-service visit: stylist fixed')}</small>}
+            {moving && d.nop !== d.origOp && <small>· {t(`${group} serviz${group === 1 ? 'io' : 'i'} di ${opName(d.origOp)}`, `${group} service${group === 1 ? '' : 's'} from ${opName(d.origOp)}`)}</small>}
           </div>
         );
       })()}
@@ -622,8 +655,8 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
         onSlotMenu(startMin, e.clientX, e.clientY);
       }}
       title={grouped
-        ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare solo questo, o trascina la barra scura a sinistra per spostare tutta la visita`,
-            `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move just this one, or drag the dark bar on the left to move the whole visit`)
+        ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare solo questo, o trascina la barra scura a sinistra per spostare tutta la visita, anche a un'altra operatrice`,
+            `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move just this one, or drag the dark bar on the left to move the whole visit, to another stylist too`)
         : undefined}
       onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
       style={{

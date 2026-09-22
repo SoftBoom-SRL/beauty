@@ -8,13 +8,18 @@ import AgendaSection from '../src/sections/agenda/index.jsx';
 import Topbar from '../src/shell/Topbar.jsx';
 import { useDash } from '../src/ctx.jsx';
 import DkModals from '../src/modals/DkModals.jsx';
-import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENTS } from './fixtures.js';
+import DkToast from '../src/ui/DkToast.jsx';
+import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment } from './fixtures.js';
 import '../src/styles/styles.css';
 import '../src/styles/desktop.css';
 import '../src/styles/app.css';
 
 /* risposte finte per ogni rotta usata dall'agenda */
-const json = (data) => new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
+// `__status` nel corpo = risposta d'errore simulata (400 idoneità, 409 slot occupato)
+const json = (data) => {
+  const status = (data && data.__status) || 200;
+  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+};
 const routes = [
   [/\/api\/core\/salon/, () => SALON],
   [/\/api\/staff\/$/, () => OPERATORS],
@@ -24,9 +29,12 @@ const routes = [
   [/\/api\/clients\//, (u, init) => ((init?.method || 'GET') === 'POST'
     ? { id: 95, full_name: 'Nuova Cliente', phone: '+39 333 000 0000', categories: [] }
     : { items: [{ id: 90, full_name: 'Marta Rossi', phone: '+39 333 111 2233' }] })],
-  [/\/api\/agenda\/appointments\/\d+$/, (u) => {
+  // spostamento (trascinamento, o orario/operatrice cambiati dal pannello)
+  [/\/api\/agenda\/appointments\/\d+\/move$/, (u, init) => moveAppointment(Number(u.pathname.split('/')[4]), JSON.parse(init.body || '{}'))],
+  // GET il dettaglio, PUT le modifiche a servizi e nota
+  [/\/api\/agenda\/appointments\/\d+$/, (u, init) => {
     const id = Number(u.pathname.split('/').pop());
-    return APPOINTMENTS(TODAY).find((a) => a.id === id) || APPOINTMENTS(TODAY)[0];
+    return (init?.method || 'GET') === 'PUT' ? editAppointment(id, JSON.parse(init.body || '{}')) : APPOINTMENT(id);
   }],
   [/\/api\/agenda\/day/, (u) => DAY_ROWS(u.searchParams.get('date') || TODAY)],
   [/\/api\/agenda\/week/, (u) => WEEK(u.searchParams.get('start'))],
@@ -50,11 +58,13 @@ window.fetch = (input, init) => {
   return realFetch(input, init);
 };
 
-/* ponte per i test: apre i modali dall'esterno, come farebbe la topbar */
+/* ponte per i test: apre i modali dall'esterno, come farebbe la topbar.
+ * Monta anche il toast, che nell'app vive nella shell: senza, gli avvisi con
+ * «Annulla» non comparivano e non si poteva provare l'annullamento. */
 function Ponte() {
-  const { openModal } = useDash();
+  const { openModal, toastProps } = useDash();
   window.__apri = openModal;
-  return null;
+  return <DkToast {...toastProps} />;
 }
 
 staffAuth.installStaffAuth();

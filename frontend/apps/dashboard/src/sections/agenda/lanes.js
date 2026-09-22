@@ -136,6 +136,7 @@ export function serviceBands(appt) {
     acc += spans[i];
     bands.push({
       name: it.service_name || '',
+      service_id: it.service_id ?? null,   // per tingere la fascia col colore della categoria
       opId: it.operator_id ?? null,
       fromPct: from,
       toPct: (acc / total) * 100,

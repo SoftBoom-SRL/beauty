@@ -363,15 +363,25 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
             )}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {/* La pillola prende il colore della sua categoria, piena: è lo
+                stesso codice colore dei blocchi in agenda, e con il solo
+                pallino il servizio si leggeva solo parola per parola. */}
             {filteredServices.map((s) => {
               const on = isSelected(s.id);
               const noOps = !eligibleOps(s.id).length;
+              const cat = catColor(s.category_id);
               return (
-                <button key={s.id} type="button" onClick={() => toggleService(s.id)} className={'dk-pill' + (on ? ' dk-pill--on' : '')} title={noOps ? t('Nessuna operatrice abilitata', 'No stylist enabled') : `${fmtDur(s.duration_min, lang)} · ${fmtEur(Number(s.price), lang)}`} style={{ padding: '5px 11px 5px 9px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 99, background: catColor(s.category_id), boxShadow: on ? '0 0 0 2px rgba(255,255,255,0.6)' : 'none' }} />
+                <button key={s.id} type="button" onClick={() => toggleService(s.id)} className="dk-pill" title={noOps ? t('Nessuna operatrice abilitata', 'No stylist enabled') : `${fmtDur(s.duration_min, lang)} · ${fmtEur(Number(s.price), lang)}`}
+                  style={{
+                    padding: '5px 11px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1, color: 'var(--ink)',
+                    borderWidth: 2, fontWeight: on ? 700 : 600,
+                    background: on ? `color-mix(in srgb, ${cat} 70%, #FFFFFF)` : `color-mix(in srgb, ${cat} 26%, var(--surface))`,
+                    borderColor: on ? `color-mix(in srgb, ${cat} 60%, var(--ink))` : `color-mix(in srgb, ${cat} 50%, transparent)`,
+                    boxShadow: on ? `0 0 0 3px color-mix(in srgb, ${cat} 32%, transparent)` : 'none',
+                  }}>
                   {svcName(s, lang)}
-                  {giftFor(s.id) && <Icon name="gift" size={12} color={on ? '#fff' : 'var(--clay-ink)'} title={t('Coperto da una gift card', 'Covered by a gift card')} />}
-                  <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? '#fff' : 'var(--muted-2)'} />
+                  {giftFor(s.id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da una gift card', 'Covered by a gift card')} />}
+                  <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? 'var(--ink)' : 'var(--ink-2)'} />
                 </button>
               );
             })}

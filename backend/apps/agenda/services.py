@@ -610,6 +610,7 @@ def resolve_items_edit(
     location=None,
     keep_service_ids=(),
     existing_items=None,
+    force: bool = False,
 ) -> list[tuple]:
     """Come resolve_items ma con durata per-item sovrascrivibile manualmente.
 
@@ -625,6 +626,12 @@ def resolve_items_edit(
     ammessi anche se nel frattempo sono stati tolti dal listino, altrimenti una
     visita vecchia non sarebbe più modificabile. Un servizio disattivato che non
     c'era prima non si può invece aggiungere.
+
+    `force=True` (solo gesti dello staff): l'operatrice richiesta si tiene anche
+    se in quella fascia è occupata, e la catena può sforare la chiusura. Serve
+    per allungare un trattamento accanto a un incastro già forzato, che con la
+    sola verifica di libertà rispondeva «Orario non più disponibile» a un
+    trascinamento che deve solo scrivere.
 
     `existing_items` è {AppointmentService.id: riga} della visita: quando l'item
     arriva con `id`, prezzo e posa restano quelli CONCORDATI con la cliente. Un
@@ -690,25 +697,29 @@ def resolve_items_edit(
         if requested:
             operator = operator_by_id.get(requested)
             if operator is None or operator.id not in eligible_ids:
+                # L'idoneità non si forza MAI: nessuno può fare un servizio che
+                # non sa fare, per quanto il banco insista.
                 raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
-            if _is_free(
+            if force or _is_free(
                 _windows(operator), busy.get(operator.id, ()), cursor, end,
                 allow_soak=allow_soak,
             ):
                 chosen = operator
         else:
+            eligible_operators = [op for op in operators if op.id in eligible_ids]
             chosen = next(
                 (
                     op
-                    for op in operators
-                    if op.id in eligible_ids
-                    and _is_free(
+                    for op in eligible_operators
+                    if _is_free(
                         _windows(op), busy.get(op.id, ()), cursor, end,
                         allow_soak=False,
                     )
                 ),
                 None,
             )
+            if chosen is None and force and eligible_operators:
+                chosen = eligible_operators[0]
         if chosen is None:
             raise HttpError(409, "Orario non più disponibile")
         resolved.append((service, chosen, duration_min, soak, price))
@@ -716,7 +727,7 @@ def resolve_items_edit(
     # Anche in modifica la cliente resta in salone fino alla fine della posa:
     # il vincolo esisteva solo in creazione, e allungando un colore dall'app la
     # visita finiva dopo la serranda abbassata.
-    _ensure_within_opening(salon, day, cursor, force=False)
+    _ensure_within_opening(salon, day, cursor, force=force)
     return resolved
 
 
@@ -935,6 +946,7 @@ def edit_appointment(
     *,
     items: list[dict] | None = None,
     note: str | None = None,
+    force: bool = False,
     actor=None,
 ) -> Appointment:
     """Modifica i servizi e/o la nota di una visita aperta.
@@ -960,17 +972,26 @@ def edit_appointment(
         if not items:
             raise HttpError(400, "Nessun servizio selezionato")
         existing = {item.id: item for item in appointment.items.all()}
-        resolved = resolve_items_edit(
-            appointment.salon,
-            items,
-            appointment.start,
-            exclude_appointment_id=appointment.id,
-            location=appointment.location,
+        kwargs = {
+            "exclude_appointment_id": appointment.id,
+            "location": appointment.location,
             # i servizi già sulla visita restano modificabili anche se nel
             # frattempo sono usciti dal listino
-            keep_service_ids={item.service_id for item in existing.values()},
-            existing_items=existing,
-        )
+            "keep_service_ids": {item.service_id for item in existing.values()},
+            "existing_items": existing,
+        }
+        try:
+            resolved = resolve_items_edit(appointment.salon, items, appointment.start, **kwargs)
+        except HttpError as err:
+            # Si prova SEMPRE prima senza forzare: così una modifica che sta
+            # comodamente nella giornata non marca la visita come forzata senza
+            # motivo. Si forza solo se lo staff l'ha chiesto e il rifiuto era di
+            # disponibilità (409) — mai di idoneità (400).
+            if not force or err.status_code != 409:
+                raise
+            resolved = resolve_items_edit(appointment.salon, items, appointment.start, force=True, **kwargs)
+            appointment.forced = True
+            changed.append("forced")
         appointment.items.all().delete()
         snapshot_items_edit(appointment, resolved)
         appointment.operator = resolved[0][1]
@@ -1037,6 +1058,7 @@ def move_appointment(
     new_start: dt.datetime,
     *,
     operator=None,
+    from_operator=None,
     actor=None,
     force: bool = False,
     allow_past: bool = True,
@@ -1044,9 +1066,13 @@ def move_appointment(
 ) -> Appointment:
     """Sposta l'appuntamento (items con lo stesso delta, essendo sequenziali da start).
 
-    Se `operator` è indicata, subentra all'operatrice principale sui suoi item
-    (previa verifica di idoneità). Rivalida lo slot escludendo l'appuntamento
-    stesso; emette appointment.moved e slot.freed sul vecchio orario.
+    Se `operator` è indicata, subentra sugli item di `from_operator` — che di
+    default è l'operatrice principale — previa verifica di idoneità. In agenda
+    `from_operator` è la COLONNA da cui parte il trascinamento: una visita può
+    avere servizi di due operatrici, e trascinando il gruppo di una collega
+    devono cambiare mano i suoi, non quelli della principale. Rivalida lo slot
+    escludendo l'appuntamento stesso; emette appointment.moved e slot.freed sul
+    vecchio orario.
     force=True (solo staff): salta la rivalidazione di turno e sovrapposizioni.
     allow_past=False (app cliente): come in creazione, un orario già trascorso è
     rifiutato. Lo staff può invece sistemare a posteriori un orario sbagliato.
@@ -1064,9 +1090,10 @@ def move_appointment(
     if not items:
         raise HttpError(400, "Appuntamento senza servizi")
 
+    source_id = from_operator.id if from_operator is not None else old_operator_id
     target_operators = []
     for item in items:
-        if operator is not None and item.operator_id == old_operator_id:
+        if operator is not None and item.operator_id == source_id:
             if not item.service.operators.filter(id=operator.id).exists():
                 raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
             target_operators.append(operator)
@@ -1095,8 +1122,12 @@ def move_appointment(
     if force:
         changed.append("forced")
     if operator is not None:
-        appointment.operator = operator
-        changed.append("operator")
+        # L'operatrice principale cambia solo se è la sua colonna ad aver
+        # cambiato mano: spostando i servizi di una collega, la titolare della
+        # visita resta quella di prima.
+        if source_id == old_operator_id:
+            appointment.operator = operator
+            changed.append("operator")
         for item, target in zip(items, target_operators):
             if item.operator_id != target.id:
                 item.operator = target

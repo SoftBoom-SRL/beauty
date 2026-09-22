@@ -90,9 +90,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
     if (appt?.client?.id) api.get(`/api/clients/${appt.client.id}`).then(setClientDetail).catch(() => {});
   }, [appt?.client?.id]);
 
-  /* note edit */
+  /* note edit (salvata insieme ai servizi, dal piede del pannello) */
   const [note, setNote] = useState(appointment?.note || '');
-  const [savingNote, setSavingNote] = useState(false);
   const noteDirty = note !== (appt?.note || '');
 
   /* services edit → PUT /appointments/{id} with the full items list */
@@ -103,13 +102,78 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
     service_id: it.service_id,
     operator_id: it.operator_id ?? null,
     duration_min: it.duration_min,
+    soak_min: it.soak_min || 0,       // solo per l'anteprima degli orari a destra
     price: Number(it.price) || 0,
     name: it.service_name,
   }));
   const [editItems, setEditItems] = useState(() => mkEditItems(appointment?.items));
   const [addingSvc, setAddingSvc] = useState(false);
   const [savingItems, setSavingItems] = useState(false);
+  const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
   useEffect(() => { setEditItems(mkEditItems(appt?.items)); setAddingSvc(false); }, [appt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Il servizio appena aggiunto finisce in fondo alla lista, spesso sotto il
+   * bordo del pannello: lo si porta in vista e lo si illumina un istante, così
+   * si vede dove è andato e su chi. */
+  const addedRef = useRef(null);
+  useEffect(() => {
+    if (!justAdded) return undefined;
+    addedRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const id = setTimeout(() => setJustAdded(null), 1800);
+    return () => clearTimeout(id);
+  }, [justAdded]);
+
+  /* ---- orario e operatrice, modificabili qui senza passare da «Riprogramma» ----
+   * «Riprogramma» resta per cercare uno slot libero o un altro giorno; spostare
+   * di un quarto d'ora o passare la cliente alla collega sono invece gesti da
+   * fare sul posto, ed erano dietro un flusso a sé. */
+  const stepMin = settings?.slot_interval_min || 15;
+  const [timeDraft, setTimeDraft] = useState(null);   // "HH:MM" mentre si digita
+  const [movingBusy, setMovingBusy] = useState(false);
+  useEffect(() => { setTimeDraft(null); }, [appt?.start]);
+
+  /* `opts.base` è l'appuntamento da cui si parte: serve all'«Annulla», che
+   * scatta quando in pagina c'è già la versione spostata — senza, il confronto
+   * «è cambiato qualcosa?» guardava la copia vecchia e l'annullamento non
+   * faceva niente. */
+  async function applyMove({ startMin, operatorId }, opts = {}) {
+    if (movingBusy) return;
+    const base = opts.base || appt;
+    const from = minutesOfDay(base.start);
+    const target = startMin ?? from;
+    const toOp = operatorId ?? base.operator_id;
+    const reassigned = toOp !== base.operator_id;
+    if (target === from && !reassigned) return;
+    setMovingBusy(true);
+    try {
+      const res = await api.post(`/api/agenda/appointments/${base.id}/move`, {
+        start: isoAtMin(toDateStr(base.start), target),
+        ...(reassigned ? { operator_id: toOp, from_operator_id: base.operator_id } : {}),
+        force: !!opts.force,
+      });
+      setAppt(res);
+      const who = operators.find((x) => x.id === toOp);
+      fireToast({
+        msg: reassigned
+          ? t(`Passato a ${who?.first_name || ''}, ${timeLabel(target)}`, `Moved to ${who?.first_name || ''}, ${timeLabel(target)}`)
+          : t(`Spostato alle ${timeLabel(target)}`, `Moved to ${timeLabel(target)}`),
+        icon: 'calendar',
+        undo: t('Annulla', 'Undo'),
+        undoFn: () => applyMove({ startMin: from, operatorId: base.operator_id }, { force: true, base: res }),
+      });
+      onMutate?.();
+    } catch (err) {
+      // Slot occupato o fuori turno: si scrive lo stesso, come in griglia — chi
+      // sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
+      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+        setMovingBusy(false);
+        await applyMove({ startMin, operatorId }, { ...opts, base, force: true });
+        return;
+      }
+      setTimeDraft(null);
+      toastErr(err, t, fireToast);
+    } finally { setMovingBusy(false); }
+  }
 
   /* margin (behind a small toggle) */
   const [showMargin, setShowMargin] = useState(false);
@@ -133,6 +197,26 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
 
   /* ---- editable services (only when live + can write) ---- */
   const itemsEditable = !terminal && canWrite;
+  const canMove = itemsEditable;
+  /* Chi può prendersi la visita: le colleghe abilitate a TUTTI i servizi che
+   * oggi sono dell'operatrice principale (sono quelli che cambiano mano, come
+   * nel trascinamento in agenda). Il server rifiuterebbe le altre. */
+  const mainItems = (appt.items || []).filter((it) => (it.operator_id ?? appt.operator_id) === appt.operator_id);
+  const visitOps = operators.filter((op) => op.id === appt.operator_id
+    || (mainItems.length > 0 && mainItems.every((it) => (op.service_ids || []).includes(it.service_id))));
+  const otherOpNames = [...new Set((appt.items || [])
+    .filter((it) => it.operator_id && it.operator_id !== appt.operator_id)
+    .map((it) => operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name)
+    .filter(Boolean))];
+
+  const commitTime = () => {
+    const v = timeDraft;
+    setTimeDraft(null);
+    if (!v || !/^\d{1,2}:\d{2}$/.test(v)) return;
+    const m = hmToMin(v);
+    if (!Number.isFinite(m) || m === startMin) return;
+    applyMove({ startMin: Math.max(0, Math.min(23 * 60 + 55, m)) });
+  };
   const svcOf = (id) => (services || []).find((s) => s.id === id);
   const activeServices = (services || []).filter((s) => s.active !== false);
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
@@ -141,48 +225,75 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
   const itemsSig = (list) => JSON.stringify((list || []).map((i) => [i.id ?? null, i.service_id, i.operator_id ?? null, Number(i.duration_min) || 0]));
   const itemsDirty = itemsSig(editItems) !== itemsSig(appt.items);
   const editTotal = editItems.reduce((s, it) => s + Number(it.price || 0), 0);
+  /* Orario di ogni riga: i servizi sono in fila dall'inizio della visita, posa
+   * compresa. Serve a vedere subito che cosa slitta quando si cambia una durata
+   * o si aggiunge un trattamento. */
+  const itemSpans = (() => {
+    let cursor = startMin;
+    return editItems.map((it) => {
+      const from = cursor;
+      const to = cursor + Math.max(0, parseInt(it.duration_min, 10) || 0) + (it.soak_min || 0);
+      cursor = to;
+      return { from, to };
+    });
+  })();
 
+  /* Il servizio aggiunto va alla STESSA persona della visita, se è abilitata:
+   * «prima disponibile» faceva scegliere al server una collega qualsiasi, e
+   * dalla scheda non si capiva nemmeno su chi fosse finito. */
   const addServiceItem = (sid) => {
     const s = svcOf(sid);
-    setEditItems((l) => [...l, { key: 'e' + (itemSeq.current++), id: undefined, service_id: sid, operator_id: null, duration_min: s?.duration_min ?? 30, price: Number(s?.price) || 0, name: s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : '' }]);
+    const eligible = eligibleOps(sid);
+    const mine = eligible.some((op) => op.id === appt.operator_id) ? appt.operator_id : (eligible[0]?.id ?? null);
+    const key = 'e' + (itemSeq.current++);
+    setEditItems((l) => [...l, { key, id: undefined, service_id: sid, operator_id: mine, duration_min: s?.duration_min ?? 30, soak_min: s?.soak_min || 0, price: Number(s?.price) || 0, name: s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : '' }]);
+    setJustAdded(key);
   };
   const removeServiceItem = (key) => setEditItems((l) => l.filter((x) => x.key !== key));
   const setItemDuration = (key, raw) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: raw === '' ? '' : Math.max(0, parseInt(raw, 10) || 0) } : x)));
   const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.max(5, parseInt(x.duration_min, 10) || 5) } : x)));
   const setItemOperator = (key, opId) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
 
-  async function saveItems() {
-    if (savingItems || !editItems.length) return;
+  /* Un solo salvataggio per servizi e nota, e sta nel piede del pannello: il
+   * pulsante viveva in fondo alla lista dei servizi, cioè fuori dallo schermo
+   * proprio dopo aver aggiunto una riga — si modificava e non si salvava. */
+  const dirty = itemsDirty || noteDirty;
+  async function saveChanges(opts = {}) {
+    if (savingItems || !editItems.length || !dirty) return;
     setSavingItems(true);
     try {
       const res = await api.put(`/api/agenda/appointments/${appt.id}`, {
-        items: editItems.map((it) => ({
-          ...(it.id != null ? { id: it.id } : {}),   // existing → id; new → omitted; omitted rows → removed
-          service_id: it.service_id,
-          operator_id: it.operator_id ?? null,
-          duration_min: Math.max(5, parseInt(it.duration_min, 10) || 5),
-        })),
+        ...(opts.force ? { force: true } : {}),
+        ...(itemsDirty ? {
+          items: editItems.map((it) => ({
+            ...(it.id != null ? { id: it.id } : {}),   // existing → id; new → omitted; omitted rows → removed
+            service_id: it.service_id,
+            operator_id: it.operator_id ?? null,
+            duration_min: Math.max(5, parseInt(it.duration_min, 10) || 5),
+          })),
+        } : {}),
+        ...(noteDirty ? { note } : {}),
       });
       setAppt(res);
-      fireToast({ msg: t('Appuntamento aggiornato', 'Appointment updated'), icon: 'check' });
+      fireToast({
+        msg: t('Appuntamento aggiornato', 'Appointment updated') + (opts.force ? t(' · si sovrappone a un altro impegno', ' · overlaps another booking') : ''),
+        icon: opts.force ? 'alert' : 'check',
+      });
       onMutate?.();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Orario non più disponibile', 'Time no longer available'), icon: 'alert' });
-      else toastErr(err, t, fireToast);
+      // 409 = l'operatrice scelta è occupata in quella fascia (o si sfora la
+      // chiusura). Come in griglia non ci si ferma: si scrive lo stesso e lo si
+      // dice nell'avviso. Il 400 (non abilitata al servizio) resta un no.
+      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+        setSavingItems(false);
+        await saveChanges({ force: true });
+        return;
+      }
+      toastErr(err, t, fireToast);
     } finally { setSavingItems(false); }
   }
 
   const openClient = () => { setSelClient(appt.client.id); setTab('clienti'); onClose(); };
-
-  async function saveNote() {
-    setSavingNote(true);
-    try {
-      const res = await api.put(`/api/agenda/appointments/${appt.id}`, { note });
-      setAppt(res);
-      fireToast({ msg: t('Nota salvata', 'Note saved'), icon: 'check' });
-    } catch (err) { toastErr(err, t, fireToast); }
-    finally { setSavingNote(false); }
-  }
 
   async function lifecycle(action, body, toastMsg, icon) {
     if (busy) return false;
@@ -298,6 +409,23 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
               appuntamento nove volte su dieci deve far entrare la cliente,
               incassare o spostarlo, e prima bisognava scorrere per trovarle.
               Una sola azione piena (clay): quella che fa avanzare il lavoro. */}
+          {/* Modifiche in sospeso: il salvataggio sta QUI, dove si vede sempre.
+              In fondo alla lista dei servizi finiva sotto il bordo del pannello
+              proprio dopo aver aggiunto un trattamento. */}
+          {itemsEditable && dirty && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '8px 10px', borderRadius: 12, background: 'var(--clay-tint)' }}>
+              <Icon name="alert" size={15} color="var(--clay-ink)" />
+              <span className="t-sm" style={{ flex: 1, minWidth: 0, color: 'var(--clay-ink)', fontWeight: 600 }}>
+                {itemsDirty && noteDirty ? t('Servizi e nota da salvare', 'Services and note to save')
+                  : itemsDirty ? t('Servizi da salvare', 'Services to save') : t('Nota da salvare', 'Note to save')}
+              </span>
+              <button className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5 }} disabled={savingItems}
+                onClick={() => { setEditItems(mkEditItems(appt.items)); setNote(appt.note || ''); }}>{t('Annulla', 'Discard')}</button>
+              <button className="dk-btn dk-btn--clay" style={{ height: 32, fontSize: 12.5 }} disabled={savingItems || !editItems.length} onClick={() => saveChanges()}>
+                <Icon name="check" size={14} color="#fff" />{savingItems ? t('Salvataggio…', 'Saving…') : t('Salva', 'Save')}
+              </button>
+            </div>
+          )}
           {!terminal && canWrite && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {appt.status === 'confirmed' && (
@@ -314,7 +442,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                 <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--soft')} style={{ flex: 1, height: 42 }} onClick={() => openModal('sell', { appointment: appt, onDone: onMutate })}>
                   <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />{t('Incassa', 'Check out')}
                 </button>
-                <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={() => setFlow('reschedule')}>
+                <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={() => setFlow('reschedule')}
+                  title={t('Cerca un orario libero o sposta a un altro giorno (per l’ora e la persona di oggi bastano i comandi qui sopra)', 'Find a free time or move to another day (for today’s time and stylist use the controls above)')}>
                   <Icon name="calendar" size={16} />{t('Riprogramma', 'Reschedule')}
                 </button>
               </div>
@@ -364,18 +493,64 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {/* chi e quando */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, order: 2 }}>
-          {/* operator hero */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16, background: `color-mix(in srgb, ${col} 26%, #FFFFFF)` }}>
-            <Avatar initials={o?.initials || initialsOf((appt.items || [])[0]?.operator_name)} size={50} color={col} ring />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="t-meta" style={{ fontSize: 10, color: 'var(--ink-2)', opacity: 0.7, marginBottom: 1 }}>{t('Operatrice', 'Stylist')}</div>
-              <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.05 }}>{o ? o.first_name : (appt.items || [])[0]?.operator_name}</div>
-              {o?.role_title && <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.75 }}>{o.role_title}</div>}
+          {/* Chi e quando — si cambiano QUI. Prima erano due scritte, e per
+              spostare di un quarto d'ora o passare la cliente alla collega
+              bisognava entrare in «Riprogramma», che è un'altra schermata. */}
+          <div style={{ padding: '13px 15px', borderRadius: 16, background: `color-mix(in srgb, ${col} 26%, #FFFFFF)` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <Avatar initials={o?.initials || initialsOf((appt.items || [])[0]?.operator_name)} size={50} color={col} ring />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="t-meta" style={{ fontSize: 10, color: 'var(--ink-2)', opacity: 0.7, marginBottom: 1 }}>{t('Operatrice', 'Stylist')}</div>
+                <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.05 }}>{o ? o.first_name : (appt.items || [])[0]?.operator_name}</div>
+                {o?.role_title && <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.75 }}>{o.role_title}</div>}
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div className="t-meta" style={{ fontSize: 10, color: 'var(--ink-2)', opacity: 0.7, marginBottom: 3 }}>{t('Inizio', 'Starts')}</div>
+                {canMove ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                    <button className="dk-iconbtn" disabled={movingBusy} title={t(`Anticipa di ${stepMin} minuti`, `${stepMin} minutes earlier`)} aria-label={t('Anticipa', 'Earlier')}
+                      onClick={() => applyMove({ startMin: Math.max(0, startMin - stepMin) })}
+                      style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.65)', border: 'none' }}><Icon name="chevL" size={14} /></button>
+                    <input type="time" value={timeDraft ?? timeLabel(startMin)} step={stepMin * 60} disabled={movingBusy}
+                      onChange={(e) => setTimeDraft(e.target.value)} onBlur={commitTime}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+                      aria-label={t('Ora di inizio', 'Start time')}
+                      style={{ width: 92, border: '1px solid rgba(17,24,39,0.18)', borderRadius: 9, padding: '5px 7px', fontSize: 14, fontWeight: 700, fontFamily: 'var(--mono, monospace)', textAlign: 'center', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
+                    <button className="dk-iconbtn" disabled={movingBusy} title={t(`Posticipa di ${stepMin} minuti`, `${stepMin} minutes later`)} aria-label={t('Posticipa', 'Later')}
+                      onClick={() => applyMove({ startMin: Math.min(23 * 60 + 55, startMin + stepMin) })}
+                      style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.65)', border: 'none' }}><Icon name="chevR" size={14} /></button>
+                  </div>
+                ) : (
+                  <div className="tabnum" style={{ fontWeight: 700, fontSize: 15 }}>{timeLabel(startMin)}</div>
+                )}
+                <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.7, marginTop: 3 }}>{fmtDur(appt.total_duration_min, lang)} · {t('fino alle', 'until')} {timeLabel(endMin)}</div>
+              </div>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div className="tabnum" style={{ fontWeight: 700, fontSize: 15 }}>{timeLabel(startMin)}</div>
-              <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.7 }}>{fmtDur(appt.total_duration_min, lang)}</div>
-            </div>
+            {/* passare la visita a un'altra persona: un tocco, senza uscire di qui */}
+            {canMove && visitOps.length > 1 && (
+              <div style={{ marginTop: 11, paddingTop: 10, borderTop: '1px dashed rgba(17,24,39,0.16)' }}>
+                <div className="t-meta" style={{ fontSize: 10, color: 'var(--ink-2)', opacity: 0.7, marginBottom: 7 }}>{t('Passa a', 'Hand over to')}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {visitOps.map((op) => {
+                    const on = op.id === appt.operator_id;
+                    return (
+                      <button key={op.id} type="button" disabled={movingBusy || on} onClick={() => applyMove({ operatorId: op.id })}
+                        className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')}
+                        style={{ '--pill-c': opColors[op.id] || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12, cursor: on ? 'default' : 'pointer' }}>
+                        <Avatar initials={op.initials} size={20} color={opColors[op.id] || 'var(--clay)'} ring={on} />
+                        <span>{op.first_name}</span>
+                        {on && <Icon name="check" size={12} stroke={2.6} />}
+                      </button>
+                    );
+                  })}
+                </div>
+                {otherOpNames.length > 0 && (
+                  <div className="t-sm" style={{ color: 'var(--ink-2)', opacity: 0.8, marginTop: 7 }}>
+                    {t(`Cambia mano solo la parte di ${o?.first_name || ''}: il resto resta a ${otherOpNames.join(', ')}.`, `Only ${o?.first_name || ''}'s part changes hands: the rest stays with ${otherOpNames.join(', ')}.`)}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* deposit status */}
@@ -450,9 +625,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t('Aggiungi una nota…', 'Add a note…')}
               style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 12, padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--sans)', resize: 'vertical', outline: 'none', boxSizing: 'border-box', background: 'var(--surface)' }} />
             {noteDirty && (
-              <button className="dk-btn dk-btn--soft" disabled={savingNote || !canWrite} style={{ height: 34, fontSize: 12.5, marginTop: 6 }} onClick={saveNote}>
-                <Icon name="check" size={14} />{savingNote ? t('Salvataggio…', 'Saving…') : t('Salva nota', 'Save note')}
-              </button>
+              <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 5 }}>{t('Nota modificata: si salva col pulsante in fondo.', 'Note changed: save it with the button below.')}</div>
             )}
           </div>
 
@@ -511,18 +684,23 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                   <Icon name="calendar" size={14} color="var(--muted)" style={{ flexShrink: 0, marginTop: 1 }} />
                   <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.35 }}>
                     <b>{t(`${(appt.items || []).length} servizi in un'unica visita`, `${(appt.items || []).length} services in one visit`)}</b>{' — '}
-                    {t('in agenda trascina un servizio per spostare solo quello, o la barra scura a sinistra per spostarli tutti insieme.', 'in the agenda drag one service to move just that one, or the dark bar on its left to move them all together.')}
+                    {t('in agenda trascina un servizio per spostare solo quello, o la barra scura a sinistra per spostarli tutti insieme, anche nella colonna di un’altra operatrice.', 'in the agenda drag one service to move just that one, or the dark bar on its left to move them all together, into another stylist’s column too.')}
                   </div>
                 </div>
               )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {editItems.map((it) => {
+                {editItems.map((it, i) => {
                   const s = svcOf(it.service_id);
                   const color = catColor(s?.category_id);
                   const isNew = it.id == null;
-                  const eligible = isNew ? eligibleOps(it.service_id) : [];
+                  // L'operatrice si sceglie su OGNI riga, non solo su quelle
+                  // nuove: era l'unico modo per sapere su chi finiva un servizio
+                  // aggiunto, e per passarne uno alla collega senza trascinare.
+                  const eligible = eligibleOps(it.service_id);
+                  const span = itemSpans[i];
                   return (
-                    <div key={it.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div key={it.key} ref={it.key === justAdded ? addedRef : undefined}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: it.key === justAdded ? '8px' : 0, margin: it.key === justAdded ? '-8px' : 0, borderRadius: 10, background: it.key === justAdded ? 'var(--clay-tint)' : 'transparent', transition: 'background 400ms' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
                         <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -534,23 +712,43 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                           <Icon name="x" size={14} />
                         </button>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
                         <NumInput integer min={5} value={it.duration_min} emptyValue=""
                           onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
                           aria-label={t('Durata in minuti', 'Duration in minutes')}
                           style={{ width: 52, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
                         <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('minuti', 'minutes')}</span>
+                        {/* dove cade il servizio nella giornata: i servizi sono
+                            in fila dall'inizio della visita, e cambiando una
+                            durata slittano tutti quelli dopo */}
+                        {span && <span className="tabnum t-sm" style={{ color: 'var(--muted-2)', marginLeft: 'auto' }}>{timeLabel(span.from)}–{timeLabel(span.to)}</span>}
                       </div>
-                      {isNew && eligible.length > 0 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16 }}>
-                          <Icon name="sparkle" size={12} color="var(--muted-2)" />
-                          <select value={it.operator_id ?? ''} onChange={(e) => setItemOperator(it.key, e.target.value ? Number(e.target.value) : null)}
-                            style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '4px 6px', fontSize: 12, fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink-2)', outline: 'none', cursor: 'pointer' }}>
-                            <option value="">{t('Prima disponibile', 'First available')}</option>
-                            {eligible.map((op) => <option key={op.id} value={op.id}>{op.first_name}</option>)}
-                          </select>
-                        </div>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
+                        {eligible.length > 0 ? (
+                          <React.Fragment>
+                            {eligible.map((op) => {
+                              const on = op.id === it.operator_id;
+                              return (
+                                <button key={op.id} type="button" onClick={() => setItemOperator(it.key, op.id)}
+                                  className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')}
+                                  style={{ '--pill-c': opColors[op.id] || 'var(--clay)', padding: '2px 9px 2px 3px', fontSize: 11.5 }}>
+                                  <Avatar initials={op.initials} size={18} color={opColors[op.id] || 'var(--clay)'} ring={on} />
+                                  <span>{op.first_name}</span>
+                                </button>
+                              );
+                            })}
+                            {isNew && (
+                              <button type="button" onClick={() => setItemOperator(it.key, null)} className={'dk-pill' + (it.operator_id === null ? ' dk-pill--on' : '')} style={{ padding: '3px 9px', fontSize: 11.5 }}>
+                                <Icon name="sparkle" size={11} color={it.operator_id === null ? '#fff' : 'var(--muted-2)'} />{t('Prima disponibile', 'First available')}
+                              </button>
+                            )}
+                          </React.Fragment>
+                        ) : (
+                          <span className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <Icon name="alert" size={12} color="var(--danger)" />{t('Nessuna operatrice abilitata a questo servizio', 'No stylist can perform this service')}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -570,11 +768,14 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
                     </div>
                     {activeServices.length ? (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {/* stesso codice colore dei blocchi in agenda: la
+                            pillola è tinta della sua categoria, non solo un
+                            pallino accanto al nome */}
                         {activeServices.map((s) => (
-                          <button key={s.id} onClick={() => { addServiceItem(s.id); setAddingSvc(false); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--hair)', background: 'var(--surface)', color: 'var(--ink-2)' }}>
-                            <span style={{ width: 7, height: 7, borderRadius: 99, background: catColor(s.category_id) }} />
+                          <button key={s.id} onClick={() => { addServiceItem(s.id); setAddingSvc(false); }}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `2px solid color-mix(in srgb, ${catColor(s.category_id)} 50%, transparent)`, background: `color-mix(in srgb, ${catColor(s.category_id)} 26%, var(--surface))`, color: 'var(--ink)' }}>
                             {lang === 'en' && s.name_en ? s.name_en : s.name_it}
-                            <Icon name="plus" size={12} color="var(--muted-2)" />
+                            <Icon name="plus" size={12} color="var(--ink-2)" />
                           </button>
                         ))}
                       </div>
@@ -586,14 +787,16 @@ export default function ApptDetailModal({ appointment, onMutate, onClose }) {
               </div>
 
               <div className="hr" style={{ margin: '10px 0 8px' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontWeight: 700 }}>
                 <span>{t('Totale', 'Total')}</span>
                 <span className="t-num" style={{ fontSize: 17 }}>{fmtMoney(editTotal, lang)}</span>
               </div>
+              {/* Il pulsante che salva sta nel piede del pannello, sempre in
+                  vista: qui resta solo il promemoria di dove guardare. */}
               {itemsDirty && (
-                <button className="dk-btn dk-btn--soft" disabled={savingItems || !editItems.length} onClick={saveItems} style={{ height: 36, fontSize: 12.5, marginTop: 10, width: '100%' }}>
-                  <Icon name="check" size={14} />{savingItems ? t('Salvataggio…', 'Saving…') : t('Salva modifiche', 'Save changes')}
-                </button>
+                <div className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Icon name="chevD" size={13} color="var(--clay-ink)" />{t('Salva le modifiche col pulsante qui sotto', 'Save your changes with the button below')}
+                </div>
               )}
             </div>
           )}

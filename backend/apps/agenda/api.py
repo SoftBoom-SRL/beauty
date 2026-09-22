@@ -559,13 +559,16 @@ def move_appointment(request, appointment_id: int, data: MoveIn):
     appointment = salon_get(Appointment, ctx, appointment_id)
 
     operator = None
+    from_operator = None
     if data.operator_id:
         from apps.staff.models import Operator  # lazy
 
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
+        if data.from_operator_id and data.from_operator_id != data.operator_id:
+            from_operator = salon_get(Operator, ctx, data.from_operator_id, active=True)
     appointment = services.move_appointment(
-        appointment, data.start, operator=operator, actor=ctx.user, force=data.force,
-        client_overlap_ok=True,
+        appointment, data.start, operator=operator, from_operator=from_operator,
+        actor=ctx.user, force=data.force, client_overlap_ok=True,
     )
     return _appointment_out(appointment)
 
@@ -659,6 +662,11 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
     quella di listino per le voci nuove). Prezzo e posa delle voci esistenti
     restano quelli concordati con la cliente. Il deposito non si ricalcola: si
     riduce soltanto se la visita è scesa sotto la caparra.
+
+    `force=True`: si prova comunque a scrivere anche se in quella fascia
+    l'operatrice risulta occupata o la visita sfora la chiusura (allungare un
+    trattamento accanto a un incastro già forzato). L'idoneità al servizio
+    resta un limite invalicabile.
     """
     ctx = request.auth
     require_scope(ctx, "agenda")
@@ -667,6 +675,7 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
         appointment,
         items=[item.dict() for item in data.items] if data.items is not None else None,
         note=data.note,
+        force=data.force,
         actor=ctx.user,
     )
     return _appointment_out(appointment)
