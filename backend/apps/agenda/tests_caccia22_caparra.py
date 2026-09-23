@@ -178,6 +178,25 @@ class RefundEventsOrderTests(AgendaTestBase):
         given_back = Decimal(refund.call_args.kwargs["amount_cents"]) / 100 if refund.called else Decimal("0")
         self.assertEqual(deducted + given_back, Decimal("20.00"))
 
+    def test_a_pending_partial_refund_leaves_the_rest_deductible(self):
+        """02-21: con 10 € in restituzione la cassa detrae i 20 rimasti, non zero."""
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="pending")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
+
+    def test_a_refund_written_by_hand_is_not_counted_again(self):
+        """Un rimborso scritto dall'admin senza la sua riga resta un rimborso."""
+        from apps.sales.services import deposit_retained
+
+        appointment = self._paid()
+        Appointment.objects.filter(pk=appointment.pk).update(deposit_refunded_amount=Decimal("10.00"))
+        appointment.refresh_from_db()
+        self.assertEqual(deposit_retained(appointment), Decimal("20.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
+
 
 class DepositHoldFollowsTheVisitTests(AgendaTestBase):
     """02-04, 02-16: scadenza e sollecito seguono il termine vero, non un inizio che non c'è più."""

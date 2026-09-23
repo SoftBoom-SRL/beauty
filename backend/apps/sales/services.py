@@ -536,7 +536,13 @@ def deposit_retained(appointment) -> Decimal:
         for row in refunds.values()
         if (row.get("status") or "") in REFUND_IN_FLIGHT
     )
-    left = _to_cents(appointment.deposit_amount) - _refunds_done_cents(refunds) - in_flight
+    # `deposit_refunded_amount` è la copia di quanto già restituito che la
+    # dashboard mostra: di solito coincide con i rimborsi riusciti, ma se è più
+    # alto (scritto a mano dall'admin, senza la riga del rimborso) vale lui.
+    # Contare solo le righe avrebbe detratto al conto, o restituito di nuovo,
+    # soldi che la cliente ha già riavuto.
+    done = max(_refunds_done_cents(refunds), _to_cents(appointment.deposit_refunded_amount))
+    left = _to_cents(appointment.deposit_amount) - done - in_flight
     return (Decimal(max(left, 0)) / 100).quantize(TWO_PLACES)
 
 

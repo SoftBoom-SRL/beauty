@@ -159,17 +159,17 @@ class Appointment(TimeStampedModel):
     def deposit_credit(self):
         """Quota di caparra ancora in cassa, quindi detraibile al checkout.
 
-        È `deposit_amount` meno i rimborsi già riusciti, e solo se la caparra
-        risulta pagata. Prima si detraeva sempre l'intero importo: dopo un
-        rimborso parziale di dieci euro su trenta, la cliente si vedeva scontare
-        trenta euro che il salone non aveva più.
+        È `deposit_amount` meno i rimborsi già riusciti E quelli ancora in
+        corso (`sales.services.deposit_retained`). Prima si detraeva sempre
+        l'intero importo: dopo un rimborso parziale di dieci euro su trenta, la
+        cliente si vedeva scontare trenta euro che il salone non aveva più. E
+        con un rimborso parziale ancora «pending» la caparra risultava «rimborso
+        in corso» e la quota detraibile era zero: la cassa faceva pagare tutto e
+        la parte ancora trattenuta tornava sulla carta solo dopo (02-21).
         """
-        from decimal import Decimal
+        from apps.sales.services import deposit_retained  # lazy: sales dipende da agenda
 
-        if self.deposit_status != self.DepositStatus.PAID:
-            return Decimal("0.00")
-        left = Decimal(self.deposit_amount or 0) - Decimal(self.deposit_refunded_amount or 0)
-        return max(left, Decimal("0.00")).quantize(Decimal("0.01"))
+        return deposit_retained(self)
 
 
 class AppointmentService(models.Model):
