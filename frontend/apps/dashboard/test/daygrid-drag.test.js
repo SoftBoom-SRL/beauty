@@ -194,8 +194,10 @@ test('il clic dentro l\'ombra della piega vale «stessa ora, stesse operatrici»
   const g = setup({ rows, allRows: rows, ghost: tue });
   const colGiulia = find(g.root(), (el) => el.key === 2 && typeof el.props?.onClick === 'function' && el.props.style?.position === 'relative');
   assert.ok(colGiulia, 'colonna di Giulia');
-  // 11:10, dentro l'ombra della piega (11:00–11:30)
-  const y = 160 + (11 * 60 + 10 - 8 * 60) * PXM;
+  // 11:10, dentro l'ombra della piega (11:00–11:30): 10 minuti sotto il suo bordo alto
+  const ombra = find(g.root(), (el) => el.key === 'ghost412');
+  assert.ok(ombra, 'l\'ombra della piega è nella colonna di Giulia');
+  const y = 160 + ombra.props.style.top - 1.5 + 10 * PXM;
   const target = { getBoundingClientRect: () => rect(532, 160, 468, 12 * 60 * PXM) };
   colGiulia.props.onClick({ target, currentTarget: target, clientX: 800, clientY: y });
   assert.equal(g.cb.onSlotMenu.calls.length, 1);

@@ -19,14 +19,14 @@ import HexInput from '../../ui/HexInput.jsx';
 import {
   DK_START, DK_END, PXM, COLW, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
-  ghostBlockAt, apptRevenue, DOW_IT, DOW_EN,
+  ghostBlockAt, apptRevenue, DOW_IT, DOW_EN, dayGridRange, openingFor,
 } from './lib.js';
 
 const HOURS_W = 64;   // colonna delle ore a sinistra (fissa durante lo scorrimento)
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
-  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom,
+  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom, scrollMemo,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
@@ -43,9 +43,13 @@ export default function DayGrid({
 
   // px per minuto alla scala scelta da chi guarda (zoom personale)
   const pxm = PXM * (zoom || 1);
-  const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
-  const marks = gridMarks(step);                     // ora piena / mezz'ora / quarti (solo passo 15)
-  const gridH = (DK_END - DK_START) * pxm;
+  /* Fascia oraria del giorno (12-04): orari del centro e turni, allargata per
+   * appuntamenti, pause e l'ombra dell'appuntamento aperto (vedi dayGridRange).
+   * Prima era fissa 08–20. */
+  const { start: G0, end: G1 } = dayGridRange(allRows || rows, openingFor(settings, date), ghost);
+  const hours = []; for (let h = G0 / 60; h <= G1 / 60; h++) hours.push(h);
+  const marks = gridMarks(step, G0, G1);             // ora piena / mezz'ora / quarti (solo passo 15)
+  const gridH = (G1 - G0) * pxm;
   /* `rows` = le colonne da disegnare (le chip delle operatrici spente non ci
    * sono). `dataRows` = TUTTE le righe del giorno: i conti vanno fatti su
    * quelle, perché un appuntamento è elencato una volta sola nella riga
@@ -111,8 +115,8 @@ export default function DayGrid({
     const top0 = cols.offsetTop;                       // dove comincia la griglia nel contenuto
     const offset = zoomAnchor.current?.offset ?? el.clientHeight / 2;
     zoomAnchor.current = null;
-    const minute = DK_START + (el.scrollTop + offset - top0) / (PXM * prev);
-    el.scrollTop = (minute - DK_START) * (PXM * zoom) + top0 - offset;
+    const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
+    el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
   }, [zoom]);
   /* Pinch del trackpad (che arriva come ctrl+rotella) e ⌘/ctrl+rotella: il
    * listener è nativo e NON passivo, altrimenti il browser ingrandisce la
@@ -132,6 +136,32 @@ export default function DayGrid({
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [onZoom]);
+
+  /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica) e
+   * tornava in cima: l'ombra dell'appuntamento aperto nel pannello — il motivo
+   * per cui si sfoglia — finiva fuori schermo. Il minuto in cima alla griglia
+   * si ricorda in `scrollMemo` (vive nella sezione, sopravvive al rimontaggio)
+   * e si ritrova sul giorno dopo, anche quando la fascia oraria cambia; se poi
+   * l'ombra resta fuori vista, la si porta in vista. */
+  const ownMemo = useRef(null);
+  const memo = scrollMemo || ownMemo;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || memo.current == null) return;
+    el.scrollTop = Math.max(0, (memo.current - G0) * pxm);
+  }, [G0]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !ghost) return;
+    const top = (aStartMin(ghost) - G0) * pxm;                 // nella griglia, sotto l'intestazione
+    const visible = el.clientHeight - (headRef.current?.offsetHeight || 0);
+    if (top < el.scrollTop || top + 24 > el.scrollTop + visible) el.scrollTop = Math.max(0, top - 40);
+  }, [ghost?.id, ghost?.start, date]); // eslint-disable-line react-hooks/exhaustive-deps
+  function onGridScroll() {
+    const el = scrollRef.current;
+    if (el) memo.current = G0 + el.scrollTop / pxm;
+    onDragScroll();
+  }
 
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
@@ -462,7 +492,7 @@ export default function DayGrid({
     const snap = bestSnap(rawMin, d, nop);
     d.snap = snap && snap.min !== ns ? snap : null;
     if (snap) ns = snap.min;
-    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
+    ns = Math.max(G0, Math.min(G1 - step, ns));
     d.ns = ns; d.nop = nop;
     d.moved = d.moved || Math.abs(dy) > 4 || nop !== d.origOp;
     if (d.moved && !wasMoved) startedMoving();
@@ -606,7 +636,7 @@ export default function DayGrid({
   return (
     <div
       ref={scrollRef} className="scroll" style={{ flex: 1, overflow: 'auto', position: 'relative' }}
-      onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onScroll={onDragScroll}
+      onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onScroll={onGridScroll}
     >
       {/* operator header (sticky top) */}
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingBottom: 8, borderBottom: '1px solid var(--hair)' }}>
@@ -667,16 +697,16 @@ export default function DayGrid({
         </div>
       </div>
 
-      {/* grid body */}
-      <div style={{ display: 'flex', position: 'relative', height: gridH }}>
+      {/* grid body — `data-span-min`: quanti minuti copre, per «Adatta» */}
+      <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH }}>
         {/* hour gutter (sticky left) */}
         <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
           {/* etichette in grassetto centrate sulla riga (line-height 14 → -7) + tacca che la prolunga nel gutter */}
           {hours.map((h) => (
             <React.Fragment key={h}>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm - 7, right: 10, fontSize: 11, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm, right: 0, width: 6, ...GRID_LINE_STYLE.hour }} />
-              {h < 20 && 30 * pxm > 18 && <div style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * pxm - 6, right: 10, fontSize: 9.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
+              <div style={{ position: 'absolute', top: (h * 60 - G0) * pxm - 7, right: 10, fontSize: 11, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
+              <div style={{ position: 'absolute', top: (h * 60 - G0) * pxm, right: 0, width: 6, ...GRID_LINE_STYLE.hour }} />
+              {h < G1 / 60 && 30 * pxm > 18 && <div style={{ position: 'absolute', top: (h * 60 + 30 - G0) * pxm - 6, right: 10, fontSize: 9.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
             </React.Fragment>
           ))}
         </div>
@@ -687,20 +717,20 @@ export default function DayGrid({
           {/* rimpicciolendo, quarti e mezz'ore diventano un reticolo illeggibile:
               sotto una certa altezza restano solo le ore */}
           {marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12))
-            .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
+            .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - G0) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
           {/* passato (solo oggi): velo leggero — non si prenota indietro nel tempo */}
-          {nowMin != null && nowMin > DK_START && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, DK_END) - DK_START) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
+          {nowMin != null && nowMin > G0 && (
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, G1) - G0) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
           )}
-          {nowMin != null && nowMin >= DK_START && nowMin <= DK_END && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - DK_START) * pxm, height: 2, background: '#F4708A', zIndex: 8, pointerEvents: 'none' }}>
+          {nowMin != null && nowMin >= G0 && nowMin <= G1 && (
+            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - G0) * pxm, height: 2, background: '#F4708A', zIndex: 8, pointerEvents: 'none' }}>
               <span style={{ position: 'absolute', left: -6, top: -5, width: 12, height: 12, borderRadius: 99, background: '#F4708A', boxShadow: '0 0 0 3px rgba(244,112,138,0.2)' }} />
               <span className="tabnum" style={{ position: 'absolute', right: 6, top: -8, fontSize: 10, fontWeight: 800, color: '#F4708A', background: 'var(--paper)', padding: '0 4px', borderRadius: 4 }}>{timeLabel(nowMin)}</span>
             </div>
           )}
           {rows.map((row) => {
             const o = row.operator;
-            const closed = closedIntervals(row.windows);
+            const closed = closedIntervals(row.windows, G0, G1);
             const isTarget = targetOp === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
             return (
@@ -712,7 +742,7 @@ export default function DayGrid({
                   if (e.target !== e.currentTarget) return;
                   if (justDragged.current || drag.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const raw = DK_START + (e.clientY - rect.top) / pxm;
+                  const raw = G0 + (e.clientY - rect.top) / pxm;
                   /* Clic sull'ombra dell'appuntamento aperto: vuol dire «qui,
                    * a quest'ora, con chi lo fa» — cambia solo il giorno. Letto
                    * come uno slot qualsiasi, il clic sull'ombra della piega di
@@ -724,13 +754,13 @@ export default function DayGrid({
                     onSlotMenu(o.id, gb.startMin, e.clientX, e.clientY, visitVerdict(ghost, 0, ghost.operator_id, ghost.operator_id), { ghostHit: true });
                     return;
                   }
-                  const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
+                  const snapped = Math.max(G0, Math.min(G1 - step, Math.floor(raw / step) * step));
                   onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows: dataRows }));
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 {closed.map(([s, e2], i) => (
-                  <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (s - DK_START) * pxm, height: (e2 - s) * pxm, pointerEvents: 'none', borderRadius: 10, background: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--paper) 70%, transparent) 0 6px, transparent 6px 12px)', zIndex: 1 }}>
+                  <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (s - G0) * pxm, height: (e2 - s) * pxm, pointerEvents: 'none', borderRadius: 10, background: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--paper) 70%, transparent) 0 6px, transparent 6px 12px)', zIndex: 1 }}>
                     {(e2 - s) * pxm > 46 && (
                       <span className="dk-closed-label" style={{ top: '50%', transform: 'translateY(-50%)' }}>
                         {(row.windows || []).length ? t('Fuori turno', 'Off shift') : t('Non in turno', 'Off today')}
@@ -743,10 +773,10 @@ export default function DayGrid({
                     quelli della visita faceva sembrare che partisse tutta,
                     mentre gli altri restano fermi davvero (vedi itemPos). */}
                 {dragging && d.kind === 'item' && itemBlocks(d.block.appt).filter((b) => b.opId === o.id && (!d.detach || b.item.id === d.itemId)).map((b) => (
-                  <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - DK_START) * pxm + 1.5, height: b.dur * pxm - 3 }} />
+                  <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - G0) * pxm + 1.5, height: b.dur * pxm - 3 }} />
                 ))}
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
-                  <div className="dk-drag-ghost" style={{ top: (d.orig - DK_START) * pxm + 1.5, height: d.obj.duration_min * pxm - 3 }} />
+                  <div className="dk-drag-ghost" style={{ top: (d.orig - G0) * pxm + 1.5, height: d.obj.duration_min * pxm - 3 }} />
                 )}
                 {/* Ombra dell'appuntamento aperto nel pannello mentre si sfoglia
                     un altro giorno: dove andrebbe a finire, alla sua ora e nella
@@ -762,7 +792,7 @@ export default function DayGrid({
                   <div key={'ghost' + b.item.id} data-ghost={b.item.id === ghostFirstId ? 'first' : ''}
                     style={{
                       position: 'absolute', left: 4, right: 4,
-                      top: (b.startMin - DK_START) * pxm + 1.5, height: b.dur * pxm - 3,
+                      top: (b.startMin - G0) * pxm + 1.5, height: b.dur * pxm - 3,
                       borderRadius: 12, border: '2px dashed var(--clay)',
                       background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
                       pointerEvents: 'none', zIndex: 6, overflow: 'hidden',
@@ -806,7 +836,7 @@ export default function DayGrid({
                             title={t(`Un'unica visita di ${sp.client}: ${sp.total} servizi · trascina qui per spostarli tutti insieme, anche in un'altra colonna`, `One visit for ${sp.client}: ${sp.total} services · drag here to move them all together, to another column too`)}
                             style={{
                               position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 12),
-                              top: (sp.startMin - DK_START) * pxm + 1.5,
+                              top: (sp.startMin - G0) * pxm + 1.5,
                               height: (sp.endMin - sp.startMin) * pxm - 3,
                               background: 'rgba(17,24,39,0.55)', borderRadius: '12px 0 0 12px',
                               pointerEvents: dragging || !canWrite ? 'none' : 'auto',
@@ -823,7 +853,7 @@ export default function DayGrid({
                       {/* service blocks (each in its operator's column) */}
                       {placed.map(({ b, pos, lane, laneCount }) => (
                         <ItemBlock
-                          key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
+                          key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin} g0={G0}
                           lane={lane} laneCount={laneCount}
                           dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
                           highlight={b.apptId === openApptId}
@@ -843,7 +873,7 @@ export default function DayGrid({
                   const pos = pausePos(p);
                   return (
                     <PauseBlock
-                      key={'p' + p.id} pxm={pxm} p={p} startMin={pos.startMin} dur={pos.dur ?? p.duration_min} dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang}
+                      key={'p' + p.id} pxm={pxm} g0={G0} p={p} startMin={pos.startMin} dur={pos.dur ?? p.duration_min} dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang}
                       canWrite={canWrite}
                       onDown={(e) => onPauseDown(e, p)}
                       onResizeDown={(e) => onPauseResizeDown(e, p)}
@@ -914,23 +944,23 @@ export default function DayGrid({
   );
 }
 
-/* closed (off-shift) intervals within the grid, from API windows [["09:00","13:00"],...] */
-function closedIntervals(windows) {
+/* closed (off-shift) intervals within the grid (`g0`–`g1`, minuti), from API windows [["09:00","13:00"],...] */
+function closedIntervals(windows, g0 = DK_START, g1 = DK_END) {
   const win = (windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const out = [];
-  let cursor = DK_START;
+  let cursor = g0;
   win.forEach(([s, e]) => {
-    if (s > cursor) out.push([cursor, Math.min(s, DK_END)]);
+    if (s > cursor) out.push([cursor, Math.min(s, g1)]);
     cursor = Math.max(cursor, e);
   });
-  if (cursor < DK_END) out.push([cursor, DK_END]);
+  if (cursor < g1) out.push([cursor, g1]);
   return out.filter(([s, e]) => e > s);
 }
 
 const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, isLast, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -965,7 +995,7 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
         : undefined}
       onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * pxm + 1.5, height: h - 3,
+        position: 'absolute', top: (startMin - g0) * pxm + 1.5, height: h - 3,
         // Mentre si trascina il blocco torna a tutta larghezza: deve restare
         // leggibile sopra gli altri.
         ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
@@ -1010,14 +1040,14 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
 }
 
 /* ---------- pause (break) block — hatched, movable, resizable ---------- */
-function PauseBlock({ p, startMin, dur, dragging, tone, pxm = PXM, t, canWrite, onDown, onResizeDown, onRemove }) {
+function PauseBlock({ p, g0 = DK_START, startMin, dur, dragging, tone, pxm = PXM, t, canWrite, onDown, onResizeDown, onRemove }) {
   const bh = dur * pxm;
   const bCompact = bh < 44;
   return (
     <div
       onPointerDown={(e) => onDown(e)}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * pxm + 1.5, height: bh - 3,
+        position: 'absolute', top: (startMin - g0) * pxm + 1.5, height: bh - 3,
         ...(dragging ? { left: 4, right: 4 } : laneCss(0, 1)),
         borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : '1.5px dashed var(--pewter-300, #B6B4BB)',
         background: 'repeating-linear-gradient(135deg, rgba(120,120,128,0.13) 0 7px, rgba(120,120,128,0.04) 7px 14px)',

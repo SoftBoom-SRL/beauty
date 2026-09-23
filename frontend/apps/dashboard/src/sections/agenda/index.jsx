@@ -60,7 +60,9 @@ export default function AgendaSection() {
     if (!el) return;
     const body = el.querySelector('.dk-tl-cols')?.parentElement || el.querySelector('[data-daycol]')?.parentElement;
     const disponibile = el.clientHeight - (body ? body.offsetTop : 0) - 8;
-    if (disponibile > 60) setZoom(disponibile / ((DK_END - DK_START) * PXM));
+    // la fascia oraria non è più fissa (08–20): la dice la griglia stessa
+    const span = Number(body?.dataset?.spanMin) || (DK_END - DK_START);
+    if (disponibile > 60) setZoom(disponibile / (span * PXM));
   }, [setZoom]);
 
   /* ---- real "now" (updated every 30s) ---- */
@@ -74,6 +76,9 @@ export default function AgendaSection() {
 
   /* ---- day data ---- */
   const [dayData, setDayData] = useState(null);   // null = first load → skeleton
+  // minuto in cima alla griglia del giorno: sopravvive allo scheletro fra un
+  // giorno e l'altro (vedi DayGrid, `scrollMemo`)
+  const dayScroll = useRef(null);
   const [waitlist, setWaitlist] = useState([]);
   const [summary, setSummary] = useState(null);
   const [released, setReleased] = useState([]);   // slot liberati per caparra non pagata: «da richiamare»
@@ -833,6 +838,7 @@ export default function AgendaSection() {
               <DayGrid
                 rows={visibleRows}
                 ghost={ghostAppt}
+                scrollMemo={dayScroll}
                 zoom={zoom}
                 onZoom={setZoom}
                 allRows={allRows}
