@@ -1,5 +1,5 @@
 // helpers.js — clienti section utilities (pure functions, no React).
-import { fmtTime, salonDateParts } from '@youty/shared';
+import { fmtTime, salonDateParts, todayStr } from '@youty/shared';
 
 /* Shared input style used across the section's forms (from the prototype). */
 export const inputCss = {
@@ -90,21 +90,68 @@ export function consentStamp(consents, key) {
   return isStamp(cs[`${key}_revoked_at`]) ? { kind: 'revoked', at: cs[`${key}_revoked_at`] } : null;
 }
 
+const MONTHS_SHORT = {
+  it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+};
+const monthShort = (m, lang) => (lang === 'en' ? MONTHS_SHORT.en : MONTHS_SHORT.it)[m - 1];
+
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
 export function dateTimeLabel(iso, lang) {
   if (!iso) return '';
   // Ora del salone, non del dispositivo (vedi shared/format.js).
   const p = salonDateParts(iso);
-  const months = lang === 'en'
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return `${p.day} ${months[p.month - 1]} ${p.year} · ${fmtTime(iso)}`;
+  return `${p.day} ${monthShort(p.month, lang)} ${p.year} · ${fmtTime(iso)}`;
 }
 
 /* "12 mar 2026" from an ISO date/datetime. */
 export function dateLabel(iso, lang) {
   if (!iso) return '';
+  // Una data pura («cliente dal» 2021-05-10) è già un giorno del calendario:
+  // letta come istante (mezzanotte UTC) e riportata sul fuso del salone,
+  // in un salone a ovest di Greenwich diventava il giorno prima.
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso));
+  if (d) return `${Number(d[3])} ${monthShort(Number(d[2]), lang)} ${d[1]}`;
   return dateTimeLabel(iso, lang).split(' · ')[0];
+}
+
+/** Giorno e mese della timeline dello storico, sul calendario del SALONE:
+ *  `new Date(iso).getDate()` era il giorno del dispositivo, e da una postazione
+ *  su un altro fuso le visite serali cambiavano giorno (14-13, 06-18).
+ *  → { day, month: 'mar', year: '' | '25' } (anno solo se non è quello in corso). */
+export function timelineDate(iso, lang, today = todayStr()) {
+  const p = salonDateParts(iso);
+  return {
+    day: p.day,
+    month: monthShort(p.month, lang),
+    year: p.year === Number(String(today).slice(0, 4)) ? '' : String(p.year).slice(2),
+  };
+}
+
+/** Caparra di una visita come va mostrata nello storico, o null se non c'è.
+ *  Prima si guardava solo «pagata» e se ne mostrava l'intero `deposit_amount`:
+ *  dopo un rimborso parziale di 10 € su 30 la scheda diceva 30 €, e una
+ *  caparra da restituire o in rimborso non compariva affatto (14-25).
+ *  → { kind: 'paid'|'refund_due'|'refunding'|'refunded'|'forfeited', amount, refunded } */
+export function depositBadge(a) {
+  const amount = Number(a?.deposit_amount || 0);
+  const refunded = Number(a?.deposit_refunded_amount || 0);
+  // in centesimi interi: gli importi arrivano come stringhe decimali del server
+  const left = Math.max(0, Math.round(amount * 100) - Math.round(refunded * 100)) / 100;
+  switch (a?.deposit_status) {
+    case 'paid': {
+      // quello che resta in cassa e si detrae al conto (deposit_credit)
+      const credit = a.deposit_credit != null ? Number(a.deposit_credit) : left;
+      return credit > 0
+        ? { kind: 'paid', amount: credit, refunded }
+        : { kind: 'refunded', amount: refunded || amount, refunded };
+    }
+    case 'refund_due': return { kind: 'refund_due', amount: left, refunded };
+    case 'refunding': return { kind: 'refunding', amount: left, refunded };
+    case 'refunded': return { kind: 'refunded', amount: refunded || amount, refunded };
+    case 'forfeited': return { kind: 'forfeited', amount: left, refunded };
+    default: return null;   // nessuna caparra, o richiesta e non ancora pagata
+  }
 }
 
 /* wa.me link from a phone number (digits only, keeps leading country code). */
@@ -172,12 +219,16 @@ export function formatBirthday(v, lang) {
   const base = lang === 'en' ? `${months[b.m - 1]} ${b.d}` : `${b.d} ${months[b.m - 1]}`;
   return b.y ? `${base} ${b.y}` : base;
 }
-/** giorni al prossimo compleanno (0 = oggi), null se non impostato */
-export function daysToBirthday(v) {
+/** giorni al prossimo compleanno (0 = oggi), null se non impostato.
+ *  «Oggi» è quello del SALONE (todayStr): con la mezzanotte del dispositivo
+ *  una postazione su un altro fuso annunciava il compleanno il giorno sbagliato.
+ *  Aritmetica in UTC: niente ore saltate col cambio dell'ora. */
+export function daysToBirthday(v, today = todayStr()) {
   const b = parseBirthday(v);
   if (!b) return null;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  let next = new Date(today.getFullYear(), b.m - 1, b.d);
-  if (next < today) next = new Date(today.getFullYear() + 1, b.m - 1, b.d);
-  return Math.round((next - today) / 86400000);
+  const [y, m, d] = String(today).split('-').map(Number);
+  const t0 = Date.UTC(y, m - 1, d);
+  let next = Date.UTC(y, b.m - 1, b.d);
+  if (next < t0) next = Date.UTC(y + 1, b.m - 1, b.d);
+  return Math.round((next - t0) / 86400000);
 }
