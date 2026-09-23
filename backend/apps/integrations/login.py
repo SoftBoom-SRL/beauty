@@ -93,8 +93,9 @@ def _unlinked_memberships(user: User) -> list[Membership]:
     return sorted(memberships, key=lambda m: not m.is_owner)  # stabile: poi per id
 
 
-def _adoptable_salon(user: User) -> Salon | None:
-    """Il salone che «Accedi con Yourang» può collegare da solo, se c'è.
+def _adoptable_salon(free: list[Membership]) -> Salon | None:
+    """Fra i saloni senza connessione (`_unlinked_memberships`), quello che
+    «Accedi con Yourang» può collegare da solo, se c'è.
 
     Solo uno di cui l'utente è TITOLARE, e solo se è l'unico senza connessione.
     Prima si adottava il primo salone senza connessione in cui l'utente era
@@ -102,7 +103,7 @@ def _adoptable_salon(user: User) -> Salon | None:
     altro alla propria org (anagrafica spinta lì, webhook del salone suoi), e il
     titolare di «Centro» e «Mare» che accedeva con l'org di Mare collegava Centro.
     """
-    owned = [m.salon for m in _unlinked_memberships(user) if m.is_owner]
+    owned = [m.salon for m in free if m.is_owner]
     return owned[0] if len(owned) == 1 else None
 
 
@@ -121,7 +122,7 @@ def _resolve_salon(org: str, email: str, email_verified: bool) -> tuple[Salon | 
         user = User.objects.filter(email__iexact=email).first()
         if user:
             free = _unlinked_memberships(user)
-            adoptable = _adoptable_salon(user)
+            adoptable = _adoptable_salon(free)
             if adoptable is not None:
                 return adoptable, user
             if free:
@@ -145,7 +146,7 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
         # Caso A: org già collegata a questo salone, niente da ricollegare.
         user = _get_or_create_user(email, name, email_verified)
     else:
-        adoptable = _adoptable_salon(user)
+        adoptable = _adoptable_salon(_unlinked_memberships(user))
         link = adoptable is not None and adoptable.pk == salon.pk
 
     if _membership_for(salon, user) is None:
