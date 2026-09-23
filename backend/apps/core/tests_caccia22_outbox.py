@@ -347,3 +347,39 @@ class OpeningHoursNotSetTests(TestCase):
         # sette giorni vuoti scritti per esteso restano invece «chiuso»
         closed = normalize_opening_hours_week({str(day): [] for day in range(7)})
         self.assertEqual(closed, {str(day): [] for day in range(7)})
+
+
+@override_settings(YOURANG_API_URL="https://yourang.example/events")
+class HeldEventsDoNotBlockTests(TestCase):
+    """Revisione finale: il link della caparra non aspetta una conferma solo trattenuta."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _flush(self, sent, **kwargs):
+        from unittest.mock import patch
+
+        from .management.commands.flush_outbox import flush_pending
+
+        with patch("httpx.Client.post", side_effect=_fake_yourang(sent, **kwargs)):
+            return flush_pending()
+
+    def test_a_deposit_link_does_not_wait_for_a_held_confirmation(self):
+        held = emit_event(self.salon, "appointment.created", {}, delay_seconds=600, coalesce_key="appointment:7")
+        link = emit_event(self.salon, "deposit.payment_link", {}, coalesce_key="appointment:7")
+        sent = []
+        self._flush(sent)
+        # il termine per pagare corre: il link parte subito, la conferma alla sua ora
+        self.assertEqual(sent, [("deposit.payment_link", link.id)])
+        held.refresh_from_db()
+        self.assertEqual(held.status, OutboxEvent.Status.PENDING)
+
+    def test_but_it_still_waits_for_a_message_being_retried(self):
+        retrying = emit_event(self.salon, "appointment.created", {}, coalesce_key="appointment:8")
+        sent = []
+        self._flush(sent, failing=("appointment.created",))
+        retrying.refresh_from_db()
+        self.assertEqual(retrying.attempts, 1)
+        link = emit_event(self.salon, "deposit.payment_link", {}, coalesce_key="appointment:8")
+        self._flush(sent)
+        self.assertNotIn(("deposit.payment_link", link.id), sent)

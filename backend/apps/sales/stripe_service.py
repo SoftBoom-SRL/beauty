@@ -572,9 +572,10 @@ def ensure_deposit_link(appointment, *, resend: bool = False, actor=None, reason
         "resend": resend,
         "reason": reason,
     }
-    # Stessa chiave degli eventi dell'appuntamento: il link parte DOPO la
-    # conferma ancora trattenuta, non prima (vedi flush_outbox). Non si fonde
-    # con loro: le fusioni guardano solo i tipi `appointment.*`.
+    # Stessa chiave degli eventi dell'appuntamento: un messaggio della visita
+    # in ritentativo non viene scavalcato (vedi flush_outbox). Non si fonde
+    # con loro (le fusioni guardano solo i tipi `appointment.*`) e non aspetta
+    # quelli solo trattenuti: il termine per pagare corre già.
     from apps.agenda.services import appointment_event_key  # lazy
 
     emit_event(

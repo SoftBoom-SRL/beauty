@@ -366,6 +366,13 @@ def flush_pending(limit: int = 200) -> tuple[int, int]:
     conferma che aveva preso un 502 ripartiva col suo ritentativo DOPO
     l'annullamento arrivato nel frattempo: l'ultima parola che la cliente
     riceveva era «confermato», e si presentava a un appuntamento annullato.
+
+    Non aspetta invece chi è solo TRATTENUTO (mai tentato, con l'attesa ancora
+    in corso: il ritardo di sicurezza dell'agenda). I messaggi dell'appuntamento
+    trattenuti si fondono fra loro, quindi dietro a uno così resterebbero solo
+    link e sollecito della caparra: fermi anche quaranta minuti mentre il
+    termine per pagare corre, e poi consegnati DOPO la conferma fusa con lo
+    spostamento, col vecchio orario come ultima parola.
     """
     now = timezone.now()
     release_stale_claims(now)
@@ -375,6 +382,8 @@ def flush_pending(limit: int = 200) -> tuple[int, int]:
         coalesce_key=OuterRef("coalesce_key"),
         id__lt=OuterRef("id"),
         status__in=(OutboxEvent.Status.PENDING, OutboxEvent.Status.SENDING),
+    ).exclude(
+        status=OutboxEvent.Status.PENDING, attempts=0, next_attempt_at__gt=now,
     )
     pending = list(
         OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)

@@ -48,19 +48,20 @@ il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.ser
   (nome cliente, telefono, lingua, orari ISO).
 - **Ordine per oggetto**: gli eventi con la stessa `coalesce_key` partono
   nell'ordine in cui sono nati; uno aspetta che quelli più vecchi con la stessa
-  chiave siano consegnati, falliti, sostituiti o scaduti (`flush_outbox`).
-  Chiavi: `appointment:<id>` (anche caparra e `visit.completed`, che si
-  ordinano dopo i messaggi trattenuti dell'appuntamento ma NON si fondono con
-  loro), `slot:<id>`, `automation:<id>`, `communication:<id>`.
+  chiave siano consegnati, falliti, sostituiti o scaduti (`flush_outbox`), ma
+  non quelli soltanto trattenuti dal ritardo di sicurezza (mai tentati).
+  Chiavi: `appointment:<id>` (anche caparra e `visit.completed`, che NON si
+  fondono con i messaggi dell'appuntamento), `slot:<id>`, `automation:<id>`,
+  `communication:<id>`.
 - **Ritardo di sicurezza**: gli eventi dell'agenda passano da
   `agenda.services.emit_appointment_event`, che li TRATTIENE per
   `SalonSettings.automation_delay_seconds` (30 di serie, 0 = subito) con una
   `coalesce_key` per oggetto. Due eventi trattenuti sullo stesso appuntamento si
   fondono in uno solo: prenotare e correggere l'orario un istante dopo manda un
   messaggio, non due, e quello che «torna indietro» annulla non parte affatto.
-  Gli eventi immediati (OTP, link di pagamento) NON si ritardano; il link della
-  caparra, che ha la chiave dell'appuntamento, parte però dopo la conferma
-  ancora trattenuta.
+  Gli eventi immediati (OTP, link di pagamento) NON si ritardano e non aspettano
+  i messaggi trattenuti; aspettano solo quelli della stessa chiave in
+  ritentativo.
 - **Condizioni E/O** (deposito, automazioni): JSON `{"op":"and|or","rules":[{"field","cmp","value"}]}`,
   valutate con `common.conditions.evaluate(conditions, facts)`;
   facts standard da `apps.clients.services.client_facts(client)`.
