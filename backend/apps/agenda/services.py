@@ -187,10 +187,25 @@ def lock_salon(salon) -> None:
     sovrapposte. Il lock sulla riga del salone (SELECT … FOR UPDATE) fa
     attendere la seconda finché la prima non ha committato. Su SQLite è un
     no-op, ma lì le scritture sono già seriali. Va chiamata DENTRO atomic().
+
+    Il lock è FOR NO KEY UPDATE, non FOR UPDATE. Su PostgreSQL le chiavi
+    esterne di Django sono DEFERRABLE INITIALLY DEFERRED: al COMMIT chi ha
+    inserito righe legate al salone (vendite, registro attività, eventi
+    outbox) ne verifica l'esistenza con FOR KEY SHARE sulla riga del salone,
+    incompatibile con FOR UPDATE. Un checkout che teneva la riga di un
+    appuntamento restava così in attesa del salone al commit, mentre chi
+    teneva il salone aspettava quella stessa riga: deadlock, e un 500 a una
+    delle due. NO KEY UPDATE non ferma quei controlli e continua a
+    serializzare fra loro tutte le chiamate a questa funzione. L'ordine resta
+    sempre salone → riga dell'appuntamento (vedi `_lock_and_reload`).
     """
     from apps.core.models import Salon  # lazy
 
-    list(Salon.objects.select_for_update().filter(pk=salon.pk).values_list("id", flat=True))
+    list(
+        Salon.objects.select_for_update(no_key=True)
+        .filter(pk=salon.pk)
+        .values_list("id", flat=True)
+    )
 
 
 def _bookable_service(salon, service_id, *, keep_ids=()):
@@ -811,13 +826,25 @@ def _lock_and_reload(appointment: Appointment) -> None:
     `status`, riportando in agenda un appuntamento annullato. La rilettura
     avviene DOPO il lock, altrimenti si rileggerebbe di nuovo un dato che può
     cambiare un istante dopo.
+
+    Dopo il salone si blocca anche la RIGA dell'appuntamento. Il webhook della
+    caparra e il rilascio automatico lavorano sulla riga: col solo lock del
+    salone un annullamento poteva rileggere «caparra richiesta» un istante
+    prima che il pagamento fosse registrato e poi riscriverla sopra, o uno
+    spostamento passare su una visita appena liberata. Sempre in quest'ordine
+    (salone, poi riga), lo stesso di chi tocca l'appuntamento da cassa e Stripe.
     """
+    _lock_row(appointment)
+    _ensure_open(appointment)
+
+
+def _lock_row(appointment: Appointment) -> None:
+    """Lock del salone, poi lock e rilettura della riga dell'appuntamento."""
     lock_salon(appointment.salon)
     try:
-        appointment.refresh_from_db()
+        appointment.refresh_from_db(from_queryset=Appointment.objects.select_for_update())
     except Appointment.DoesNotExist:
         raise HttpError(404, "Appuntamento non trovato")
-    _ensure_open(appointment)
 
 
 def _event_payload(appointment: Appointment) -> dict:
@@ -1277,6 +1304,20 @@ def move_appointment(
             exclude_appointment_id=appointment.id,
             ignore_client_id=appointment.client_id if client_overlap_ok else None,
         )
+        if not allow_past:
+            # Dall'app cliente la posa di un'altra cliente resta intoccabile:
+            # sovrapporvisi è una scelta che lo staff fa a mano, e la ricerca
+            # dell'app quell'orario non lo propone. Lo spostamento lo
+            # accettava comunque — da una lista vecchia di un minuto o da una
+            # richiesta costruita a mano.
+            _reject_soak_overlap(
+                appointment,
+                new_start,
+                [
+                    (item.duration_min, item.soak_min, op)
+                    for item, op in zip(items, target_operators)
+                ],
+            )
         # La permanenza della cliente, posa finale compresa, deve stare dentro
         # l'apertura del centro: il controllo c'era solo in creazione, e
         # spostando si potevano portare i 60' di posa di un colore mezz'ora
@@ -1341,6 +1382,23 @@ def move_appointment(
         after={"appointments": [undo_log.appointment_snapshot(appointment)]},
     )
     return appointment
+
+
+def _reject_soak_overlap(appointment: Appointment, start: dt.datetime, segments: list[tuple]) -> None:
+    """409 se un lavoro attivo della catena cade nella posa di un'altra cliente.
+
+    Complemento di `_validate_segments` (che per lo staff la ammette) per le
+    richieste dell'app: segments = [(active_min, soak_min, operator)].
+    """
+    local = timezone.localtime(start)
+    cursor = local.hour * 60 + local.minute
+    busy = _busy_map(appointment.salon, local.date(), exclude_appointment_id=appointment.id)
+    for active_min, soak_min, operator in segments:
+        end = cursor + active_min
+        soaks = [(s, e) for s, e, hard in busy.get(operator.id, ()) if not hard]
+        if _overlaps(soaks, cursor, end):
+            raise HttpError(409, "Orario non più disponibile")
+        cursor = end + (soak_min or 0)
 
 
 @transaction.atomic
@@ -1493,6 +1551,15 @@ def split_appointment(
 @transaction.atomic
 def check_in(appointment: Appointment, *, actor=None) -> Appointment:
     _lock_and_reload(appointment)
+    # Una seconda postazione con la scheda vecchia riportava «in corso» a
+    # «check-in»: lo stato tornava indietro a trattamento avviato e l'evento
+    # ripartiva verso Yourang.
+    if appointment.status == Appointment.Status.IN_PROGRESS:
+        raise HttpError(400, "Il trattamento è già iniziato: il check-in è già stato fatto")
+    if appointment.status == Appointment.Status.CHECKED_IN:
+        # Già fatto (doppio clic, due postazioni): niente di nuovo da dire né
+        # da annullare.
+        return appointment
     before = undo_log.appointment_snapshot(appointment)
     appointment.status = Appointment.Status.CHECKED_IN
     appointment.save(update_fields=["status", "updated_at"])
@@ -1541,8 +1608,20 @@ def start_appointment(appointment: Appointment, *, actor=None) -> Appointment:
 
 @transaction.atomic
 def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> Appointment:
-    """No-show: stato + deposito paid->forfeited. L'addebito Stripe è di sales."""
+    """No-show: stato + deposito paid->forfeited. L'addebito Stripe è di sales.
+
+    Solo da «confermato» e a orario già iniziato. Prima passava anche con la
+    cliente in poltrona (check-in, trattamento in corso) o per la visita di
+    domani: caparra trattenuta, un no-show nello storico che pesa sulle regole
+    caparra delle prossime prenotazioni e lo slot annunciato come libero.
+    """
     _lock_and_reload(appointment)
+    if appointment.status != Appointment.Status.CONFIRMED:
+        raise HttpError(400, "La cliente è già in salone: non può essere un no-show")
+    if appointment.start > timezone.now():
+        raise HttpError(
+            400, "L'appuntamento non è ancora iniziato: il no-show si segna dopo l'orario d'inizio"
+        )
     before = undo_log.appointment_snapshot(appointment)
     appointment.status = Appointment.Status.NO_SHOW
     appointment.cancel_reason = reason or ""
@@ -2085,11 +2164,7 @@ def restore_released(appointment: Appointment, *, actor=None, force: bool = Fals
     cancellando l'id del PaymentIntent — con Stripe che aveva già restituito i
     soldi e il gestionale che rimandava il link.
     """
-    lock_salon(appointment.salon)
-    try:
-        appointment.refresh_from_db()
-    except Appointment.DoesNotExist:
-        raise HttpError(404, "Appuntamento non trovato")
+    _lock_row(appointment)
     if not (appointment.status == Appointment.Status.CANCELLED and appointment.auto_released):
         raise HttpError(400, "L'appuntamento non è stato liberato automaticamente")
     items = list(appointment.items.select_related("operator"))
