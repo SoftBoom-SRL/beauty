@@ -95,12 +95,19 @@ class Client(models.Model):
     def save(self, *args, **kwargs):
         from common.phone import phone_key as compute_phone_key  # lazy: evita cicli
 
-        new_key = compute_phone_key(self.phone)
-        if new_key != self.phone_key:
-            self.phone_key = new_key
-            update_fields = kwargs.get("update_fields")
-            if update_fields is not None and "phone_key" not in update_fields:
-                kwargs["update_fields"] = list(update_fields) + ["phone_key"]
+        update_fields = kwargs.get("update_fields")
+        # Un salvataggio che non tocca il telefono non tocca la chiave. Prima
+        # la ricalcolava sempre: una scheda con la chiave scritta dal vecchio
+        # algoritmo, doppione di un'altra, non si poteva più nemmeno archiviare
+        # (DELETE → IntegrityError → 500) né correggere nel nome (18-02). Le
+        # chiavi vecchie le riallinea la migrazione clients.0008; qui si
+        # ricalcola quando il numero cambia davvero, o col salvataggio pieno.
+        if update_fields is None or "phone" in update_fields:
+            new_key = compute_phone_key(self.phone)
+            if new_key != self.phone_key:
+                self.phone_key = new_key
+                if update_fields is not None and "phone_key" not in update_fields:
+                    kwargs["update_fields"] = list(update_fields) + ["phone_key"]
         super().save(*args, **kwargs)
 
     class Meta:

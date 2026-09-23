@@ -16,19 +16,58 @@ così si può usare come controllo bloccante prima dell'aggiornamento:
     python manage.py check_phone_duplicates && python manage.py migrate
 
 La chiave viene ricalcolata in Python con `common.phone.phone_key`, la stessa
-funzione che usano il modello (`Client.save`) e la migrazione di backfill
-`0006`: il comando funziona quindi anche su un database che non ha ancora la
-colonna `phone_key` riempita, cioè proprio nella situazione in cui serve.
+funzione che usa il modello (`Client.save`): il comando funziona quindi anche
+su un database che non ha ancora la colonna `phone_key` riempita, cioè proprio
+nella situazione in cui serve. Quando la colonna c'è, la confronta con la
+chiave ricalcolata: una chiave salvata con un algoritmo vecchio non ritrova la
+cliente al login (18-02). Quelle le riallinea `migrate`
+(clients.0008_caccia22_clienti_phone_key), tranne le schede doppione, che la
+migrazione lascia com'erano: per questo i doppioni restano bloccanti.
+
+Di ogni scheda mostra anche note, schede tecniche, punti fedeltà, lista
+d'attesa, gift card e coupon: sono quello che una cancellazione porta via (o
+scollega), non solo visite e vendite (06-19).
 
 Uso: `python manage.py check_phone_duplicates [--salon SLUG] [--limit N] [--exit-zero]`
 """
 
 from django.core.management.base import BaseCommand
+from django.db import connection
 from django.db.models import Count
 
 from apps.clients.models import Client
 from apps.core.models import Salon
 from common.phone import phone_key as compute_phone_key
+
+
+# Relazioni mostrate per ogni scheda doppione: (related_name su Client, etichetta).
+RELATED = (
+    ("appointments", "visite"),
+    ("sales", "vendite"),
+    ("notes", "note"),
+    ("sheets", "schede"),
+    ("loyalty_accounts", "fedeltà"),
+    ("waitlist_entries", "attesa"),
+    ("gift_cards_bought", "gift comprate"),
+    ("gift_cards_received", "gift ricevute"),
+    ("coupons", "coupon"),
+)
+
+
+def _has_phone_key_column() -> bool:
+    with connection.cursor() as cursor:
+        columns = connection.introspection.get_table_description(cursor, Client._meta.db_table)
+    return any(col.name == "phone_key" for col in columns)
+
+
+def _related_counts(ids) -> dict[str, dict[int, int]]:
+    """{relazione: {client_id: quante}} per le sole schede indicate."""
+    counts = {}
+    for rel, _ in RELATED:
+        counts[rel] = dict(
+            Client.objects.filter(id__in=ids).annotate(n=Count(rel)).values_list("id", "n")
+        )
+    return counts
 
 
 class Command(BaseCommand):
@@ -66,20 +105,26 @@ class Command(BaseCommand):
                 raise SystemExit(2)
             qs = qs.filter(salon__slug=salon_slug)
 
-        # Campi elencati uno per uno: nessuna lettura della colonna `phone_key`,
-        # che su un database non ancora migrato può non esistere. Count distinct
-        # perché le due join insieme moltiplicherebbero le righe.
-        rows = (
-            qs.values("id", "salon_id", "first_name", "last_name", "phone", "since", "is_active")
-            .annotate(visite=Count("appointments", distinct=True), vendite=Count("sales", distinct=True))
-            .order_by("salon_id", "id")
-        )
+        # Campi elencati uno per uno: la colonna `phone_key` si legge solo se
+        # esiste (su un database non ancora migrato può mancare). I conteggi
+        # delle cose collegate si fanno dopo, sulle sole schede doppione: una
+        # join per relazione su tutta l'anagrafica moltiplicava le righe.
+        stored = _has_phone_key_column()
+        fields = ["id", "salon_id", "first_name", "last_name", "phone", "since", "is_active"]
+        if stored:
+            fields.append("phone_key")
+        rows = qs.values(*fields).order_by("salon_id", "id")
 
         groups: dict[tuple[int, str], list[dict]] = {}
+        stale: list[dict] = []
         total = 0
         for row in rows.iterator(chunk_size=500):
             total += 1
             key = compute_phone_key(row["phone"])
+            row["key"] = key
+            row["stale"] = stored and row["phone_key"] != key
+            if row["stale"]:
+                stale.append(row)
             if not key:
                 # Numeri non normalizzabili («n/d», «da chiedere»): il vincolo è
                 # parziale e non li tocca, qui non c'è identità da proteggere.
@@ -87,6 +132,11 @@ class Command(BaseCommand):
             groups.setdefault((row["salon_id"], key), []).append(row)
 
         duplicates = {k: v for k, v in groups.items() if len(v) > 1}
+
+        in_groups = {c["id"] for clients in duplicates.values() for c in clients}
+        realign = [row for row in stale if row["id"] not in in_groups]
+        if realign:
+            self._report_stale(realign, limit)
 
         if not duplicates:
             self.stdout.write(
@@ -97,6 +147,7 @@ class Command(BaseCommand):
             )
             return
 
+        counts = _related_counts(in_groups)
         salons = {
             s["id"]: s
             for s in Salon.objects.filter(id__in={sid for sid, _ in duplicates}).values(
@@ -135,13 +186,20 @@ class Command(BaseCommand):
             for client, nome in zip(clients, nomi):
                 dal = client["since"].strftime("%d/%m/%Y") if client["since"] else "—"
                 stato = "" if client["is_active"] else "  [disattivata]"
+                collegati = "  ".join(
+                    f"{label} {counts[rel].get(client['id'], 0)}" for rel, label in RELATED
+                )
                 riga = (
                     f"  #{client['id']:<6} {nome:<{larghezza_nome}}  "
                     f"{(client['phone'] or ''):<{larghezza_tel}}  "
-                    f"cliente dal {dal:<10}  "
-                    f"visite {client['visite']:<4} vendite {client['vendite']:<4}{stato}"
+                    f"cliente dal {dal:<10}  {collegati}{stato}"
                 )
                 self.stdout.write(riga.rstrip())
+                if client["stale"]:
+                    self.stdout.write(
+                        f"          chiave salvata {client['phone_key'] or '(vuota)'}: "
+                        "resta questa finché il doppione non è bonificato"
+                    )
             self.stdout.write("")
 
         if hidden:
@@ -158,13 +216,36 @@ class Command(BaseCommand):
             "    la scheda non ne registra una, quindi a parità di informazioni la più\n"
             "    vecchia è quella con l'identificativo più basso.\n"
             "  · le schede disattivate contano lo stesso: il vincolo non guarda `is_active`.\n"
-            "  · tieni la scheda con visite e vendite, sposta su quella le eventuali visite\n"
-            "    dell'altra, poi cancella la scheda svuotata (le visite sono PROTECT: finché\n"
-            "    ne ha, la cancellazione viene rifiutata).\n"
+            "  · cancellare una scheda porta via con sé note, schede tecniche, punti\n"
+            "    fedeltà e lista d'attesa, e scollega vendite, gift card e coupon (restano\n"
+            "    senza cliente). Prima sposta sulla scheda che tieni TUTTO quello che le\n"
+            "    colonne qui sopra contano, poi cancella quella svuotata; le visite sono\n"
+            "    PROTECT: finché ne ha, la cancellazione viene rifiutata.\n"
             "  · finché esiste un gruppo qui sopra, `migrate` si ferma su\n"
-            "    clients.0007_client_phone_key_unique e il deploy resta a metà."
+            "    clients.0007_client_phone_key_unique (se non è ancora applicata) e\n"
+            "    clients.0008 lascia quelle schede con la chiave di prima."
         )
 
         if options["exit_zero"]:
             return
         raise SystemExit(1)
+
+    def _report_stale(self, rows, limit):
+        """Schede con la chiave salvata diversa da quella di oggi (non doppioni)."""
+        self.stdout.write(
+            self.style.WARNING(
+                f"{len(rows)} schede con la chiave telefono salvata diversa da quella calcolata "
+                "oggi: al login non vengono ritrovate. Le riallinea `migrate` "
+                "(clients.0008_caccia22_clienti_phone_key); se restano dopo la migrazione, "
+                "sono state scritte senza passare da Client.save."
+            )
+        )
+        shown = rows if limit <= 0 else rows[:limit]
+        for row in shown:
+            self.stdout.write(
+                f"  #{row['id']:<6} salone #{row['salon_id']:<4} {row['phone'] or '':<16} "
+                f"chiave salvata {row['phone_key'] or '(vuota)'} → {row['key'] or '(vuota)'}"
+            )
+        if len(rows) > len(shown):
+            self.stdout.write(f"  … e altre {len(rows) - len(shown)} (alza --limit, oppure 0 per tutte).")
+        self.stdout.write("")
