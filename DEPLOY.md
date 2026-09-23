@@ -246,11 +246,17 @@ se le lasci come env di runtime il container parte ma il bundle punta a localhos
 APP=dashboard
 VITE_API_URL=https://beautyapi.yourang.ai
 VITE_CLIENT_APP_URL=https://beautyclients.yourang.ai
+VITE_YOURANG_URL=https://app.yourang.ai
 ```
 
 `VITE_CLIENT_APP_URL` serve a *Impostazioni → Link pubblici*, dove la titolare
 copia i propri URL (app cliente e modulo contatti). La dashboard sta su un altro
 dominio e non può dedurlo. Se manca, quella sezione non compare.
+
+`VITE_YOURANG_URL` è la destinazione del pill «Torna a yourang» in basso a
+destra. Il fallback compilato è `http://localhost:3000`, che in produzione è un
+link morto: essendo inlinata a build time, se la dimentichi te ne accorgi solo
+cliccando. Il valore porta `?yr_sweep=1` da sé — non aggiungerlo qui.
 
 Il Dockerfile fallisce apposta se manca `VITE_API_URL`, così non ti ritrovi in
 produzione un frontend che chiama `http://localhost:8000`, **e se manca `APP`**:

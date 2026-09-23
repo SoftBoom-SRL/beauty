@@ -282,3 +282,109 @@
 /* maniglia di ridimensionamento: visibile solo al passaggio sul blocco (evita prese accidentali) */
 .dk-resize-handle > div { opacity: 0; transition: opacity 120ms var(--ease); }
 .dk-resize-handle:hover > div, [style*="cursor: grab"]:hover > .dk-resize-handle > div { opacity: 1; }
+
+/* ============================================================
+   Passaggio yourang ↔ portale: pill di ritorno + telo a bolla.
+
+   L'ancora del cerchio è `calc(100% - 2.5rem)` su entrambi gli assi, la STESSA
+   che usano yourang (web/src/app/globals.css) e il portale food. Andata e
+   ritorno sono un'unica passata divisa su due documenti: se i due lati ancorano
+   in punti diversi si leggono come due animazioni scollegate invece che come un
+   solo movimento. Non cambiarla da un lato solo.
+   ============================================================ */
+
+/* L'indigo è il brand di UN ALTRO prodotto: sta qui come letterale e NON deve
+   seguire i token del salone — `var(--clay)` qui sarebbe il bug, non la
+   soluzione. Un solo valore per pill e telo, di proposito: sono la stessa cosa
+   vista prima e durante il viaggio. */
+:root { --yourang-brand: 79 70 229; }
+
+.yr-return-pill {
+  position: fixed; right: 22px; bottom: 22px; z-index: 40;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-radius: 999px;
+  background: rgb(var(--yourang-brand)); color: #fff;
+  font-size: 13px; font-weight: 500; text-decoration: none;
+  box-shadow: var(--shadow-lg, 0 10px 28px rgba(0, 0, 0, .22));
+  transition: opacity 120ms var(--ease);
+}
+.yr-return-pill:hover { opacity: .9; }
+.yr-return-pill:focus-visible { outline: 2px solid rgb(var(--yourang-brand)); outline-offset: 2px; }
+
+.yr-sweep {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: rgb(var(--yourang-brand));
+}
+.yr-sweep__mark { height: 48px; width: auto; max-width: 70vw; object-fit: contain; }
+
+/* Ritorno: il cerchio si apre dall'ancora e copre.
+
+   L'easing è ease-OUT, e non è una preferenza estetica: l'AREA coperta da un
+   cerchio cresce col QUADRATO del raggio, quindi la copertura accelera già da
+   sé. Un ease-in-out simmetrico ci si somma — l'inizio indugia come una bolla
+   nell'angolo e la parte centrale scatta. Decelerare il raggio compensa la
+   legge r² invece di alimentarla.
+
+   La copertura è più rapida della scopertura di proposito: coprire nasconde una
+   pagina che sta per essere scaricata e deve sembrare deciso, scoprire è il
+   premio e può respirare. */
+.yr-sweep[data-phase='entering'] {
+  animation: yrBubbleIn 430ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Il battito del marchio. Nessuna animazione: il pannello sta fermo a copertura
+   piena mentre scorre un timer — per questo la fase è guidata da setTimeout e
+   non da animationend come le due vicine.
+
+   Questa dichiarazione è documentazione, NON meccanica: quando 'entering'
+   smette di matchare, il suo `forwards` cade e l'elemento torna alla base
+   `clip-path: none`, che è già copertura piena. Ridichiarare il cerchio non
+   cambia nulla a schermo — sta qui perché lo stato di riposo della fase sia
+   scritto invece che dedotto. */
+.yr-sweep[data-phase='holding'] {
+  clip-path: circle(150% at calc(100% - 2.5rem) calc(100% - 2.5rem));
+}
+
+/* Arrivo da yourang: il cerchio si richiude sull'ancora dove sta il pill.
+
+   `pointer-events: none` per la coda: una regione completamente ritagliata non
+   dovrebbe ricevere hit-test per specifica, ma una dichiarazione costa meno che
+   fidarsi. */
+.yr-sweep[data-phase='exiting'] {
+  pointer-events: none;
+  animation: yrBubbleOut 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Un solo keyframe per verso: un cerchio ancorato su un punto non ha una
+   sinistra e una destra da specchiare, si apre e si richiude sulla sua ancora.
+   Il marchio dentro il telo è ritagliato insieme a lui, di proposito:
+   `clip-path` ritaglia anche i figli, quindi il logo è scoperto dal cerchio che
+   cresce e mangiato da quello che si chiude. È esattamente quella la lettura. */
+@keyframes yrBubbleIn {
+  from { clip-path: circle(0%   at calc(100% - 2.5rem) calc(100% - 2.5rem)); }
+  to   { clip-path: circle(150% at calc(100% - 2.5rem) calc(100% - 2.5rem)); }
+}
+@keyframes yrBubbleOut {
+  from { clip-path: circle(150% at calc(100% - 2.5rem) calc(100% - 2.5rem)); }
+  to   { clip-path: circle(0%   at calc(100% - 2.5rem) calc(100% - 2.5rem)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yr-return-pill { transition: none; }
+
+  /* Ridotto a un tick impercettibile invece di `animation: none`, e la
+     differenza è portante: la sequenza avanza sull'`animationend` del telo,
+     quindi togliere l'animazione toglierebbe anche la navigazione. 1ms tiene
+     vivo l'evento rispettando "stesso stato finale, nessun viaggio".
+     'holding' non è qui: non ha animazione da accorciare — è il componente ad
+     azzerarne il timer sotto reduced-motion. */
+  .yr-sweep[data-phase='entering'],
+  .yr-sweep[data-phase='exiting'] { animation-duration: 1ms !important; }
+}
+
+/* Testo per i soli lettori di schermo (annuncio della navigazione in corso). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
