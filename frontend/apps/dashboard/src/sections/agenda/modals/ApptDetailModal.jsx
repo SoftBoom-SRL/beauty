@@ -7,6 +7,7 @@ import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
+import { depositDueLabel } from './rules.js';
 
 // Motivazioni predefinite: il titolare può sostituirle dalle Impostazioni
 // (settings.no_show_reasons / cancel_reasons); qui restano come fallback.
@@ -86,10 +87,6 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       .then((wl) => setMatchCount(wlMatches(wl, appt).length))
       .catch(() => setMatchCount(null));
   }, [flow]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* cancellazione "tardiva" (caparra trattenuta) se manca meno della soglia salone */
-  const cancelMinH = settings?.cancel_min_hours ?? 24;
-  const lateCancel = !!appt && parseISO(appt.start).getTime() - Date.now() < cancelMinH * 3600000;
 
   /* enrich with client stats (visits, spend, categories, deposit_always) */
   const [clientDetail, setClientDetail] = useState(null);
@@ -499,7 +496,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         }>
         <div className="t-meta" style={{ marginBottom: 12 }}>{t('Cosa succederà', 'What will happen')}</div>
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
-          <FlowSteps steps={cancelSteps(appt, lateCancel, matchCount, t, lang)} />
+          <FlowSteps steps={cancelSteps(appt, matchCount, t, lang)} />
         </div>
         <ReasonPicker reasons={cancelReasons} />
       </DkPanel>
@@ -710,8 +707,11 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                       )}
                     </span>
                   )}
+                  {/* Orario del SALONE: da un portatile con un altro fuso la
+                      scadenza si leggeva spostata di ore, e la reception
+                      richiamava la cliente quando il posto era già libero. */}
                   {appt.deposit_status === 'required' && appt.deposit_due_at && !terminal && (
-                    <span> · {t('entro le', 'by')} <b className="tabnum">{new Date(appt.deposit_due_at).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>{t(', poi lo slot si libera', ', then the slot is freed')}</span>
+                    <span> · {t('entro le', 'by')} <b className="tabnum">{depositDueLabel(appt.deposit_due_at, lang)}</b>{t(', poi lo slot si libera', ', then the slot is freed')}</span>
                   )}
                 </div>
                 {appt.deposit_status === 'required' && !terminal && hasScope('sales') && (
@@ -776,16 +776,18 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             {showMargin && (
               !margin ? <div className="skel" style={{ height: 96, borderRadius: 12, marginTop: 8 }} /> : (
                 <div style={{ background: 'var(--surface-2)', borderRadius: 12, padding: '11px 14px', marginTop: 8 }}>
+                  {/* fmtMoney e non fmtEur: un costo nullo è «€0,00», non
+                      «− Gratis» (e un ricavo nullo non è un omaggio) */}
                   {[[t('Ricavo', 'Revenue'), margin.revenue, false], [t('Costo prodotti', 'Product cost'), margin.product_cost, true], [t('Costo fornitori', 'Supplier cost'), margin.supplier_cost, true], [t('Costo lavoro', 'Labour cost'), margin.labor_cost, true]].map(([l, v, neg], i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
                       <span className="t-sm" style={{ color: 'var(--muted)' }}>{l}</span>
-                      <span className="tabnum" style={{ fontSize: 12.5 }}>{neg ? '− ' : ''}{fmtEur(Number(v), lang)}</span>
+                      <span className="tabnum" style={{ fontSize: 12.5 }}>{neg && Number(v) ? '− ' : ''}{fmtMoney(v, lang)}</span>
                     </div>
                   ))}
                   <div className="hr" style={{ margin: '6px 0' }} />
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <span style={{ fontWeight: 700, fontSize: 13.5 }}>{t('Margine stimato', 'Estimated margin')}</span>
-                    <span className="t-num" style={{ fontWeight: 800, fontSize: 16, color: Number(margin.margin) >= 0 ? 'var(--ok)' : 'var(--danger)' }}>{fmtEur(Number(margin.margin), lang)} · {margin.margin_pct}%</span>
+                    <span className="t-num" style={{ fontWeight: 800, fontSize: 16, color: Number(margin.margin) >= 0 ? 'var(--ok)' : 'var(--danger)' }}>{fmtMoney(margin.margin, lang)} · {margin.margin_pct}%</span>
                   </div>
                 </div>
               )

@@ -51,8 +51,12 @@ export function opDisplay(first, last, firsts) {
 export const initialsOf = (full) =>
   String(full || '').split(' ').filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
-/** €-format that never says "Gratis" for zero sums */
-export const fmtMoney = (n, lang) => (Number(n) ? fmtEur(Number(n), lang) : '€0');
+/** €-format that never says "Gratis" for zero sums.
+ *  Lo zero si scrive con i suoi due decimali, come ogni altro importo: «€0»
+ *  accanto a «€45,00» nello stesso riepilogo sembrava un dato troncato. */
+export const fmtMoney = (n, lang) => (Number(n)
+  ? fmtEur(Number(n), lang)
+  : '€' + (0).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
 /** Espande un appuntamento in blocchi per-servizio concatenati dallo `start`.
  *  Ogni servizio è un blocco nella colonna della sua operatrice, con orario e
@@ -214,8 +218,12 @@ export function wlWhatsAppMsg(w, appt, lang, salonName) {
 
 /* --- Anteprima passo-passo del flusso no-show / cancellazione -------------
  * Restituiscono l'array di passi per <FlowSteps>. I contenuti rispecchiano
- * l'esito reale del backend (apps/agenda/services.py): no-show/cancell. tardiva
- * → caparra trattenuta; cancell. anticipata → rimborsata; senza caparra nulla.
+ * l'esito reale del backend (apps/agenda/services.py): no-show → caparra
+ * trattenuta; annullamento dal gestionale → caparra SEMPRE da rimborsare, a
+ * qualunque ora (la penale vale solo per la cliente che disdice tardi
+ * dall'app); senza caparra nulla. L'importo è `deposit_credit`, la quota che
+ * il salone ha ancora in mano: dopo un rimborso parziale di 10 € su 30 il
+ * versato diceva 30 dove in gioco ne restavano 20.
  * `matchCount` = voci di lista d'attesa compatibili (null finché in caricamento). */
 
 const _slotStep = (appt, t) => ({
@@ -238,7 +246,8 @@ const _waitlistStep = (matchCount, t) => ({
 });
 
 const _paid = (appt) => appt.deposit_status === 'paid';
-const _depEur = (appt, lang) => fmtEur(Number(appt.deposit_amount), lang);
+// deposit_credit manca solo da un server più vecchio: lì vale il versato
+const _depEur = (appt, lang) => fmtMoney(appt.deposit_credit ?? appt.deposit_amount, lang);
 
 export function noShowSteps(appt, matchCount, t, lang) {
   return [
@@ -251,12 +260,14 @@ export function noShowSteps(appt, matchCount, t, lang) {
   ];
 }
 
-export function cancelSteps(appt, late, matchCount, t, lang) {
+/* Niente «annullamento tardivo» qui: dal gestionale il server rimborsa sempre
+ * la caparra pagata (cancel_appointment con by_client=False). L'anteprima
+ * scriveva «Caparra trattenuta» sotto le 24 ore, la reception confermava
+ * convinta di tenerla e intanto partiva il rimborso sulla carta. */
+export function cancelSteps(appt, matchCount, t, lang) {
   let dep;
   if (!_paid(appt)) {
     dep = { n: 2, title: t('Nessuna caparra', 'No deposit'), detail: '—', tone: 'muted' };
-  } else if (late) {
-    dep = { n: 2, title: t('Caparra trattenuta', 'Deposit forfeited'), detail: _depEur(appt, lang), tone: 'danger' };
   } else {
     // Il rimborso avviene su Stripe se la caparra è stata pagata online; altrimenti
     // resta «da rimborsare» finché lo staff non lo conferma dal dettaglio.
