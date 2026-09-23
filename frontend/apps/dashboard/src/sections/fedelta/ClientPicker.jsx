@@ -117,7 +117,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
                   <input autoFocus value={nf.first_name} onChange={(e) => setNf((f) => ({ ...f, first_name: e.target.value }))} placeholder={t('Nome', 'First name')} style={nfInput} />
                   <input value={nf.last_name} onChange={(e) => setNf((f) => ({ ...f, last_name: e.target.value }))} placeholder={t('Cognome', 'Last name')} style={nfInput} />
                 </div>
-                <PhoneInput value={nf.phone} onChange={(v) => setNf((f) => ({ ...f, phone: v }))} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
+                <PhoneInput value={nf.phone} onChange={(v) => { setNf((f) => ({ ...f, phone: v })); setArchived(null); }} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
                 {nf.phone.trim() && !phoneOk && (
                   <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>
                     {t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')}

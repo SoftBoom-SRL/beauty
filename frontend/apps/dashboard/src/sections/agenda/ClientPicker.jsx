@@ -189,7 +189,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
           <input value={draft.last_name} maxLength={MAX.last_name} onChange={(e) => setD({ last_name: e.target.value })} placeholder={t('Cognome', 'Last name')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
         </div>
         <div style={{ marginBottom: 8 }}>
-          <PhoneInput value={draft.phone} onChange={(v) => setD({ phone: v })} lang={lang} autoFocus={!!draft.first_name} onEnter={create} ariaLabel={t('Telefono', 'Phone')} />
+          <PhoneInput value={draft.phone} onChange={(v) => { setD({ phone: v }); setArchived(null); }} lang={lang} autoFocus={!!draft.first_name} onEnter={create} ariaLabel={t('Telefono', 'Phone')} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: 12 }}>{t('Genere', 'Gender')}</span>
