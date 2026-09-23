@@ -181,6 +181,21 @@ def stack(salon, actor) -> list[UndoEntry]:
     )
 
 
+def purge_expired(now=None) -> int:
+    """Cancella le voci scadute di tutti i saloni. Ritorna quante.
+
+    `record` pulisce soltanto lo storico di chi ha appena fatto un gesto: per
+    chi non ne fa più (fine turno, una collaboratrice che se ne va) le
+    istantanee — note, prezzi, il nome della cliente nell'etichetta — restavano
+    a database per sempre. La chiama `flush_outbox` a ogni giro.
+    """
+    now = now or timezone.now()
+    deleted, _ = UndoEntry.objects.filter(
+        created_at__lt=now - dt.timedelta(minutes=UNDO_WINDOW_MINUTES)
+    ).delete()
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # Esecuzione
 # ---------------------------------------------------------------------------

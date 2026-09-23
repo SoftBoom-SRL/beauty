@@ -57,18 +57,22 @@ def emit_event(
     `delay_seconds` > 0 trattiene l'evento: prima di quell'istante nessun worker
     lo consegna (vedi `flush_outbox._due`). `coalesce_key` lo lega a un oggetto,
     così chi emette l'evento successivo può ritrovarlo con `held_events` e
-    fonderlo invece di accodarne un altro.
+    fonderlo invece di accodarne un altro; il worker consegna inoltre gli eventi
+    con la stessa chiave nell'ordine in cui sono nati.
     """
+    now = timezone.now()
+    hold_until = (
+        now + timezone.timedelta(seconds=int(delay_seconds))
+        if delay_seconds and int(delay_seconds) > 0
+        else None
+    )
     event = OutboxEvent.objects.create(
         salon=salon,
         event_type=event_type,
         payload=payload or {},
         coalesce_key=coalesce_key or "",
-        next_attempt_at=(
-            timezone.now() + timezone.timedelta(seconds=int(delay_seconds))
-            if delay_seconds and int(delay_seconds) > 0
-            else None
-        ),
+        next_attempt_at=hold_until,
+        due_at=hold_until or now,
     )
     # Solo tipo e id: il payload può contenere dati personali e codici OTP,
     # che non devono finire nei log.
