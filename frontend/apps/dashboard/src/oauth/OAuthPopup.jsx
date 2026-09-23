@@ -9,7 +9,7 @@
 // Same origin as the opener → api carries the staff Bearer (connect), and
 // postMessage targets window.location.origin.
 import React, { useEffect, useState } from 'react';
-import { api, useT } from '@youty/shared';
+import { api, staffAuth, useT } from '@youty/shared';
 
 const START = {
   login: '/api/integrations/yourang/oauth/login/start',
@@ -43,6 +43,20 @@ export default function OAuthPopup({ path }) {
         const state = params.get('state');
         if (!code || !state) throw new Error('missing code/state');
         const res = await api.post('/api/integrations/yourang/oauth/exchange', { code, state });
+
+        // Senza opener NON siamo una finestra di servizio: ci si è arrivati con
+        // una navigazione di primo livello, che è come entra il pill di lancio
+        // di yourang (oauth_client.portal_url punta a /oauth-popup/start).
+        // Lì il postMessage non ha destinatario e window.close() viene
+        // RIFIUTATO dal browser su una scheda che non ha aperto lui: la pagina
+        // restava ferma su «Connessione in corso…» tenendo in mano una
+        // sessione valida appena coniata. Qui la si applica e si entra.
+        if (!window.opener) {
+          if (res.mode === 'login' && res.session) staffAuth.applySession(res.session);
+          window.location.replace('/');
+          return;
+        }
+
         notify({ type: 'yourang-oauth', ok: true, mode: res.mode, session: res.session });
         window.close();
       } catch (e) {
@@ -62,7 +76,12 @@ export default function OAuthPopup({ path }) {
         <div>
           <p style={{ fontWeight: 600 }}>{t('Connessione a Yourang non riuscita', 'Yourang connection failed')}</p>
           <p style={{ color: '#888', fontSize: 13 }}>{error}</p>
-          <button onClick={() => window.close()} style={{ marginTop: 12 }}>{t('Chiudi', 'Close')}</button>
+          <button
+            onClick={() => (window.opener ? window.close() : window.location.replace('/'))}
+            style={{ marginTop: 12 }}
+          >
+            {window.opener ? t('Chiudi', 'Close') : t('Torna all\u2019accesso', 'Back to sign-in')}
+          </button>
         </div>
       ) : (
         <p>{t('Connessione a Yourang in corso…', 'Connecting to Yourang…')}</p>
