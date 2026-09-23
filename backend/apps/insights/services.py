@@ -379,10 +379,22 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     # è il denaro davvero entrato nel periodo.
     billed_qs = sales_qs.filter(deposit_appointment__isnull=True)
     revenue = billed_qs.aggregate(total=Sum("total"))["total"] or ZERO
+    from apps.sales.models import DepositRefund  # lazy: come Payment più sotto
+
+    # Al netto delle caparre restituite nel periodo (annullamento in tempo,
+    # eccedenza al conto, restituzione a mano): prima una caparra rimborsata
+    # restava per sempre in `deposit_cashed` e in `cash_in` (08-17). Il
+    # rimborso conta nel periodo in cui avviene, come l'incasso.
+    deposit_refunded = (
+        DepositRefund.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end).aggregate(
+            total=Sum("amount")
+        )["total"]
+        or ZERO
+    )
     deposit_cashed = (
         sales_qs.filter(deposit_appointment__isnull=False).aggregate(total=Sum("total"))["total"]
         or ZERO
-    )
+    ) - deposit_refunded
     sales_count = billed_qs.count()
     avg_ticket = _safe_avg_money(revenue, sales_count)
     retail_revenue = (

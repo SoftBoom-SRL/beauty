@@ -127,3 +127,40 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"{self.method} · € {self.amount}"
+
+
+class DepositRefund(models.Model):
+    """Caparra (o una sua parte) restituita alla cliente: denaro che ESCE dalla cassa.
+
+    La caparra entra in cassa con la sua vendita (`Sale.deposit_appointment`) il
+    giorno in cui arriva; il rimborso è un movimento a sé, con la SUA data.
+    Prima nessun rimborso — annullamento in tempo, eccedenza al conto,
+    restituzione a mano o dalla dashboard Stripe — stornava la vendita-caparra,
+    e «Incassato oggi» e gli insight contavano per sempre denaro tornato alla
+    cliente. Una riga per rimborso riuscito: la chiave è l'id Stripe (o quella
+    del rimborso manuale) preceduta dall'appuntamento. Le righe le tiene
+    allineate `services.sync_deposit_refunds`, a partire dai rimborsi registrati
+    sull'appuntamento.
+    """
+
+    salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="+")
+    appointment = models.ForeignKey(
+        "agenda.Appointment", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    deposit_sale = models.ForeignKey(
+        Sale, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    key = models.CharField(max_length=120)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    method = models.CharField(max_length=10, choices=Payment.Method.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["salon", "created_at"])]
+        constraints = [
+            models.UniqueConstraint(fields=["salon", "key"], name="uniq_deposit_refund_salon_key"),
+        ]
+
+    def __str__(self):
+        return f"Rimborso caparra · € {self.amount}"

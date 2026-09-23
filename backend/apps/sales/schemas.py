@@ -120,6 +120,8 @@ class TodaySummaryOut(Schema):
     deposit_used: Decimal = Decimal("0.00")
     # Caparre arrivate oggi: denaro in cassa, ma non venduto di oggi.
     deposit_cashed: Decimal = Decimal("0.00")
+    # Caparre restituite oggi: denaro uscito, già tolto da `cash_in`.
+    deposit_refunded: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
 
 

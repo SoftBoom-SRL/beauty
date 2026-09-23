@@ -41,6 +41,7 @@ from .schemas import (
     TodaySummaryOut,
 )
 from .services import (
+    deposit_retained,
     finalize_sale,
     record_deposit_cashed,
     record_no_show_charge,
@@ -184,6 +185,10 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
         # Non `deposit_amount`: quello che si detrae è la quota ancora in cassa,
         # cioè al netto dei rimborsi già fatti su quella caparra.
         deposit_credit = appointment.deposit_credit
+        # Quanto della caparra è ancora del salone, contando anche i rimborsi
+        # in volo: con un rimborso parziale «pending» la quota detraibile è
+        # zero, ma il resto va comunque restituito qui sotto (02-21, 05-14).
+        deposit_retained_amount = deposit_retained(appointment)
         try:
             sale = finalize_sale(
                 ctx.salon,
@@ -212,7 +217,12 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
     _close_deposit_link(appointment)
     # Caparra più alta del conto: `finalize_sale` ha detratto solo fino al
     # totale, la differenza va restituita (prima il conto era impossibile).
-    settle_deposit_excess(appointment, deposit_credit - sale.deposit_deducted, actor=ctx.user)
+    # Si parte da quanto il salone ha ancora, non dalla sola quota detraibile.
+    settle_deposit_excess(
+        appointment,
+        max(deposit_retained_amount, deposit_credit) - sale.deposit_deducted,
+        actor=ctx.user,
+    )
 
     client = appointment.client
     service_names = [

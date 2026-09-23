@@ -90,3 +90,90 @@ class PaidDepositOnAShorterVisitTests(AgendaTestBase):
         self.assertEqual(refund.call_args.kwargs["amount_cents"], 4000)
         original.refresh_from_db()
         self.assertEqual(original.deposit_refunded_amount, Decimal("40.00"))
+
+
+class RefundEventsOrderTests(AgendaTestBase):
+    """05-14, 02-21: lo stato della caparra non dipende dall'ordine degli eventi Stripe."""
+
+    def _paid(self, amount="30.00"):
+        return Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.op1, start=_aware(self.day, 10),
+            deposit_status=Appointment.DepositStatus.PAID, deposit_amount=Decimal(amount),
+            deposit_payment_intent_id="pi_dep",
+        )
+
+    def test_a_late_pending_event_does_not_undo_a_succeeded_refund(self):
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        record_deposit_refund(appointment, refund_id="re_1", cents=3000, status="succeeded")
+        # arriva in ritardo `refund.created`, con lo stato che aveva allora
+        record_deposit_refund(appointment, refund_id="re_1", cents=3000, status="pending")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+
+    def test_the_charge_refunded_total_is_remembered(self):
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        # rimborso di 10 dalla dashboard Stripe: arriva solo `charge.refunded`
+        record_deposit_refund(appointment, floor_cents=1000)
+        # poi un altro evento, di un rimborso diverso ancora in corso
+        record_deposit_refund(appointment, refund_id="re_2", cents=500, status="failed")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
+
+    def test_a_failure_after_charge_refunded_keeps_state_and_amount_together(self):
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        record_deposit_refund(appointment, floor_cents=3000)
+        record_deposit_refund(appointment, refund_id="re_1", cents=3000, status="failed")
+        appointment.refresh_from_db()
+        # prima: «rimborsata» con 0 € rimborsati
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_update").exists()
+        )
+
+    def test_a_partial_pending_refund_never_costs_the_client_the_rest(self):
+        from apps.accounts.models import Membership, Role, User
+        from common.auth import create_staff_tokens
+
+        from .models import AppointmentService
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        AppointmentService.objects.create(
+            appointment=appointment, service=self.svc60, operator=self.op1,
+            duration_min=60, price=Decimal("50.00"),
+        )
+        record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="pending")
+        appointment.refresh_from_db()
+        user = User.objects.create_user(email="cassa25@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Cassa25", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        # la cassa vede la quota detraibile e incassa il resto del conto
+        due = Decimal("50.00") - appointment.deposit_credit
+        body = {
+            "blocks": [{"operator_id": self.op1.id, "lines": [
+                {"line_type": "service", "service_id": self.svc60.id, "qty": 1, "unit_price": "50.00"},
+            ]}],
+            "payments": [{"method": "cash", "amount": str(due)}] if due else [],
+        }
+        refunded = {"id": "re_rest", "amount": int((Decimal("20.00") - appointment.deposit_credit) * 100),
+                    "status": "succeeded"}
+        with patch("apps.sales.stripe_service.refund_payment_intent", return_value=refunded) as refund:
+            res = self.client.post(
+                f"/api/sales/checkout/{appointment.id}", data=json.dumps(body),
+                content_type="application/json", **auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        deducted = Decimal(res.json()["sale"]["deposit_deducted"])
+        # dei 30 versati: 10 stanno tornando, il resto è detratto o restituito qui
+        given_back = Decimal(refund.call_args.kwargs["amount_cents"]) / 100 if refund.called else Decimal("0")
+        self.assertEqual(deducted + given_back, Decimal("20.00"))

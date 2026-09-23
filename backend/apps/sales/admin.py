@@ -1,7 +1,7 @@
 from django.contrib import admin
 from unfold.admin import ModelAdmin, TabularInline
 
-from .models import Payment, Sale, SaleLine
+from .models import DepositRefund, Payment, Sale, SaleLine
 
 
 class SaleLineInline(TabularInline):
@@ -37,3 +37,11 @@ class PaymentAdmin(ModelAdmin):
     list_display = ("sale", "method", "amount", "gift_card")
     list_filter = ("method",)
     raw_id_fields = ("sale", "gift_card")
+
+
+@admin.register(DepositRefund)
+class DepositRefundAdmin(ModelAdmin):
+    list_display = ("created_at", "salon", "appointment", "amount", "method", "key")
+    list_filter = ("salon", "method")
+    date_hierarchy = "created_at"
+    raw_id_fields = ("salon", "appointment", "deposit_sale")
