@@ -26,6 +26,26 @@ class OperatorIn(Schema):
     order: int = 0
 
 
+class OperatorPatchIn(Schema):
+    """PUT /api/staff/{id}: si applicano SOLO i campi presenti nel corpo (C19).
+
+    `location_id` e `user_id` accettano null (nessuna sede, nessun utente);
+    gli altri campi, se presenti, non possono essere null.
+    """
+
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    color: Optional[str] = None
+    role_title: Optional[str] = None
+    location_id: Optional[int] = None
+    user_id: Optional[int] = None
+    service_ids: Optional[list[int]] = None
+    hourly_cost: Optional[Decimal] = None
+    cycle_weeks: Optional[int] = None
+    active: Optional[bool] = None
+    order: Optional[int] = None
+
+
 class OperatorColorIn(Schema):
     color: str
 
@@ -40,10 +60,15 @@ class OperatorOut(Schema):
     location_id: Optional[int] = None
     user_id: Optional[int] = None
     service_ids: list[int] = []
-    hourly_cost: Decimal
+    # null (mai 0) per chi non è titolare e non ha lo scope `team`: è un dato
+    # salariale. Vedi `cash_hidden`.
+    hourly_cost: Optional[Decimal] = None
     cycle_weeks: int
     active: bool
     order: int
+    # Vero quando qualche dato di cassa/HR della riga è stato nascosto (null)
+    # per mancanza di permesso: la dashboard mostra «•••» (C6).
+    cash_hidden: bool = False
 
 
 class OperatorStatusOut(OperatorOut):
@@ -52,7 +77,8 @@ class OperatorStatusOut(OperatorOut):
     on_shift: bool
     windows: list[tuple[str, str]]
     absence_type: Optional[str] = None
-    month_revenue: Decimal
+    # null senza il permesso vendite (C6).
+    month_revenue: Optional[Decimal] = None
     today_clients: int
 
 
@@ -118,8 +144,9 @@ class AbsenceOut(AbsenceIn):
 
 class PerformanceOut(Schema):
     month: str  # "YYYY-MM"
-    revenue: Decimal
+    revenue: Optional[Decimal] = None  # null senza il permesso vendite (C6)
     sales_count: int
+    cash_hidden: bool = False
 
 
 class ServedClientOut(Schema):
@@ -127,6 +154,9 @@ class ServedClientOut(Schema):
     first_name: str
     last_name: str
     phone: str
-    visits: int
+    # Visite, ultima visita e spesa sono dati di cassa, come nella scheda
+    # cliente: null senza il permesso vendite, con `cash_hidden` (C6).
+    visits: Optional[int] = None
     last_visit: Optional[datetime] = None
-    total_spent: Decimal
+    total_spent: Optional[Decimal] = None
+    cash_hidden: bool = False

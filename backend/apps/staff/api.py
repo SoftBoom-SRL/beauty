@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Optional
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -25,6 +26,7 @@ from .schemas import (
     OperatorDetailOut,
     OperatorIn,
     OperatorOut,
+    OperatorPatchIn,
     OperatorStatusOut,
     PerformanceOut,
     PublicOperatorOut,
@@ -98,7 +100,24 @@ def _get_salon_by_slug(slug: str) -> Salon:
         raise HttpError(404, "Salone non trovato")
 
 
-def _operator_out(op: Operator) -> dict:
+def _sees_cash(ctx) -> bool:
+    """Incassi per operatrice e spesa delle clienti sono dati di cassa.
+
+    La stessa regola della scheda cliente (`get_client`) e delle vendite
+    (`list_sales` chiede `sales` anche col filtro operatrice): senza, il ruolo
+    «Operatrice» — dato proprio perché non veda gli incassi — li leggeva tutti
+    da /api/staff (09-01, 10-09).
+    """
+    return ctx.is_owner or "sales" in ctx.scopes
+
+
+def _sees_hourly_cost(ctx) -> bool:
+    """Il costo orario è un dato salariale: lo vede chi gestisce il personale."""
+    return ctx.is_owner or "team" in ctx.scopes
+
+
+def _operator_out(op: Operator, ctx) -> dict:
+    hourly_cost_visible = _sees_hourly_cost(ctx)
     return {
         "id": op.id,
         "first_name": op.first_name,
@@ -109,62 +128,95 @@ def _operator_out(op: Operator) -> dict:
         "location_id": op.location_id,
         "user_id": op.user_id,
         "service_ids": [s.id for s in op.services.all()],
-        "hourly_cost": op.hourly_cost,
+        # null e non 0: «0 €/h» sarebbe un dato falso, non un dato nascosto (C6).
+        "hourly_cost": op.hourly_cost if hourly_cost_visible else None,
         "cycle_weeks": op.cycle_weeks,
         "active": op.active,
         "order": op.order,
+        "cash_hidden": not hourly_cost_visible,
     }
 
 
-def _validate_operator_payload(data: OperatorIn) -> None:
+# Colonne che accettano null nel corpo: nessuna sede, nessun utente collegato.
+_NULLABLE_OPERATOR_FIELDS = {"location_id", "user_id"}
+
+
+def _validate_operator_payload(payload: dict) -> None:
     """Colore, ciclo e ordine arrivano dal client e finiscono grezzi a database.
 
     Senza questi controlli un ciclo a zero o negativo, o un colore che non è un
     esadecimale, non erano un 400 ma un errore del database: 500, e chi compila
-    la scheda non sapeva quale campo rifare.
+    la scheda non sapeva quale campo rifare. Si controllano i campi presenti:
+    in modifica il corpo porta solo quelli cambiati.
     """
-    if not _HEX_COLOR_RE.match((data.color or "").strip()):
+    for name, value in payload.items():
+        if value is None and name not in _NULLABLE_OPERATOR_FIELDS:
+            raise HttpError(400, f"Campo obbligatorio: {name}")
+    if "color" in payload and not _HEX_COLOR_RE.match(payload["color"].strip()):
         raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
-    if not (1 <= data.cycle_weeks <= MAX_CYCLE_WEEKS):
+    if "cycle_weeks" in payload and not (1 <= payload["cycle_weeks"] <= MAX_CYCLE_WEEKS):
         raise HttpError(400, f"Settimane di ciclo non valide (da 1 a {MAX_CYCLE_WEEKS})")
-    if not (0 <= data.order <= MAX_OPERATOR_ORDER):
+    if "order" in payload and not (0 <= payload["order"] <= MAX_OPERATOR_ORDER):
         raise HttpError(400, "Ordine dell'operatrice non valido")
-    if data.hourly_cost < 0:
+    if "hourly_cost" in payload and payload["hourly_cost"] < 0:
         raise HttpError(400, "Il costo orario non può essere negativo")
 
 
-def _apply_operator_payload(operator: Operator, ctx, data: OperatorIn) -> Operator:
-    _validate_operator_payload(data)
-    payload = data.dict()
-    service_ids = payload.pop("service_ids")
-    location_id = payload.pop("location_id")
-    user_id = payload.pop("user_id")
-    payload["color"] = payload["color"].strip().upper()
+def _apply_operator_payload(operator: Operator, ctx, payload: dict) -> Operator:
+    """Applica `payload` (i soli campi da scrivere) e salva.
 
-    location = salon_get(Location, ctx, location_id) if location_id else None
-    user = _resolve_user(ctx, user_id)
-    if user is not None:
-        # `Operator.user` è OneToOne: collegare a un'operatrice un utente già
-        # legato a un'altra faceva saltare l'insert con un 500 anonimo.
-        taken = Operator.objects.filter(user=user).exclude(pk=operator.pk).first()
-        if taken is not None:
-            raise HttpError(400, f"Utente già collegato a {taken.first_name} {taken.last_name}")
-
+    In creazione arriva il corpo completo. In modifica solo i campi presenti
+    nella richiesta (C19): la scheda costruiva la PUT dal modulo letto
+    all'apertura e sostituiva tutto, quindi il colore cambiato dall'agenda o
+    l'abilitazione a un servizio data dal listino nel frattempo tornavano
+    indietro al primo «Salva» (09-09). Per lo stesso motivo in modifica si
+    scrivono solo quelle colonne, e i servizi solo se `service_ids` c'è.
+    """
+    _validate_operator_payload(payload)
+    payload = dict(payload)
+    creating = operator.pk is None
+    service_ids = payload.pop("service_ids", None)
+    if "color" in payload:
+        payload["color"] = payload["color"].strip().upper()
+    fields = []
+    if "location_id" in payload:
+        location_id = payload.pop("location_id")
+        operator.location = salon_get(Location, ctx, location_id) if location_id else None
+        fields.append("location")
+    if "user_id" in payload:
+        user = _resolve_user(ctx, payload.pop("user_id"))
+        if user is not None:
+            # `Operator.user` è OneToOne: collegare a un'operatrice un utente già
+            # legato a un'altra faceva saltare l'insert con un 500 anonimo.
+            taken = Operator.objects.filter(user=user).exclude(pk=operator.pk).first()
+            if taken is not None:
+                raise HttpError(400, f"Utente già collegato a {taken.first_name} {taken.last_name}")
+        operator.user = user
+        fields.append("user")
     for name, value in payload.items():
         setattr(operator, name, value)
-    operator.salon = ctx.salon
-    operator.location = location
-    operator.user = user
+        fields.append(name)
 
     # Abbassare `cycle_weeks` lasciava a database i turni delle settimane
     # scomparse: `_week_index` non li seleziona più da nessuna data, quindi
     # l'operatrice risultava a riposo per metà delle settimane senza che nulla
     # lo mostrasse. Si cancellano nella stessa transazione del salvataggio.
+    orphans = 0
     with transaction.atomic():
-        operator.save()
-        orphans = operator.shifts.filter(week_index__gte=operator.cycle_weeks).delete()[0]
-        Service = _catalog_service_model()
-        operator.services.set(Service.objects.filter(salon=ctx.salon, id__in=service_ids))
+        if creating:
+            operator.salon = ctx.salon
+            operator.save()
+        else:
+            # Stesso lock di `replace_shifts`: la pulizia dei turni fuori ciclo
+            # e una sostituzione dei turni in corsa non si incrociano.
+            Operator.objects.select_for_update().filter(pk=operator.pk).first()
+            if fields:
+                operator.save(update_fields=fields)
+            if "cycle_weeks" in payload:
+                orphans = operator.shifts.filter(week_index__gte=operator.cycle_weeks).delete()[0]
+        if service_ids is not None:
+            Service = _catalog_service_model()
+            operator.services.set(Service.objects.filter(salon=ctx.salon, id__in=service_ids))
     if orphans:
         log_activity(
             ctx.salon,
@@ -212,25 +264,37 @@ def _reject_overlapping_shifts(rows) -> None:
 
 
 @router.get("/", auth=staff_auth, response=list[OperatorStatusOut])
-def list_operators(request):
+def list_operators(request, include_inactive: bool = False):
+    """Operatrici con lo stato di oggi.
+
+    `include_inactive=true` restituisce anche le disattivate (`active: false`,
+    C8): la scheda si apriva solo da questa lista, quindi un'operatrice spenta
+    per errore o rientrata dopo mesi non si ritrovava più per riattivarla
+    (09-05, 15-05).
+    """
     ctx = request.auth
     today = timezone.localdate()
-    operators = list(_operators_qs(ctx).filter(active=True))
+    operators = _operators_qs(ctx)
+    if not include_inactive:
+        operators = operators.filter(active=True)
+    operators = list(operators)
+    sees_cash = _sees_cash(ctx)
     # Incasso del mese e clienti di oggi in due query per l'intera lista, non
     # due per operatrice (vedi `month_revenue_by_operator`).
-    revenues = month_revenue_by_operator(operators, today)
+    revenues = month_revenue_by_operator(operators, today) if sees_cash else {}
     clients = today_clients_by_operator(operators, today)
     result = []
     for op in operators:
         status = today_status(op, today)
-        out = _operator_out(op)
+        out = _operator_out(op, ctx)
         out.update(
             {
                 "on_shift": status["on_shift"],
                 "windows": [(_fmt_min(a), _fmt_min(b)) for a, b in status["windows"]],
                 "absence_type": status["absence_type"],
-                "month_revenue": revenues.get(op.id, Decimal("0")),
+                "month_revenue": revenues.get(op.id, Decimal("0")) if sees_cash else None,
                 "today_clients": clients.get(op.id, 0),
+                "cash_hidden": out["cash_hidden"] or not sees_cash,
             }
         )
         result.append(out)
@@ -244,7 +308,7 @@ def list_operators(request):
 def create_operator(request, data: OperatorIn):
     ctx = request.auth
     require_scope(ctx, "team")
-    operator = _apply_operator_payload(Operator(), ctx, data)
+    operator = _apply_operator_payload(Operator(), ctx, data.dict())
     log_activity(
         ctx.salon,
         "operator.created",
@@ -252,23 +316,23 @@ def create_operator(request, data: OperatorIn):
         actor=ctx.user,
         payload={"operator_id": operator.id},
     )
-    return _operator_out(operator)
+    return _operator_out(operator, ctx)
 
 
 @router.get("/{int:operator_id}", auth=staff_auth, response=OperatorDetailOut)
 def get_operator(request, operator_id: int):
     op = salon_get(Operator, request.auth, operator_id)
-    out = _operator_out(op)
+    out = _operator_out(op, request.auth)
     out["shifts"] = list(op.shifts.all())
     return out
 
 
 @router.put("/{int:operator_id}", auth=staff_auth, response=OperatorOut)
-def update_operator(request, operator_id: int, data: OperatorIn):
+def update_operator(request, operator_id: int, data: OperatorPatchIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    operator = _apply_operator_payload(operator, ctx, data)
+    operator = _apply_operator_payload(operator, ctx, data.dict(exclude_unset=True))
     log_activity(
         ctx.salon,
         "operator.updated",
@@ -276,7 +340,7 @@ def update_operator(request, operator_id: int, data: OperatorIn):
         actor=ctx.user,
         payload={"operator_id": operator.id},
     )
-    return _operator_out(operator)
+    return _operator_out(operator, ctx)
 
 
 @router.patch("/{int:operator_id}/color", auth=staff_auth, response=OperatorOut)
@@ -302,7 +366,7 @@ def set_operator_color(request, operator_id: int, data: OperatorColorIn):
         actor=ctx.user,
         payload={"operator_id": operator.id, "color": operator.color},
     )
-    return _operator_out(operator)
+    return _operator_out(operator, ctx)
 
 
 @router.delete("/{int:operator_id}", auth=staff_auth, response=OkOut)
@@ -331,10 +395,17 @@ def replace_shifts(request, operator_id: int, data: ShiftsReplaceIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    for row in data.shifts:
-        _validate_shift_row(operator, row)
-    _reject_overlapping_shifts(data.shifts)
     with transaction.atomic():
+        # Cancella-e-ricrea sotto lock sulla riga dell'operatrice: su PostgreSQL
+        # il DELETE del secondo di due salvataggi simultanei non vedeva le righe
+        # appena inserite dal primo, e restavano entrambe le serie sovrapposte —
+        # proprio ciò che `_reject_overlapping_shifts` vieta (18-14). Le righe si
+        # validano sull'operatrice riletta sotto lock: il ciclo ridotto nel
+        # frattempo non lascia turni fuori ciclo.
+        operator = Operator.objects.select_for_update().get(pk=operator.pk)
+        for row in data.shifts:
+            _validate_shift_row(operator, row)
+        _reject_overlapping_shifts(data.shifts)
         operator.shifts.all().delete()
         shifts = WeeklyShift.objects.bulk_create(
             [
@@ -438,14 +509,29 @@ def delete_absence(request, operator_id: int, absence_id: int):
 
 @router.get("/{int:operator_id}/performance", auth=staff_auth, response=list[PerformanceOut])
 def get_performance(request, operator_id: int, months: int = 6):
-    operator = salon_get(Operator, request.auth, operator_id)
-    return performance_series(operator, months=months)
+    ctx = request.auth
+    operator = salon_get(Operator, ctx, operator_id)
+    series = performance_series(operator, months=months)
+    if not _sees_cash(ctx):
+        # Il fatturato mese per mese dell'operatrice è un dato di cassa (C6).
+        for row in series:
+            row["revenue"] = None
+            row["cash_hidden"] = True
+    return series
 
 
 @router.get("/{int:operator_id}/clients", auth=staff_auth, response=list[ServedClientOut])
 def get_served_clients(request, operator_id: int, q: str = ""):
-    operator = salon_get(Operator, request.auth, operator_id)
-    return served_clients(operator, q=q)
+    ctx = request.auth
+    operator = salon_get(Operator, ctx, operator_id)
+    rows = served_clients(operator, q=q)
+    if not _sees_cash(ctx):
+        # Spesa, visite e ultima visita: gli stessi dati che la scheda cliente
+        # nasconde a chi non ha il permesso vendite (`stats_hidden`), che qui
+        # passavano comunque (09-01, C6).
+        for row in rows:
+            row.update(visits=None, last_visit=None, total_spent=None, cash_hidden=True)
+    return rows
 
 
 # ---- Endpoint pubblico (web app cliente, no auth) -------------------------------
@@ -453,7 +539,17 @@ def get_served_clients(request, operator_id: int, q: str = ""):
 
 @router.get("/public/operators", response=list[PublicOperatorOut])
 def public_operators(request, salon: str):
-    """Operatrici attive del salone, per la scelta dello stilista in prenotazione."""
+    """Operatrici prenotabili dall'app, per la scelta dello stilista.
+
+    Solo quelle della sede su cui l'app cerca e prenota (la predefinita) e
+    quelle senza sede, lo stesso filtro di `agenda.services._operators_qs`.
+    Elencandole tutte, la cliente sceglieva una stilista di un'altra sede, la
+    ricerca le mostrava orari di una collega e la conferma rispondeva 400
+    «Operatrice non idonea»: con lei dall'app non si prenotava mai (09-03,
+    16-04, 04-04).
+    """
+    from apps.agenda.services import default_location  # lazy: agenda è caricata dopo staff
+
     s = _get_salon_by_slug(salon)
     # Endpoint senza auth: come la disponibilità pubblica in agenda, va limitato
     # per IP, altrimenti chiunque può sfogliare il team di ogni salone a raffica.
@@ -463,11 +559,11 @@ def public_operators(request, salon: str):
         PUBLIC_OPERATORS_WINDOW_SECONDS,
     ):
         raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
-    operators = (
-        Operator.objects.filter(salon=s, active=True)
-        .order_by("order", "id")
-        .prefetch_related("services")
-    )
+    operators = Operator.objects.filter(salon=s, active=True)
+    location = default_location(s)
+    if location is not None:
+        operators = operators.filter(Q(location__isnull=True) | Q(location=location))
+    operators = operators.order_by("order", "id").prefetch_related("services")
     return [
         {
             "id": op.id,
