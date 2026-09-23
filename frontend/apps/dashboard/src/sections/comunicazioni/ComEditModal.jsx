@@ -62,7 +62,9 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     let cancelled = false;
     setClientBusy(true);
     const h = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: cq, limit: 12 } })
+      // solo schede attive: l'invio salta comunque le archiviate, e scegliere
+      // il doppione archiviato lasciava fuori la cliente vera (14-22)
+      api.get('/api/clients/', { params: { q: cq, is_active: true, limit: 12 } })
         .then((res) => { if (!cancelled) setClientResults(res.items || []); })
         .catch(() => { if (!cancelled) setClientResults([]); })
         .finally(() => { if (!cancelled) setClientBusy(false); });
