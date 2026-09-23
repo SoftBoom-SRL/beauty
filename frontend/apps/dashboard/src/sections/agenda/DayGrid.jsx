@@ -13,16 +13,20 @@
 // passaggio del mouse: chi lavora in salone conosce i propri orari, e la
 // striscia sotto il cursore era solo rumore su una griglia già piena.
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Avatar, Icon, fmtDur, timeLabel, statusMeta } from '@youty/shared';
+import { Avatar, Icon, fmtDur, timeLabel, statusMeta, parseISO } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
+import HexInput from '../../ui/HexInput.jsx';
 import {
   DK_START, DK_END, PXM, COLW, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
+  ghostBlockAt, apptRevenue, DOW_IT, DOW_EN, dayGridRange, openingFor,
 } from './lib.js';
+
+const HOURS_W = 64;   // colonna delle ore a sinistra (fissa durante lo scorrimento)
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
-  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom,
+  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom, scrollMemo,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
@@ -35,12 +39,17 @@ export default function DayGrid({
   const justDragged = useRef(false);                 // sopprime il click che segue un rilascio
   const [, force] = useState(0);
   const scrollRef = useRef(null);
+  const headRef = useRef(null);                      // intestazione fissa delle operatrici
 
   // px per minuto alla scala scelta da chi guarda (zoom personale)
   const pxm = PXM * (zoom || 1);
-  const hours = []; for (let h = 8; h <= 20; h++) hours.push(h);
-  const marks = gridMarks(step);                     // ora piena / mezz'ora / quarti (solo passo 15)
-  const gridH = (DK_END - DK_START) * pxm;
+  /* Fascia oraria del giorno (12-04): orari del centro e turni, allargata per
+   * appuntamenti, pause e l'ombra dell'appuntamento aperto (vedi dayGridRange).
+   * Prima era fissa 08–20. */
+  const { start: G0, end: G1 } = dayGridRange(allRows || rows, openingFor(settings, date), ghost);
+  const hours = []; for (let h = G0 / 60; h <= G1 / 60; h++) hours.push(h);
+  const marks = gridMarks(step, G0, G1);             // ora piena / mezz'ora / quarti (solo passo 15)
+  const gridH = (G1 - G0) * pxm;
   /* `rows` = le colonne da disegnare (le chip delle operatrici spente non ci
    * sono). `dataRows` = TUTTE le righe del giorno: i conti vanno fatti su
    * quelle, perché un appuntamento è elencato una volta sola nella riga
@@ -50,6 +59,8 @@ export default function DayGrid({
    * occupato — ci si prenotava sopra davvero. */
   const dataRows = allRows || rows;
   const ops = rows.map((r) => r.operator);
+  // primo servizio dell'ombra che cade in una colonna disegnata: lì va «qui»
+  const ghostFirstId = ghost ? (itemBlocks(ghost).find((b) => ops.some((o) => o.id === b.opId))?.item.id ?? null) : null;
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
   const rowOf = (opId) => dataRows.find((r) => r.operator.id === opId);
   const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
@@ -104,8 +115,8 @@ export default function DayGrid({
     const top0 = cols.offsetTop;                       // dove comincia la griglia nel contenuto
     const offset = zoomAnchor.current?.offset ?? el.clientHeight / 2;
     zoomAnchor.current = null;
-    const minute = DK_START + (el.scrollTop + offset - top0) / (PXM * prev);
-    el.scrollTop = (minute - DK_START) * (PXM * zoom) + top0 - offset;
+    const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
+    el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
   }, [zoom]);
   /* Pinch del trackpad (che arriva come ctrl+rotella) e ⌘/ctrl+rotella: il
    * listener è nativo e NON passivo, altrimenti il browser ingrandisce la
@@ -126,6 +137,32 @@ export default function DayGrid({
     return () => el.removeEventListener('wheel', onWheel);
   }, [onZoom]);
 
+  /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica) e
+   * tornava in cima: l'ombra dell'appuntamento aperto nel pannello — il motivo
+   * per cui si sfoglia — finiva fuori schermo. Il minuto in cima alla griglia
+   * si ricorda in `scrollMemo` (vive nella sezione, sopravvive al rimontaggio)
+   * e si ritrova sul giorno dopo, anche quando la fascia oraria cambia; se poi
+   * l'ombra resta fuori vista, la si porta in vista. */
+  const ownMemo = useRef(null);
+  const memo = scrollMemo || ownMemo;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || memo.current == null) return;
+    el.scrollTop = Math.max(0, (memo.current - G0) * pxm);
+  }, [G0]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !ghost) return;
+    const top = (aStartMin(ghost) - G0) * pxm;                 // nella griglia, sotto l'intestazione
+    const visible = el.clientHeight - (headRef.current?.offsetHeight || 0);
+    if (top < el.scrollTop || top + 24 > el.scrollTop + visible) el.scrollTop = Math.max(0, top - 40);
+  }, [ghost?.id, ghost?.start, date]); // eslint-disable-line react-hooks/exhaustive-deps
+  function onGridScroll() {
+    const el = scrollRef.current;
+    if (el) memo.current = G0 + el.scrollTop / pxm;
+    onDragScroll();
+  }
+
   useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
@@ -135,11 +172,24 @@ export default function DayGrid({
     const el = scrollRef.current?.querySelector(`[data-appt="${openApptId}"]`);
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }, [openApptId]);
-  // Esc annulla il drag in corso
+  /* Esc annulla il drag in corso. `preventDefault` è il contratto di
+   * ui/layers.js: quell'Esc è del trascinamento, e il pannello di dettaglio
+   * aperto sotto non deve chiudersi insieme a lui. In cattura, così arriva
+   * prima di chi ascolta su `window` e guarda `defaultPrevented` subito (il
+   * drawer della prenotazione). */
+  const onDragChangeRef = useRef(onDragChange);
+  onDragChangeRef.current = onDragChange;
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && drag.current) { drag.current = null; document.body.classList.remove('dk-dragging'); force((x) => x + 1); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || !drag.current) return;
+      e.preventDefault();
+      drag.current = null;
+      document.body.classList.remove('dk-dragging');
+      onDragChangeRef.current?.(false);   // la striscia dei giorni torna normale
+      force((x) => x + 1);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
   /* Operatrice sotto il puntatore, o null se si è usciti dalla griglia.
@@ -156,23 +206,52 @@ export default function DayGrid({
     return ops[idx].id;
   }
 
-  /** Giorno della striscia sotto (x, y), con un margine di tolleranza. */
+  /* Il punto cade nella parte di griglia che si vede davvero? Le colonne, sotto
+   * l'intestazione fissa delle operatrici e a destra della colonna delle ore.
+   * Fuori da qui il puntatore non indica né un'ora né un'operatrice. */
+  function inGrid(x, y) {
+    const el = scrollRef.current;
+    const cols = el?.querySelector('.dk-tl-cols');
+    if (!el || !cols) return false;
+    const v = el.getBoundingClientRect();
+    const c = cols.getBoundingClientRect();
+    const head = headRef.current?.getBoundingClientRect();
+    const left = Math.max(c.left, v.left + HOURS_W), right = Math.min(c.right, v.right);
+    const top = Math.max(c.top, head ? head.bottom : v.top), bottom = Math.min(c.bottom, v.bottom);
+    return x >= left && x < right && y >= top && y < bottom;
+  }
+
+  /** Giorno della striscia sotto (x, y), con un margine di tolleranza. La
+   *  pillola del giorno a video non conta: le forbici lasciate lì creavano un
+   *  appuntamento a parte alla stessa ora, spezzando la visita. */
   function dropDate(x, y) {
     let best = null;
     document.querySelectorAll('[data-daydrop]').forEach((el) => {
+      const iso = el.getAttribute('data-daydrop');
+      if (iso === date) return;
       const r = el.getBoundingClientRect();
       const pad = 4;   // le pillole sono piccole: un po' di margine aiuta la mira
       if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) {
-        best = el.getAttribute('data-daydrop');
+        best = iso;
       }
     });
     return best;
   }
 
+  /* Un secondo dito sul tablet non prende il trascinamento in corso: prima lo
+   * spostava e al primo sollevamento lo rilasciava. Si tiene il puntatore che
+   * ha cominciato (pointerId) e i suoi soli eventi; `startScroll` serve a
+   * seguire la rotella (vedi track). */
   function beginDrag(e, d) {
-    drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId };
+    if (e.isPrimary === false) return false;
+    drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, startScroll: scrollRef.current?.scrollTop || 0 };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
+    return true;
   }
+  const otherPointer = (e) => {
+    const d = drag.current;
+    return !!(d && e && e.pointerId != null && d.pointerId != null && e.pointerId !== d.pointerId);
+  };
 
   // Drag di un blocco-servizio → muove QUEL servizio e basta.
   // Prima muoveva tutta la visita e per spostarne uno solo bisognava prima
@@ -310,18 +389,22 @@ export default function DayGrid({
         excludeItemId: d.itemId, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows,
       });
     }
-    const delta = d.ns - d.orig;
+    return visitVerdict(appt, d.ns - d.orig, d.origOp, d.nop);
+  }
+  /* Esito dello spostamento di una visita intera: tutti i servizi slittano di
+   * `delta` minuti e quelli della colonna `origOp` passano a `nop`. */
+  function visitVerdict(appt, delta, origOp, nop) {
     // Cambio di colonna: cambiano mano i servizi della colonna di PARTENZA —
     // quelli che la spina tiene insieme lì — mentre quelli affidati ad altre
     // colleghe restano dove sono (stessa regola del server, from_operator_id).
-    const moved = itemBlocks(appt).filter((b) => b.opId === d.origOp);
-    if (d.nop !== d.origOp) {
-      const skill = skillVerdict(d.nop, moved);
+    const moved = itemBlocks(appt).filter((b) => b.opId === origOp);
+    if (nop !== origOp) {
+      const skill = skillVerdict(nop, moved);
       if (skill) return skill;
     }
     let warn = null;
     for (const b of itemBlocks(appt)) {
-      const opId = b.opId === d.origOp ? d.nop : b.opId;
+      const opId = b.opId === origOp ? nop : b.opId;
       const row = rowOf(opId);
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
@@ -334,39 +417,85 @@ export default function DayGrid({
   }
 
   function onMove(e) {
-    if (!drag.current) return;
     const d = drag.current;
+    if (!d || otherPointer(e)) return;
     d.cx = e.clientX; d.cy = e.clientY;
+    track(d);
+  }
+  /* Scorrendo la griglia (rotella) durante un trascinamento il puntatore non si
+   * muove, ma sotto di lui passa un altro orario: i minuti si ricalcolano
+   * anche da qui. Prima venivano solo da clientY − startY e il blocco si
+   * staccava dal puntatore. */
+  function onDragScroll() {
+    const d = drag.current;
+    if (d) track(d);
+  }
+  function startedMoving() {
+    document.body.classList.add('dk-dragging');
+    onLeave && onLeave();
+    onDragChange && onDragChange(true);
+  }
+
+  /* Posizione del trascinamento: dal puntatore (d.cx, d.cy) più quanto è
+   * scorsa la griglia da quando è cominciato. */
+  function track(d) {
+    const dy = d.cy - d.startY + ((scrollRef.current?.scrollTop || 0) - (d.startScroll || 0));
     if (d.mode === 'resize') {
-      const dy = e.clientY - d.startY;
       const rawDur = d.origDur + dy / pxm;
-      let nd = Math.round(rawDur / 5) * 5;
+      // Un tocco sulla maniglia non cambia niente: arrotondata ai 5 minuti (o
+      // agganciata a un vicino) la durata cambiava senza che nessuno l'avesse
+      // chiesto, e partiva il PUT.
+      const still = Math.abs(rawDur - d.origDur) < 2.5;
+      let nd = still ? d.origDur : Math.round(rawDur / 5) * 5;
       // anche allungando ci si attacca al vicino: la fine del blocco (posa
       // compresa) va a combaciare con l'inizio di quello che c'è sotto
       const soak = d.block?.soakMin || 0;
-      const snap = bestSnapEnd(d.orig + rawDur + soak, d, d.block.opId);
+      // La pausa non ha `block`: leggere d.block.opId dava un TypeError a ogni
+      // movimento, e la pausa pranzo non si allungava più.
+      const opId = d.kind === 'pause' ? d.obj.operator_id : d.block.opId;
+      const snap = still ? null : bestSnapEnd(d.orig + rawDur + soak, d, opId);
       d.snap = null;
       if (snap) {
         const snapped = snap.min - d.orig - soak;
         if (snapped >= 5) { nd = snapped; d.snap = snap; }
       }
-      nd = Math.max(5, Math.min(DK_END - d.orig, nd));
+      // Nessun tetto alla fine della griglia: un servizio che finisce dopo la
+      // griglia (salone aperto fino alle 21, incastro serale) veniva accorciato
+      // fino al bordo — bastava toccare la maniglia. Il limite è la mezzanotte.
+      nd = Math.max(5, Math.min(24 * 60 - d.orig - soak, nd));
       d.ndur = nd; d.moved = d.moved || Math.abs(dy) > 2;
       force((x) => x + 1);
       return;
     }
-    const dy = e.clientY - d.startY;
+    const wasMoved = d.moved;
+    /* Fuori dalla griglia che si vede (sopra la striscia dei giorni, fra la
+     * striscia e la griglia, sull'intestazione, fuori dal riquadro) non c'è né
+     * un'ora né una colonna: il blocco resta al suo posto e il badge dice cosa
+     * farà il rilascio — su una pillola «stesso orario, quel giorno», altrove
+     * niente. Prima ora e colonna venivano dal dy e dalla sola X: sopra la
+     * pillola di giovedì il badge diceva «08:00 · Giulia · Fuori turno», e un
+     * rilascio fra la striscia e la griglia spostava davvero (forzato) all'ora
+     * schiacciata in cima e alla colonna sotto la X. */
+    if (!inGrid(d.cx, d.cy)) {
+      d.outside = true;
+      d.dayTarget = d.kind === 'item' ? dropDate(d.cx, d.cy) : null;
+      d.ns = d.orig; d.nop = d.origOp; d.snap = null; d.verdict = null;
+      d.moved = true;
+      if (!wasMoved) startedMoving();
+      force((x) => x + 1);
+      return;
+    }
+    d.outside = false; d.dayTarget = null;
     const rawMin = d.orig + dy / pxm;
-    const nop = colFromX(e.clientX) ?? d.origOp;
+    const nop = colFromX(d.cx) ?? d.origOp;
     let ns = Math.round(rawMin / step) * step;
     const snap = bestSnap(rawMin, d, nop);
     d.snap = snap && snap.min !== ns ? snap : null;
     if (snap) ns = snap.min;
-    ns = Math.max(DK_START, Math.min(DK_END - step, ns));
+    ns = Math.max(G0, Math.min(G1 - step, ns));
     d.ns = ns; d.nop = nop;
-    const wasMoved = d.moved;
     d.moved = d.moved || Math.abs(dy) > 4 || nop !== d.origOp;
-    if (d.moved && !wasMoved) { document.body.classList.add('dk-dragging'); onLeave && onLeave(); onDragChange && onDragChange(true); }
+    if (d.moved && !wasMoved) startedMoving();
     if (d.moved) d.verdict = validateDrag(d);
     force((x) => x + 1);
   }
@@ -379,9 +508,10 @@ export default function DayGrid({
     force((x) => x + 1);
     return d;
   }
-  function onCancel() { endDrag(); }
+  function onCancel(e) { if (!otherPointer(e)) endDrag(); }
 
-  function onUp() {
+  function onUp(e) {
+    if (otherPointer(e)) return;   // si solleva un altro dito: il trascinamento continua
     const d = endDrag();
     if (!d) return;
     if (d.mode === 'resize') {
@@ -399,14 +529,18 @@ export default function DayGrid({
     }
     justDragged.current = true;
     setTimeout(() => { justDragged.current = false; }, 0);
+    // Fuori dalla griglia conta solo una pillola della striscia; altrove il
+    // rilascio annulla (vedi track).
+    if (!d.outside) { commitDrop(d); return; }
     // Rilascio sopra la striscia dei giorni: in vista giorno non esiste un'altra
     // colonna dove portare l'appuntamento, e spostarlo a domani voleva dire
     // aprirlo e passare da «Riprogramma». I giorni in alto fanno da bersaglio.
     // Il bersaglio si cerca confrontando i rettangoli, non con elementFromPoint:
     // quello restituisce ciò che sta in cima nel punto esatto, e basta un
     // pixel di stacco fra una pillola e l'altra per farlo cadere nel vuoto.
-    const dayTarget = dropDate(d.cx, d.cy);
-    if (dayTarget && onSplitItem && d.kind === 'item' && d.detach) {
+    const dayTarget = d.kind === 'item' ? dropDate(d.cx, d.cy) : null;
+    if (!dayTarget) return;
+    if (onSplitItem && d.detach) {
       // Le forbici staccano QUEL servizio, anche quando lo si lascia su un
       // altro giorno: il controllo sul bersaglio «giorno» veniva prima di
       // guardare d.detach, e il rilascio sulla pillola spostava l'INTERA
@@ -416,13 +550,14 @@ export default function DayGrid({
       onSplitItem(d.block.appt, d.block.item, d.orig, d.origOp, { dateIso: dayTarget });
       return;
     }
-    if (dayTarget && onDropOnDate && d.kind === 'item') {
-      // Orario ORIGINALE: salendo sulla striscia il cursore esce dalla griglia e
-      // l'ora si schiaccerebbe all'inizio del tabellone. Chi trascina su un
-      // giorno sta dicendo «stesso orario, altro giorno».
-      onDropOnDate(d.block.appt, dayTarget, d.apptStart);
-      return;
-    }
+    // Orario ORIGINALE: salendo sulla striscia il cursore esce dalla griglia e
+    // l'ora si schiaccerebbe all'inizio del tabellone. Chi trascina su un
+    // giorno sta dicendo «stesso orario, altro giorno».
+    if (onDropOnDate) onDropOnDate(d.block.appt, dayTarget, d.apptStart);
+  }
+
+  /* Rilascio dentro la griglia: spostamento, stacco o pausa. */
+  function commitDrop(d) {
     if (d.ns === d.orig && d.nop === d.origOp) return;
     // Intenzione di spostamento, calcolata una volta sola: la usa il ramo valido
     // e viene passata anche al rilascio non valido, così il padre può offrire
@@ -490,6 +625,8 @@ export default function DayGrid({
 
   const d = drag.current;
   const dragging = d && d.moved && d.mode !== 'resize';
+  // colonna di arrivo evidenziata: nessuna quando il puntatore è fuori dalla griglia
+  const targetOp = dragging && !d.outside ? d.nop : null;
   // Nessuno slot è vietato: fuori turno, sovrapposizione e fase di posa sono
   // AVVISI, non divieti. Chi sta al banco incastra dove vuole — il rilascio
   // «non valido» finisce in onInvalidDrop, che scrive lo stesso forzando — e il
@@ -499,19 +636,19 @@ export default function DayGrid({
   return (
     <div
       ref={scrollRef} className="scroll" style={{ flex: 1, overflow: 'auto', position: 'relative' }}
-      onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel}
+      onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onScroll={onGridScroll}
     >
       {/* operator header (sticky top) */}
-      <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingBottom: 8, borderBottom: '1px solid var(--hair)' }}>
+      <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingBottom: 8, borderBottom: '1px solid var(--hair)' }}>
         <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 11, background: 'var(--paper)' }} />
         <div style={{ flex: 1, display: 'flex', gap: 6, paddingRight: 4 }}>
           {rows.map((row) => {
             const o = row.operator;
             const cnt = row.appointments.length;
-            const rev = row.appointments.reduce((s, a) => s + Number(a.total_price || 0), 0);
+            const rev = apptRevenue(row.appointments);   // il no-show non entra, come nel mese
             const col = colorOf(o.id);
             const onShift = (row.windows || []).length > 0;
-            const isTarget = dragging && d.nop === o.id;
+            const isTarget = targetOp === o.id;
             return (
               <div key={o.id} title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + COLW + 'px', padding: '10px 11px', display: 'flex', alignItems: 'center', gap: 9, minWidth: 0, borderRadius: '0 0 12px 12px', background: col, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
                 <div style={{ position: 'relative', flexShrink: 0 }}>
@@ -538,10 +675,12 @@ export default function DayGrid({
                         <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: col }}>
                           <input type="color" value={(col && col[0] === '#') ? col : '#C9B8F2'} onChange={(e) => setOpColor(o.id, e.target.value)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
                         </label>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', background: 'var(--surface)' }}>
-                          <span style={{ color: 'var(--muted-2)', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5 }}>#</span>
-                          <input value={((col && col[0] === '#') ? col : '').replace('#', '').toUpperCase()} maxLength={6} placeholder="C9B8F2" onChange={(e) => { const v = e.target.value.replace(/[^0-9a-fA-F]/g, ''); setOpColor(o.id, '#' + v.padEnd(6, '0').slice(0, 6)); }} style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5, width: 64, letterSpacing: '0.05em' }} />
-                        </span>
+                        {/* Il campo completava con zeri e salvava a ogni tasto: scrivendo
+                            «C9B8F2» passavano C00000, C90000… con un PATCH e un evento
+                            live per ogni lettera, e il campo si riempiva di zeri sotto
+                            le dita. HexInput scrive solo a sei cifre valide (o tre, a
+                            campo lasciato). */}
+                        <HexInput value={(col && col[0] === '#') ? col : ''} onChange={(c) => setOpColor(o.id, c)} width={64} />
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 1fr)', gap: 3 }}>
                         {(opPalette || []).map((c) => {
@@ -558,16 +697,16 @@ export default function DayGrid({
         </div>
       </div>
 
-      {/* grid body */}
-      <div style={{ display: 'flex', position: 'relative', height: gridH }}>
+      {/* grid body — `data-span-min`: quanti minuti copre, per «Adatta» */}
+      <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH }}>
         {/* hour gutter (sticky left) */}
         <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
           {/* etichette in grassetto centrate sulla riga (line-height 14 → -7) + tacca che la prolunga nel gutter */}
           {hours.map((h) => (
             <React.Fragment key={h}>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm - 7, right: 10, fontSize: 11, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
-              <div style={{ position: 'absolute', top: (h * 60 - DK_START) * pxm, right: 0, width: 6, ...GRID_LINE_STYLE.hour }} />
-              {h < 20 && 30 * pxm > 18 && <div style={{ position: 'absolute', top: (h * 60 + 30 - DK_START) * pxm - 6, right: 10, fontSize: 9.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
+              <div style={{ position: 'absolute', top: (h * 60 - G0) * pxm - 7, right: 10, fontSize: 11, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }} className="tabnum">{String(h).padStart(2, '0')}:00</div>
+              <div style={{ position: 'absolute', top: (h * 60 - G0) * pxm, right: 0, width: 6, ...GRID_LINE_STYLE.hour }} />
+              {h < G1 / 60 && 30 * pxm > 18 && <div style={{ position: 'absolute', top: (h * 60 + 30 - G0) * pxm - 6, right: 10, fontSize: 9.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }} className="tabnum">{String(h).padStart(2, '0')}:30</div>}
             </React.Fragment>
           ))}
         </div>
@@ -578,21 +717,21 @@ export default function DayGrid({
           {/* rimpicciolendo, quarti e mezz'ore diventano un reticolo illeggibile:
               sotto una certa altezza restano solo le ore */}
           {marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12))
-            .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - DK_START) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
+            .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - G0) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
           {/* passato (solo oggi): velo leggero — non si prenota indietro nel tempo */}
-          {nowMin != null && nowMin > DK_START && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, DK_END) - DK_START) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
+          {nowMin != null && nowMin > G0 && (
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, G1) - G0) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
           )}
-          {nowMin != null && nowMin >= DK_START && nowMin <= DK_END && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - DK_START) * pxm, height: 2, background: '#F4708A', zIndex: 8, pointerEvents: 'none' }}>
+          {nowMin != null && nowMin >= G0 && nowMin <= G1 && (
+            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - G0) * pxm, height: 2, background: '#F4708A', zIndex: 8, pointerEvents: 'none' }}>
               <span style={{ position: 'absolute', left: -6, top: -5, width: 12, height: 12, borderRadius: 99, background: '#F4708A', boxShadow: '0 0 0 3px rgba(244,112,138,0.2)' }} />
               <span className="tabnum" style={{ position: 'absolute', right: 6, top: -8, fontSize: 10, fontWeight: 800, color: '#F4708A', background: 'var(--paper)', padding: '0 4px', borderRadius: 4 }}>{timeLabel(nowMin)}</span>
             </div>
           )}
           {rows.map((row) => {
             const o = row.operator;
-            const closed = closedIntervals(row.windows);
-            const isTarget = dragging && d.nop === o.id;
+            const closed = closedIntervals(row.windows, G0, G1);
+            const isTarget = targetOp === o.id;
             const tone = isTarget ? verdictTone(d.verdict) : '';
             return (
               <div
@@ -603,14 +742,25 @@ export default function DayGrid({
                   if (e.target !== e.currentTarget) return;
                   if (justDragged.current || drag.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const raw = DK_START + (e.clientY - rect.top) / pxm;
-                  const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
+                  const raw = G0 + (e.clientY - rect.top) / pxm;
+                  /* Clic sull'ombra dell'appuntamento aperto: vuol dire «qui,
+                   * a quest'ora, con chi lo fa» — cambia solo il giorno. Letto
+                   * come uno slot qualsiasi, il clic sull'ombra della piega di
+                   * Giulia faceva partire la visita alle 11 e passava a Giulia
+                   * anche i servizi di Anna. Il menu mostra l'esito dello
+                   * spostamento intero, non di un quarto d'ora di quella colonna. */
+                  const gb = ghostBlockAt(ghost, o.id, raw);
+                  if (gb) {
+                    onSlotMenu(o.id, gb.startMin, e.clientX, e.clientY, visitVerdict(ghost, 0, ghost.operator_id, ghost.operator_id), { ghostHit: true });
+                    return;
+                  }
+                  const snapped = Math.max(G0, Math.min(G1 - step, Math.floor(raw / step) * step));
                   onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows: dataRows }));
                 }}
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 {closed.map(([s, e2], i) => (
-                  <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (s - DK_START) * pxm, height: (e2 - s) * pxm, pointerEvents: 'none', borderRadius: 10, background: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--paper) 70%, transparent) 0 6px, transparent 6px 12px)', zIndex: 1 }}>
+                  <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (s - G0) * pxm, height: (e2 - s) * pxm, pointerEvents: 'none', borderRadius: 10, background: 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--paper) 70%, transparent) 0 6px, transparent 6px 12px)', zIndex: 1 }}>
                     {(e2 - s) * pxm > 46 && (
                       <span className="dk-closed-label" style={{ top: '50%', transform: 'translateY(-50%)' }}>
                         {(row.windows || []).length ? t('Fuori turno', 'Off shift') : t('Non in turno', 'Off today')}
@@ -623,29 +773,33 @@ export default function DayGrid({
                     quelli della visita faceva sembrare che partisse tutta,
                     mentre gli altri restano fermi davvero (vedi itemPos). */}
                 {dragging && d.kind === 'item' && itemBlocks(d.block.appt).filter((b) => b.opId === o.id && (!d.detach || b.item.id === d.itemId)).map((b) => (
-                  <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - DK_START) * pxm + 1.5, height: b.dur * pxm - 3 }} />
+                  <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - G0) * pxm + 1.5, height: b.dur * pxm - 3 }} />
                 ))}
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
-                  <div className="dk-drag-ghost" style={{ top: (d.orig - DK_START) * pxm + 1.5, height: d.obj.duration_min * pxm - 3 }} />
+                  <div className="dk-drag-ghost" style={{ top: (d.orig - G0) * pxm + 1.5, height: d.obj.duration_min * pxm - 3 }} />
                 )}
                 {/* Ombra dell'appuntamento aperto nel pannello mentre si sfoglia
                     un altro giorno: dove andrebbe a finire, alla sua ora e nella
                     colonna di chi lo fa. Serve a inquadrare il posto con lo
                     sguardo invece di calcolarlo. Non intercetta il puntatore:
                     il clic passa sotto e apre il menu dello slot, che offre
-                    «Sposta qui». */}
-                {ghost && itemBlocks(ghost).filter((b) => b.opId === o.id).map((b, gi) => (
-                  <div key={'ghost' + b.item.id}
+                    «Sposta qui» (dentro l'ombra: stessa ora, stesse operatrici,
+                    vedi ghostBlockAt). */}
+                {/* «qui» una volta sola, sul primo servizio visibile: scritto
+                    in cima a ogni colonna, anche l'ombra della piega diceva
+                    «11:00 · qui» e invitava a spostare la visita alle 11. */}
+                {ghost && itemBlocks(ghost).filter((b) => b.opId === o.id).map((b) => (
+                  <div key={'ghost' + b.item.id} data-ghost={b.item.id === ghostFirstId ? 'first' : ''}
                     style={{
                       position: 'absolute', left: 4, right: 4,
-                      top: (b.startMin - DK_START) * pxm + 1.5, height: b.dur * pxm - 3,
+                      top: (b.startMin - G0) * pxm + 1.5, height: b.dur * pxm - 3,
                       borderRadius: 12, border: '2px dashed var(--clay)',
                       background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
                       pointerEvents: 'none', zIndex: 6, overflow: 'hidden',
                       padding: '5px 9px', display: 'flex', flexDirection: 'column', gap: 1,
                     }}>
                     <span className="tabnum" style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--clay-ink)', letterSpacing: '0.04em' }}>
-                      {timeLabel(b.startMin)}{gi === 0 ? ' · ' + t('qui', 'here') : ''}
+                      {timeLabel(b.startMin)}{b.item.id === ghostFirstId ? ' · ' + t('qui', 'here') : ''}
                     </span>
                     {b.dur * pxm > 34 && (
                       <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -679,10 +833,10 @@ export default function DayGrid({
                         return (
                           <div key={'sp' + sp.apptId}
                             onPointerDown={ref && canWrite ? (e) => onItemDown(e, ref.b, { whole: true }) : undefined}
-                            title={t(`Un'unica visita di ${sp.client}: ${sp.count} servizi · trascina qui per spostarli tutti insieme, anche in un'altra colonna`, `One visit for ${sp.client}: ${sp.count} services · drag here to move them all together, to another column too`)}
+                            title={t(`Un'unica visita di ${sp.client}: ${sp.total} servizi · trascina qui per spostarli tutti insieme, anche in un'altra colonna`, `One visit for ${sp.client}: ${sp.total} services · drag here to move them all together, to another column too`)}
                             style={{
                               position: 'absolute', ...laneCss(sp.lane, sp.laneCount, 12),
-                              top: (sp.startMin - DK_START) * pxm + 1.5,
+                              top: (sp.startMin - G0) * pxm + 1.5,
                               height: (sp.endMin - sp.startMin) * pxm - 3,
                               background: 'rgba(17,24,39,0.55)', borderRadius: '12px 0 0 12px',
                               pointerEvents: dragging || !canWrite ? 'none' : 'auto',
@@ -699,7 +853,7 @@ export default function DayGrid({
                       {/* service blocks (each in its operator's column) */}
                       {placed.map(({ b, pos, lane, laneCount }) => (
                         <ItemBlock
-                          key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin}
+                          key={'i' + b.item.id} block={b} startMin={pos.startMin} activeMin={pos.activeMin} soakMin={pos.soakMin} g0={G0}
                           lane={lane} laneCount={laneCount}
                           dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang} canWrite={canWrite}
                           highlight={b.apptId === openApptId}
@@ -719,7 +873,7 @@ export default function DayGrid({
                   const pos = pausePos(p);
                   return (
                     <PauseBlock
-                      key={'p' + p.id} pxm={pxm} p={p} startMin={pos.startMin} dur={pos.dur ?? p.duration_min} dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang}
+                      key={'p' + p.id} pxm={pxm} g0={G0} p={p} startMin={pos.startMin} dur={pos.dur ?? p.duration_min} dragging={pos.dragging} tone={pos.dragging ? verdictTone(pos.verdict) : ''} t={t} lang={lang}
                       canWrite={canWrite}
                       onDown={(e) => onPauseDown(e, p)}
                       onResizeDown={(e) => onPauseResizeDown(e, p)}
@@ -758,6 +912,21 @@ export default function DayGrid({
           ? itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp).length
           : 1;
         const moving = d.kind === 'item' && !detach && group < (d.block.appt.items || []).length;
+        // Fuori dalla griglia il badge dice che cosa farà il rilascio, non un
+        // orario e una colonna che non ci sono (vedi track).
+        if (d.outside) {
+          const dd = d.dayTarget ? parseISO(d.dayTarget) : null;
+          const dayLbl = dd ? `${t(DOW_IT[(dd.getDay() + 6) % 7], DOW_EN[(dd.getDay() + 6) % 7])} ${dd.getDate()}` : '';
+          const at = timeLabel(detach ? d.orig : start);
+          return (
+            <div className="dk-drag-badge" style={{ top: d.cy + 18, left: d.cx + 18 }}>
+              <Icon name={dd ? 'calendar' : 'x'} size={14} color="#fff" stroke={2.6} />
+              {dd
+                ? <span>{detach ? t(`Stacca su ${dayLbl}, ${at}`, `Detach to ${dayLbl}, ${at}`) : t(`${dayLbl}, stesso orario (${at})`, `${dayLbl}, same time (${at})`)}</span>
+                : <span>{t('Fuori dalla griglia: rilascia per annullare', 'Outside the grid: release to cancel')}</span>}
+            </div>
+          );
+        }
         return (
           <div className={'dk-drag-badge' + (tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
             <Icon name={tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
@@ -775,23 +944,23 @@ export default function DayGrid({
   );
 }
 
-/* closed (off-shift) intervals within the grid, from API windows [["09:00","13:00"],...] */
-function closedIntervals(windows) {
+/* closed (off-shift) intervals within the grid (`g0`–`g1`, minuti), from API windows [["09:00","13:00"],...] */
+function closedIntervals(windows, g0 = DK_START, g1 = DK_END) {
   const win = (windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const out = [];
-  let cursor = DK_START;
+  let cursor = g0;
   win.forEach(([s, e]) => {
-    if (s > cursor) out.push([cursor, Math.min(s, DK_END)]);
+    if (s > cursor) out.push([cursor, Math.min(s, g1)]);
     cursor = Math.max(cursor, e);
   });
-  if (cursor < DK_END) out.push([cursor, DK_END]);
+  if (cursor < g1) out.push([cursor, g1]);
   return out.filter(([s, e]) => e > s);
 }
 
 const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
-function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, isLast, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -826,14 +995,17 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
         : undefined}
       onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * pxm + 1.5, height: h - 3,
+        position: 'absolute', top: (startMin - g0) * pxm + 1.5, height: h - 3,
         // Mentre si trascina il blocco torna a tutta larghezza: deve restare
         // leggibile sopra gli altri.
         ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
         boxShadow: dragging ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : '0 1px 3px rgba(17,24,39,0.12)',
-        zIndex: highlight && !dragging ? 3 : undefined, padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
-        cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', zIndex: dragging ? 20 : 2, transform: dragging ? 'scale(1.03)' : 'none',
+        // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
+        // secondo, così il blocco aperto nel pannello restava a 2 e il suo
+        // contorno spariva sotto il vicino di corsia.
+        zIndex: dragging ? 20 : highlight ? 3 : 2, padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
+        cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', transform: dragging ? 'scale(1.03)' : 'none',
         opacity: appt.status === 'no_show' ? 0.5 : dragging ? 0.92 : 1, transition: dragging ? 'none' : 'box-shadow 150ms',
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,
       }}
@@ -868,14 +1040,14 @@ function ItemBlock({ block, startMin, activeMin, soakMin, lane = 0, laneCount = 
 }
 
 /* ---------- pause (break) block — hatched, movable, resizable ---------- */
-function PauseBlock({ p, startMin, dur, dragging, tone, pxm = PXM, t, canWrite, onDown, onResizeDown, onRemove }) {
+function PauseBlock({ p, g0 = DK_START, startMin, dur, dragging, tone, pxm = PXM, t, canWrite, onDown, onResizeDown, onRemove }) {
   const bh = dur * pxm;
   const bCompact = bh < 44;
   return (
     <div
       onPointerDown={(e) => onDown(e)}
       style={{
-        position: 'absolute', top: (startMin - DK_START) * pxm + 1.5, height: bh - 3,
+        position: 'absolute', top: (startMin - g0) * pxm + 1.5, height: bh - 3,
         ...(dragging ? { left: 4, right: 4 } : laneCss(0, 1)),
         borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : '1.5px dashed var(--pewter-300, #B6B4BB)',
         background: 'repeating-linear-gradient(135deg, rgba(120,120,128,0.13) 0 7px, rgba(120,120,128,0.04) 7px 14px)',

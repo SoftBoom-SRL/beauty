@@ -27,6 +27,18 @@ export function zoomStep(current, dir) {
 }
 export const COLW = 158;          // min operator column width
 
+/** Eventi live dopo cui le viste giorno, settimana e mese si ricaricano.
+ *  Ognuna ne ascoltava un pezzo diverso, e ciascuna restava ferma su qualcosa:
+ *  - `deposit.` e `sale.`: la caparra pagata online e l'incasso in cassa
+ *    (anche `appointment.closed` del conto) — in settimana e nel mese il
+ *    pallino «caparra da versare» e la visita «in corso» restavano lì;
+ *  - `operator.` e `settings.`: turni, assenze e orari del centro cambiati da
+ *    un'altra postazione — la colonna di un'assente restava «in turno», il
+ *    trascinamento diceva «Disponibile» e lo spostamento partiva forzato sopra
+ *    un'assenza, senza che nessuno lo vedesse; nel mese l'occupazione restava
+ *    quella vecchia. */
+export const AGENDA_LIVE_RE = /^(appointment|pause|waitlist|slot|visit|sale|deposit|operator|settings)\./;
+
 export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
 export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const DOW_IT = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
@@ -104,9 +116,39 @@ export function addMonths(dateStr, n) {
  *  («Annulla»): quel percorso ha in mano l'oggetto di prima dello spostamento,
  *  e confrontando il ritorno con `appt.start` il movimento sembrava un
  *  non-movimento — l'annullamento non partiva e l'appuntamento restava dove
- *  era stato spostato, senza dire niente. */
-export const moveIsNoop = (startMin, opId, from) =>
-  startMin === undefined || (startMin === from.startMin && opId === from.opId);
+ *  era stato spostato, senza dire niente.
+ *
+ *  Conta anche il GIORNO (`toDate` contro `from.date`, "YYYY-MM-DD"): «Sposta
+ *  qui» sull'ombra di un altro giorno arriva proprio con la stessa ora e la
+ *  stessa colonna, e confrontando solo quelle la cliente di martedì alle 10
+ *  che chiedeva «giovedì, stessa ora» restava a martedì — nessuna richiesta,
+ *  nessun avviso. Senza date si confrontano solo ora e operatrice. */
+export const moveIsNoop = (startMin, opId, from, toDate = null) =>
+  startMin === undefined || (
+    startMin === from.startMin && opId === from.opId
+    && (toDate == null || from.date == null || toDate === from.date)
+  );
+
+/** Servizio dell'ombra sotto il punto (colonna `opId`, minuto `minute`), o null.
+ *  L'ombra è l'appuntamento aperto nel pannello disegnato su un altro giorno:
+ *  un riquadro per servizio, ognuno nella colonna di chi lo fa. */
+export function ghostBlockAt(ghost, opId, minute) {
+  if (!ghost || minute == null) return null;
+  return itemBlocks(ghost).find((b) => b.opId === opId && minute >= b.startMin && minute < b.startMin + Math.max(b.dur, 1)) || null;
+}
+
+/** Dove porta «Sposta qui»: { startMin, opId, fromOp }.
+ *  - clic sull'ombra (`slot.ghostHit`): stesso orario e stesse operatrici, cambia
+ *    solo il giorno. Col clic sull'ombra della piega (11:00, Giulia) la visita
+ *    partiva alle 11:00 e i servizi di Anna passavano a Giulia: l'ombra diceva
+ *    «qui» e l'appuntamento finiva altrove, con un'altra operatrice;
+ *  - clic su uno spazio libero: la visita parte all'ora cliccata e i servizi
+ *    dell'operatrice principale passano alla colonna cliccata (quelli affidati
+ *    alle colleghe restano loro, spostati dello stesso tanto). */
+export function moveHereTarget(appt, slot) {
+  if (slot.ghostHit) return { startMin: aStartMin(appt), opId: appt.operator_id, fromOp: appt.operator_id };
+  return { startMin: slot.startMin, opId: slot.opId, fromOp: appt.operator_id };
+}
 
 /** ApiError → toast, with network fallback */
 export function toastErr(err, t, fireToast) {
@@ -145,6 +187,15 @@ export function weekLayout(list) {
   return out;
 }
 
+/** Vero se `value` ("YYYY-MM-DD" di <input type="date">) è una data da cui
+ *  saltare. Scrivendo l'anno a tastiera il campo passa per 0002, 0020, 0202:
+ *  sono date valide per il browser, e al primo tasto l'agenda saltava al 1902
+ *  (gli anni 0–99 di Date sono il Novecento). */
+export function plausibleDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  return !!m && Number(m[1]) >= 1900;
+}
+
 /* ---- waitlist helpers ---- */
 
 /** label for a WaitlistOut preference */
@@ -181,7 +232,11 @@ export function wlMatches(waitlist, appt) {
 /** rank waitlist entries for a freed slot (service match assumed) */
 export function wlRank(entries, appt) {
   const hour = Math.floor(aStartMin(appt) / 60);
-  const dow = (parseISO(appt.start).getDay() + 6) % 7;
+  // Giorno della settimana sul calendario del SALONE: getDay() sull'ISO
+  // dell'API legge il fuso del dispositivo, e da una postazione su un altro
+  // fuso (o a cavallo della mezzanotte UTC) il venerdì sera diventava sabato —
+  // «weekend» e «giorni precisi» premiavano le voci sbagliate.
+  const dow = (parseISO(toDateStr(appt.start)).getDay() + 6) % 7;
   const opIds = apptOperatorIds(appt);
   const score = (w) => {
     let s = 10;
@@ -389,15 +444,123 @@ export const GRID_LINE_STYLE = {
   quarter: { height: 1, background: 'color-mix(in srgb, var(--ink) 4%, transparent)' },
 };
 
-/** Segni orari da disegnare: [{ m, kind }] con kind ∈ hour | half | quarter. */
-export function gridMarks(step) {
+/* ---- Fascia oraria delle griglie (vista giorno e settimana) -----------------
+ * Era fissa, 08:00–20:00: la sposa forzata alle 07:00 non compariva né in
+ * giorno né in settimana (il blocco finiva sotto l'intestazione), e con i turni
+ * fino alle 21 la fascia 20–21 non si poteva cliccare e un trascinamento la
+ * schiacciava alle 19:45. Ora la fascia è quella del giorno: orari del centro e
+ * turni, allargata a ore piene per gli appuntamenti e le pause che ci sono
+ * davvero. Senza orari né turni si parte dalle 08–20 di sempre.
+ * `base` e `extra` = [[da, a], …] in minuti dalla mezzanotte. */
+export function gridRange(base, extra = []) {
+  const all = [...((base && base.length) ? base : [[DK_START, DK_END]]), ...(extra || [])];
+  let lo = Infinity, hi = -Infinity;
+  for (const [s, e] of all) {
+    if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+    if (s < lo) lo = s;
+    if (e > hi) hi = e;
+  }
+  if (!Number.isFinite(lo)) return { start: DK_START, end: DK_END };
+  const start = Math.max(0, Math.floor(lo / 60) * 60);
+  const end = Math.min(24 * 60, Math.max(start + 60, Math.ceil(hi / 60) * 60));
+  return { start, end };
+}
+
+/** Fine di un appuntamento: l'ultimo servizio della catena, posa compresa. */
+const apptSpan = (a) => {
+  const s = aStartMin(a);
+  const blocks = itemBlocks(a);
+  const e = blocks.length ? Math.max(...blocks.map((b) => b.startMin + b.dur)) : s + aDur(a);
+  return [s, Math.max(e, s + 1)];
+};
+
+/** Fascia della vista giorno. `rows` = righe di /agenda/day (turni,
+ *  appuntamenti, pause), `opening` = fasce del centro di quel giorno
+ *  [["09:00","19:00"], …], `ghost` = appuntamento aperto nel pannello, che su
+ *  un altro giorno si disegna in trasparenza e deve restare visibile. */
+export function dayGridRange(rows, opening, ghost = null) {
+  const base = (opening || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]);
+  const extra = [];
+  for (const r of rows || []) {
+    for (const [a, b] of r.windows || []) base.push([hmToMin(a), hmToMin(b)]);
+    for (const a of r.appointments || []) if (a.status !== 'cancelled') extra.push(apptSpan(a));
+    for (const p of r.pauses || []) extra.push([aStartMin(p), aStartMin(p) + (p.duration_min || 0)]);
+  }
+  if (ghost) extra.push(apptSpan(ghost));
+  return gridRange(base, extra);
+}
+
+/** Fascia della vista settimana: una sola scala per i sette giorni, dagli orari
+ *  del centro di tutta la settimana (`openingWeek` = settings.opening_hours_week)
+ *  e dagli appuntamenti del payload /agenda/week (`duration_min` = totale). */
+export function weekGridRange(days, openingWeek, ghost = null) {
+  const base = [];
+  for (const ranges of Object.values(openingWeek || {})) {
+    for (const [a, b] of ranges || []) base.push([hmToMin(a), hmToMin(b)]);
+  }
+  const extra = [];
+  for (const d of days || []) {
+    for (const a of d.appointments || []) {
+      const s = minutesOfDay(a.start);
+      extra.push([s, s + Math.max(a.duration_min || 0, 1)]);
+    }
+  }
+  if (ghost) extra.push(apptSpan(ghost));
+  return gridRange(base, extra);
+}
+
+/** Fasce del centro per il giorno "YYYY-MM-DD" (settings.opening_hours_week). */
+export function openingFor(settings, dateStr) {
+  const week = settings?.opening_hours_week;
+  if (!week || !Object.keys(week).length || !dateStr) return [];
+  return week[String((parseISO(dateStr).getDay() + 6) % 7)] || [];
+}
+
+/** Segni orari da disegnare: [{ m, kind }] con kind ∈ hour | half | quarter,
+ *  dalla fascia `start`–`end` (minuti; di norma quella di gridRange). */
+export function gridMarks(step, start = DK_START, end = DK_END) {
   const out = [];
-  for (let m = DK_START; m <= DK_END; m += 15) {
+  for (let m = start; m <= end; m += 15) {
     if (m % 60 === 0) out.push({ m, kind: 'hour' });
     else if (m % 30 === 0) out.push({ m, kind: 'half' });
     else if (step === 15) out.push({ m, kind: 'quarter' });
   }
   return out;
+}
+
+/** Sotto-colonne di un giorno in vista settimana.
+ *
+ *  Le operatrici della sede attiva — chi non ha sede vale per tutte, la stessa
+ *  regola della vista giorno — e in coda chi ha comunque appuntamenti quel
+ *  giorno: di un'altra sede (col suo nome) o non più in team (`orphanName`).
+ *  Prima c'erano le sotto-colonne delle operatrici di TUTTE le sedi: in
+ *  settimana si prenotava a nome di chi lavora altrove.
+ *  `appointments` = gli appuntamenti del giorno (payload /agenda/week). */
+export function weekDayOps(operators, locationId, appointments, orphanName) {
+  const all = operators || [];
+  const base = all.filter((o) => !locationId || o.location_id == null || o.location_id === locationId);
+  const known = new Set(base.map((o) => o.id));
+  const extra = [];
+  for (const a of appointments || []) {
+    const id = a.operator_id;
+    if (!id || known.has(id)) continue;
+    known.add(id);
+    extra.push(all.find((o) => o.id === id) || { id, first_name: orphanName, last_name: '', inactive: true });
+  }
+  return base.concat(extra);
+}
+
+/** Incasso atteso nelle testate di giorno e settimana, con la regola del mese
+ *  (agenda_range): il no-show non entra. Le testate lo contavano, e lo stesso
+ *  giorno valeva un incasso in vista giorno e un altro nel mese. Si somma in
+ *  centesimi: i prezzi arrivano come stringhe decimali ("45.10"). */
+export function apptRevenue(list) {
+  let cents = 0;
+  for (const a of list || []) {
+    if (a.status === 'no_show' || a.status === 'cancelled') continue;
+    cents += Math.round(Number(a.total_price || 0) * 100);
+  }
+  return cents / 100;
 }
 
 /** Segmenti della striscia colorata di un blocco settimanale: uno per operatrice,

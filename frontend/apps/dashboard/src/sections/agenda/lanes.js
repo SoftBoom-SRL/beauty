@@ -89,12 +89,20 @@ export function laneCss(lane = 0, laneCount = 1, fixedWidth = null) {
  *  disegnare una barra sola: in agenda due servizi della stessa cliente erano
  *  due riquadri identici a due appuntamenti distinti, e non si capiva né che
  *  fossero una cosa sola né che si potessero staccare.
+ *
+ *  La spina c'è anche quando in questa colonna la visita ha UN servizio solo
+ *  (colore con Anna, piega con Giulia): è la maniglia per spostare la visita
+ *  intera. Senza, una visita divisa fra due colonne non aveva nessun punto da
+ *  cui prenderla tutta — il corpo del blocco stacca il suo servizio — e per
+ *  spostarla di un'ora la si spezzava in due appuntamenti.
+ *  `count` = servizi della visita in questa colonna, `total` = in tutta la visita.
  */
 export function visitSpines(placed) {
   const byAppt = new Map();
   for (const placedItem of placed) {
     const { b, pos } = placedItem;
-    if (((b.appt.items || []).length) < 2) continue;
+    const total = (b.appt.items || []).length;
+    if (total < 2) continue;
     const start = pos.startMin;
     const end = start + (pos.activeMin ?? b.activeMin ?? 0) + (pos.soakMin ?? b.soakMin ?? 0);
     const cur = byAppt.get(b.apptId);
@@ -104,15 +112,13 @@ export function visitSpines(placed) {
       cur.count += 1;
     } else {
       byAppt.set(b.apptId, {
-        apptId: b.apptId, startMin: start, endMin: end, count: 1,
+        apptId: b.apptId, startMin: start, endMin: end, count: 1, total,
         client: b.appt.client?.full_name || '',
         lane: placedItem.lane || 0, laneCount: placedItem.laneCount || 1,
       });
     }
   }
-  // Una barra ha senso solo se in questa colonna ci sono almeno due servizi
-  // della stessa visita: con uno solo non c'è niente da legare.
-  return [...byAppt.values()].filter((sp) => sp.count > 1);
+  return [...byAppt.values()];
 }
 
 /** Bande di un blocco settimana, una per servizio della visita.

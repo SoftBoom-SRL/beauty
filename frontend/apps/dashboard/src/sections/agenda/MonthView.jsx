@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, fmtMoney, toastErr, opDisplay } from './lib.js';
+import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, fmtMoney, toastErr, opDisplay, AGENDA_LIVE_RE } from './lib.js';
 import {
   monthGrid, filterDay, monthSummary, loadRatio, loadTone, LOAD_TONES, LOAD_WARN, LOAD_FULL,
   statusCounts, sortByStart, operatorRows, dayLabel, pctLabel, EMPTY_DAY,
@@ -49,12 +49,15 @@ export default function MonthView({ anchor, onOpenDay }) {
   /* live: modifiche dalle altre postazioni → ricarica senza skeleton, una volta per raffica */
   /* Il timer sta in una ref: `live` cambia identità a ogni evento ricevuto, e
    * con una variabile locale il cleanup dell'effetto annullava il ricarico
-   * appena programmato — il mese non si aggiornava mai. */
+   * appena programmato — il mese non si aggiornava mai.
+   * Gli eventi sono gli stessi delle viste giorno e settimana (AGENDA_LIVE_RE):
+   * ascoltando solo appuntamenti e pause, la caparra pagata e i turni o gli
+   * orari cambiati altrove lasciavano pallini e occupazione quelli vecchi. */
   const liveTimer = useRef(null);
   useEffect(() => {
     if (!live?.subscribe) return undefined;
     const unsub = live.subscribe(({ events }) => {
-      if (!events.some((e) => /^(appointment|pause)\./.test(e.type))) return;
+      if (!events.some((e) => AGENDA_LIVE_RE.test(e.type))) return;
       clearTimeout(liveTimer.current);
       liveTimer.current = setTimeout(() => load(true), LIVE_DEBOUNCE_MS);
     });
