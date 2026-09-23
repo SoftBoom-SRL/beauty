@@ -27,6 +27,18 @@ export function zoomStep(current, dir) {
 }
 export const COLW = 158;          // min operator column width
 
+/** Eventi live dopo cui le viste giorno, settimana e mese si ricaricano.
+ *  Ognuna ne ascoltava un pezzo diverso, e ciascuna restava ferma su qualcosa:
+ *  - `deposit.` e `sale.`: la caparra pagata online e l'incasso in cassa
+ *    (anche `appointment.closed` del conto) — in settimana e nel mese il
+ *    pallino «caparra da versare» e la visita «in corso» restavano lì;
+ *  - `operator.` e `settings.`: turni, assenze e orari del centro cambiati da
+ *    un'altra postazione — la colonna di un'assente restava «in turno», il
+ *    trascinamento diceva «Disponibile» e lo spostamento partiva forzato sopra
+ *    un'assenza, senza che nessuno lo vedesse; nel mese l'occupazione restava
+ *    quella vecchia. */
+export const AGENDA_LIVE_RE = /^(appointment|pause|waitlist|slot|visit|sale|deposit|operator|settings)\./;
+
 export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
 export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 export const DOW_IT = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
@@ -104,9 +116,39 @@ export function addMonths(dateStr, n) {
  *  («Annulla»): quel percorso ha in mano l'oggetto di prima dello spostamento,
  *  e confrontando il ritorno con `appt.start` il movimento sembrava un
  *  non-movimento — l'annullamento non partiva e l'appuntamento restava dove
- *  era stato spostato, senza dire niente. */
-export const moveIsNoop = (startMin, opId, from) =>
-  startMin === undefined || (startMin === from.startMin && opId === from.opId);
+ *  era stato spostato, senza dire niente.
+ *
+ *  Conta anche il GIORNO (`toDate` contro `from.date`, "YYYY-MM-DD"): «Sposta
+ *  qui» sull'ombra di un altro giorno arriva proprio con la stessa ora e la
+ *  stessa colonna, e confrontando solo quelle la cliente di martedì alle 10
+ *  che chiedeva «giovedì, stessa ora» restava a martedì — nessuna richiesta,
+ *  nessun avviso. Senza date si confrontano solo ora e operatrice. */
+export const moveIsNoop = (startMin, opId, from, toDate = null) =>
+  startMin === undefined || (
+    startMin === from.startMin && opId === from.opId
+    && (toDate == null || from.date == null || toDate === from.date)
+  );
+
+/** Servizio dell'ombra sotto il punto (colonna `opId`, minuto `minute`), o null.
+ *  L'ombra è l'appuntamento aperto nel pannello disegnato su un altro giorno:
+ *  un riquadro per servizio, ognuno nella colonna di chi lo fa. */
+export function ghostBlockAt(ghost, opId, minute) {
+  if (!ghost || minute == null) return null;
+  return itemBlocks(ghost).find((b) => b.opId === opId && minute >= b.startMin && minute < b.startMin + Math.max(b.dur, 1)) || null;
+}
+
+/** Dove porta «Sposta qui»: { startMin, opId, fromOp }.
+ *  - clic sull'ombra (`slot.ghostHit`): stesso orario e stesse operatrici, cambia
+ *    solo il giorno. Col clic sull'ombra della piega (11:00, Giulia) la visita
+ *    partiva alle 11:00 e i servizi di Anna passavano a Giulia: l'ombra diceva
+ *    «qui» e l'appuntamento finiva altrove, con un'altra operatrice;
+ *  - clic su uno spazio libero: la visita parte all'ora cliccata e i servizi
+ *    dell'operatrice principale passano alla colonna cliccata (quelli affidati
+ *    alle colleghe restano loro, spostati dello stesso tanto). */
+export function moveHereTarget(appt, slot) {
+  if (slot.ghostHit) return { startMin: aStartMin(appt), opId: appt.operator_id, fromOp: appt.operator_id };
+  return { startMin: slot.startMin, opId: slot.opId, fromOp: appt.operator_id };
+}
 
 /** ApiError → toast, with network fallback */
 export function toastErr(err, t, fireToast) {

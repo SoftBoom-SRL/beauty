@@ -6,6 +6,7 @@ import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
   isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay,
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
+  moveIsNoop, moveHereTarget, AGENDA_LIVE_RE,
 } from './lib.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
@@ -107,6 +108,36 @@ export default function AgendaSection() {
   const fetchSummary = useCallback(() => api.get('/api/sales/today-summary').then(setSummary).catch(() => {}), []);
   const fetchReleased = useCallback(() => api.get('/api/agenda/released').then(setReleased).catch(() => {}), []);
   const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
+  /* Le callback date ai modali (onMutate, onCreated) vivono quanto il modale,
+   * ma `refetchAll` cambia a ogni giorno sfogliato: quella catturata
+   * all'apertura ricaricava il giorno di allora, e la risposta veniva scartata
+   * perché non era più quello a video. Passando dalla ref si ricarica sempre
+   * il giorno che si ha davanti. */
+  const refetchAllRef = useRef(refetchAll);
+  refetchAllRef.current = refetchAll;
+
+  /* Copia fresca dell'appuntamento aperto nel pannello. Le props del modale
+   * restano quelle dell'apertura, mentre il pannello salva e aggiorna solo il
+   * proprio stato: dopo «Passa a Bea» l'ombra restava nella colonna di Anna e
+   * «Sposta qui» mandava Anna come operatrice di partenza — il server non
+   * trovava i suoi servizi, e l'appuntamento restava a Bea (se occupata,
+   * forzato sopra la sua cliente) mentre l'avviso diceva «Spostato a Carla».
+   * Si rilegge a ogni modifica segnalata dal pannello, legata all'id del modale
+   * perché riaprendone un altro la copia vecchia non valga più. */
+  const modalRef = useRef(modal);
+  modalRef.current = modal;
+  const [apptFresh, setApptFresh] = useState(null);   // { modalId, appt }
+  const freshSeq = useRef(0);
+  const reloadOpenAppt = useCallback((id) => {
+    const m = modalRef.current;
+    if (!m || m.name !== 'apptdetail' || m.props?.appointment?.id !== id) return;
+    const my = ++freshSeq.current;
+    api.get(`/api/agenda/appointments/${id}`)
+      .then((fresh) => {
+        if (my === freshSeq.current && modalRef.current?.id === m.id) setApptFresh({ modalId: m.id, appt: fresh });
+      })
+      .catch(() => { /* resta la copia che c'è */ });
+  }, []);
 
   useEffect(() => {
     const my = ++daySeq.current;
@@ -125,16 +156,23 @@ export default function AgendaSection() {
    * ferma sui dati di quando si era aperto il giorno. Il timer vive in una ref
    * e si spegne solo allo smontaggio, come già fa MonthView.
    * `deposit.`: la caparra pagata online deve comparire da sola, senza che
-   * nessuno ricarichi la pagina. */
+   * nessuno ricarichi la pagina. `operator.` e `settings.` (turni, assenze,
+   * orari del centro): vedi AGENDA_LIVE_RE.
+   * Con il pannello aperto si rilegge anche il suo appuntamento, che può
+   * essere stato cambiato altrove: l'ombra deve stare dove sta davvero. */
   const liveTimer = useRef(null);
   useEffect(() => {
     if (!live?.subscribe) return undefined;
     return live.subscribe(({ events }) => {
-      if (!events.some((e) => /^(appointment|pause|waitlist|slot|visit|sale|deposit)\./.test(e.type))) return;
+      if (!events.some((e) => AGENDA_LIVE_RE.test(e.type))) return;
       clearTimeout(liveTimer.current);
-      liveTimer.current = setTimeout(refetchAll, 250);
+      liveTimer.current = setTimeout(() => {
+        refetchAll();
+        const m = modalRef.current;
+        if (m?.name === 'apptdetail' && m.props?.appointment?.id) reloadOpenAppt(m.props.appointment.id);
+      }, 250);
     });
-  }, [live, refetchAll]);
+  }, [live, refetchAll, reloadOpenAppt]);
   useEffect(() => () => clearTimeout(liveTimer.current), []);
 
   /* refetch after any modal closes — mutations happen inside modals, keep the grid fresh */
@@ -190,8 +228,43 @@ export default function AgendaSection() {
   const pickMode = modal?.name === 'newappt';
   const openNewAppt = useCallback((prefill) => {
     if (!canWrite) { noWrite(); return; }
-    openModal('newappt', { prefill: prefill || {}, onCreated: refetchAll });
-  }, [canWrite, noWrite, openModal, refetchAll]);
+    openModal('newappt', { prefill: prefill || {}, onCreated: () => refetchAllRef.current() });
+  }, [canWrite, noWrite, openModal]);
+  /* Con la prenotazione aperta, un clic in griglia SCEGLIE l'orario: aprire un
+   * altro drawer (vista settimana) o il dettaglio di un blocco sostituiva quello
+   * in corso, e cliente, servizi e nota scritti al telefono sparivano. */
+  const pickNewAppt = useCallback((prefill) => {
+    if (pickMode) {
+      if (!canWrite) { noWrite(); return; }
+      setAgendaPick({ operatorId: prefill?.operatorId, start: prefill?.start, date: prefill?.date });
+      return;
+    }
+    openNewAppt(prefill);
+  }, [pickMode, canWrite, noWrite, setAgendaPick, openNewAppt]);
+
+  /* Dettaglio di un appuntamento, da qualunque punto dell'agenda.
+   * `extraMutate`: la vista settimana ricarica anche la sua griglia. */
+  const openApptDetail = (a, extraMutate) => {
+    if (!a) return;
+    if (pickMode) {
+      fireToast({ msg: t('Prenotazione in corso: scegli uno spazio libero, o chiudila per aprire questo appuntamento', 'Booking in progress: pick a free space, or close it to open this appointment'), icon: 'info' });
+      return;
+    }
+    /* In settimana il giorno «scelto» non si vede: aprendo un appuntamento di
+     * giovedì con la sezione ferma su lunedì, l'ombra compariva su lunedì, alla
+     * stessa ora, senza niente che dicesse perché. Qui il giorno scelto diventa
+     * quello dell'appuntamento: l'ombra compare solo quando si sfoglia davvero
+     * un altro giorno dal pannello — che quel giorno lo mostra. */
+    if (calView === 'week') {
+      const day = toDateStr(a.start);
+      if (day && day !== dateRef.current) setDate(day);
+    }
+    openModal('apptdetail', {
+      appointment: a,
+      onMutate: () => { refetchAllRef.current(); extraMutate?.(); reloadOpenAppt(a.id); },
+      onShowDate: setDate,
+    });
+  };
   /* groupOpen sta fra le dipendenze: senza, l'handler registrato restava
    * quello di prima e vedeva il drawer di gruppo ancora chiuso — il tasto N ci
    * apriva sopra la prenotazione singola. */
@@ -266,6 +339,9 @@ export default function AgendaSection() {
   // bersaglio, altrimenti nessuno immagina di poterci lasciare sopra un blocco.
   const [dragOn, setDragOn] = useState(false);
 
+  /* Sposta la visita sul giorno a video, all'ora `startMin`, e con `opId` (se
+   * diversa dalla colonna di partenza) passa di mano i servizi di quella
+   * colonna. Ritorna true se il server ha scritto lo spostamento. */
   const moveAppt = async (a, startMin, opId, opts = {}) => {
     const fromMin = aMin(a.start);
     /* Colonna di PARTENZA del gesto: non è per forza quella dell'operatrice
@@ -273,22 +349,34 @@ export default function AgendaSection() {
      * trascinando il gruppo di una devono cambiare mano i SUOI servizi — è
      * quello che dice `from_operator_id` al server. */
     const fromOp = opts.fromOp ?? a.operator_id;
-    const reassigned = opId != null && opId !== fromOp;
-    if (startMin === undefined || (startMin === fromMin && !reassigned)) return;
-    setPending({ kind: 'appt', id: a.id, startMin, opId, fromOp });
+    const toOp = opId ?? fromOp;
+    const reassigned = toOp !== fromOp;
+    // Il giorno di partenza conta quanto ora e colonna: vedi moveIsNoop.
+    const fromDate = toDateStr(a.start);
+    if (moveIsNoop(startMin, toOp, { startMin: fromMin, opId: fromOp, date: fromDate }, date)) return false;
+    const otherDay = fromDate !== date;
+    setPending({ kind: 'appt', id: a.id, startMin, opId: toOp, fromOp });
     try {
       await api.post(`/api/agenda/appointments/${a.id}/move`, {
         start: isoAtMin(date, startMin),
         // L'operatrice si manda solo se cambia davvero: mandarla sempre faceva
         // rivalidare l'idoneità anche a un semplice spostamento d'orario, e un
         // servizio tolto dall'elenco della collega bloccava il trascinamento.
-        ...(reassigned ? { operator_id: opId, from_operator_id: fromOp } : {}),
+        ...(reassigned ? { operator_id: toOp, from_operator_id: fromOp } : {}),
         force: !!opts.force,
       });
-      const opName = firstName((operators.find((o) => o.id === opId) || {}).first_name || '');
+      const opName = firstName((operators.find((o) => o.id === toOp) || {}).first_name || '');
+      // Su un altro giorno l'avviso lo dice: «Spostato alle 10:00» a chi ha
+      // appena portato la cliente da martedì a giovedì non spiegava niente.
+      const dd = parseISO(date);
+      const when = otherDay
+        ? t(`${DOW_IT[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`)
+        : timeLabel(startMin);
       const where = reassigned
-        ? t(`Spostato a ${opName}, ${timeLabel(startMin)}`, `Moved to ${opName}, ${timeLabel(startMin)}`)
-        : t('Spostato alle ' + timeLabel(startMin), 'Moved to ' + timeLabel(startMin));
+        ? t(`Spostato a ${opName}, ${when}`, `Moved to ${opName}, ${when}`)
+        : otherDay
+          ? t('Spostato a ' + when, 'Moved to ' + when)
+          : t('Spostato alle ' + when, 'Moved to ' + when);
       fireToast({
         msg: where + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
@@ -299,17 +387,20 @@ export default function AgendaSection() {
         // al contrario ne avrebbe invece fatti partire due.
         undoFn: opts.undo === false ? undefined : () => undoLast(),
       });
-      await fetchDay();
+      // lo spostamento è scritto: un ricarico andato male non lo rende fallito
+      await fetchDay().catch(() => {});
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
+      return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
         // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
-        await moveAppt(a, startMin, opId, { ...opts, force: true });
-        return;
+        // `await` qui dentro: il `finally` deve aspettare il secondo tentativo.
+        return await moveAppt(a, startMin, opId, { ...opts, force: true });
       }
       if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
       else toastErr(err, t, fireToast);
       await fetchDay().catch(() => {}); // revert to server truth
+      return false;
     } finally { setPending(null); }
   };
 
@@ -359,19 +450,40 @@ export default function AgendaSection() {
   /* Appuntamento aperto nel pannello: con quello a video, un clic su uno spazio
    * libero vuol dire «spostalo qui» — è il gesto della cliente che chiama per
    * spostare, e prima bisognava indovinare l'orario e scriverlo a mano. */
-  const openAppt = modal?.name === 'apptdetail' ? (modal.props?.appointment ?? null) : null;
+  // La copia più fresca che si ha: quella riletta dopo le modifiche del
+  // pannello, altrimenti quella dell'apertura.
+  const openAppt = modal?.name === 'apptdetail'
+    ? ((apptFresh && apptFresh.modalId === modal.id && apptFresh.appt) || modal.props?.appointment || null)
+    : null;
   /* Ombra dell'appuntamento aperto: mentre dal pannello si sfogliano i
    * giorni, si vede dove andrebbe a finire — alla sua ora, nella colonna di
    * chi lo fa. Sul suo giorno non serve: lì c'è il blocco vero, cerchiato. */
   const ghostAppt = openAppt && toDateStr(openAppt.start) !== date ? openAppt : null;
-  const moveOpenApptHere = async (a, opId, startMin) => {
+  /* `slot` = il menu dello slot: { opId, startMin, ghostHit }. Clic sull'ombra
+   * = stessa ora e stesse operatrici su questo giorno; clic su uno spazio
+   * libero = quell'ora, con la colonna cliccata (vedi moveHereTarget). */
+  const moveOpenApptHere = async (a, slot) => {
     setSlotMenu(null);
-    await moveAppt(a, startMin, opId);
+    if (!canWrite) { noWrite(); return; }
+    // Si parte dall'appuntamento com'è ADESSO sul server: ora, giorno e
+    // operatrice di partenza devono essere quelli veri, non quelli di quando
+    // si è aperto il pannello (lì può essere cambiato, o altrove).
+    let cur = a;
+    try { cur = await api.get(`/api/agenda/appointments/${a.id}`); } catch { /* si prova con la copia che c'è */ }
+    const target = moveHereTarget(cur, slot);
+    const from = { startMin: aMin(cur.start), opId: target.fromOp, date: toDateStr(cur.start) };
+    if (moveIsNoop(target.startMin, target.opId ?? target.fromOp, from, date)) {
+      // niente da mandare: lo si dice, invece di riaprire il pannello come
+      // se lo spostamento fosse avvenuto
+      fireToast({ msg: t('È già qui', 'Already here'), icon: 'info' });
+      return;
+    }
+    await moveAppt(cur, target.startMin, target.opId, { fromOp: target.fromOp });
     try {
       // il pannello si riapre sui dati freschi, altrimenti resterebbe a mostrare
       // l'orario di prima mentre in griglia il blocco è già altrove
       const fresh = await api.get(`/api/agenda/appointments/${a.id}`);
-      openModal('apptdetail', { appointment: fresh, onMutate: refetchAll, onShowDate: setDate });
+      openApptDetail(fresh);
     } catch { /* il pannello resta com'è: la griglia è comunque aggiornata */ }
   };
 
@@ -559,6 +671,16 @@ export default function AgendaSection() {
   const allRows = dayData || [];
   const visibleRows = allRows.filter((r) => vis[r.operator.id] !== false);
 
+  // Prenotazione aperta: un clic sulla griglia (giorno o settimana) sceglie
+  // l'orario. Stava solo in vista giorno, e in settimana il clic apriva un
+  // drawer nuovo sopra quello in corso.
+  const pickBanner = pickMode ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 26px', background: 'var(--clay-tint)', borderBottom: '1px solid var(--hair)', color: 'var(--clay-ink)', fontSize: 13, fontWeight: 600 }}>
+      <Icon name="target" size={15} color="var(--clay-ink)" />
+      {t('Scelta orario: clicca uno spazio libero per impostare orario e operatrice nella prenotazione', 'Pick a time: click a free space to set time and stylist in the booking')}
+    </div>
+  ) : null;
+
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
       {/* timeline column */}
@@ -670,7 +792,10 @@ export default function AgendaSection() {
 
         {/* body — day / week / month */}
         {calView === 'week' ? (
-          <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={openNewAppt} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
+          <React.Fragment>
+            {pickBanner}
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
+          </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (
@@ -696,12 +821,7 @@ export default function AgendaSection() {
               <button className="dk-btn dk-btn--soft" style={{ height: 32, fontSize: 12.5, flexShrink: 0 }} onClick={() => setAll(!allOn)}>{allOn ? t('Deseleziona', 'Clear') : t('Tutte', 'All')}</button>
             </div>
 
-            {pickMode && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 26px', background: 'var(--clay-tint)', borderBottom: '1px solid var(--hair)', color: 'var(--clay-ink)', fontSize: 13, fontWeight: 600 }}>
-                <Icon name="target" size={15} color="var(--clay-ink)" />
-                {t('Scelta orario: clicca uno spazio libero per impostare orario e operatrice nella prenotazione', 'Pick a time: click a free space to set time and stylist in the booking')}
-              </div>
-            )}
+            {pickBanner}
             {dayData === null ? (
               <DaySkeleton />
             ) : (
@@ -725,15 +845,16 @@ export default function AgendaSection() {
                 opPalette={opPalette}
                 onHover={onHover}
                 onLeave={() => setHover(null)}
-                onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll, onShowDate: setDate })}
+                onOpenAppt={(a) => openApptDetail(a)}
                 onInvalidDrop={onInvalidDrop}
                 onDropOnDate={moveApptToDate}
                 onDragChange={setDragOn}
                 onSplitItem={splitItem}
-                onSlotMenu={(opId, startMin, x, y, verdict) => {
+                onSlotMenu={(opId, startMin, x, y, verdict, extra) => {
                   if (!canWrite) { noWrite(); return; }
                   if (pickMode) { setAgendaPick({ operatorId: opId, start: isoAtMin(date, startMin), date }); return; }
-                  setSlotMenu({ opId, startMin, x, y, verdict });
+                  // `ghostHit`: il clic è caduto sull'ombra dell'appuntamento aperto
+                  setSlotMenu({ opId, startMin, x, y, verdict, ghostHit: !!extra?.ghostHit });
                 }}
                 onMoveAppt={moveAppt}
                 onResizeItem={resizeItem}
@@ -758,7 +879,7 @@ export default function AgendaSection() {
             released={released}
             onRestore={(a) => restoreReleased(a)}
             onRebook={(a) => openNewAppt({ clientId: a.client?.id, clientName: a.client?.full_name, serviceIds: (a.items || []).map((i) => i.service_id), date })}
-            onOpenAppt={(a) => openModal('apptdetail', { appointment: a, onMutate: refetchAll, onShowDate: setDate })}
+            onOpenAppt={(a) => openApptDetail(a)}
             onOpenLog={() => { setDeepLink && setDeepLink('log-today'); setTab('impostazioni'); }}
             onOpenWaitlist={() => openModal('waitlist')}
             onOpenOpportunity={() => openModal('opportunity')}
@@ -821,7 +942,7 @@ export default function AgendaSection() {
                     cliente: si sfogliano i giorni dal pannello e si clicca lo
                     spazio giusto, senza passare da nessun'altra schermata. */}
                 {openAppt && (
-                  <button className="dk-row" onClick={() => moveOpenApptHere(openAppt, slotMenu.opId, slotMenu.startMin)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
+                  <button className="dk-row" onClick={() => moveOpenApptHere(openAppt, slotMenu)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="calendar" size={15} color="var(--clay-ink)" /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t(`Sposta qui ${firstName(openAppt.client?.full_name)}`, `Move ${firstName(openAppt.client?.full_name)} here`)}</div>

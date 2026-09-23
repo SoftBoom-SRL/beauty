@@ -18,6 +18,7 @@ import { useDash } from '../../ctx.jsx';
 import {
   DK_START, DK_END, PXM, COLW, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
+  ghostBlockAt,
 } from './lib.js';
 
 export default function DayGrid({
@@ -50,6 +51,8 @@ export default function DayGrid({
    * occupato — ci si prenotava sopra davvero. */
   const dataRows = allRows || rows;
   const ops = rows.map((r) => r.operator);
+  // primo servizio dell'ombra che cade in una colonna disegnata: lì va «qui»
+  const ghostFirstId = ghost ? (itemBlocks(ghost).find((b) => ops.some((o) => o.id === b.opId))?.item.id ?? null) : null;
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
   const rowOf = (opId) => dataRows.find((r) => r.operator.id === opId);
   const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
@@ -310,18 +313,22 @@ export default function DayGrid({
         excludeItemId: d.itemId, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows,
       });
     }
-    const delta = d.ns - d.orig;
+    return visitVerdict(appt, d.ns - d.orig, d.origOp, d.nop);
+  }
+  /* Esito dello spostamento di una visita intera: tutti i servizi slittano di
+   * `delta` minuti e quelli della colonna `origOp` passano a `nop`. */
+  function visitVerdict(appt, delta, origOp, nop) {
     // Cambio di colonna: cambiano mano i servizi della colonna di PARTENZA —
     // quelli che la spina tiene insieme lì — mentre quelli affidati ad altre
     // colleghe restano dove sono (stessa regola del server, from_operator_id).
-    const moved = itemBlocks(appt).filter((b) => b.opId === d.origOp);
-    if (d.nop !== d.origOp) {
-      const skill = skillVerdict(d.nop, moved);
+    const moved = itemBlocks(appt).filter((b) => b.opId === origOp);
+    if (nop !== origOp) {
+      const skill = skillVerdict(nop, moved);
       if (skill) return skill;
     }
     let warn = null;
     for (const b of itemBlocks(appt)) {
-      const opId = b.opId === d.origOp ? d.nop : b.opId;
+      const opId = b.opId === origOp ? nop : b.opId;
       const row = rowOf(opId);
       if (!row) continue;
       // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
@@ -604,6 +611,17 @@ export default function DayGrid({
                   if (justDragged.current || drag.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
                   const raw = DK_START + (e.clientY - rect.top) / pxm;
+                  /* Clic sull'ombra dell'appuntamento aperto: vuol dire «qui,
+                   * a quest'ora, con chi lo fa» — cambia solo il giorno. Letto
+                   * come uno slot qualsiasi, il clic sull'ombra della piega di
+                   * Giulia faceva partire la visita alle 11 e passava a Giulia
+                   * anche i servizi di Anna. Il menu mostra l'esito dello
+                   * spostamento intero, non di un quarto d'ora di quella colonna. */
+                  const gb = ghostBlockAt(ghost, o.id, raw);
+                  if (gb) {
+                    onSlotMenu(o.id, gb.startMin, e.clientX, e.clientY, visitVerdict(ghost, 0, ghost.operator_id, ghost.operator_id), { ghostHit: true });
+                    return;
+                  }
                   const snapped = Math.max(DK_START, Math.min(DK_END - step, Math.floor(raw / step) * step));
                   onSlotMenu(o.id, snapped, e.clientX, e.clientY, explainSlot(row, snapped, step, { nowMin, t, rows: dataRows }));
                 }}
@@ -633,9 +651,13 @@ export default function DayGrid({
                     colonna di chi lo fa. Serve a inquadrare il posto con lo
                     sguardo invece di calcolarlo. Non intercetta il puntatore:
                     il clic passa sotto e apre il menu dello slot, che offre
-                    «Sposta qui». */}
-                {ghost && itemBlocks(ghost).filter((b) => b.opId === o.id).map((b, gi) => (
-                  <div key={'ghost' + b.item.id}
+                    «Sposta qui» (dentro l'ombra: stessa ora, stesse operatrici,
+                    vedi ghostBlockAt). */}
+                {/* «qui» una volta sola, sul primo servizio visibile: scritto
+                    in cima a ogni colonna, anche l'ombra della piega diceva
+                    «11:00 · qui» e invitava a spostare la visita alle 11. */}
+                {ghost && itemBlocks(ghost).filter((b) => b.opId === o.id).map((b) => (
+                  <div key={'ghost' + b.item.id} data-ghost={b.item.id === ghostFirstId ? 'first' : ''}
                     style={{
                       position: 'absolute', left: 4, right: 4,
                       top: (b.startMin - DK_START) * pxm + 1.5, height: b.dur * pxm - 3,
@@ -645,7 +667,7 @@ export default function DayGrid({
                       padding: '5px 9px', display: 'flex', flexDirection: 'column', gap: 1,
                     }}>
                     <span className="tabnum" style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--clay-ink)', letterSpacing: '0.04em' }}>
-                      {timeLabel(b.startMin)}{gi === 0 ? ' · ' + t('qui', 'here') : ''}
+                      {timeLabel(b.startMin)}{b.item.id === ghostFirstId ? ' · ' + t('qui', 'here') : ''}
                     </span>
                     {b.dur * pxm > 34 && (
                       <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>

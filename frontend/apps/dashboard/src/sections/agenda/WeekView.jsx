@@ -14,7 +14,7 @@ import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
   DK_START, DK_END, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands,
+  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE,
 } from './lib.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -46,26 +46,49 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * più un dblclick, e senza questa guardia il drawer si rimontava tre volte. */
   const lastOpen = useRef({ at: 0, key: '' });
 
-  // reusable refetch (no skeleton flash) — used after a move and passed to the detail modal
-  const refetchWeek = useCallback(() => (
-    api.get('/api/agenda/week', { params: { start: weekStart, ...(locationId ? { location_id: locationId } : {}) } })
-      .then((rows) => setDays(rows))
-      .catch((err) => toastErr(err, t, fireToast))
-  ), [weekStart, locationId, t, fireToast]);
+  /* reusable refetch (no skeleton flash) — used after a move and passed to the detail modal.
+   * Settimana e sede si leggono da una ref, e un numero di sequenza scarta le
+   * risposte superate, come fa fetchDay in vista giorno. Il pannello teneva il
+   * ricarico di quando si era aperto: sfogliata la settimana dopo, «Salva»
+   * rileggeva la 21–27 e la mostrava sotto l'intestazione «28 set – 4 ott», e
+   * clic e trascinamenti lavoravano sulle date vecchie. Stessa corsa fra un
+   * evento live e un cambio di settimana. */
+  const weekSeq = useRef(0);
+  const weekRef = useRef(weekStart);
+  weekRef.current = weekStart;
+  const locRef = useRef(locationId);
+  locRef.current = locationId;
+  const weekParams = (start, loc) => ({ params: { start, ...(loc ? { location_id: loc } : {}) } });
+  const refetchWeek = useCallback(() => {
+    const my = ++weekSeq.current;
+    const forWeek = weekRef.current, forLoc = locRef.current;
+    return api.get('/api/agenda/week', weekParams(forWeek, forLoc))
+      .then((rows) => {
+        if (my === weekSeq.current && forWeek === weekRef.current && forLoc === locRef.current) setDays(rows);
+      })
+      .catch((err) => {
+        if (my !== weekSeq.current) return;
+        toastErr(err, t, fireToast);
+        setDays((cur) => cur ?? []);   // mai uno scheletro senza fine
+      });
+  }, [t, fireToast]);
+  const refetchWeekRef = useRef(refetchWeek);
+  refetchWeekRef.current = refetchWeek;
 
   // live: modifiche dalle altre postazioni → ricarica la settimana senza skeleton
   useEffect(() => live.subscribe(({ events }) => {
-    if (events.some((e) => /^(appointment|pause|waitlist|slot|visit)\./.test(e.type))) refetchWeek();
+    if (events.some((e) => AGENDA_LIVE_RE.test(e.type))) refetchWeek();
   }), [live, refetchWeek]);
 
   useEffect(() => {
-    let alive = true;
+    const my = ++weekSeq.current;
     setDays(null);
-    api.get('/api/agenda/week', { params: { start: weekStart, ...(locationId ? { location_id: locationId } : {}) } })
-      .then((rows) => { if (alive) setDays(rows); })
-      .catch((err) => { if (alive) { setDays([]); toastErr(err, t, fireToast); } });
-    return () => { alive = false; };
+    api.get('/api/agenda/week', weekParams(weekStart, locationId))
+      .then((rows) => { if (my === weekSeq.current) setDays(rows); })
+      .catch((err) => { if (my === weekSeq.current) { setDays([]); toastErr(err, t, fireToast); } });
   }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // smontaggio: le risposte in volo non scrivono più niente
+  useEffect(() => () => { weekSeq.current++; }, []);
 
   /* Zoom: stessa scala e stesso gesto della vista giorno (⌘/ctrl + rotella o
    * pinch del trackpad), tenendo fermo il minuto che si stava guardando. */
@@ -320,11 +343,17 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   }
 
   async function openDetail(appt) {
+    // Con la prenotazione aperta il dettaglio non si apre (la sostituirebbe):
+    // lo dice la sezione, senza nemmeno caricarlo.
+    if (pickMode && onOpenAppt) { onOpenAppt(appt); return; }
     try {
       const full = await api.get(`/api/agenda/appointments/${appt.id}`);
       // `onShowDate`: sfogliando i giorni dal pannello, la settimana mostrata
       // segue (la vista si ricava dalla stessa data della sezione).
-      openModal('apptdetail', { appointment: full, onMutate: refetchWeek, onShowDate });
+      // Il ricarico passa dalla ref: quello catturato all'apertura rileggeva
+      // la settimana di allora anche dopo averne sfogliata un'altra.
+      if (onOpenAppt) onOpenAppt(full, () => refetchWeekRef.current());
+      else openModal('apptdetail', { appointment: full, onMutate: () => refetchWeekRef.current(), onShowDate });
     } catch (err) { toastErr(err, t, fireToast); }
   }
 
