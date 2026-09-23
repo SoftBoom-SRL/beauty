@@ -11,6 +11,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 
+import httpx
 from django.db import IntegrityError, transaction
 from django.db import connection as db_connection
 from django.utils import timezone
@@ -214,11 +215,16 @@ def _reconcile_contact(salon, rc: dict, by_id: dict, by_key: dict, report: SyncR
         by_key.setdefault(key, local)
 
 
-def sync_clients(conn: YourangConnection) -> SyncReport:
+def sync_clients(conn: YourangConnection, *, push: bool = True) -> SyncReport:
     """Riconcilia per telefono E.164: linkati→aggiorna, stesso telefono→linka,
-    mancanti→crea; i clienti nativi non ancora su Yourang vengono spinti."""
+    mancanti→crea; i clienti nativi non ancora su Yourang vengono spinti
+    (salvo push=False: il webhook riconcilia e basta, il push è del cron)."""
+    with YourangClient(conn) as client:
+        return _sync_clients(conn, client, push=push)
+
+
+def _sync_clients(conn: YourangConnection, client: YourangClient, *, push: bool) -> SyncReport:
     report = SyncReport()
-    client = YourangClient(conn)
     salon = conn.salon
 
     # 1) scarica tutti i contatti Yourang
@@ -254,6 +260,8 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
             report.errors.append(f"contatto {rc.get('id') or '?'}: {exc}")
 
     # 3) locali senza corrispondenza → push su Yourang
+    if not push:
+        return report
     for local in Client.objects.filter(salon=salon, is_active=True):
         if local.yourang_contact_id:
             continue
@@ -289,21 +297,79 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
     return report
 
 
+def sync_contact(conn: YourangConnection, contact_id: str) -> SyncReport:
+    """Webhook contact.*: riconcilia SOLO quel contatto.
+
+    Ogni contact.* rifaceva la sync completa dentro la richiesta: elenco di
+    tutti i contatti e push di ogni scheda non collegata. Con lo scope
+    contacts:write mancante erano 120 POST rifiutati per 120 schede a OGNI
+    webhook, e a raffica un thread di gunicorn occupato per minuti (11-12). Il
+    push delle schede locali resta al primo collegamento e al cron.
+    """
+    report = SyncReport()
+    with YourangClient(conn) as client:
+        try:
+            rc = client.get_contact(contact_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (404, 405):
+                raise
+            # Contatto sparito nel frattempo, o proxy senza la rotta del
+            # singolo contatto: riconciliazione completa, ma senza push.
+            return _sync_clients(conn, client, push=False)
+    if not rc:
+        return report
+    salon = conn.salon
+    rid = str(rc.get("id") or contact_id)
+    rc = {**rc, "id": rid}
+    by_id, by_key = {}, {}
+    linked = Client.objects.filter(salon=salon, yourang_contact_id=rid).first()
+    if linked is not None:
+        by_id[rid] = linked
+    raw_phone = rc.get("phone_number", "") or ""
+    key = phone_key(raw_phone)
+    if key:
+        match = find_client_by_phone(salon, raw_phone)
+        if match is not None:
+            by_key[key] = match
+    _ensure_linked(conn)
+    try:
+        with transaction.atomic():
+            _reconcile_contact(salon, rc, by_id, by_key, report)
+    except Exception as exc:  # noqa: BLE001
+        # Come nella sync completa: un errore di questo contatto è
+        # deterministico, e un 503 farebbe ritentare Yourang all'infinito.
+        logger.warning("Yourang: contatto %s non riconciliato: %s", rid, exc)
+        report.errors.append(f"contatto {rid}: {exc}")
+    return report
+
+
 # ---- Servizi / Pacchetti → Catalogo ----------------------------------------
 
 
 def sync_services(conn: YourangConnection) -> SyncReport:
+    with YourangClient(conn) as client:
+        return _sync_services(conn, client)
+
+
+def _sync_services(conn: YourangConnection, client: YourangClient) -> SyncReport:
     report = SyncReport()
-    client = YourangClient(conn)
     salon = conn.salon
 
     if not conn.catalogue_id:
-        cat = client.create_catalogue(f"{salon.name} — Servizi")
-        if not cat.get("id"):
-            report.errors.append("creazione catalogo fallita")
-            return report
-        conn.catalogue_id = str(cat["id"])
-        conn.save(update_fields=["catalogue_id"])
+        # Sotto lock sulla riga della connessione: la prima sync in background
+        # e il cron possono partire insieme, e due «catalogo mancante» creavano
+        # due cataloghi su Yourang, uno dei quali orfano con metà del listino.
+        # Una sola chiamata dentro la transazione, e solo la prima volta.
+        with transaction.atomic():
+            locked = YourangConnection.objects.select_for_update().get(pk=conn.pk)
+            if not locked.catalogue_id:
+                cat = client.create_catalogue(f"{salon.name} — Servizi")
+                if not cat.get("id"):
+                    report.errors.append("creazione catalogo fallita")
+                    return report
+                locked.catalogue_id = str(cat["id"])
+                locked.save(update_fields=["catalogue_id", "updated_at"])
+            conn.catalogue_id = locked.catalogue_id
 
     for svc in Service.objects.filter(salon=salon, active=True).select_related("category"):
         _ensure_linked(conn)

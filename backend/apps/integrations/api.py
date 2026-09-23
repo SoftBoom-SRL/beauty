@@ -286,8 +286,20 @@ def webhook(request):
     entity_id = str(payload.get("resource_id") or "")
 
     try:
-        if event_type.startswith("contact"):
-            sync.sync_clients(conn)  # riconciliazione completa (robusta al payload)
+        if event_type == "contact.deleted":
+            # Niente da fare: la scheda locale resta (storico, caparre, note) e
+            # il suo contact-id non viene più usato; toglierlo farebbe
+            # rispingere su Yourang, al prossimo giro, il contatto appena
+            # cancellato lì. Prima qui partiva comunque la sync completa.
+            pass
+        elif event_type.startswith("contact") and entity_id:
+            # Solo quel contatto: la sync completa (elenco + push di ogni
+            # scheda non collegata) dentro ogni webhook costava migliaia di
+            # chiamate a raffica. Il push resta al primo collegamento e al cron.
+            sync.sync_contact(conn, entity_id)
+        elif event_type.startswith("contact"):
+            # Payload senza resource_id: riconciliazione completa, senza push.
+            sync.sync_clients(conn, push=False)
         elif event_type == "event.deleted" and entity_id:
             # `and entity_id` come nel ramo gemello qui sotto: senza, un
             # event.deleted col campo assente (o rinominato ancora dal proxy)
