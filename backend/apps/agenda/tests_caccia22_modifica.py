@@ -142,6 +142,24 @@ class EditNextToTheSameClientTests(EditBase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertFalse(res.json()["forced"])
 
+    def test_the_service_itself_treats_the_same_client_as_one_session(self):
+        # la modifica è sempre un gesto dello staff: anche chiamata direttamente
+        S.create_appointment(
+            self.salon, self.anna, [{"service_id": self.man60.id, "operator_id": self.giulia.id}],
+            aware(self.day, 10), via="dashboard",
+        )
+        second = S.create_appointment(
+            self.salon, self.anna, [{"service_id": self.cut30.id, "operator_id": self.giulia.id}],
+            aware(self.day, 10, 30), via="dashboard", client_overlap_ok=True,
+        )
+        item = second.items.get()
+        S.edit_appointment(second, items=[{
+            "id": item.id, "service_id": self.cut30.id, "operator_id": self.giulia.id, "duration_min": 40,
+        }])
+        second.refresh_from_db()
+        self.assertFalse(second.forced)
+        self.assertEqual(second.items.get().duration_min, 40)
+
     def test_another_client_still_conflicts(self):
         S.create_appointment(
             self.salon, self.bea, [{"service_id": self.man60.id, "operator_id": self.giulia.id}],

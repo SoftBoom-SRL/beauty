@@ -1456,7 +1456,7 @@ def edit_appointment(
     force: bool = False,
     actor=None,
     expected_updated_at: dt.datetime | None = None,
-    client_overlap_ok: bool = False,
+    client_overlap_ok: bool = True,
 ) -> Appointment:
     """Modifica i servizi e/o la nota di una visita aperta.
 
@@ -1479,8 +1479,10 @@ def edit_appointment(
     aperto gli id vecchi diventavano «servizi nuovi»: riprezzati a listino, e il
     servizio staccato nel frattempo tornava nella visita (pagato due volte).
 
-    `client_overlap_ok=True` (gesti dello staff): come in creazione, la stessa
-    cliente non occupa e la visita non diventa «forzata» per questo.
+    `client_overlap_ok` (di serie: la modifica è un gesto dello staff, l'app
+    non ne ha una): come in creazione, la stessa cliente non occupa e la visita
+    non diventa «forzata» per questo. Allungare un servizio accanto a un altro
+    della stessa seduta rispondeva 409 e, ritentato forzando, la marcava.
     """
     _lock_and_reload(appointment)
     if expected_updated_at is not None and (
