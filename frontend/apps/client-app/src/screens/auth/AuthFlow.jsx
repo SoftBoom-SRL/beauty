@@ -132,7 +132,11 @@ export default function AuthFlow({ onClose }) {
               {t('Ti invieremo un codice di accesso via SMS.', 'We will send you an access code by SMS.')}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
-            <PhoneInput variant="client" lang={lang} value={phone} onChange={setPhone} onEnter={() => { if (phone.trim()) sendOtp(); }} ariaLabel={t('Numero di telefono', 'Phone number')} />
+            {/* Invio vale quanto il pulsante: solo con un numero plausibile.
+              * Controllava solo che il campo non fosse vuoto, e un numero a metà
+              * passava alla schermata del codice consumando i tentativi per
+              * IP e per salone (16-10). */}
+            <PhoneInput variant="client" lang={lang} value={phone} onChange={setPhone} onEnter={() => { if (isPlausiblePhone(phone)) sendOtp(); }} ariaLabel={t('Numero di telefono', 'Phone number')} />
             <button className="btn btn--brand btn--block press" disabled={!isPlausiblePhone(phone) || busy}
               style={{ opacity: !isPlausiblePhone(phone) || busy ? 0.5 : 1 }} onClick={sendOtp}>
               {busy ? t('Invio…', 'Sending…') : t('Ricevi il codice', 'Get the code')}

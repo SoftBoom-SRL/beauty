@@ -12,6 +12,7 @@ export default function Profilo() {
   const [wlCount, setWlCount] = React.useState(null);
   const [points, setPoints] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+  const [consentBusy, setConsentBusy] = React.useState(false);
 
   React.useEffect(() => {
     let alive = true;
@@ -41,6 +42,33 @@ export default function Profilo() {
       errToast(err, fireToast, t);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /* Consenso alle comunicazioni promozionali (contratto C12). Dato dal form
+   * pubblico o in salone, finora non si poteva più togliere dall'app: nessuna
+   * schermata lo mostrava e la cliente restava nelle campagne (06-17). Si
+   * cambia con l'endpoint del consenso, che tiene traccia di quando. Il
+   * backend che non manda ancora `marketing_consent` non mostra la riga: un
+   * interruttore che non sa da che parte stare direbbe il falso. */
+  const setConsent = async (accepted) => {
+    if (consentBusy || !me) return;
+    setConsentBusy(true);
+    const prev = me.marketing_consent;
+    setMe((m) => (m ? { ...m, marketing_consent: accepted } : m)); // optimistic
+    try {
+      await api.post('/api/marketing/client/marketing-consent', { accepted });
+      fireToast({
+        msg: accepted
+          ? t('Riceverai offerte e novità dal salone', 'You will receive offers and news from the salon')
+          : t('Non riceverai più offerte e promozioni', 'You will no longer receive offers and promotions'),
+        icon: 'check',
+      });
+    } catch (err) {
+      setMe((m) => (m ? { ...m, marketing_consent: prev } : m));
+      errToast(err, fireToast, t);
+    } finally {
+      setConsentBusy(false);
     }
   };
 
@@ -125,10 +153,20 @@ export default function Profilo() {
               ? <Toggle on={waOn} onChange={(v) => saveMe({ whatsapp_reminders: v }, () => fireToast({ msg: v ? t('Promemoria WhatsApp attivi', 'WhatsApp reminders on') : t('Promemoria WhatsApp disattivati', 'WhatsApp reminders off'), icon: 'check' }))} />
               : <span className="skel" style={{ height: 28, width: 46, borderRadius: 99, display: 'inline-block' }} />}
           </div>
+          {typeof me?.marketing_consent === 'boolean' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 13px', borderTop: '1px solid var(--hair)' }}>
+              <Icon name="gift" size={18} color="var(--brand)" />
+              <span className="t-sm" style={{ color: 'var(--muted)', flex: 1 }}>{t('Offerte e promozioni', 'Offers and promotions')}</span>
+              <Toggle on={me.marketing_consent} onChange={setConsent} />
+            </div>
+          )}
         </div>
 
+        {/* Prima la home, poi il logout, come in Utility.jsx: uscendo da qui,
+          * schermata personale, il gate la vedeva vietata e riapriva subito
+          * l'accesso a tutto schermo, con la ripresa sul Profilo (16-09). */}
         <button className="press"
-          onClick={() => { clientAuth.logout(); }}
+          onClick={() => { setView('home'); clientAuth.logout(); fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' }); }}
           style={{ width: '100%', textAlign: 'center', padding: 13, borderRadius: 'var(--r-pill)', color: 'var(--muted)', fontWeight: 600, fontSize: 14 }}>
           {t('Esci', 'Log out')}
         </button>

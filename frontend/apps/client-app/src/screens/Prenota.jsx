@@ -11,6 +11,8 @@ import {
   ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
   nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
+import { giftServiceCards } from './walletLib.js';
+import { sameBooking, svcMinutes } from './visitLib.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 
@@ -63,13 +65,19 @@ export default function Prenota() {
     if (!session) { setGiftCards([]); return undefined; }
     let alive = true;
     api.get('/api/marketing/client/wallet')
-      // `received`: la carta che ho COMPRATO per un'altra persona non è un mio
-      // regalo — prometterebbe un prezzo sbagliato a chi prenota.
-      .then((w) => { if (alive) setGiftCards((w.gift_cards || []).filter((g) => g.gift_service_id && g.payment_status === 'paid' && g.received)); })
+      // Solo le carte che la cassa applica a lei (isSpendable, la regola di
+      // gift_index): quella che ho COMPRATO per un'altra persona non è un mio
+      // regalo, mentre quella «a trattamento» comprata per me senza
+      // destinataria sì — filtrando su `received` qui mancava, e la cassa
+      // poi la applicava (16-07).
+      .then((w) => { if (alive) setGiftCards(giftServiceCards(w.gift_cards)); })
       .catch(() => { if (alive) setGiftCards([]); });
     return () => { alive = false; };
   }, [session]);
   const giftFor = (serviceId) => giftCards.find((g) => g.gift_service_id === serviceId) || null;
+  // «Regalo di …» solo per la carta ricevuta: su quella comprata per sé il
+  // nome di chi l'ha pagata è il suo.
+  const giftFrom = (g) => (g && g.received && g.buyer_name) || '';
   const giftedSelected = serviceIds.map(giftFor).filter(Boolean);
 
   const allSvcs = React.useMemo(
@@ -78,7 +86,8 @@ export default function Prenota() {
   );
   const svcs = serviceIds.map((id) => allSvcs.find((s) => s.id === id)).filter(Boolean);
   const s = svcs[0];
-  const dur = svcs.reduce((sum, sv) => sum + (sv.duration_min || 0), 0);
+  // Lavoro + posa: è il tempo che la cliente passa in salone (C4, 09-07).
+  const dur = svcs.reduce((sum, sv) => sum + svcMinutes(sv), 0);
   const price = svcs.reduce((sum, sv) => sum + Number(sv.price || 0), 0);
   const toggleSvc = (id) => setServiceIds((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const items = serviceIds.map((id) => ({ service_id: id, operator_id: operatorId }));
@@ -138,26 +147,28 @@ export default function Prenota() {
    * risposta perdersi: la cliente vede un errore, ritocca «Conferma» e si
    * ritrova due appuntamenti (il backend non rifiuta due prenotazioni della
    * stessa cliente sullo stesso orario, e con «Prima disponibile» il secondo
-   * prende un'altra operatrice, occupando due slot). Prima di riprovare LO
-   * STESSO orario si va a vedere se l'appuntamento esiste già.
+   * prende un'altra operatrice, occupando due slot). Prima di riprovare LA
+   * STESSA prenotazione si va a vedere se l'appuntamento esiste già: stesso
+   * orario E stessi servizi. Col solo orario, il taglio già fissato alle 10:00
+   * passava per la manicure appena tentata alle 10:00, e dopo un primo POST
+   * perso per strada (rete, 502 durante un deploy) compariva «Fatto!» per una
+   * manicure che non esisteva (16-08).
    * La via più pulita — una chiave di idempotenza inviata col POST — richiede
    * un campo nuovo nello schema del backend: vedi rapporto. */
   const postedFor = React.useRef(null);
-  const findBooked = async (startIso) => {
+  const findBooked = async (startIso, ids) => {
     try {
       const data = await api.get('/api/agenda/client/appointments');
-      const wanted = new Date(startIso).getTime();
-      return (data?.upcoming || []).find(
-        (a) => new Date(a.start).getTime() === wanted && a.status !== 'cancelled',
-      ) || null;
+      return (data?.upcoming || []).find((a) => sameBooking(a, startIso, ids)) || null;
     } catch { return null; }
   };
   const createAppointment = async () => {
-    if (postedFor.current === slot.start) {
-      const existing = await findBooked(slot.start);
+    const attempt = slot.start + '|' + [...serviceIds].sort((a, b) => a - b).join(',');
+    if (postedFor.current === attempt) {
+      const existing = await findBooked(slot.start, serviceIds);
       if (existing) return existing;
     }
-    postedFor.current = slot.start;
+    postedFor.current = attempt;
     return api.post('/api/agenda/client/appointments', { items, start: slot.start });
   };
 
@@ -432,11 +443,11 @@ export default function Prenota() {
                           </div>
                         )}
                         <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(sv.duration_min, lang)}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(svcMinutes(sv), lang)}</span>
                           {giftFor(sv.id) && (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
                               <Icon name="gift" size={12} color="var(--brand-ink)" />
-                              {giftFor(sv.id).buyer_name ? t(`Regalo di ${giftFor(sv.id).buyer_name}`, `A gift from ${giftFor(sv.id).buyer_name}`) : t('Hai un regalo', 'You have a gift')}
+                              {giftFrom(giftFor(sv.id)) ? t(`Regalo di ${giftFrom(giftFor(sv.id))}`, `A gift from ${giftFrom(giftFor(sv.id))}`) : t('Hai un regalo', 'You have a gift')}
                             </span>
                           )}
                         </div>
@@ -700,7 +711,7 @@ export default function Prenota() {
                 <b style={{ color: 'var(--brand-ink)' }}>{t('Coperto da gift card', 'Covered by a gift card')}</b>
                 {': '}
                 {giftedSelected.map((g) => g.gift_service_name).join(', ')}
-                {giftedSelected[0].buyer_name ? t(` · regalo di ${giftedSelected[0].buyer_name}`, ` · a gift from ${giftedSelected[0].buyer_name}`) : ''}
+                {giftFrom(giftedSelected[0]) ? t(` · regalo di ${giftFrom(giftedSelected[0])}`, ` · a gift from ${giftFrom(giftedSelected[0])}`) : ''}
                 {'. '}
                 {t('In salone non pagherai questa parte.', 'You will not pay this part in the salon.')}
               </div>

@@ -88,8 +88,99 @@ export function countryOf(iso2) {
   return BY_ISO.get(String(iso2 || '').toUpperCase()) || null;
 }
 
-// Prefissi dal più lungo al più corto: il primo che combacia vince. A parità
-// di prefisso vince chi sta prima nell'elenco (USA prima di Canada).
+/* ---- Le regole del numero: le STESSE di `backend/common/phone.py` ----
+ * Il numero normalizzato è la chiave con cui si riconosce una cliente già in
+ * rubrica: se frontend e backend lo scrivono in due modi, la stessa persona
+ * diventa due schede e l'OTP parte verso un numero che non esiste. I casi di
+ * prova sono una tabella sola, uguale nei due lati
+ * (backend/apps/clients/tests_caccia22_telefono.py e
+ * packages/shared/test/phone-rules.test.js).
+ * R1 «+» o «00» = internazionale: dopo il prefisso cade UNO 0 interurbano,
+ *    tranne in Italia, San Marino, Vaticano e Costa d'Avorio.
+ * R2 solo cifre: 12 o più cifre che cominciano con un prefisso assegnato =
+ *    già internazionale (e vale R1); altrimenti numero italiano → +39.
+ * R3 dopo +39, 12 o più cifre che cominciano per 39 = prefisso ripetuto. */
+
+/* Prefissi internazionali assegnati dall'ITU (E.164), elenco completo: è
+ * `COUNTRY_CODES` di backend/common/phone.py e deve restare IDENTICO. Serve a
+ * sapere dove finisce il prefisso (lunghezza variabile) e se una fila di cifre
+ * senza «+» è già internazionale. COUNTRIES qui sopra resta corto perché è il
+ * menu delle bandiere: usato come elenco dei prefissi, «380501234567» era
+ * ucraino qui e italiano nel backend (+39380…), la stessa cliente importata da
+ * Excel e digitata nell'app erano due persone (16-11). I prefissi E.164 sono
+ * «prefix-free»: al più uno combacia con l'inizio di un numero. */
+export const COUNTRY_CODES = [
+  '1', '7',
+  '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44',
+  '45', '46', '47', '48', '49', '51', '52', '53', '54', '55', '56', '57', '58',
+  '60', '61', '62', '63', '64', '65', '66', '81', '82', '84', '86', '90', '91',
+  '92', '93', '94', '95', '98',
+  '211', '212', '213', '216', '218', '220', '221', '222', '223', '224', '225',
+  '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236',
+  '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247',
+  '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258',
+  '260', '261', '262', '263', '264', '265', '266', '267', '268', '269', '290',
+  '291', '297', '298', '299',
+  '350', '351', '352', '353', '354', '355', '356', '357', '358', '359', '370',
+  '371', '372', '373', '374', '375', '376', '377', '378', '379', '380', '381',
+  '382', '383', '385', '386', '387', '389',
+  '420', '421', '423',
+  '500', '501', '502', '503', '504', '505', '506', '507', '508', '509', '590',
+  '591', '592', '593', '594', '595', '596', '597', '598', '599',
+  '670', '672', '673', '674', '675', '676', '677', '678', '679', '680', '681',
+  '682', '683', '685', '686', '687', '688', '689', '690', '691', '692',
+  '800', '808', '850', '852', '853', '855', '856', '870', '878', '880', '881',
+  '882', '883', '886', '888',
+  '960', '961', '962', '963', '964', '965', '966', '967', '968', '970', '971',
+  '972', '973', '974', '975', '976', '977', '979', '992', '993', '994', '995',
+  '996', '997', '998',
+];
+
+/* Paesi in cui lo 0 dopo il prefisso fa parte del numero e resta anche da
+ * fuori: Italia (+39 02 1234567; +39 2 1234567 non esiste), San Marino
+ * (+378 0549…), Vaticano (+379 06…) e Costa d'Avorio (+225, numeri a 10 cifre
+ * che cominciano per 0). Altrove è lo 0 interurbano e in E.164 cade — uno
+ * solo. Con l'elenco corto di prima la cliente romena che scriveva
+ * «0721 234 567» con la bandiera RO restava salvata come +40 0721…, numero
+ * inesistente: niente OTP né promemoria, e senza lo 0 era una seconda scheda
+ * (06-04). Togliere TUTTI gli zeri («+49 00151…») divergeva dal backend. */
+const TRUNK_ZERO_KEPT = new Set(['39', '378', '379', '225']);
+
+// Cifre massime di un numero nazionale italiano: oltre, una fila di cifre
+// senza «+» porta già il suo prefisso («393331234567» da WhatsApp o da Excel).
+const NATIONAL_MAX_DIGITS = 11;
+
+const CODES_LONGEST_FIRST = [...COUNTRY_CODES].sort((a, b) => b.length - a.length);
+
+/** Il prefisso ITU con cui cominciano le cifre, '' se non è assegnato. */
+function ituCode(digits) {
+  return CODES_LONGEST_FIRST.find((cc) => digits.startsWith(cc)) || '';
+}
+
+/** Cifre senza «+» già in forma internazionale (R2). Servono entrambe le
+ *  condizioni: «3331234567» comincia per 33 (Francia) ma è un cellulare
+ *  italiano; «289012345678» ha 12 cifre ma nessun prefisso assegnato. */
+function alreadyInternational(digits) {
+  return digits.length > NATIONAL_MAX_DIGITS && ituCode(digits) !== '';
+}
+
+/** Cifre E.164 (prefisso compreso, senza «+») → la forma che salva il backend.
+ *  Un prefisso non assegnato lascia il numero intatto: accorciare senza sapere
+ *  dove finisce il prefisso è peggio che non toccare. */
+function canonicalDigits(digits) {
+  let d = digits;
+  // R1: uno 0 interurbano dopo il prefisso, dove non fa parte del numero.
+  const cc = ituCode(d);
+  if (cc && !TRUNK_ZERO_KEPT.has(cc) && d.startsWith('0', cc.length)) d = cc + d.slice(cc.length + 1);
+  // R3: «+39 39 333 1234567» → «+39 333 1234567». Un nazionale italiano ha al
+  // più 11 cifre: «+39 393 1234567» (10) è un cellulare vero e resta.
+  const national = d.slice(2);
+  if (d.startsWith('39') && national.length > NATIONAL_MAX_DIGITS && national.startsWith('39')) d = '39' + national.slice(2);
+  return d;
+}
+
+// Prefissi dei paesi del menu dal più lungo al più corto: il primo che combacia
+// vince. A parità di prefisso vince chi sta prima nell'elenco (USA prima di Canada).
 const DIALS = [...new Set(COUNTRIES.map((c) => c.dial))].sort((a, b) => b.length - a.length);
 
 const digitsOnly = (s) => String(s || '').replace(/\D/g, '');
@@ -99,19 +190,9 @@ function countryForDial(dial, national) {
   return same.find((c) => c.area && c.area.some((a) => national.startsWith(a))) || same[0] || null;
 }
 
-/**
- * Qualunque stringa (E.164, "00…", legacy con spazi/trattini/parentesi) →
- * { iso2, dial, national }. Senza prefisso si assume l'Italia. Prefisso
- * internazionale sconosciuto → iso2 '' e tutte le cifre in `national`.
- */
-export function splitPhone(value) {
-  let s = String(value || '').trim();
-  if (/^00/.test(s)) s = '+' + s.slice(2); // "00" = "+" internazionale
-  const digits = digitsOnly(s);
-  // Un numero nazionale italiano non supera le 11 cifre: oltre, è un numero
-  // internazionale salvato senza "+" (es. "393331234567").
-  const intl = s.startsWith('+') || digits.length > 11;
-  if (!intl) return { iso2: DEFAULT_ISO2, dial: '39', national: digits };
+/** Cifre internazionali (prefisso compreso) → { iso2, dial, national } sui
+ *  paesi del menu. Prefisso fuori menu → iso2 '' e tutte le cifre in `national`. */
+function splitIntl(digits) {
   const dial = DIALS.find((d) => digits.startsWith(d));
   if (!dial) return { iso2: '', dial: '', national: digits };
   const national = digits.slice(dial.length);
@@ -119,23 +200,68 @@ export function splitPhone(value) {
   return { iso2: c ? c.iso2 : '', dial, national };
 }
 
-/* Lo 0 iniziale del numero nazionale è il prefisso interurbano e in alcuni
- * paesi va tolto (+44 020 7946 0958 = +44 20 7946 0958), in altri fa parte del
- * numero (+39 02 1234567). La regola DEVE coincidere con quella del backend
- * (`backend/common/phone.py`): è la chiave con cui si riconosce una cliente
- * già in rubrica. Togliendolo dove il backend non lo toglie, la stessa persona
- * diventava due identità e non riusciva più ad accedere.
- * Elenco volutamente corto: un prefisso che non c'è lascia il numero intatto. */
-const TRUNK_ZERO_DROP = new Set(['44', '49', '33', '34', '41', '43', '32', '31', '30', '351', '353', '420']);
+/**
+ * Qualunque stringa (E.164, "00…", legacy con spazi/trattini/parentesi) →
+ * { iso2, dial, national }. Senza prefisso si assume l'Italia (R2). Prefisso
+ * internazionale fuori dal menu → iso2 '' e tutte le cifre in `national`.
+ */
+export function splitPhone(value) {
+  // Come il backend: via tutto fuorché cifre e «+» PRIMA di guardare come
+  // comincia. «(+39) 333 1234567» incollato cominciava per «(», non era letto
+  // come internazionale e diventava +39 39 333… (16-02).
+  const s = String(value || '').replace(/[^\d+]/g, '');
+  if (s.startsWith('+')) return splitIntl(digitsOnly(s));
+  if (s.startsWith('00')) return splitIntl(digitsOnly(s.slice(2))); // "00" = "+"
+  const digits = digitsOnly(s);
+  if (alreadyInternational(digits)) return splitIntl(digits);
+  return { iso2: DEFAULT_ISO2, dial: '39', national: digits };
+}
 
-/** (iso2, cifre nazionali) → E.164 "+<dial><cifre>", oppure '' se vuoto. */
+/** (iso2, cifre nazionali) → E.164 "+<dial><cifre>", oppure '' se vuoto.
+ *  Paese ignoto (iso2 ''): le cifre contengono già il prefisso. */
 export function joinPhone(iso2, national) {
-  let n = digitsOnly(national);
+  const n = digitsOnly(national);
   if (!n) return '';
   const c = countryOf(iso2);
-  if (!c) return '+' + n; // paese ignoto: le cifre contengono già il prefisso
-  if (TRUNK_ZERO_DROP.has(c.dial)) n = n.replace(/^0+/, '');
-  return n ? '+' + c.dial + n : '';
+  const full = canonicalDigits(c ? c.dial + n : n);
+  // Restava solo lo 0 interurbano («+44 0»): non è ancora un numero.
+  if (c && full === c.dial) return '';
+  return '+' + full;
+}
+
+/**
+ * Il testo del campo numero di PhoneInput, con la bandiera `iso2` scelta →
+ * { iso2, national, pending }: la bandiera da mostrare e le cifre da tenere in
+ * campo (joinPhone(iso2, national) è il valore). `pending` è il testo da
+ * lasciare com'è finché un «+» o un «00» battuti non hanno ancora un prefisso
+ * riconoscibile ("+", "+4", "003"): intanto il valore è vuoto.
+ * - «+»/«00» davanti (anche incollati fra parentesi): numero internazionale,
+ *   il prefisso passa nella bandiera. Il «+» da solo veniva tolto come un
+ *   carattere qualsiasi, e «+39 333…» battuto a mano diventava +39 39 333…,
+ *   «+44 7911…» diventava +39 44 7911… (16-02).
+ * - bandiera 🌐 (iso2 ''): le cifre in campo contengono già il prefisso.
+ * - bandiera italiana e più di 11 cifre con un prefisso assegnato: il prefisso
+ *   è stato scritto o incollato insieme al numero (R2, come splitPhone e il
+ *   backend). Solo per l'Italia, di cui si sa che il nazionale non supera le
+ *   11 cifre: altrove un numero lungo può cominciare con il prefisso di un
+ *   altro paese.
+ */
+export function readPhoneField(iso2, text) {
+  const s = String(text || '').replace(/[^\d+]/g, '');
+  let intl;
+  if (s.startsWith('+') || s.startsWith('00')) {
+    const lead = s.startsWith('+') ? '+' : '00';
+    intl = digitsOnly(s.slice(lead.length));
+    // I prefissi hanno al più tre cifre: prima si aspetta la prossima, dopo è
+    // un prefisso non assegnato e il numero si tiene com'è (bandiera 🌐).
+    if (!ituCode(intl) && intl.length < 3) return { iso2, national: '', pending: lead + intl };
+  } else {
+    const digits = digitsOnly(s);
+    if (iso2 && !(iso2 === DEFAULT_ISO2 && alreadyInternational(digits))) return { iso2, national: digits, pending: '' };
+    intl = digits;
+  }
+  const p = splitIntl(intl);
+  return { iso2: p.iso2, national: p.national, pending: '' };
 }
 
 /** Cifre nazionali → gruppi di 3 per leggibilità ("333 123 4567"). */
@@ -158,7 +284,8 @@ export function formatPhone(value) {
   return '+' + dial + (national ? ' ' + formatNational(iso2, national) : '');
 }
 
-/** Valore qualsiasi (anche legacy) → E.164 pronto per l'API. */
+/** Valore qualsiasi (anche legacy) → E.164 pronto per l'API: per ogni numero
+ *  che il backend accetta, la stessa scrittura di `normalize_phone` (R1–R3). */
 export function normalizePhone(value) {
   const { iso2, national } = splitPhone(value);
   return joinPhone(iso2, national);

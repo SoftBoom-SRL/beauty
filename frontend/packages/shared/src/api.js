@@ -1,6 +1,7 @@
 // api.js — fetch wrapper for the youty Django Ninja backend.
 // JSON in/out, Bearer auth via pluggable token provider, 401 hook with
 // single retry (used by staffAuth for refresh-and-retry).
+import { readableDetail } from './apiErrors.js';
 
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -47,23 +48,6 @@ async function parseBody(res) {
   const text = await res.text();
   if (!text) return null;
   try { return JSON.parse(text); } catch { return text; }
-}
-
-/* Un campo d'errore → testo leggibile.
- * Gli HttpError scritti a mano mandano `detail` come stringa, ma la
- * validazione di schema di django-ninja manda una LISTA di dizionari pydantic:
- * il toast finiva per stampare `[{"type":"less_than_equal","loc":[...],…}]`
- * invece di dire cosa non andava. Si prende il primo `msg` utile. */
-function readableDetail(value) {
-  if (typeof value === 'string' && value) return value;
-  if (Array.isArray(value)) {
-    const first = value.find((e) => e && typeof e === 'object' && typeof e.msg === 'string' && e.msg);
-    if (first) return first.msg;
-  }
-  if (value !== null && value !== undefined) {
-    try { return JSON.stringify(value); } catch { return null; }
-  }
-  return null;
 }
 
 async function request(method, path, opts = {}) {

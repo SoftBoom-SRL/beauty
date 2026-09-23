@@ -33,6 +33,10 @@ export default function Hook() {
         marketing,
         privacy,
         trap,
+        // La lingua in cui la cliente ha compilato il modulo (contratto C13):
+        // il contatto nuovo nasceva sempre in italiano, e conferme e promemoria
+        // le arrivavano in una lingua che magari non legge (06-20).
+        lang,
       }, { auth: false });
       setDone(true);
     } catch (err) {

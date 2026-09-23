@@ -9,6 +9,7 @@ import {
   ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon,
   WEEKDAYS_SHORT, errToast,
 } from './lib.jsx';
+import { svcMinutes } from './visitLib.js';
 
 export default function WaitlistNew() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -78,7 +79,7 @@ export default function WaitlistNew() {
                       style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderRadius: 'var(--r-md)', textAlign: 'left', border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand-tint)' : 'var(--paper-0)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{svcLangName(sv, lang)}</div>
-                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(sv.duration_min, lang)} · {fmtEur(Number(sv.price), lang)}</div>
+                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(svcMinutes(sv), lang)} · {fmtEur(Number(sv.price), lang)}</div>
                       </div>
                       {on && <Icon name="check" size={18} color="var(--brand)" stroke={2.4} />}
                     </button>

@@ -5,6 +5,7 @@ import React from 'react';
 import { Icon, ProgressBar, api, fmtEur, parseISO, salonTzOpts } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
+import { fmtCredit, fmtPct, giftCardTotals, isUnpaid } from './walletLib.js';
 
 export function fmtExpiry(iso, lang, t) {
   if (!iso) return t('Senza scadenza', 'No expiry');
@@ -22,7 +23,7 @@ export function fmtExpiry(iso, lang, t) {
 
 export function couponLabel(c, lang, t) {
   return c.kind === 'percent'
-    ? t(`Sconto del ${Math.round(Number(c.value))}%`, `${Math.round(Number(c.value))}% off`)
+    ? t(`Sconto del ${fmtPct(c.value, lang)}%`, `${fmtPct(c.value, lang)}% off`)
     : t(`Buono da ${fmtEur(Number(c.value), lang)}`, `${fmtEur(Number(c.value), lang)} voucher`);
 }
 
@@ -47,14 +48,12 @@ export default function Wallet() {
   const cards = wallet?.gift_cards || [];
   const coupons = wallet?.coupons || [];
   const loyalty = wallet?.loyalty || [];
-  // Le carte ancora da pagare in salone NON sono credito: la cassa le rifiuta
-  // finché il salone non incassa. Sommarle nel «saldo totale» prometteva alla
-  // cliente soldi che non poteva spendere. Si contano a parte, dicendo che
-  // cosa manca per attivarle.
-  const spendable = cards.filter((g) => g.payment_status !== 'unpaid');
-  const pending = cards.filter((g) => g.payment_status === 'unpaid');
-  const totBal = spendable.reduce((acc, g) => acc + Number(g.balance || 0), 0);
-  const totPending = pending.reduce((acc, g) => acc + Number(g.balance || 0), 0);
+  // Nel credito solo le carte che la cassa accetta da lei (vedi isSpendable):
+  // quelle ancora da pagare in salone si contano a parte, dicendo che cosa
+  // manca per attivarle; quelle comprate per un'altra persona sono credito
+  // della destinataria.
+  const totals = giftCardTotals(cards);
+  const totPending = totals.pending / 100;
 
   return (
     <div style={{ paddingBottom: 30 }}>
@@ -80,7 +79,7 @@ export default function Wallet() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Credito utilizzabile', 'Available credit')}</div>
-                      <div className="t-num" style={{ fontSize: 30, fontWeight: 800, marginTop: 2 }}>{fmtEur(totBal, lang)}</div>
+                      <div className="t-num" style={{ fontSize: 30, fontWeight: 800, marginTop: 2 }}>{fmtCredit(totals.spendable, lang)}</div>
                       {totPending > 0 && (
                         <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.82, marginTop: 4 }}>
                           {t(`+ ${fmtEur(totPending, lang)} da attivare: paga in salone`,
@@ -96,7 +95,7 @@ export default function Wallet() {
                     const initial = Number(g.initial_value || 0);
                     const used = initial > 0 ? Math.round((1 - Number(g.balance) / initial) * 100) : 0;
                     const gifted = g.gift_service_name;      // carta «a trattamento»
-                    const unpaid = g.payment_status === 'unpaid';
+                    const unpaid = isUnpaid(g);
                     return (
                       <button key={g.id} className="card press" onClick={() => setView('giftcard')} style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', textAlign: 'left', width: '100%' }}>
                         {(gifted || g.buyer_name || unpaid) && (

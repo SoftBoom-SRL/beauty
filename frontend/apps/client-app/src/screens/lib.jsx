@@ -3,6 +3,7 @@
 import React from 'react';
 import { ApiError, Icon, api, fmtEur, parseISO, timeLabel, minutesOfDay, toDateStr, todayStr, addDays, salonTzOpts } from '@youty/shared';
 import { headFont } from '../theme.js';
+import { apptMinutes, depositDueMs, depositExpired } from './visitLib.js';
 
 /* ============================== UI bits ============================== */
 
@@ -42,10 +43,28 @@ export function DetailRow({ icon, label, value }) {
 }
 
 /** Caparra da versare: importo, scadenza e pulsante di pagamento.
- *  Il link arriva già con l'appuntamento (`deposit_payment_link`); se manca lo
- *  si chiede al volo. 503 = il salone non ha i pagamenti online: si paga in sede. */
-export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
+ *  Il link si chiede al server a ogni tocco. 503 = il salone non ha i
+ *  pagamenti online: si paga in sede. `onStale` (facoltativo) ricarica chi
+ *  mostra l'appuntamento quando il tempo scade o il server dice che la visita
+ *  non è più da pagare. */
+export function DepositDue({ appt, t, lang, fireToast, compact = false, onStale }) {
   const [busy, setBusy] = React.useState(false);
+  // A scadenza passata «Paga ora» sparisce da solo, anche con la pagina ferma
+  // lì: un timer fino alla scadenza (setTimeout regge al più ~24 giorni: oltre
+  // scatta prima e se ne rimette un altro).
+  const [tick, setTick] = React.useState(0);
+  const dueMs = depositDueMs(appt);
+  const expired = depositExpired(appt);
+  React.useEffect(() => {
+    if (dueMs == null) return undefined;
+    const left = dueMs - Date.now();
+    if (left <= 0) return undefined;
+    const id = setTimeout(() => {
+      setTick((n) => n + 1);
+      if (dueMs <= Date.now()) onStale?.();
+    }, Math.min(left + 1000, 2147483647));
+    return () => clearTimeout(id);
+  }, [dueMs, tick]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!appt || appt.deposit_status !== 'required') return null;
   const amount = Number(appt.deposit_amount || 0);
   const due = appt.deposit_due_at ? new Date(appt.deposit_due_at) : null;
@@ -63,11 +82,13 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
     : null;
 
   const pay = async () => {
-    if (busy) return;
-    // Link già disponibile: si apre subito, dentro il gesto dell'utente.
-    if (appt.deposit_payment_link) { window.open(appt.deposit_payment_link, '_blank', 'noopener'); return; }
+    if (busy || depositExpired(appt)) return;
     setBusy(true);
     try {
+      // Sempre il link che il server dà ADESSO, mai `deposit_payment_link`
+      // arrivato con l'appuntamento: la sessione di pagamento scade e l'importo
+      // può cambiare, e solo questa chiamata la rifà. Per una visita non più
+      // attiva risponde 400 con il motivo, e non si apre niente.
       const res = await api.post(`/api/sales/client/appointments/${appt.id}/deposit-link`, {});
       // Dopo l'attesa il gesto è scaduto e Safari su iPhone blocca la finestra
       // nuova: il pulsante sembrava non fare niente. Si naviga nella stessa
@@ -77,7 +98,10 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
     } catch (err) {
       if (err instanceof ApiError && err.status === 503) {
         fireToast?.({ msg: t('Il salone non accetta pagamenti online: potrai pagare in sede.', 'The salon does not take online payments: you can pay on site.'), icon: 'info' });
-      } else errToast(err, fireToast, t);
+      } else {
+        errToast(err, fireToast, t);
+        if (err instanceof ApiError && err.status === 400) onStale?.();
+      }
     } finally { setBusy(false); }
   };
 
@@ -88,16 +112,23 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false }) {
         <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>
           {t(`Caparra di ${fmtEur(amount, lang)} da pagare`, `${fmtEur(amount, lang)} deposit to pay`)}
         </div>
-        {dueLabel && (
+        {expired ? (
+          <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.4 }}>
+            {t('Il tempo per pagarla è scaduto e l’orario non è più tenuto: contatta il salone.',
+              'The time to pay it has run out and the slot is no longer held: please contact the salon.')}
+          </div>
+        ) : dueLabel && (
           <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2, lineHeight: 1.4 }}>
             {t(`Entro le ${dueLabel}, poi l'orario torna disponibile.`, `By ${dueLabel}, then the slot is released.`)}
           </div>
         )}
       </div>
-      <button className="press" onClick={pay} disabled={busy}
-        style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 'var(--r-pill)', background: 'var(--brand)', color: 'var(--brand-on)', fontWeight: 700, fontSize: 13, opacity: busy ? 0.6 : 1 }}>
-        {busy ? t('Attendi…', 'Wait…') : t('Paga ora', 'Pay now')}
-      </button>
+      {!expired && (
+        <button className="press" onClick={pay} disabled={busy}
+          style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 'var(--r-pill)', background: 'var(--brand)', color: 'var(--brand-on)', fontWeight: 700, fontSize: 13, opacity: busy ? 0.6 : 1 }}>
+          {busy ? t('Attendi…', 'Wait…') : t('Paga ora', 'Pay now')}
+        </button>
+      )}
     </div>
   );
 }
@@ -165,16 +196,49 @@ export function usePublicOperators(slug) {
   return { operators, error };
 }
 
-/** Fetch the client's own appointments ({upcoming, past}). */
+/** Fetch the client's own appointments ({upcoming, past}).
+ *
+ *  Si ricarica da sola quando cambia il giorno del salone e quando l'app torna
+ *  in primo piano. Caricata una volta sola, la Home lasciata aperta la sera
+ *  diceva ancora «Domani alle 10:00» la mattina dopo, per un appuntamento che
+ *  era oggi, e una visita già rilasciata per caparra non versata restava lì
+ *  col suo «Paga ora» (16-05). */
 export function useClientAppointments() {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const seq = React.useRef(0);
+  const loaded = React.useRef(false);
   const reload = React.useCallback(() => {
+    // Conta solo l'ultima richiesta: al rientro possono partirne due insieme
+    // (cambio di giorno e primo piano) e non devono arrivare fuori ordine.
+    const n = ++seq.current;
     api.get('/api/agenda/client/appointments')
-      .then(setData)
-      .catch(setError);
+      .then((d) => { if (n !== seq.current) return; loaded.current = true; setData(d); setError(null); })
+      .catch((e) => {
+        if (n !== seq.current) return;
+        // Un aggiornamento fallito (rete assente al rientro) lascia a video
+        // quello che c'era, senza un toast d'errore a ogni ritorno nell'app.
+        if (!loaded.current) setError(e);
+      });
   }, []);
-  React.useEffect(() => { reload(); }, [reload]);
+  const todayKey = useTodayKey();
+  React.useEffect(() => { reload(); }, [reload, todayKey]);
+  React.useEffect(() => {
+    let last = Date.now();
+    const onFront = () => {
+      if (document.visibilityState === 'hidden') return;
+      // visibilitychange e focus arrivano insieme: una richiesta basta
+      if (Date.now() - last < 5000) return;
+      last = Date.now();
+      reload();
+    };
+    document.addEventListener('visibilitychange', onFront);
+    window.addEventListener('focus', onFront);
+    return () => {
+      document.removeEventListener('visibilitychange', onFront);
+      window.removeEventListener('focus', onFront);
+    };
+  }, [reload]);
   return { data, error, reload };
 }
 
@@ -260,11 +324,9 @@ export function fmtApptDate(iso, lang) {
 
 export function apptTime(iso) { return timeLabel(minutesOfDay(iso)); }
 
-/** Duration of a client-list appointment (sum of services, fallback start→end). */
+/** Durata di un appuntamento dell'elenco: lavoro + posa (vedi apptMinutes). */
 export function apptDur(appt) {
-  const s = (appt.services || []).reduce((sum, x) => sum + (x.duration_min || 0), 0);
-  if (s) return s;
-  try { return Math.max(0, (parseISO(appt.end) - parseISO(appt.start)) / 60000); } catch { return 0; }
+  return apptMinutes(appt);
 }
 
 export function apptServiceNames(appt) {
