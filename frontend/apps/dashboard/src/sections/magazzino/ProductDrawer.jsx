@@ -17,23 +17,49 @@ const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
 /* Compact colour control for the currently-selected category. Keeps a local
  * draft of the hex; commits to the parent via onCatColor only on blur / swatch
  * click / colour-picker close — never on every keystroke. Remount via `key`
- * (parent passes key={cat.id}) resets local state when the selection changes. */
+ * (parent passes key={cat.id}) resets local state when the selection changes.
+ * Il selettore nativo emette `onChange` a ogni movimento del cursore: salvare lì
+ * voleva dire decine di PUT della categoria e altrettante ricariche di tutto il
+ * magazzino, in parallelo, con la categoria che poteva restare su un colore
+ * intermedio (15-12). Lì si aggiorna solo l'anteprima; la scrittura parte a mano
+ * ferma (400 ms, come il colore operatrice in ctx), all'uscita dal campo o se la
+ * scheda si chiude prima. */
 function CatColorControl({ cat, onCatColor, t }) {
   const current = cat.color || CAT_FALLBACK;
   const [hex, setHex] = useState(current);
+  const committed = useRef(current);
+  const pickTimer = useRef(null);
+  const pickPending = useRef(null);
   const commit = (raw) => {
+    clearTimeout(pickTimer.current);
+    pickPending.current = null;
     let v = String(raw == null ? hex : raw).trim();
     if (v && v[0] !== '#') v = '#' + v;
     if (!HEX_RE.test(v)) { setHex(current); return; }
     setHex(v);
-    if (v.toLowerCase() !== current.toLowerCase()) onCatColor(cat.id, v);
+    if (v.toLowerCase() !== committed.current.toLowerCase()) {
+      committed.current = v;
+      onCatColor(cat.id, v);
+    }
   };
+  const pick = (v) => {
+    setHex(v);
+    pickPending.current = v;
+    clearTimeout(pickTimer.current);
+    pickTimer.current = setTimeout(() => commit(v), 400);
+  };
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => () => {
+    clearTimeout(pickTimer.current);
+    if (pickPending.current) commitRef.current(pickPending.current);
+  }, []);
   const swatch = HEX6_RE.test(hex) ? hex : (HEX6_RE.test(current) ? current : CAT_FALLBACK);
   return (
     <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--hair)', borderRadius: 10, background: 'var(--surface-2)' }}>
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Colore di', 'Colour of')} «{cat.name}»</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <input type="color" value={swatch} onChange={(e) => commit(e.target.value)} title={t('Scegli colore', 'Pick colour')}
+        <input type="color" value={swatch} onChange={(e) => pick(e.target.value)} onBlur={() => { if (pickPending.current) commit(pickPending.current); }} title={t('Scegli colore', 'Pick colour')}
           style={{ width: 38, height: 38, padding: 0, border: '1px solid var(--hair)', borderRadius: 9, background: 'var(--surface)', cursor: 'pointer' }} />
         <input value={hex} onChange={(e) => setHex(e.target.value)} onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(e.target.value); } }}
@@ -66,8 +92,12 @@ function SupplierPicker({ suppliers, value, onChange, canWrite, t }) {
   useEffect(() => {
     if (!open) return undefined;
     const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    // Esc con la tendina aperta chiude la tendina e basta: preventDefault()
+    // dice alla pila dei livelli (ui/layers.js) di non chiudere la scheda.
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); setOpen(false); } };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
   if (selected) {
@@ -106,7 +136,7 @@ function SupplierPicker({ suppliers, value, onChange, canWrite, t }) {
   );
 }
 
-export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose, onSaved, onDeleted, onAdj, onCatColor }) {
+export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose, onSaved, onDeleted, onAdj, onCatColor, onCreated }) {
   const { t, lang, fireToast } = useDash();
   const isNew = !!prod._new;
   const [draft, setDraft] = useState(() => (isNew ? {
@@ -143,7 +173,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
 
   const canSave = canWrite && draft.name.trim() && draft.supplier_id != null && !busy;
 
-  const save = async () => {
+  const save = async ({ reactivate = false } = {}) => {
     if (!canSave) return;
     setBusy(true);
     const payload = {
@@ -156,20 +186,34 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
       sale_price: (draft.sale_price || 0).toFixed(2),
       vat_rate: draft.vat_rate,
       min_threshold: draft.min_threshold || 0, reorder_qty: draft.reorder_qty || 0,
-      active: draft.active !== false,
+      active: reactivate ? true : draft.active !== false,
     };
     try {
       if (isNew) {
         const created = await api.post('/api/inventory/products', payload);
+        /* Il prodotto c'è: da qui in poi un errore non deve lasciare la scheda
+         * su «Crea prodotto». Stava nello stesso try del carico della scorta
+         * iniziale, e se cadeva quello un secondo clic creava un doppione (il
+         * primo a zero pezzi, 15-19). Si passa alla scheda del prodotto creato,
+         * da cui la scorta si carica con «+». */
         if (draft.initial_qty > 0) {
-          await api.postForm(`/api/inventory/products/${created.id}/load`, {
-            qty: draft.initial_qty, reason: t('Scorta iniziale', 'Initial stock'),
-          });
+          try {
+            await api.postForm(`/api/inventory/products/${created.id}/load`, {
+              qty: draft.initial_qty, reason: t('Scorta iniziale', 'Initial stock'),
+            });
+          } catch (err) {
+            fireToast({ msg: t('Prodotto creato, ma la scorta iniziale non è stata caricata: caricala con «+» dalla scheda', 'Product created, but the initial stock was not loaded: add it with “+” from the card') + ' (' + errMsg(err, t) + ')', icon: 'alert' });
+            onSaved();
+            if (onCreated) onCreated(created); else onClose();
+            return;
+          }
         }
         fireToast({ msg: t('Prodotto creato', 'Product created'), icon: 'check' });
       } else {
         await api.put(`/api/inventory/products/${prod.id}`, payload);
-        fireToast({ msg: t('Prodotto salvato', 'Product saved'), icon: 'check' });
+        fireToast(reactivate
+          ? { msg: t('Prodotto riattivato', 'Product reactivated'), icon: 'check' }
+          : { msg: t('Prodotto salvato', 'Product saved'), icon: 'check' });
       }
       onSaved();
       onClose();
@@ -201,9 +245,14 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
   return (
     <DkModal open onClose={onClose} title={isNew ? t('Nuovo prodotto', 'New product') : t('Scheda prodotto', 'Product card')} width={580}
       foot={<React.Fragment>
-        {!isNew && canWrite && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={del} disabled={busy}><Icon name="x" size={16} color="var(--danger)" />{t('Disattiva', 'Deactivate')}</button>}
+        {/* Un prodotto disattivato si riattiva da qui: prima «Disattiva» era un
+            clic senza ritorno, perché la scheda non aveva un comando per
+            rimettere `active: true` e l'elenco non mostrava i disattivati
+            (15-05). La riattivazione salva anche le modifiche della scheda. */}
+        {!isNew && canWrite && prod.active && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={del} disabled={busy}><Icon name="x" size={16} color="var(--danger)" />{t('Disattiva', 'Deactivate')}</button>}
+        {!isNew && canWrite && !prod.active && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--ok)', borderColor: 'color-mix(in srgb, var(--ok) 40%, var(--hair))', marginRight: 'auto' }} onClick={() => save({ reactivate: true })} disabled={!canSave}><Icon name="refresh" size={16} color="var(--ok)" />{t('Riattiva', 'Reactivate')}</button>}
         <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
-        {canWrite && <button className="dk-btn dk-btn--clay" disabled={!canSave} onClick={save}><Icon name="check" size={17} color="#fff" />{isNew ? t('Crea prodotto', 'Create product') : t('Salva modifiche', 'Save changes')}</button>}
+        {canWrite && <button className="dk-btn dk-btn--clay" disabled={!canSave} onClick={() => save()}><Icon name="check" size={17} color="#fff" />{isNew ? t('Crea prodotto', 'Create product') : t('Salva modifiche', 'Save changes')}</button>}
       </React.Fragment>}>
 
       <input value={draft.name} onChange={(e) => set({ name: e.target.value })} placeholder={t('Nome prodotto', 'Product name')} disabled={!canWrite}

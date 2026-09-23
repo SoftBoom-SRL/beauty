@@ -11,7 +11,7 @@ import { Pager, SkelRows, inputCss } from './bits.jsx';
 
 const PAGE = 20;
 
-export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared }) {
+export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared, liveTick }) {
   const { t, lang, fireToast, salon } = useDash();
 
   const [statusF, setStatusF] = useState('all');
@@ -40,7 +40,7 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
       .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
-  }, [statusF, offset, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [statusF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = () => setTick((n) => n + 1);
   const replaceOrder = (order) => setData((d) => (d ? { ...d, items: d.items.map((o) => (o.id === order.id ? order : o)) } : d));

@@ -96,6 +96,37 @@ export function parseRestockCsv(text) {
   return out;
 }
 
+/* ---- carico merce: a quale prodotto va ogni riga ----
+ * Il modale sa quale prodotto è stato scelto, ma mandava solo nome o SKU e il
+ * server rifaceva l'abbinamento con `.first()` su tutti i prodotti, disattivati
+ * compresi: i dodici pezzi del Kerastase finivano sul Davines omonimo, o sul
+ * vecchio articolo spento con lo stesso codice, e l'esito diceva «caricato»
+ * (15-04, 09-02). Ora ogni riga abbinata porta `product_id` (contratto C7). */
+
+/** Chiave CSV (SKU o nome) → prodotto attivo. Uno SKU vince sul nome; più
+ *  prodotti con la stessa chiave non si indovinano: `candidates` > 1 e
+ *  `product` null, e la riga chiede di scegliere. */
+export function matchRestockKey(key, activeProds) {
+  const k = String(key || '').trim().toLowerCase();
+  if (!k) return { product: null, candidates: [] };
+  const bySku = (activeProds || []).filter((p) => String(p.sku || '').trim().toLowerCase() === k);
+  const pool = bySku.length ? bySku : (activeProds || []).filter((p) => String(p.name || '').trim().toLowerCase() === k);
+  return { product: pool.length === 1 ? pool[0] : null, candidates: pool };
+}
+
+/** Righe del modale → `rows` di POST /api/inventory/load-csv. Con un prodotto
+ *  noto: `product_id` più nome e SKU (il nome sempre, anche con lo SKU: 17-16);
+ *  una riga nuova porta il nome con cui creare il prodotto. */
+export function restockRowsBody(lines) {
+  return (lines || []).map((l) => {
+    const qty = parseInt(l.qty, 10) || 0;
+    if (l.product) {
+      return { product_id: l.product.id, name: String(l.product.name || l.name || '').trim(), sku: l.product.sku || '', qty };
+    }
+    return { name: String(l.name || '').trim(), sku: l.sku || '', qty };
+  });
+}
+
 /* ---- Order PDF export ----
  * Reimplemented WITHOUT dependencies: opens a print-friendly HTML window
  * (window.open + @page print CSS) — the browser's print dialog saves it as PDF.
@@ -104,7 +135,8 @@ export function openOrderPrint({ salonName, order, supplier, lines, lang }) {
   const tt = (it, en) => (lang === 'en' ? en : it);
   const loc = lang === 'en' ? 'en-GB' : 'it-IT';
   const eur = (n) => '€' + num(n).toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const today = new Date().toLocaleDateString(loc, { day: '2-digit', month: 'long', year: 'numeric' });
+  // la data del buono è quella del salone, non del dispositivo che stampa
+  const today = new Date().toLocaleDateString(loc, salonTzOpts({ day: '2-digit', month: 'long', year: 'numeric' }));
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let net = 0;
   let vat = 0;

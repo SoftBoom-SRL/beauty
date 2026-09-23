@@ -167,6 +167,10 @@ export default function ScaricoManualeModal({ products, onClose, onDone }) {
                           onFocus={() => setOpenKey(line.key)}
                           onBlur={() => setTimeout(() => setOpenKey((k) => (k === line.key ? null : k)), 150)}
                           onChange={(e) => { setLine(line.key, { q: e.target.value }); setOpenKey(line.key); }}
+                          // Esc con i risultati aperti li chiude e basta: senza
+                          // preventDefault() la pila dei livelli chiudeva lo scarico
+                          // con le righe già compilate (15-11)
+                          onKeyDown={(e) => { if (e.key === 'Escape' && openKey === line.key) { e.preventDefault(); setOpenKey(null); } }}
                           placeholder={t('Cerca prodotto o SKU…', 'Search product or SKU…')}
                         />
                       </div>

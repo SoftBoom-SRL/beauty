@@ -8,7 +8,7 @@ import { Pager, SkelRows } from './bits.jsx';
 
 const PAGE = 30;
 
-export default function StoricoSub({ allProds }) {
+export default function StoricoSub({ allProds, liveTick }) {
   const { t, lang, fireToast } = useDash();
   const [kindF, setKindF] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
@@ -38,7 +38,7 @@ export default function StoricoSub({ allProds }) {
       .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
-  }, [kindF, dateFrom, dateTo, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kindF, dateFrom, dateTo, offset, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tabs = [
     ['all', t('Tutti', 'All')],

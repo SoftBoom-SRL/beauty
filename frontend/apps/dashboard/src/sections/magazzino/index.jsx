@@ -64,7 +64,12 @@ export default function MagazzinoSection() {
 
   useEffect(() => { loadShared(true); }, [loadShared]);
   const refreshShared = useCallback(() => { loadShared(true); }, [loadShared]);
-  useLive(/^(product|stock|order|supplier)\./, refreshShared);
+  /* Da un'altra postazione (o da una vendita: `stock.sold`) si aggiornavano
+   * solo le cifre in testata: la riga del prodotto mostrava la giacenza vecchia
+   * e un ordine inviato altrove restava «Bozza» con «Conferma e invia», che poi
+   * rispondeva 400 (15-21, 09-08). Il feed ricarica anche le liste paginate. */
+  const [liveTick, setLiveTick] = useState(0);
+  useLive(/^(product|stock|order|supplier)\./, () => { refreshShared(); setLiveTick((n) => n + 1); });
 
   const lowCount = useMemo(
     () => (allProds || []).filter((p) => p.active && p.stock_state === 'low').length,
@@ -78,7 +83,7 @@ export default function MagazzinoSection() {
     ['storico', t('Storico', 'History')],
   ];
 
-  const shared = { cats, suppliers, allProds, prodsPartial, canWrite, refreshShared };
+  const shared = { cats, suppliers, allProds, prodsPartial, canWrite, refreshShared, liveTick };
 
   return (
     <div className="dk-page" style={{ maxWidth: 1080 }}>

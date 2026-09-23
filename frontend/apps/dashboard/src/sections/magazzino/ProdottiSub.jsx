@@ -14,7 +14,7 @@ import ScaricoManualeModal from './ScaricoManualeModal.jsx';
 
 const PAGE = 30;
 
-export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, canWrite, refreshShared }) {
+export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, canWrite, refreshShared, liveTick }) {
   const { t, lang, fireToast } = useDash();
 
   /* ---- server-side filters ---- */
@@ -25,10 +25,14 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
   const [brandF, setBrandF] = useState('all');
   const [usageF, setUsageF] = useState('all');
   const [stockF, setStockF] = useState('all');
+  // 'all' = solo attivi (il valore neutro del menu filtri); 'inactive' = anche i disattivati
+  const [activeF, setActiveF] = useState('all');
   const [offset, setOffset] = useState(0);
   const resetPage = (setter) => (v) => { setter(v); setOffset(0); };
 
-  /* ---- paginated list ---- */
+  /* ---- paginated list ----
+   * `tick` cambia con le azioni di questa postazione, `liveTick` con quelle delle
+   * altre (feed live, vedi index.jsx). */
   const [data, setData] = useState(null); // {items, count}
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -45,6 +49,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
         brand: brandF !== 'all' ? brandF : undefined,
         usage: usageF !== 'all' ? usageF : undefined,
         stock_state: stockF !== 'all' ? stockF : undefined,
+        include_inactive: activeF === 'inactive' ? true : undefined,
         limit: PAGE, offset,
       },
     })
@@ -52,7 +57,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
       .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
-  }, [qDeb, catF, supF, brandF, usageF, stockF, offset, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [qDeb, catF, supF, brandF, usageF, stockF, activeF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- header metrics from the shared full snapshot ---- */
   const active = useMemo(() => (allProds || []).filter((p) => p.active), [allProds]);
@@ -60,7 +65,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
   const lowCount = active.filter((p) => p.stock_state === 'low').length;
   const brands = useMemo(() => [...new Set(active.map((p) => p.brand).filter(Boolean))].sort(), [active]);
 
-  const clearFilters = () => { setCatF('all'); setSupF('all'); setBrandF('all'); setUsageF('all'); setStockF('all'); setOffset(0); };
+  const clearFilters = () => { setCatF('all'); setSupF('all'); setBrandF('all'); setUsageF('all'); setStockF('all'); setActiveF('all'); setOffset(0); };
 
   const filterGroups = [
     { label: t('Categoria', 'Category'), value: catF, set: resetPage(setCatF), opts: [['all', t('Tutte', 'All')], ...cats.map((c) => [c.id, c.name])] },
@@ -68,6 +73,9 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
     ...(brands.length ? [{ label: t('Brand', 'Brand'), value: brandF, set: resetPage(setBrandF), opts: [['all', t('Tutti', 'All')], ...brands.map((b) => [b, b])] }] : []),
     { label: t("Tipologia d'uso", 'Usage type'), value: usageF, set: resetPage(setUsageF), opts: [['all', t('Tutte', 'All')], ['internal', t('Solo uso interno', 'In-salon only')], ['retail', t('Solo vendita', 'Retail only')], ['mixed', t('Misto', 'Mixed')]] },
     { label: t('Stato scorte', 'Stock status'), value: stockF, set: resetPage(setStockF), opts: [['all', t('Tutti', 'All')], ['low', t('Sotto soglia', 'Below threshold')], ['warning', t('Vicino alla soglia', 'Near threshold')], ['ok', t('Nella norma', 'In stock')]] },
+    // I disattivati sparivano dalla tabella e non c'era modo di riaprirli per
+    // riattivarli: un prodotto spento per errore andava ricreato (15-05).
+    { label: t('Prodotti disattivati', 'Inactive products'), value: activeF, set: resetPage(setActiveF), opts: [['all', t('Nascosti', 'Hidden')], ['inactive', t('Mostra anche i disattivati', 'Show inactive too')]] },
   ];
 
   /* ---- drawer / modals ---- */
@@ -148,10 +156,13 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
                 const qtyN = num(p.stock_qty);
                 const sub = [p.category_name, p.brand, p.sku].filter(Boolean).join(' · ') || p.supplier_name || '';
                 return (
-                  <div key={p.id} className="dk-row" onClick={() => setSelProd(p)} style={{ display: 'grid', gridTemplateColumns: '16px 2.1fr 0.85fr 1fr 0.8fr 118px 40px', gap: 12, padding: '12px 20px', alignItems: 'center', borderTop: '1px solid var(--hair)', cursor: 'pointer' }}>
+                  <div key={p.id} className="dk-row" onClick={() => setSelProd(p)} style={{ display: 'grid', gridTemplateColumns: '16px 2.1fr 0.85fr 1fr 0.8fr 118px 40px', gap: 12, padding: '12px 20px', alignItems: 'center', borderTop: '1px solid var(--hair)', cursor: 'pointer', opacity: p.active === false ? 0.6 : 1 }}>
                     <span title={st[lang]} style={{ width: 9, height: 9, borderRadius: 99, background: st.color }} />
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                      <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.name}
+                        {p.active === false && <span style={{ marginLeft: 7, fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', background: 'var(--surface-2)', padding: '1px 7px', borderRadius: 99 }}>{t('Disattivato', 'Inactive')}</span>}
+                      </div>
                       <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
                     </div>
                     <div>{usage
@@ -180,8 +191,9 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
 
       {/* drawer + modals (rendered after the drawer so they stack on top) */}
       {selProd && (
-        <ProductDrawer prod={selProd} cats={cats} suppliers={suppliers} canWrite={canWrite}
+        <ProductDrawer key={selProd._new ? 'new' : selProd.id} prod={selProd} cats={cats} suppliers={suppliers} canWrite={canWrite}
           onClose={() => setSelProd(null)} onSaved={refresh} onDeleted={refresh}
+          onCreated={(p) => setSelProd(p)}
           onAdj={(p, type) => setAdj({ prod: p, type })} onCatColor={setCatColor} />
       )}
       {adj && <AdjModal prod={adj.prod} type={adj.type} onClose={() => setAdj(null)} onDone={afterMovement} />}
