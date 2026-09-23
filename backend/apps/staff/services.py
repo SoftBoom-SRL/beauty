@@ -14,7 +14,13 @@ from decimal import Decimal
 
 from django.apps import apps
 from django.db.models import Count, Max, Q, Sum
+from django.db.models.functions import TruncMonth
 from django.utils import timezone
+
+# Tetto ai mesi della serie di rendimento: il parametro arriva dalla query
+# string di un GET senza scope richiesto, e senza limite superiore
+# `?months=50000000` diventava una scansione di cinquant'anni di vendite.
+MAX_PERFORMANCE_MONTHS = 36
 
 
 def _current_absence(operator, on_date: date_cls):
@@ -83,6 +89,35 @@ def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+def _subtract(windows: list[tuple[int, int]], cuts: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Toglie dalle finestre gli intervalli `cuts` (le pause).
+
+    Le pause vanno sottratte DOPO la fusione, non ritagliate riga per riga: con
+    due righe che si sovrappongono (9–18 con pausa 13–14 e una seconda riga
+    12–15) la fusione ricuciva i due tronconi e la pausa pranzo spariva, così
+    l'agenda proponeva appuntamenti mentre l'operatrice era a tavola.
+    """
+    if not cuts:
+        return windows
+    result: list[tuple[int, int]] = []
+    for start, end in windows:
+        pieces = [(start, end)]
+        for cut_start, cut_end in cuts:
+            remaining: list[tuple[int, int]] = []
+            for piece_start, piece_end in pieces:
+                if cut_end <= piece_start or cut_start >= piece_end:
+                    remaining.append((piece_start, piece_end))
+                    continue
+                if piece_start < cut_start:
+                    remaining.append((piece_start, cut_start))
+                if cut_end < piece_end:
+                    remaining.append((cut_end, piece_end))
+            pieces = remaining
+        result.extend(pieces)
+    result.sort()
+    return result
+
+
 def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     """Finestre lavorabili (minuti da mezzanotte) per l'operatrice in quella data.
 
@@ -104,23 +139,24 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     weekday = date.weekday()  # 0 = lunedì
 
     windows: list[tuple[int, int]] = []
+    breaks: list[tuple[int, int]] = []
     for shift in operator.shifts.all():
         if shift.week_index != week_index or shift.weekday != weekday:
             continue
         start, end = shift.start_min, shift.end_min
+        windows.append((start, end))
         if shift.break_start_min is not None and shift.break_end_min is not None:
             break_start = max(shift.break_start_min, start)
             break_end = min(shift.break_end_min, end)
-            if break_start > start:
-                windows.append((start, break_start))
-            if break_end < end:
-                windows.append((break_end, end))
-        else:
-            windows.append((start, end))
+            if break_start < break_end:
+                breaks.append((break_start, break_end))
+    # Prima si fondono le righe contigue, POI si tolgono le pause: al contrario
+    # la fusione richiudeva il buco appena ritagliato (vedi `_subtract`).
+    windows = _subtract(_merge_windows(windows), breaks)
     bounds = opening_windows(operator.salon, date)
     if bounds is not None:
-        windows = _intersect(windows, bounds)
-    return _merge_windows(windows)
+        windows = _merge_windows(_intersect(windows, bounds))
+    return windows
 
 
 def today_status(operator, on_date: date_cls | None = None) -> dict:
@@ -179,9 +215,55 @@ def today_clients_count(operator, on_date: date_cls | None = None) -> int:
     )
 
 
+def month_revenue_by_operator(operators, on_date: date_cls | None = None) -> dict[int, Decimal]:
+    """Incasso del mese per OGNI operatrice, in una sola query.
+
+    La lista operatrici resta aperta tutto il giorno sul banco: chiamare
+    `month_revenue` una volta per riga significava una query per operatrice a
+    ogni ricarica (e altrettante per `today_clients_count`).
+    """
+    SaleLine = _sale_line_model()
+    ids = [op.pk for op in operators]
+    if SaleLine is None or not ids:
+        return {}
+    on_date = on_date or timezone.localdate()
+    rows = (
+        SaleLine.objects.filter(
+            operator_id__in=ids,
+            sale__created_at__year=on_date.year,
+            sale__created_at__month=on_date.month,
+        )
+        .values("operator_id")
+        .annotate(total=Sum("amount"))
+    )
+    return {row["operator_id"]: row["total"] or Decimal("0") for row in rows}
+
+
+def today_clients_by_operator(operators, on_date: date_cls | None = None) -> dict[int, int]:
+    """Appuntamenti di giornata per OGNI operatrice, in una sola query."""
+    Appointment = _appointment_model()
+    ids = [op.pk for op in operators]
+    if Appointment is None or not ids:
+        return {}
+    on_date = on_date or timezone.localdate()
+    rows = (
+        Appointment.objects.filter(operator_id__in=ids, start__date=on_date)
+        .exclude(status__in=["cancelled", "no_show"])
+        .values("operator_id")
+        .annotate(total=Count("id"))
+    )
+    return {row["operator_id"]: row["total"] for row in rows}
+
+
 def performance_series(operator, months: int = 6) -> list[dict]:
-    """Serie mensile {month, revenue, sales_count} sugli ultimi `months` mesi (incluso quello corrente)."""
-    months = max(1, int(months))
+    """Serie mensile {month, revenue, sales_count} sugli ultimi `months` mesi (incluso quello corrente).
+
+    `months` è limitato a `MAX_PERFORMANCE_MONTHS`: prima accettava qualunque
+    intero e faceva una query di aggregazione PER MESE, quindi bastava un GET
+    con `?months=20000` per tenere occupato un worker. Ora i mesi si contano in
+    una sola query raggruppata.
+    """
+    months = min(max(1, int(months)), MAX_PERFORMANCE_MONTHS)
     today = timezone.localdate()
     month_starts: list[tuple[int, int]] = []
     y, m = today.year, today.month
@@ -193,16 +275,31 @@ def performance_series(operator, months: int = 6) -> list[dict]:
     month_starts.reverse()
 
     SaleLine = _sale_line_model()
+    totals: dict[str, tuple[Decimal, int]] = {}
+    if SaleLine is not None:
+        first_year, first_month = month_starts[0]
+        rows = (
+            SaleLine.objects.filter(
+                operator=operator,
+                sale__created_at__date__gte=date_cls(first_year, first_month, 1),
+            )
+            .annotate(month=TruncMonth("sale__created_at"))
+            .values("month")
+            .annotate(revenue=Sum("amount"), sales_count=Count("sale", distinct=True))
+        )
+        for row in rows:
+            if row["month"] is None:
+                continue
+            totals[row["month"].strftime("%Y-%m")] = (
+                row["revenue"] or Decimal("0"),
+                row["sales_count"] or 0,
+            )
+
     series = []
     for y, m in month_starts:
-        revenue, sales_count = Decimal("0"), 0
-        if SaleLine is not None:
-            agg = SaleLine.objects.filter(
-                operator=operator, sale__created_at__year=y, sale__created_at__month=m
-            ).aggregate(revenue=Sum("amount"), sales_count=Count("sale", distinct=True))
-            revenue = agg["revenue"] or Decimal("0")
-            sales_count = agg["sales_count"] or 0
-        series.append({"month": f"{y:04d}-{m:02d}", "revenue": revenue, "sales_count": sales_count})
+        key = f"{y:04d}-{m:02d}"
+        revenue, sales_count = totals.get(key, (Decimal("0"), 0))
+        series.append({"month": key, "revenue": revenue, "sales_count": sales_count})
     return series
 
 
@@ -227,17 +324,26 @@ def served_clients(operator, q: str = "") -> list[dict]:
         .order_by("-last_visit")
     )
 
+    rows = list(rows)
+
+    # Speso per cliente in UNA query raggruppata: prima era un aggregate per
+    # riga, quindi seicento clienti serviti volevano seicentouna query e la
+    # scheda dell'operatrice diventava inservibile proprio per chi lavora di più.
     SaleLine = _sale_line_model()
+    spent_by_client: dict[int, Decimal] = {}
+    if SaleLine is not None and rows:
+        spent_by_client = {
+            item["sale__client_id"]: item["total"] or Decimal("0")
+            for item in SaleLine.objects.filter(
+                operator=operator, sale__client_id__in=[r["client_id"] for r in rows]
+            )
+            .values("sale__client_id")
+            .annotate(total=Sum("amount"))
+        }
+
     result = []
     for row in rows:
-        total_spent = Decimal("0")
-        if SaleLine is not None:
-            total_spent = (
-                SaleLine.objects.filter(operator=operator, sale__client_id=row["client_id"]).aggregate(
-                    total=Sum("amount")
-                )["total"]
-                or Decimal("0")
-            )
+        total_spent = spent_by_client.get(row["client_id"], Decimal("0"))
         result.append(
             {
                 "client_id": row["client_id"],

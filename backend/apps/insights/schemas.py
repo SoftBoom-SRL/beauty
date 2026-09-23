@@ -14,6 +14,9 @@ class KpisOut(Schema):
     gift_card_sold: Decimal = Decimal("0.00")
     gift_card_redeemed: Decimal = Decimal("0.00")
     deposit_used: Decimal = Decimal("0.00")
+    # Caparre entrate in cassa nel periodo: non sono fatturato (lo diventa il
+    # conto del giorno della visita), ma sono denaro incassato.
+    deposit_cashed: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
     sales_count: int
     avg_ticket: Decimal

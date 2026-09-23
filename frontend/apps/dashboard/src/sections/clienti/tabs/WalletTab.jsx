@@ -1,14 +1,39 @@
 // WalletTab.jsx — staff view of the client's wallet: coupons, loyalty points,
-// gift cards. The marketing endpoints have no by-client filter, so we query
-// `q=<name word>` and filter exactly by client id; loyalty balances require
-// scanning each active program's accounts list (inefficient — a per-client
-// wallet endpoint on the staff side would fix both, noted in the port report).
+// gift cards. Coupon e gift card si filtrano lato server per `client_id`; la
+// fedeltà no (l'elenco iscritte non ha quel filtro), quindi si scorrono le
+// pagine fino a trovarla — e se il programma è più grande del tetto qui sotto
+// il saldo si dichiara «non verificabile» invece di dire «non iscritta».
 import React, { useEffect, useState } from 'react';
 import { api, EmptyState, Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import { useDash } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
-import { clientQueryWord, dateLabel } from '../helpers.js';
+import { dateLabel } from '../helpers.js';
+
+/* scansione dell'elenco iscritte a un programma fedeltà: pagine da 200,
+ * al massimo 5.000 tessere — oltre, il saldo non è verificabile da qui. */
+const LOYALTY_PAGE = 200;
+const LOYALTY_MAX = 5000;
+
+/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): una gift card
+ *  consumata ha saldo «€0», non è un regalo. */
+const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
+
+/** → { points } se la cliente è iscritta, { points: null } se non lo è,
+ *  { unknown: true } se l'elenco è più lungo di quanto possiamo scorrere. */
+async function loyaltyPointsOf(programId, clientId) {
+  for (let offset = 0; offset < LOYALTY_MAX; offset += LOYALTY_PAGE) {
+    const res = await api.get(`/api/marketing/loyalty-programs/${programId}/accounts`, {
+      params: { limit: LOYALTY_PAGE, offset },
+    });
+    const items = res.items || [];
+    const mine = items.find((a) => a.client_id === clientId);
+    if (mine) return { points: mine.points };
+    const seen = offset + items.length;
+    if (!items.length || seen >= Number(res.count ?? seen)) return { points: null };
+  }
+  return { unknown: true };
+}
 
 export default function WalletTab({ c }) {
   const { t, lang, services, fireToast } = useDash();
@@ -20,10 +45,11 @@ export default function WalletTab({ c }) {
   useEffect(() => {
     let dead = false;
     setCoupons(null); setGifts(null); setLoyalty(null);
-    const word = clientQueryWord(c);
 
-    api.get('/api/marketing/coupons', { params: { q: word || undefined, limit: 100 } })
-      .then((res) => { if (!dead) setCoupons((res.items || []).filter((x) => x.client_id === c.id)); })
+    // filtro lato server: cercare per nome e scremare qui lasciava fuori i
+    // coupon oltre il centesimo risultato, e la scheda diceva «nessun coupon»
+    api.get('/api/marketing/coupons', { params: { client_id: c.id } })
+      .then((res) => { if (!dead) setCoupons(res.items || []); })
       .catch(() => { if (!dead) setCoupons([]); });
 
     // filtro lato server: la cliente come acquirente o destinataria
@@ -35,11 +61,8 @@ export default function WalletTab({ c }) {
       .then(async (programs) => {
         const active = (programs || []).filter((p) => p.active);
         const rows = await Promise.all(active.map(async (p) => {
-          try {
-            const acc = await api.get(`/api/marketing/loyalty-programs/${p.id}/accounts`, { params: { limit: 200 } });
-            const mine = (acc.items || []).find((a) => a.client_id === c.id);
-            return { program: p, points: mine ? mine.points : null };
-          } catch { return { program: p, points: null }; }
+          try { return { program: p, ...(await loyaltyPointsOf(p.id, c.id)) }; }
+          catch { return { program: p, unknown: true }; }
         }));
         if (!dead) setLoyalty(rows);
       })
@@ -48,11 +71,11 @@ export default function WalletTab({ c }) {
     return () => { dead = true; };
   }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + fmtEur(Number(cp.value), lang);
+  const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + eur0(cp.value, lang);
   const rewardLabel = (p) => {
     const rt = p.reward_type || '';
     if (rt.includes('percent')) return t(`Sconto ${Number(p.reward_value)}%`, `${Number(p.reward_value)}% off`);
-    if (rt.includes('amount')) return t(`Buono ${fmtEur(Number(p.reward_value), lang)}`, `${fmtEur(Number(p.reward_value), lang)} voucher`);
+    if (rt.includes('amount')) return t(`Buono ${eur0(p.reward_value, lang)}`, `${eur0(p.reward_value, lang)} voucher`);
     if (rt.includes('service')) {
       const s = services.find((x) => x.id === p.reward_service_id);
       return s ? ((lang === 'en' && s.name_en) ? s.name_en : s.name_it) : t('Servizio omaggio', 'Free service');
@@ -132,7 +155,7 @@ export default function WalletTab({ c }) {
       </div>
       {loyalty == null ? <div className="skel" style={{ height: 90, borderRadius: 12 }} /> : loyalty.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {loyalty.map(({ program: p, points }) => {
+          {loyalty.map(({ program: p, points, unknown }) => {
             const val = points != null ? points : 0;
             const pctDone = Math.min(100, Math.round(val / Math.max(1, p.threshold) * 100));
             const reached = val >= p.threshold;
@@ -146,10 +169,15 @@ export default function WalletTab({ c }) {
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</div>
                     <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Premio: ', 'Reward: ')}{rewardLabel(p)}</div>
                   </div>
-                  <div className="t-num" style={{ fontSize: 16 }}>{val}<span style={{ color: 'var(--muted-2)', fontSize: 13 }}>/{p.threshold}</span></div>
+                  <div className="t-num" style={{ fontSize: 16 }}>{unknown ? '—' : val}<span style={{ color: 'var(--muted-2)', fontSize: 13 }}>/{p.threshold}</span></div>
                 </div>
                 <ProgressBar value={pctDone} color={reached ? 'var(--ok)' : (p.color || 'var(--clay)')} />
-                {points == null
+                {/* «non verificabile» non è «non iscritta»: senza questa
+                    distinzione una cliente con 9 timbri su 10 risultava fuori
+                    dal programma e nessuno le riconosceva il premio */}
+                {unknown
+                  ? <div className="t-sm" style={{ marginTop: 8, color: 'var(--warn)', fontWeight: 600 }}>{t('Saldo non verificabile: programma troppo numeroso', 'Balance not verifiable: program too large')}</div>
+                  : points == null
                   ? <div className="t-sm" style={{ marginTop: 8, color: 'var(--muted-2)' }}>{t('Non ancora iscritta al programma', 'Not enrolled yet')}</div>
                   : reached
                     ? <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--ok)' }}><Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Premio raggiunto → il coupon compare qui sopra con origine Fedeltà', 'Reward reached → the coupon appears above with Loyalty origin')}</div>
@@ -194,7 +222,7 @@ export default function WalletTab({ c }) {
                   </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div className="t-num" style={{ fontSize: 19, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>{fmtEur(Number(g.balance), lang)}</div>
+                  <div className="t-num" style={{ fontSize: 19, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>{eur0(g.balance, lang)}</div>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, marginTop: 3, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>
                     <Icon name={spent ? 'check' : 'clock'} size={12} color={spent ? 'var(--muted-2)' : 'var(--ok)'} />{spent ? t('Esaurita', 'Spent') : t('Attiva', 'Active')}
                   </span>
@@ -217,7 +245,7 @@ export default function WalletTab({ c }) {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '6px 0 16px' }}>
             <QrGlyph code={giftView.code} size={160} />
             <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '4px 12px', borderRadius: 8 }}>{giftView.code}</span>
-            <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{fmtEur(Number(giftView.balance), lang)}</div>
+            <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{eur0(giftView.balance, lang)}</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 99, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)', background: giftView.status === 'active' ? 'var(--ok-tint)' : 'var(--paper-2)' }}>
               <Icon name={giftView.status === 'active' ? 'clock' : 'check'} size={13} color={giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)'} />
               {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : t('Esaurita', 'Spent')}
@@ -227,8 +255,8 @@ export default function WalletTab({ c }) {
             {[
               [t('Tipo', 'Type'), giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
               [giftView.buyer_client_id === c.id ? t('Destinataria', 'For') : t('Regalata da', 'From'), (giftView.buyer_client_id === c.id ? giftView.recipient_name : giftView.buyer_name) || '—'],
-              [t('Valore iniziale', 'Initial value'), fmtEur(Number(giftView.initial_value), lang)],
-              [t('Saldo', 'Balance'), fmtEur(Number(giftView.balance), lang)],
+              [t('Valore iniziale', 'Initial value'), eur0(giftView.initial_value, lang)],
+              [t('Saldo', 'Balance'), eur0(giftView.balance, lang)],
               [t('Pagamento', 'Payment'), giftView.payment_status === 'unpaid' ? t('Da pagare', 'Unpaid') : t('Pagata', 'Paid')],
               [t('Scadenza', 'Expiry'), giftView.expires_at ? dateLabel(giftView.expires_at, lang) : t('Nessuna', 'None')],
             ].map(([l, v], i) => (

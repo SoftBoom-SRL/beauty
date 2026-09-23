@@ -10,6 +10,30 @@ import OrdiniSub from './OrdiniSub.jsx';
 import FornitoriSub from './FornitoriSub.jsx';
 import StoricoSub from './StoricoSub.jsx';
 
+const PROD_PAGE = 500;
+const PROD_MAX_PAGES = 20;   // fino a 10.000 articoli: oltre, le metriche si dichiarano parziali
+
+/* Lo snapshot alimenta valore di magazzino, conteggio sottoscorta, elenco
+ * brand, picker dello scarico manuale e i prezzi delle righe d'ordine: una
+ * sola pagina da 500 con `count` ignorato faceva mentire tutte queste cifre su
+ * un catalogo più grande, e i prodotti oltre il 500° sparivano dal picker
+ * senza alcun avviso. Si pagina fino a `count`, con un tetto oltre il quale lo
+ * snapshot si dichiara parziale. */
+async function loadAllProducts() {
+  const items = [];
+  let count = 0;
+  for (let page = 0; page < PROD_MAX_PAGES; page++) {
+    const res = await api.get('/api/inventory/products', {
+      params: { limit: PROD_PAGE, offset: page * PROD_PAGE, include_inactive: true },
+    });
+    const batch = res?.items || [];
+    items.push(...batch);
+    count = Number(res?.count ?? items.length);
+    if (!batch.length || items.length >= count) return { items, partial: false };
+  }
+  return { items, partial: items.length < count };
+}
+
 export default function MagazzinoSection() {
   const { t, subTab, setSubTab, fireToast, hasScope } = useDash();
   const sub = subTab || 'prodotti';
@@ -19,17 +43,19 @@ export default function MagazzinoSection() {
   const [cats, setCats] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [allProds, setAllProds] = useState(null); // full snapshot for metrics/pickers/enrichment
+  const [prodsPartial, setProdsPartial] = useState(false); // snapshot incompleto (catalogo oltre il tetto)
 
   const loadShared = useCallback(async (silent = false) => {
     try {
       const [c, s, p] = await Promise.all([
         api.get('/api/inventory/categories'),
         api.get('/api/inventory/suppliers'),
-        api.get('/api/inventory/products', { params: { limit: 500, include_inactive: true } }),
+        loadAllProducts(),
       ]);
       setCats(c || []);
       setSuppliers(s || []);
-      setAllProds(p?.items || []);
+      setAllProds(p.items);
+      setProdsPartial(p.partial);
     } catch (err) {
       if (!silent) fireToast({ msg: errMsg(err, t), icon: 'alert' });
       setAllProds((prev) => prev || []);
@@ -52,7 +78,7 @@ export default function MagazzinoSection() {
     ['storico', t('Storico', 'History')],
   ];
 
-  const shared = { cats, suppliers, allProds, canWrite, refreshShared };
+  const shared = { cats, suppliers, allProds, prodsPartial, canWrite, refreshShared };
 
   return (
     <div className="dk-page" style={{ maxWidth: 1080 }}>

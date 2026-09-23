@@ -20,6 +20,14 @@ const initialsOf = (name, email) => {
 export default function TeamDrawer({ onClose, onRoles }) {
   const { t, lang, hasScope, session, fireToast } = useDash();
   const canTeam = hasScope('team');
+  /* Un ruolo si assegna (o si invita) solo se non dà più di quanto si ha: il
+   * server lo rifiuta con 403, e chi ha il solo «team» poteva altrimenti
+   * promuovere se stessa o una collega a permessi che il titolare le aveva
+   * negato. Qui i ruoli fuori portata si vedono spenti e spiegati, invece di
+   * far comparire un errore dopo il clic. */
+  const isOwner = !!session?.is_owner;
+  const myScopes = session?.scopes || [];
+  const canAssign = (role) => isOwner || (role?.scopes || []).every((x) => myScopes.includes(x));
   const [members, setMembers] = useState(null);
   const [roles, setRoles] = useState([]);
   const [invitations, setInvitations] = useState(null);
@@ -102,6 +110,13 @@ export default function TeamDrawer({ onClose, onRoles }) {
           </div>
         ) : (
           <React.Fragment>
+            {!isOwner && roles.some((r) => !canAssign(r)) && (
+              <div className="t-sm" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', color: 'var(--ink-2)', marginBottom: 12 }}>
+                <Icon name="lock" size={14} color="var(--muted)" style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>{t('I ruoli che danno permessi che tu non hai risultano «non assegnabili»: nessuno può regalare più di quanto possiede. Per quelli, chiedi al titolare.',
+                  'Roles granting permissions you do not hold show as “not assignable”: nobody can give away more than they have. For those, ask the owner.')}</span>
+              </div>
+            )}
             {/* members */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
               {members.map((m) => (
@@ -121,7 +136,11 @@ export default function TeamDrawer({ onClose, onRoles }) {
                       <select value={m.role?.id ?? ''} onChange={(e) => setRole(m.id, e.target.value ? Number(e.target.value) : null)}
                         style={{ border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13, fontWeight: 600, padding: '7px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', cursor: 'pointer', flexShrink: 0, color: 'var(--ink)' }}>
                         <option value="">{t('Nessun ruolo', 'No role')}</option>
-                        {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id} disabled={!canAssign(r) && m.role?.id !== r.id}>
+                            {r.name}{canAssign(r) ? '' : ' · ' + t('non assegnabile', 'not assignable')}
+                          </option>
+                        ))}
                       </select>
                       {m.user.id !== session?.user?.id && (
                         <button className="dk-iconbtn" title={t('Rimuovi membro', 'Remove member')} onClick={() => setConfirmRemove(m)} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name="x" size={14} color="var(--danger)" /></button>
@@ -163,7 +182,11 @@ export default function TeamDrawer({ onClose, onRoles }) {
                 <div className="t-meta" style={{ marginBottom: 10 }}>{t('Invita un membro', 'Invite a member')}</div>
                 <input value={inv.email} onChange={(e) => setInv((f) => ({ ...f, email: e.target.value }))} type="email" placeholder="email@salone.it" style={{ ...inputCss, width: '100%', boxSizing: 'border-box', marginBottom: 9 }} />
                 <select value={inv.role_id ?? ''} onChange={(e) => setInv((f) => ({ ...f, role_id: Number(e.target.value) }))} style={{ ...inputCss, width: '100%', fontWeight: 600, cursor: 'pointer', marginBottom: 12 }}>
-                  {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id} disabled={!canAssign(r)}>
+                      {r.name}{canAssign(r) ? '' : ' · ' + t('non assegnabile', 'not assignable')}
+                    </option>
+                  ))}
                 </select>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="dk-btn dk-btn--ghost" style={{ flex: 1 }} onClick={() => setInviting(false)}>{t('Annulla', 'Cancel')}</button>

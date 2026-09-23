@@ -1,5 +1,7 @@
 """Endpoint /api/staff — operatrici, turni, assenze, performance, clienti serviti."""
 
+import re
+from decimal import Decimal
 from typing import Optional
 
 from django.db import transaction
@@ -9,6 +11,7 @@ from ninja.errors import HttpError
 
 from apps.core.models import Location, Salon
 from apps.core.services import log_activity
+from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
@@ -30,14 +33,24 @@ from .schemas import (
     WeeklyShiftOut,
 )
 from .services import (
-    month_revenue,
+    month_revenue_by_operator,
     performance_series,
     served_clients,
-    today_clients_count,
+    today_clients_by_operator,
     today_status,
 )
 
 router = Router(tags=["staff"])
+
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
+# Un ciclo di turni più lungo di un anno non esiste in un salone, e il campo a
+# database è PositiveSmallIntegerField: senza tetto (e senza minimo) il valore
+# diventava un errore del database (500) invece di un errore della richiesta.
+MAX_CYCLE_WEEKS = 52
+MAX_OPERATOR_ORDER = 2147483647  # limite di PositiveIntegerField
+
+PUBLIC_OPERATORS_MAX_PER_WINDOW = 120
+PUBLIC_OPERATORS_WINDOW_SECONDS = 300
 
 
 # ---- Helpers -----------------------------------------------------------------
@@ -68,7 +81,14 @@ def _resolve_user(ctx, user_id: Optional[int]):
 
 
 def _operators_qs(ctx):
-    return Operator.objects.filter(salon=ctx.salon).prefetch_related("services")
+    # `today_status` legge turni, assenze e orari di apertura del salone: senza
+    # questi precaricamenti la lista operatrici faceva una manciata di query per
+    # riga, su una pagina che sta aperta tutto il giorno.
+    return (
+        Operator.objects.filter(salon=ctx.salon)
+        .select_related("salon", "salon__settings")
+        .prefetch_related("services", "shifts", "absences")
+    )
 
 
 def _get_salon_by_slug(slug: str) -> Salon:
@@ -96,31 +116,71 @@ def _operator_out(op: Operator) -> dict:
     }
 
 
+def _validate_operator_payload(data: OperatorIn) -> None:
+    """Colore, ciclo e ordine arrivano dal client e finiscono grezzi a database.
+
+    Senza questi controlli un ciclo a zero o negativo, o un colore che non è un
+    esadecimale, non erano un 400 ma un errore del database: 500, e chi compila
+    la scheda non sapeva quale campo rifare.
+    """
+    if not _HEX_COLOR_RE.match((data.color or "").strip()):
+        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+    if not (1 <= data.cycle_weeks <= MAX_CYCLE_WEEKS):
+        raise HttpError(400, f"Settimane di ciclo non valide (da 1 a {MAX_CYCLE_WEEKS})")
+    if not (0 <= data.order <= MAX_OPERATOR_ORDER):
+        raise HttpError(400, "Ordine dell'operatrice non valido")
+    if data.hourly_cost < 0:
+        raise HttpError(400, "Il costo orario non può essere negativo")
+
+
 def _apply_operator_payload(operator: Operator, ctx, data: OperatorIn) -> Operator:
+    _validate_operator_payload(data)
     payload = data.dict()
     service_ids = payload.pop("service_ids")
     location_id = payload.pop("location_id")
     user_id = payload.pop("user_id")
+    payload["color"] = payload["color"].strip().upper()
 
     location = salon_get(Location, ctx, location_id) if location_id else None
     user = _resolve_user(ctx, user_id)
+    if user is not None:
+        # `Operator.user` è OneToOne: collegare a un'operatrice un utente già
+        # legato a un'altra faceva saltare l'insert con un 500 anonimo.
+        taken = Operator.objects.filter(user=user).exclude(pk=operator.pk).first()
+        if taken is not None:
+            raise HttpError(400, f"Utente già collegato a {taken.first_name} {taken.last_name}")
 
     for name, value in payload.items():
         setattr(operator, name, value)
     operator.salon = ctx.salon
     operator.location = location
     operator.user = user
-    operator.save()
 
-    Service = _catalog_service_model()
-    operator.services.set(Service.objects.filter(salon=ctx.salon, id__in=service_ids))
+    # Abbassare `cycle_weeks` lasciava a database i turni delle settimane
+    # scomparse: `_week_index` non li seleziona più da nessuna data, quindi
+    # l'operatrice risultava a riposo per metà delle settimane senza che nulla
+    # lo mostrasse. Si cancellano nella stessa transazione del salvataggio.
+    with transaction.atomic():
+        operator.save()
+        orphans = operator.shifts.filter(week_index__gte=operator.cycle_weeks).delete()[0]
+        Service = _catalog_service_model()
+        operator.services.set(Service.objects.filter(salon=ctx.salon, id__in=service_ids))
+    if orphans:
+        log_activity(
+            ctx.salon,
+            "operator.shifts_updated",
+            f"Ciclo turni ridotto a {operator.cycle_weeks} settimane: "
+            f"{orphans} righe di turno fuori ciclo rimosse",
+            actor=ctx.user,
+            payload={"operator_id": operator.id, "removed_shifts": orphans},
+        )
     return operator
 
 
 def _validate_shift_row(operator: Operator, row) -> None:
     if row.weekday not in range(7):
         raise HttpError(400, "Giorno della settimana non valido")
-    if row.week_index >= (operator.cycle_weeks or 1):
+    if not (0 <= row.week_index < (operator.cycle_weeks or 1)):
         raise HttpError(400, "Settimana del ciclo non valida per questa operatrice")
     if not (0 <= row.start_min < row.end_min <= 1440):
         raise HttpError(400, "Orario di turno non valido")
@@ -131,6 +191,23 @@ def _validate_shift_row(operator: Operator, row) -> None:
             raise HttpError(400, "Orario di pausa non valido")
 
 
+def _reject_overlapping_shifts(rows) -> None:
+    """Due righe dello stesso giorno e della stessa settimana non si sovrappongono.
+
+    Righe contigue (9–13 e 13–18) restano ammesse: sono lo stesso turno spezzato.
+    Sovrapporle invece non significa nulla — quale delle due pause vale? — e
+    faceva sparire la pausa pranzo dalle finestre lavorabili.
+    """
+    by_day: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for row in rows:
+        by_day.setdefault((row.week_index, row.weekday), []).append((row.start_min, row.end_min))
+    for spans in by_day.values():
+        spans.sort()
+        for (_, previous_end), (start, _) in zip(spans, spans[1:]):
+            if start < previous_end:
+                raise HttpError(400, "Due righe di turno si sovrappongono nello stesso giorno")
+
+
 # ---- Lista operatrici con stato di oggi ----------------------------------------
 
 
@@ -138,8 +215,13 @@ def _validate_shift_row(operator: Operator, row) -> None:
 def list_operators(request):
     ctx = request.auth
     today = timezone.localdate()
+    operators = list(_operators_qs(ctx).filter(active=True))
+    # Incasso del mese e clienti di oggi in due query per l'intera lista, non
+    # due per operatrice (vedi `month_revenue_by_operator`).
+    revenues = month_revenue_by_operator(operators, today)
+    clients = today_clients_by_operator(operators, today)
     result = []
-    for op in _operators_qs(ctx).filter(active=True):
+    for op in operators:
         status = today_status(op, today)
         out = _operator_out(op)
         out.update(
@@ -147,8 +229,8 @@ def list_operators(request):
                 "on_shift": status["on_shift"],
                 "windows": [(_fmt_min(a), _fmt_min(b)) for a, b in status["windows"]],
                 "absence_type": status["absence_type"],
-                "month_revenue": month_revenue(op, today),
-                "today_clients": today_clients_count(op, today),
+                "month_revenue": revenues.get(op.id, Decimal("0")),
+                "today_clients": clients.get(op.id, 0),
             }
         )
         result.append(out)
@@ -205,13 +287,11 @@ def set_operator_color(request, operator_id: int, data: OperatorColorIn):
     suo. Basta il permesso agenda: è una preferenza di lavoro in sala, non
     un dato anagrafico. L'evento `operator.updated` fa ricaricare le altre.
     """
-    import re
-
     ctx = request.auth
     require_scope(ctx, "agenda")
     operator = salon_get(Operator, ctx, operator_id)
     color = (data.color or "").strip()
-    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+    if not _HEX_COLOR_RE.match(color):
         raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
     operator.color = color.upper()
     operator.save(update_fields=["color"])
@@ -253,6 +333,7 @@ def replace_shifts(request, operator_id: int, data: ShiftsReplaceIn):
     operator = salon_get(Operator, ctx, operator_id)
     for row in data.shifts:
         _validate_shift_row(operator, row)
+    _reject_overlapping_shifts(data.shifts)
     with transaction.atomic():
         operator.shifts.all().delete()
         shifts = WeeklyShift.objects.bulk_create(
@@ -374,6 +455,14 @@ def get_served_clients(request, operator_id: int, q: str = ""):
 def public_operators(request, salon: str):
     """Operatrici attive del salone, per la scelta dello stilista in prenotazione."""
     s = _get_salon_by_slug(salon)
+    # Endpoint senza auth: come la disponibilità pubblica in agenda, va limitato
+    # per IP, altrimenti chiunque può sfogliare il team di ogni salone a raffica.
+    if not ratelimit.hit(
+        f"public-operators:{s.id}:{ratelimit.client_ip(request)}",
+        PUBLIC_OPERATORS_MAX_PER_WINDOW,
+        PUBLIC_OPERATORS_WINDOW_SECONDS,
+    ):
+        raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
     operators = (
         Operator.objects.filter(salon=s, active=True)
         .order_by("order", "id")
@@ -386,7 +475,8 @@ def public_operators(request, salon: str):
             "last_name": op.last_name,
             "initials": op.initials,
             "color": op.color,
-            "service_ids": list(op.services.values_list("id", flat=True)),
+            # `values_list` avrebbe ignorato il prefetch e rifatto una query per riga.
+            "service_ids": [service.id for service in op.services.all()],
         }
         for op in operators
     ]

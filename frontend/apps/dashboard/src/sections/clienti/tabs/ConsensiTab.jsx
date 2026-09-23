@@ -8,8 +8,10 @@ export default function ConsensiTab({ c, updateClient, canWrite }) {
   const { t } = useDash();
   const consents = c.consents || {};
 
+  // i consensi si rileggono dall'ultimo stato noto al momento dell'invio:
+  // spuntando due caselle di seguito la seconda PUT ripristinava la prima
   const setConsent = (key, v) => updateClient(
-    { consents: { ...consents, [key]: v } },
+    (prev) => ({ consents: { ...(prev.consents || {}), [key]: v } }),
     { msg: v ? t('Consenso attivato', 'Consent enabled') : t('Consenso revocato', 'Consent revoked'), icon: v ? 'check' : 'x' },
   );
   const setWa = (v) => updateClient(

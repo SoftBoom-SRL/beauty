@@ -1,9 +1,21 @@
 // format.js — currency / time / date helpers shared by both apps.
-// Money from the API arrives as decimal STRINGS ("35.00") — display with fmtEur(Number(x)).
+// Money from the API arrives as decimal STRINGS ("35.00"): fmtEur le legge come
+// numeri, quindi fmtEur(x) e fmtEur(Number(x)) danno lo stesso risultato.
 
 export function fmtEur(n, lang) {
-  if (n === 0) return lang === 'en' ? 'Free' : 'Gratis';
-  return '€' + Number(n).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT');
+  // Il denaro si scrive SEMPRE con due decimali. Senza i minimi, trentacinque
+  // euro e cinquanta si leggeva «€35,5» sullo scontrino a video; senza i
+  // massimi, un prezzo calcolato (sconto fornitore, medie) usciva con tre
+  // decimali — «€8,415» a video contro «8,42 €» sullo stesso ordine stampato.
+  // Lo zero si riconosce sul NUMERO e non sul valore grezzo: gli importi
+  // arrivano dall'API come stringhe decimali, e «0.00» non è === 0, quindi la
+  // stessa cifra si leggeva «Gratis» oppure «€0,00» a seconda del chiamante.
+  const v = Number(n);
+  if (v === 0) return lang === 'en' ? 'Free' : 'Gratis';
+  return '€' + v.toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 /** minutes from midnight → "HH:MM" */

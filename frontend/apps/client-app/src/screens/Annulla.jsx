@@ -46,6 +46,7 @@ export default function Annulla() {
   const depAmt = Number(appt.deposit_amount || 0);
   const depPaid = appt.deposit_status === 'paid' && depAmt > 0;
   const dm = depositMeta(appt.deposit_status, t);
+  const cancelMinH = brand.cancelMinHours;
 
   const confirm = async () => {
     if (busy) return;
@@ -56,7 +57,7 @@ export default function Annulla() {
       setDone(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
-        setPolicyErr(err.message); // 24h policy — contatta il salone
+        setPolicyErr(err.message); // preavviso minimo non rispettato — contatta il salone
         fireToast({ msg: err.message, icon: 'alert' });
       } else {
         errToast(err, fireToast, t);
@@ -74,11 +75,14 @@ export default function Annulla() {
         <div style={{ display: 'flex', gap: 12, padding: 16, background: 'var(--danger-tint)', borderRadius: 'var(--r-md)', marginBottom: 20 }}>
           <Icon name="alert" size={22} color="var(--danger)" />
           <div style={{ fontSize: 14, lineHeight: 1.5, color: 'var(--ink-2)', flex: 1 }}>
+            {/* Le ore di preavviso sono un'impostazione del salone: scriverle a
+              * mano faceva dire all'app «24h» anche dove la regola era diversa,
+              * e la cliente scopriva la soglia vera solo dal rifiuto. */}
             {depPaid
-              ? t(`Annullando a meno di 24h dall'appuntamento perderai il deposito di ${fmtEur(depAmt, lang)} versato. Sei sicura?`,
-                  `Cancelling within 24h of the appointment forfeits your ${fmtEur(depAmt, lang)} deposit. Are you sure?`)
-              : t('Sei sicura di voler annullare? A meno di 24h dall’appuntamento l’annullamento non è consentito dall’app.',
-                  'Are you sure you want to cancel? Within 24h of the appointment, cancelling from the app isn’t allowed.')}
+              ? t(`Annullando a meno di ${cancelMinH}h dall'appuntamento perderai il deposito di ${fmtEur(depAmt, lang)} versato. Sei sicura?`,
+                  `Cancelling within ${cancelMinH}h of the appointment forfeits your ${fmtEur(depAmt, lang)} deposit. Are you sure?`)
+              : t(`Sei sicura di voler annullare? A meno di ${cancelMinH}h dall’appuntamento l’annullamento non è consentito dall’app.`,
+                  `Are you sure you want to cancel? Within ${cancelMinH}h of the appointment, cancelling from the app isn’t allowed.`)}
           </div>
         </div>
 

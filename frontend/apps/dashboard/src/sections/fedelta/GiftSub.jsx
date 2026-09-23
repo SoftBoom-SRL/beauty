@@ -1,10 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, fmtEur, parseISO, Icon, EmptyState } from '@youty/shared';
+
+/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un KPI o un
+ *  saldo a zero è «€0», non un omaggio. */
+const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
+import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, GC_PAYMENT_META } from './meta.js';
+
+// L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
+// basta: un salone che ne ha vendute di più ne vedeva una parte senza che
+// niente lo dicesse, e le mancanti erano semplicemente introvabili.
+const LIMIT = 24;
 
 const PAY_METHOD_LABELS = {
   cash: { it: 'Contanti', en: 'Cash' },
@@ -25,40 +35,51 @@ export default function GiftSub() {
   const [query, setQuery] = useState('');
   const [statusF, setStatusF] = useState('all');
   const [payF, setPayF] = useState('all');
+  const [offset, setOffset] = useState(0);
 
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
   const [kpi, setKpi] = useState(null);
   const [loading, setLoading] = useState(true);
   const [edit, setEdit] = useState(null);
   const [markingId, setMarkingId] = useState(null);
 
+  // la ricerca si scrive in `query` con un ritardo, e riporta alla prima pagina
   useEffect(() => {
-    const tm = setTimeout(() => setQuery(q), 300);
+    const tm = setTimeout(() => { setQuery(q); setOffset(0); }, 300);
     return () => clearTimeout(tm);
   }, [q]);
 
-  const reload = () => {
-    let alive = true;
+  /* Come in CouponSub: un solo effetto con filtri e offset fra le dipendenze,
+   * l'offset azzerato dallo stesso gestore che cambia il filtro, e `reqSeq` a
+   * scartare le risposte in ritardo (altrimenti si vede una pagina mentre il
+   * pager ne annuncia un'altra). */
+  const reqSeq = useRef(0);
+  const setFilter = (setter) => (v) => { setter(v); setOffset(0); };
+
+  const reload = useCallback(() => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     api.get('/api/marketing/gift-cards', {
       params: {
         status: statusF === 'all' ? undefined : statusF,
         payment_status: payF === 'all' ? undefined : payF,
         q: query || undefined,
+        limit: LIMIT, offset,
       },
     }).then((res) => {
-      if (!alive) return;
+      if (seq !== reqSeq.current) return;
       setItems(res.items || []);
+      setTotal(res.total || 0);
       setKpi(res.kpi || null);
     }).catch((err) => {
-      if (!alive) return;
-      setItems([]); setKpi(null);
+      if (seq !== reqSeq.current) return;
+      setItems([]); setTotal(0); setKpi(null);
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    }).finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  };
+    }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
+  }, [statusF, payF, query, offset, fireToast, t]);
 
-  useEffect(reload, [statusF, payF, query]);
+  useEffect(() => { reload(); }, [reload]);
 
   const markPaid = async (card, method) => {
     setMarkingId(null);
@@ -77,7 +98,13 @@ export default function GiftSub() {
     reload();
   };
 
-  const unpaidCount = items.filter((g) => g.payment_status === 'unpaid').length;
+  // `items` è una pagina, non tutte le carte: il numero è esatto solo quando la
+  // pagina le contiene tutte, oppure quando il filtro è già «da pagare» e allora
+  // il totale del server è proprio quello. Altrimenti si mostra l'etichetta
+  // senza cifra, invece di un conteggio che parla solo della pagina a video.
+  const pageUnpaid = items.filter((g) => g.payment_status === 'unpaid').length;
+  const unpaidExact = payF === 'unpaid' ? total : (total <= items.length ? pageUnpaid : null);
+  const showUnpaid = unpaidExact === null ? pageUnpaid > 0 : unpaidExact > 0;
 
   return (
     <React.Fragment>
@@ -91,9 +118,9 @@ export default function GiftSub() {
       ) : (
         <div className="dk-card" style={{ display: 'flex', alignItems: 'stretch', gap: 0, padding: '16px 6px', marginBottom: 18, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           {[
-            [t('Valore venduto', 'Sold value'), fmtEur(Number(kpi?.sold_total || 0), lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
-            [t('Già riscattato', 'Already redeemed'), fmtEur(Number(kpi?.redeemed_total || 0), lang), 'var(--muted)', t('valore consumato', 'value consumed')],
-            [t('Da riscattare', 'Outstanding'), fmtEur(Number(kpi?.outstanding || 0), lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
+            [t('Valore venduto', 'Sold value'), eur0(kpi?.sold_total || 0, lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
+            [t('Già riscattato', 'Already redeemed'), eur0(kpi?.redeemed_total || 0, lang), 'var(--muted)', t('valore consumato', 'value consumed')],
+            [t('Da riscattare', 'Outstanding'), eur0(kpi?.outstanding || 0, lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
           ].map(([l, v, c, sub], i) => (
             <div key={i} style={{ flex: 1, padding: '2px 18px', borderLeft: i ? '1px solid var(--hair)' : 'none' }}>
               <div className="t-meta" style={{ marginBottom: 5 }}>{l}</div>
@@ -102,7 +129,12 @@ export default function GiftSub() {
             </div>
           ))}
           <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-end', gap: 8, padding: '0 14px 0 18px', borderLeft: '1px solid var(--hair)' }}>
-            {unpaidCount > 0 && <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap' }}>{unpaidCount} {t('da pagare', 'unpaid')}</span>}
+            {showUnpaid && (
+              <button onClick={() => { setPayF('unpaid'); setOffset(0); }} title={t('Mostra solo le gift card da pagare', 'Show only unpaid gift cards')}
+                style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '3px 10px', borderRadius: 99, whiteSpace: 'nowrap', border: 'none', cursor: 'pointer' }}>
+                {unpaidExact === null ? t('da pagare', 'unpaid') : `${unpaidExact} ${t('da pagare', 'unpaid')}`}
+              </button>
+            )}
             {canWrite && <button className="dk-btn dk-btn--clay" onClick={() => setEdit({})} style={{ whiteSpace: 'nowrap' }}><Icon name="plus" size={17} color="#fff" />{t('Nuova gift card', 'New gift card')}</button>}
           </div>
         </div>
@@ -115,8 +147,8 @@ export default function GiftSub() {
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[
-          { label: t('Stato', 'Status'), value: statusF, set: setStatusF, opts: [['all', t('Tutte', 'All')], ['active', t('Attive', 'Active')], ['redeemed', t('Esaurite', 'Redeemed')], ['expired', t('Scadute', 'Expired')]] },
-          { label: t('Pagamento', 'Payment'), value: payF, set: setPayF, opts: [['all', t('Tutti', 'All')], ['paid', t('Pagate', 'Paid')], ['unpaid', t('Da pagare', 'Unpaid')]] },
+          { label: t('Stato', 'Status'), value: statusF, set: setFilter(setStatusF), opts: [['all', t('Tutte', 'All')], ['active', t('Attive', 'Active')], ['redeemed', t('Esaurite', 'Redeemed')], ['expired', t('Scadute', 'Expired')]] },
+          { label: t('Pagamento', 'Payment'), value: payF, set: setFilter(setPayF), opts: [['all', t('Tutti', 'All')], ['paid', t('Pagate', 'Paid')], ['unpaid', t('Da pagare', 'Unpaid')]] },
         ]} />
       </div>
 
@@ -139,8 +171,8 @@ export default function GiftSub() {
                   <div style={{ flexShrink: 0, padding: 7, border: '1px solid var(--hair)', borderRadius: 10, background: '#fff' }}><QrMini code={g.code} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{fmtEur(value, lang)}</span>
-                      {used > 0 && g.status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{fmtEur(balance, lang)}</strong></span>}
+                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{eur0(value, lang)}</span>
+                      {used > 0 && g.status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{eur0(balance, lang)}</strong></span>}
                     </div>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
                     {g.gift_service_name && (
@@ -214,6 +246,8 @@ export default function GiftSub() {
         <EmptyState icon="gift" title={t('Nessuna gift card', 'No gift cards')} sub={t('Vendi la prima gift card.', 'Sell your first gift card.')}
           action={canWrite ? t('Nuova gift card', 'New gift card') : null} onAction={() => setEdit({})} />
       )}
+
+      <Pager count={total} limit={LIMIT} offset={offset} setOffset={setOffset} t={t} />
 
       {edit && (
         <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} services={services} />

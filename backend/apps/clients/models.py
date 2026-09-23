@@ -107,6 +107,17 @@ class Client(models.Model):
         ordering = ["first_name", "last_name", "id"]
         constraints = [
             models.UniqueConstraint(fields=["salon", "phone"], name="uniq_client_salon_phone"),
+            # L'identità della cliente è la chiave normalizzata, non la stringa
+            # digitata: «348 221 0094» e «+39 348 2210094» sono la stessa
+            # persona ma superavano il vincolo qui sopra. Parziale perché
+            # phone_key resta vuota sui numeri non normalizzabili («n/d»,
+            # «da chiedere»): lì non c'è identità da proteggere e un vincolo
+            # pieno impedirebbe la seconda scheda senza numero.
+            models.UniqueConstraint(
+                fields=["salon", "phone_key"],
+                condition=~models.Q(phone_key=""),
+                name="uniq_client_salon_phone_key",
+            ),
             models.UniqueConstraint(
                 fields=["salon", "yourang_contact_id"],
                 condition=~models.Q(yourang_contact_id=""),

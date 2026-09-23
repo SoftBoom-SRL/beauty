@@ -35,10 +35,18 @@ class AutomationOut(Schema):
 
     @staticmethod
     def resolve_webhook_token(obj):
+        # Chi non ha «marketing» legge l'automazione ma non la sua credenziale:
+        # con il token si fa partire la sequenza di messaggi senza autenticarsi.
+        if getattr(obj, "_mask_secrets", False):
+            return ""
         return str(obj.webhook_token)
 
     @staticmethod
     def resolve_webhook_url(obj):
+        # L'indirizzo contiene il token: nasconderne uno e non l'altro non
+        # servirebbe a niente.
+        if getattr(obj, "_mask_secrets", False):
+            return ""
         return f"/api/automations/hook/{obj.webhook_token}"
 
 

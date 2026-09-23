@@ -5,7 +5,12 @@
 #
 # ATTENZIONE: Vite inlina le variabili VITE_* nel bundle a build time.
 # Non sono configurabili a runtime: cambiarle richiede un nuovo build.
-ARG APP=dashboard
+#
+# APP non ha un default di proposito: con `APP=dashboard` implicito bastava
+# dimenticare la spunta «Build Variable?» su beauty-client perché il build
+# riuscisse e il dominio delle clienti servisse il gestionale staff, healthcheck
+# verde compreso. Meglio un build che fallisce.
+ARG APP
 
 # ---------- build ----------
 FROM node:22-alpine AS build
@@ -22,6 +27,12 @@ RUN test -n "$VITE_API_URL" || { \
       echo "ERRORE: build arg VITE_API_URL mancante — il frontend punterebbe a localhost."; \
       exit 1; }
 
+# Stessa guardia per APP: senza, non si sa quale delle due applicazioni si sta
+# pubblicando (vedi il commento in testa al file).
+RUN test -n "$APP" || { \
+      echo "ERRORE: build arg APP mancante — valori ammessi: dashboard | client-app."; \
+      exit 1; }
+
 WORKDIR /repo
 
 # Layer di dipendenze separato: cambia solo quando cambiano i package.json
@@ -32,6 +43,11 @@ COPY packages/shared/package.json packages/shared/
 RUN npm ci --no-audit --no-fund
 
 COPY . .
+# Un APP scritto male (refuso, nome vecchio) non deve arrivare a `npm run build`,
+# che fallirebbe con un errore di workspace poco leggibile.
+RUN test -d "apps/$APP" || { \
+      echo "ERRORE: build arg APP='$APP' non corrisponde a nessuna applicazione in apps/."; \
+      exit 1; }
 RUN npm run build --workspace apps/$APP
 
 # ---------- runtime ----------

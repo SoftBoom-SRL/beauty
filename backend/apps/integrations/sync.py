@@ -6,9 +6,10 @@ Yourang impone il telefono univoco per org e offre le rotte `by-phone`
 idempotenti). I servizi vengono spinti in un unico catalogo per salone.
 """
 
-import re
+import logging
 from dataclasses import dataclass, field
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -35,12 +36,42 @@ _EVENT_STATUS = {
     "pending_deletion": Appointment.Status.CANCELLED,
 }
 
+# «Avanzamento» dell'appuntamento: una ri-consegna dell'evento non deve MAI
+# riportarlo indietro. Yourang conosce solo confermato/annullato, mentre
+# check-in, servizio in corso, conto chiuso e no-show li decide il salone
+# davanti alla cliente: valgono più di qualunque eco remota.
+_STATUS_RANK = {
+    Appointment.Status.CONFIRMED: 0,
+    Appointment.Status.CHECKED_IN: 1,
+    Appointment.Status.IN_PROGRESS: 2,
+    Appointment.Status.CLOSED: 3,
+    Appointment.Status.NO_SHOW: 3,
+    Appointment.Status.CANCELLED: 3,
+}
+
+# Tetto di pagine sui contatti: un proxy che ignora `offset` rimanderebbe
+# all'infinito la stessa pagina e il webhook resterebbe appeso per sempre.
+MAX_CONTACT_PAGES = 200
+
+# Nome del servizio segnaposto delle prenotazioni importate (non è un servizio
+# del listino: esiste solo perché un evento Yourang non porta un servizio nostro).
+PLACEHOLDER_SERVICE_NAME = "Prenotazione Yourang"
+
+logger = logging.getLogger("youty.integrations")
+
 
 # La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
 # common.phone: è la stessa usata da login, registrazione, form pubblico e
 # import CSV, così il telefono che è la chiave naturale dei contatti Yourang
 # coincide con quello con cui il cliente accede all'app.
-from common.phone import COUNTRY_CODES, TRUNK_ZERO_KEPT, _drop_trunk_zero, normalize_phone  # noqa: E402,F401
+from common.phone import (  # noqa: E402,F401
+    COUNTRY_CODES,
+    TRUNK_ZERO_KEPT,
+    _drop_trunk_zero,
+    find_client_by_phone,
+    normalize_phone,
+    phone_key,
+)
 
 
 def _split_name(full: str) -> tuple[str, str]:
@@ -63,6 +94,89 @@ class SyncReport:
 # ---- Clienti ↔ Contatti ----------------------------------------------------
 
 
+def _list_all_contacts(client: YourangClient, report: SyncReport) -> list[dict]:
+    """Tutti i contatti dell'org, con due paracadute sulla paginazione.
+
+    Il ciclo si fermava solo su una pagina corta: un proxy che ignora `offset`
+    (o che sbaglia a contarlo) rimandava per sempre la stessa pagina e la sync —
+    che gira dentro il webhook — non finiva mai.
+    """
+    remote: list[dict] = []
+    seen_ids: set[str] = set()
+    offset = 0
+    for _ in range(MAX_CONTACT_PAGES):
+        page = client.list_contacts(limit=100, offset=offset)
+        if not page:
+            break
+        fresh = {str(rc.get("id") or "") for rc in page} - {""} - seen_ids
+        if not fresh and seen_ids:
+            report.errors.append("contatti: pagina già vista, paginazione interrotta")
+            break
+        seen_ids |= fresh
+        remote.extend(page)
+        if len(page) < 100:
+            break
+        offset += 100
+    else:
+        report.errors.append(f"contatti: oltre {MAX_CONTACT_PAGES} pagine, elenco troncato")
+    return remote
+
+
+def _reconcile_contact(salon, rc: dict, by_id: dict, by_key: dict, report: SyncReport) -> None:
+    """Un solo contatto remoto → scheda locale. Gli indici si aggiornano qui
+    dentro: due contatti remoti scritti in due modi ma con lo stesso numero
+    devono ritrovare la stessa scheda, non crearne una seconda né riscrivere lo
+    stesso contact-id (che è unico per salone)."""
+    rid = str(rc.get("id") or "")
+    raw_phone = rc.get("phone_number", "") or ""
+    phone = normalize_phone(raw_phone)
+    key = phone_key(raw_phone)
+    first = rc.get("first_name") or "Cliente"
+    last = rc.get("last_name") or ""
+    email = rc.get("email") or ""
+
+    local = by_id.get(rid) if rid else None
+    if local is None and key:
+        local = by_key.get(key)
+        # Si linka solo una scheda ancora libera: se ha già un altro contact-id
+        # sovrascriverlo violerebbe il vincolo unico e romperebbe l'altro legame.
+        if local is not None and rid and not local.yourang_contact_id:
+            local.yourang_contact_id = rid
+            local.save(update_fields=["yourang_contact_id"])
+            report.linked += 1
+
+    if local is None:
+        if not phone:
+            return
+        local = Client.objects.create(
+            salon=salon,
+            first_name=first,
+            last_name=last,
+            phone=phone,
+            email=email,
+            yourang_contact_id=rid,
+            # Cliente dell'anagrafica Yourang: da oggi è anche cliente del salone.
+            since=timezone.localdate(),
+        )
+        report.created += 1
+    else:
+        changed = []
+        if local.email != email and email:
+            local.email = email
+            changed.append("email")
+        if local.last_name != last and last:
+            local.last_name = last
+            changed.append("last_name")
+        if changed:
+            local.save(update_fields=changed)
+            report.updated += 1
+
+    if rid:
+        by_id.setdefault(rid, local)
+    if key:
+        by_key.setdefault(key, local)
+
+
 def sync_clients(conn: YourangConnection) -> SyncReport:
     """Riconcilia per telefono E.164: linkati→aggiorna, stesso telefono→linka,
     mancanti→crea; i clienti nativi non ancora su Yourang vengono spinti."""
@@ -71,69 +185,35 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
     salon = conn.salon
 
     # 1) scarica tutti i contatti Yourang
-    remote: list[dict] = []
-    offset = 0
-    while True:
-        page = client.list_contacts(limit=100, offset=offset)
-        remote.extend(page)
-        if len(page) < 100:
-            break
-        offset += 100
+    remote = _list_all_contacts(client, report)
 
     locals_by_id = {
         c.yourang_contact_id: c
         for c in Client.objects.filter(salon=salon).exclude(yourang_contact_id="")
     }
-    locals_by_phone = {}
-    # Anche i disattivati: il vincolo unique (salon, phone) vale comunque, quindi
-    # senza di loro un contatto remoto con quel numero farebbe fallire la create.
+    # L'indice è sulla CHIAVE normalizzata, non sulla stringa: è quella l'identità
+    # del cliente (Client.phone_key). Anche i disattivati, perché il vincolo
+    # unique (salon, phone) vale comunque e senza di loro un contatto remoto con
+    # quel numero farebbe fallire la create.
+    locals_by_key = {}
     for c in Client.objects.filter(salon=salon):
-        norm = normalize_phone(c.phone)
-        if norm:
-            locals_by_phone.setdefault(norm, c)
-
-    linked_ids = set()
+        key = phone_key(c.phone)
+        if key:
+            locals_by_key.setdefault(key, c)
 
     # 2) Yourang → locale
     for rc in remote:
-        rid = str(rc.get("id") or "")
-        phone = normalize_phone(rc.get("phone_number", ""))
-        first = rc.get("first_name") or "Cliente"
-        last = rc.get("last_name") or ""
-        email = rc.get("email") or ""
-
-        local = locals_by_id.get(rid)
-        if local is None and phone:
-            local = locals_by_phone.get(phone)
-            if local and not local.yourang_contact_id:
-                local.yourang_contact_id = rid
-                local.save(update_fields=["yourang_contact_id"])
-                report.linked += 1
-        if local is None:
-            if not phone:
-                continue
-            Client.objects.create(
-                salon=salon,
-                first_name=first,
-                last_name=last,
-                phone=phone,
-                email=email,
-                yourang_contact_id=rid,
-            )
-            report.created += 1
-        else:
-            changed = []
-            if local.email != email and email:
-                local.email = email
-                changed.append("email")
-            if local.last_name != last and last:
-                local.last_name = last
-                changed.append("last_name")
-            if changed:
-                local.save(update_fields=changed)
-                report.updated += 1
-        if rid:
-            linked_ids.add(rid)
+        try:
+            # Savepoint per contatto: un solo salvataggio che fallisce (telefono
+            # duplicato, corsa con un'altra consegna) non deve fermare tutta la
+            # riconciliazione. L'errore era deterministico, quindi l'integrazione
+            # restava bloccata per sempre: dal webhook 503 a ripetizione, dal cron
+            # connessione in ERROR e nessun tentativo capace di riuscire.
+            with transaction.atomic():
+                _reconcile_contact(salon, rc, locals_by_id, locals_by_key, report)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Yourang: contatto %s non riconciliato: %s", rc.get("id"), exc)
+            report.errors.append(f"contatto {rc.get('id') or '?'}: {exc}")
 
     # 3) locali senza corrispondenza → push su Yourang
     for local in Client.objects.filter(salon=salon, is_active=True):
@@ -155,8 +235,16 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
             report.errors.append(f"push {phone}: {exc}")
             continue
         if created.get("id"):
-            local.yourang_contact_id = str(created["id"])
-            local.save(update_fields=["yourang_contact_id"])
+            try:
+                # Stesso motivo del ciclo qui sopra: due schede locali scritte in
+                # due modi ricevono lo stesso contact-id dal by-phone remoto, e la
+                # seconda viola il vincolo unico. Si salta quella, non la sync.
+                with transaction.atomic():
+                    local.yourang_contact_id = str(created["id"])
+                    local.save(update_fields=["yourang_contact_id"])
+            except IntegrityError as exc:
+                report.errors.append(f"push {phone}: contatto già collegato ({exc})")
+                continue
             report.pushed += 1
 
     return report
@@ -233,16 +321,73 @@ def _default_operator(salon) -> Operator:
 
 
 def _yourang_service(salon) -> Service:
-    svc = Service.objects.filter(salon=salon, name_it="Prenotazione Yourang").first()
+    svc = Service.objects.filter(salon=salon, name_it=PLACEHOLDER_SERVICE_NAME).first()
     if svc is None:
         cat = (
             ServiceCategory.objects.filter(salon=salon).order_by("order", "id").first()
             or ServiceCategory.objects.create(salon=salon, name_it="Yourang")
         )
+        # active=False di proposito: è un segnaposto tecnico, non un servizio del
+        # salone. Attivo finirebbe nel listino pubblico (/catalog/public/services),
+        # prenotabile dall'app a 0 €, e verrebbe pure rispinto su Yourang a 0 €.
         svc = Service.objects.create(
-            salon=salon, category=cat, name_it="Prenotazione Yourang", duration_min=60, price=0,
+            salon=salon,
+            category=cat,
+            name_it=PLACEHOLDER_SERVICE_NAME,
+            duration_min=60,
+            price=0,
+            active=False,
         )
     return svc
+
+
+def _merged_status(local_status: str, remote_status: str) -> str:
+    """Stato dopo una ri-consegna: si avanza, non si torna mai indietro.
+
+    Il remoto porta lo stato «iniziale» dell'evento; check-in, servizio in corso,
+    chiusura, no-show e annullamento sono decisioni prese in salone. Senza questo
+    una ri-consegna dopo un 503 riapriva un appuntamento già chiuso.
+    """
+    if _STATUS_RANK.get(remote_status, 0) > _STATUS_RANK.get(local_status, 0):
+        return remote_status
+    return local_status
+
+
+def _client_for_event(salon, data: dict) -> Client:
+    """Scheda cliente dell'evento importato, deduplicata sulla CHIAVE del
+    telefono (non sulla stringa grezza: «348 221 0094» e «+39 348 2210094» sono
+    la stessa cliente, e due schede spaccherebbero storico, fedeltà e caparre).
+    """
+    first, last = _split_name(data.get("client_full_name", ""))
+    phone = normalize_phone(data.get("client_phone_number", "") or "") or ""
+    defaults = {
+        "first_name": first or "Cliente",
+        "last_name": last,
+        # Prima visita nota: senza `since` la scheda risulta senza storia.
+        "since": timezone.localdate(),
+    }
+
+    if not phone:
+        # get_or_create anche senza telefono: il vincolo unique (salon, phone)
+        # permette UN solo cliente con phone="" per salone. ponytail: le
+        # prenotazioni Yourang senza numero condividono un cliente segnaposto.
+        client_obj, _ = Client.objects.get_or_create(salon=salon, phone="", defaults=defaults)
+        return client_obj
+
+    existing = find_client_by_phone(salon, phone)
+    if existing is not None:
+        return existing
+    try:
+        # Savepoint: due consegne dello stesso evento in parallelo, o il vincolo
+        # di unicità su (salon, phone_key), fanno perdere la corsa a una delle
+        # due — che deve rileggere la scheda dell'altra, non esplodere.
+        with transaction.atomic():
+            return Client.objects.create(salon=salon, phone=phone, **defaults)
+    except IntegrityError:
+        existing = find_client_by_phone(salon, phone)
+        if existing is None:
+            raise
+        return existing
 
 
 def _event_duration_min(data: dict, start) -> int:
@@ -263,18 +408,7 @@ def import_event(conn: YourangConnection, event_id: str) -> Appointment | None:
     if not data:
         return None
 
-    operator = _default_operator(salon)
-
-    phone = normalize_phone(data.get("client_phone_number", "") or "") or ""
-    first, last = _split_name(data.get("client_full_name", ""))
-    # get_or_create anche senza telefono: il vincolo unique (salon, phone) permette
-    # UN solo cliente con phone="" per salone. ponytail: le prenotazioni Yourang
-    # senza numero condividono un cliente segnaposto; deduplica per contact-id
-    # quando l'evento lo espone.
-    client_obj, _ = Client.objects.get_or_create(
-        salon=salon, phone=phone,
-        defaults={"first_name": first or "Cliente", "last_name": last},
-    )
+    client_obj = _client_for_event(salon, data)
 
     start = parse_datetime(data.get("starting_date") or "")
     if start is None:
@@ -282,20 +416,57 @@ def import_event(conn: YourangConnection, event_id: str) -> Appointment | None:
     if timezone.is_naive(start):
         start = timezone.make_aware(start)
 
-    status = _EVENT_STATUS.get(str(data.get("status", "")).lower(), Appointment.Status.CONFIRMED)
+    raw_status = str(data.get("status", "")).lower()
+    remote_status = _EVENT_STATUS.get(raw_status)
+    if remote_status is None and raw_status:
+        # Enum remota cambiata: non si indovina. In creazione l'appuntamento
+        # nasce confermato (meglio visibile in agenda che perso), in
+        # aggiornamento lo stato locale NON si tocca — un "cancelled" scritto
+        # in un modo nuovo non deve diventare un confermato che occupa lo slot.
+        logger.warning("Yourang: stato evento sconosciuto %r (evento %s)", raw_status, event_id)
 
-    appt, _ = Appointment.objects.update_or_create(
-        salon=salon,
-        yourang_event_id=str(event_id),
-        defaults={
-            "client": client_obj,
-            "operator": operator,
-            "start": start,
-            "status": status,
-            "created_via": Appointment.CreatedVia.YOURANG,
-            "note": "Prenotazione da Yourang",
-        },
-    )
+    appt = Appointment.objects.filter(salon=salon, yourang_event_id=str(event_id)).first()
+    if appt is None:
+        try:
+            with transaction.atomic():
+                appt = Appointment.objects.create(
+                    salon=salon,
+                    yourang_event_id=str(event_id),
+                    client=client_obj,
+                    operator=_default_operator(salon),
+                    start=start,
+                    status=remote_status or Appointment.Status.CONFIRMED,
+                    created_via=Appointment.CreatedVia.YOURANG,
+                    note="Prenotazione da Yourang",
+                )
+        except IntegrityError:
+            # Due consegne dello stesso evento in parallelo: vince una sola
+            # create, l'altra rilegge la riga invece di propagare un 503.
+            appt = Appointment.objects.filter(
+                salon=salon, yourang_event_id=str(event_id)
+            ).first()
+            if appt is None:
+                raise
+    else:
+        # In aggiornamento si riscrive SOLO ciò che è di competenza remota: chi e
+        # quando. Operatrice e nota sono decisioni prese in salone e a ogni
+        # ri-consegna venivano azzerate (operatrice riportata alla prima attiva,
+        # nota dello staff cancellata); lo stato può solo avanzare.
+        changed = []
+        if appt.client_id != client_obj.id:
+            appt.client = client_obj
+            changed.append("client")
+        if appt.start != start:
+            appt.start = start
+            changed.append("start")
+        if remote_status is not None:
+            merged = _merged_status(appt.status, remote_status)
+            if merged != appt.status:
+                appt.status = merged
+                changed.append("status")
+        if changed:
+            appt.save(update_fields=changed + ["updated_at"])
+
     # ponytail: nessun mapping affidabile Evento→Servizio locale → una riga
     # segnaposto "Prenotazione Yourang" con la durata reale dell'evento, così
     # l'appuntamento è visibile in agenda (la durata deriva dagli items).
@@ -305,12 +476,21 @@ def import_event(conn: YourangConnection, event_id: str) -> Appointment | None:
         AppointmentService.objects.create(
             appointment=appt,
             service=_yourang_service(salon),
-            operator=operator,
+            # L'operatrice della riga segue quella dell'appuntamento: se il
+            # salone l'ha spostata su un'altra colonna, la riga non deve
+            # riportarla indietro alla prima attiva.
+            operator=appt.operator,
             duration_min=duration_min,
             soak_min=0,
             price=0,
         )
-    elif len(items) == 1 and items[0].duration_min != duration_min:
+    elif (
+        len(items) == 1
+        and items[0].duration_min != duration_min
+        # Solo se è ancora il segnaposto: se il salone l'ha sostituito con il
+        # servizio vero, la durata è quella del listino e non la riscrive Yourang.
+        and items[0].service.name_it == PLACEHOLDER_SERVICE_NAME
+    ):
         # L'evento è stato allungato o accorciato su Yourang: la riga segnaposto
         # segue, altrimenti l'agenda mostrerebbe ancora la durata della prima
         # importazione.
@@ -320,6 +500,16 @@ def import_event(conn: YourangConnection, event_id: str) -> Appointment | None:
 
 
 def cancel_event(conn: YourangConnection, event_id: str) -> None:
+    # Guardia obbligatoria: `yourang_event_id` è blank=True default="" su TUTTI
+    # gli appuntamenti nativi (il vincolo unico è parziale, esclude ""). Con un
+    # event_id vuoto — payload senza `resource_id`, o campo rinominato di nuovo
+    # dal proxy — il filtro cadrebbe su tutti quanti e una sola UPDATE
+    # annullerebbe l'intera agenda del salone, passata e futura.
+    if not str(event_id or "").strip():
+        logger.warning(
+            "Yourang: event.deleted senza resource_id, ignorato (salone %s)", conn.salon_id
+        )
+        return
     Appointment.objects.filter(
         salon=conn.salon, yourang_event_id=str(event_id)
     ).update(status=Appointment.Status.CANCELLED)

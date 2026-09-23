@@ -225,7 +225,10 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
   const setItemOp = (key, opId) => onPatch((r) => ({ items: r.items.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)), selStart: null }));
 
   const totalPrice = row.items.reduce((s, it) => s + Number(svcOf(it.service_id)?.price || 0), 0);
-  const totalDur = row.items.reduce((s, it) => s + (svcOf(it.service_id)?.duration_min || 0), 0);
+  // La posa occupa lo slot come il lavoro attivo (come in NewApptModal):
+  // senza, colore 45' + 30' di posa si annunciava «45m» e la cliente trovava
+  // occupata un'ora e un quarto.
+  const totalDur = row.items.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
 
   /* ---- availability ---- */
   const [slots, setSlots] = useState([]); // null = loading, [] = none
@@ -322,7 +325,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
                     <span style={{ width: 9, height: 9, borderRadius: 99, background: catColor(s.category_id), flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcName(s)}</div>
-                      <div className="t-sm" style={{ color: 'var(--muted)' }}><Icon name="clock" size={11} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur(s.duration_min, lang)}</div>
+                      <div className="t-sm" style={{ color: 'var(--muted)' }}><Icon name="clock" size={11} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur((s.duration_min || 0) + (s.soak_min || 0), lang)}{s.soak_min ? ' · ' + t('incl. posa', 'incl. soak') + ' ' + fmtDur(s.soak_min, lang) : ''}</div>
                     </div>
                     <span className="t-num" style={{ fontSize: 13.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(s.price), lang)}</span>
                     <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 8, flexShrink: 0 }} onClick={() => removeItem(it.key)} aria-label={t('Rimuovi servizio', 'Remove service')}><Icon name="x" size={13} /></button>

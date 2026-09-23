@@ -10,6 +10,7 @@ Uso negli endpoint ninja:
 """
 
 import datetime as dt
+import secrets
 from dataclasses import dataclass, field
 
 import jwt
@@ -40,25 +41,46 @@ def decode_token(token: str) -> dict | None:
 
 
 def create_staff_tokens(user, salon) -> dict:
+    """Coppia access/refresh per un membro staff, con la sessione registrata.
+
+    Il refresh porta un `jti` che corrisponde a una riga di
+    `accounts.StaffRefreshToken`: è quella riga a renderlo revocabile (uscita
+    lato server) e a permettere la rotazione al rinnovo. La registrazione sta
+    qui e non nell'endpoint di login perché i token staff si coniano anche
+    altrove (accettazione invito, login Yourang): se fosse nel chiamante,
+    prima o poi nascerebbe una sessione non tracciata, cioè non revocabile.
+    """
+    from apps.accounts.models import StaffRefreshToken  # lazy: evita cicli in fase di load
+
+    refresh_ttl = dt.timedelta(days=settings.JWT_REFRESH_TTL_DAYS)
+    jti = secrets.token_urlsafe(32)
     # sub come stringa: PyJWT >= 2.10 rifiuta in decodifica i sub non-stringa
     base = {"sub": str(user.id), "salon": salon.id, "tv": user.token_version or 0}
+    now = _now()
+    # Le righe già scadute di questo utente non servono più a nessuno: né a
+    # rinnovare né a riconoscere un token revocato, perché il JWT corrispondente
+    # è scaduto lo stesso giorno.
+    StaffRefreshToken.objects.filter(user=user, expires_at__lte=now).delete()
+    StaffRefreshToken.objects.create(
+        user=user, salon=salon, jti=jti, expires_at=now + refresh_ttl
+    )
     return {
         "access": _encode(
             {**base, "typ": "staff"},
             dt.timedelta(minutes=settings.JWT_ACCESS_TTL_MIN),
         ),
-        "refresh": _encode(
-            {**base, "typ": "staff_refresh"},
-            dt.timedelta(days=settings.JWT_REFRESH_TTL_DAYS),
-        ),
+        "refresh": _encode({**base, "typ": "staff_refresh", "jti": jti}, refresh_ttl),
     }
 
 
 def create_client_tokens(client) -> dict:
+    # Durata propria (JWT_CLIENT_TTL_DAYS) e non quella del refresh staff: sono
+    # due sessioni diverse, e prima toccare il TTL del gestionale cambiava in
+    # silenzio anche quello della web app cliente.
     return {
         "access": _encode(
             {"sub": str(client.id), "salon": client.salon_id, "typ": "client"},
-            dt.timedelta(days=settings.JWT_REFRESH_TTL_DAYS),
+            dt.timedelta(days=settings.JWT_CLIENT_TTL_DAYS),
         )
     }
 

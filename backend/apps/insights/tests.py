@@ -77,6 +77,22 @@ class CustomRangeTests(TestCase):
         self.assertEqual(start.date(), date(2026, 7, 1))
         self.assertEqual(end.date(), date(2026, 8, 1))
 
+    def test_a_range_of_centuries_is_refused(self):
+        # Il selettore non ha un anno minimo: "0202-01-01" sono 666.000 giorni
+        # scorsi uno per uno, con un thread del server occupato per minuti.
+        from ninja.errors import HttpError
+
+        from .services import MAX_RANGE_DAYS
+
+        with self.assertRaises(HttpError):
+            custom_range(date(202, 1, 1), date(2026, 12, 31))
+        with self.assertRaises(HttpError):
+            custom_range(date(1, 1, 1), date(9999, 12, 31))
+        # due anni restano leciti
+        start, end = custom_range(date(2025, 1, 1), date(2026, 12, 31))
+        self.assertEqual((end.date() - start.date()).days, 730)
+        self.assertGreaterEqual(MAX_RANGE_DAYS, 731)
+
 
 class KpisMinimalDatasetTests(TestCase):
     """Nessun KPI deve mai sollevare eccezioni, con dati assenti o minimi."""
@@ -161,6 +177,126 @@ class KpisMinimalDatasetTests(TestCase):
         self.assertEqual(result["avg_frequency"], 1)
 
 
+class NewClientsTests(TestCase):
+    """«Nuovi clienti» era strutturalmente 0: `Client.since` non viene scritta
+    dalle schede storiche, e il grafico «Nuovi vs di ritorno» mostrava sempre
+    0% / 100%."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.today = timezone.localdate()
+
+    def _client(self, name, **kwargs):
+        return Client.objects.create(
+            salon=self.salon, first_name=name, last_name="Verdi",
+            phone=f"+3933311122{Client.objects.count():02d}", **kwargs
+        )
+
+    def test_a_client_without_since_counts_from_her_first_visit(self):
+        from apps.staff.models import Operator
+
+        operator = Operator.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci")
+        client = self._client("Anna")
+        self.assertIsNone(client.since)
+        start = timezone.make_aware(
+            timezone.datetime.combine(self.today, timezone.datetime.min.time())
+        ).replace(hour=10)
+        Appointment.objects.create(
+            salon=self.salon, client=client, operator=operator, start=start, status="closed"
+        )
+        result = kpis(self.salon, "month", self.today)
+        self.assertEqual(result["new_clients"], 1)
+        self.assertEqual(result["returning_clients"], 0)
+
+    def test_a_client_without_since_counts_from_her_first_sale(self):
+        client = self._client("Bea")
+        Sale.objects.create(salon=self.salon, kind="pos", client=client, total=30)
+        self.assertEqual(kpis(self.salon, "month", self.today)["new_clients"], 1)
+
+    def test_a_client_of_the_past_is_not_new_and_counts_as_returning(self):
+        from datetime import timedelta
+
+        from apps.staff.models import Operator
+
+        operator = Operator.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci")
+        old = self._client("Carla")
+        long_ago = timezone.now() - timedelta(days=400)
+        Appointment.objects.create(
+            salon=self.salon, client=old, operator=operator, start=long_ago, status="closed"
+        )
+        now = timezone.now().replace(hour=10, minute=0)
+        Appointment.objects.create(
+            salon=self.salon, client=old, operator=operator, start=now, status="closed"
+        )
+        result = kpis(self.salon, "month", self.today)
+        self.assertEqual(result["new_clients"], 0)
+        self.assertEqual(result["returning_clients"], 1)
+
+    def test_the_declared_since_still_wins(self):
+        self._client("Dora", since=self.today)
+        self._client("Elsa", since=self.today.replace(year=self.today.year - 3, day=1))
+        self.assertEqual(kpis(self.salon, "month", self.today)["new_clients"], 1)
+
+
+class RebookingRateTests(TestCase):
+    """Il riaggancio si misura rispetto al periodo, non rispetto a oggi."""
+
+    def setUp(self):
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci")
+        self.client_row = Client.objects.create(
+            salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
+        )
+
+    def test_a_visit_already_closed_today_is_not_a_future_booking(self):
+        from datetime import timedelta
+
+        now = timezone.now()
+        visit = now - timedelta(hours=2)
+        Appointment.objects.create(
+            salon=self.salon, client=self.client_row, operator=self.operator,
+            start=visit, status="closed",
+        )
+        # nessun altro appuntamento: il riaggancio è 0, non 1
+        self.assertEqual(kpis(self.salon, "month", visit.date())["rebooking_rate"], 0)
+        Appointment.objects.create(
+            salon=self.salon, client=self.client_row, operator=self.operator,
+            start=now + timedelta(days=20), status="confirmed",
+        )
+        self.assertEqual(kpis(self.salon, "month", visit.date())["rebooking_rate"], 1.0)
+
+
+class ClientsByCategoryTests(TestCase):
+    """«Clienti per categoria» seguiva l'anagrafica intera e non cambiava mai
+    con il periodo scelto, accanto a KPI che invece cambiavano."""
+
+    def test_only_the_clients_of_the_period_are_counted(self):
+        from datetime import timedelta
+
+        from apps.clients.models import ClientCategory
+        from apps.staff.models import Operator
+
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        vip = ClientCategory.objects.create(salon=salon, name="VIP")
+        operator = Operator.objects.create(salon=salon, first_name="Sofia", last_name="Ricci")
+        recent = Client.objects.create(salon=salon, first_name="Anna", phone="+393331112233")
+        dormant = Client.objects.create(salon=salon, first_name="Bea", phone="+393331112244")
+        recent.categories.add(vip)
+        dormant.categories.add(vip)
+        Appointment.objects.create(
+            salon=salon, client=recent, operator=operator,
+            start=timezone.now().replace(hour=10, minute=0), status="closed",
+        )
+        Appointment.objects.create(
+            salon=salon, client=dormant, operator=operator,
+            start=timezone.now() - timedelta(days=400), status="closed",
+        )
+        rows = kpis(salon, "month")["clients_by_category"]
+        self.assertEqual(rows, [{"category": "VIP", "count": 1}])
+
+
 class OccupancyStatusTests(TestCase):
     """Check-in e trattamento in corso occupano la poltrona come un confermato:
     l'occupazione non deve scendere quando la cliente arriva."""
@@ -235,3 +371,66 @@ class ShiftCapacityQueryBudgetTests(TestCase):
         # Una lettura per operatrici, turni e assenze: il numero di giorni non
         # entra nel conto.
         self.assertLessEqual(len(captured), 5, [q["sql"] for q in captured])
+
+
+class DepositIsNotCountedTwiceTests(TestCase):
+    """La caparra entra in cassa il giorno in cui arriva, e al checkout il
+    servizio viene fatturato per intero con l'anticipo detratto.
+
+    Sommando le due vendite, un servizio da 100 con 30 di caparra risultava un
+    fatturato di 130 e due scontrini invece di uno.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
+        )
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci"
+        )
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.operator,
+            start=timezone.now(), status="closed",
+            deposit_status="paid", deposit_amount=30,
+        )
+
+    def _deposit_sale(self):
+        return Sale.objects.create(
+            salon=self.salon, kind="pos", client=self.client_obj,
+            deposit_appointment=self.appointment, total=30,
+        )
+
+    def _checkout_sale(self):
+        return Sale.objects.create(
+            salon=self.salon, kind="checkout", client=self.client_obj,
+            appointment=self.appointment, total=100, deposit_deducted=30,
+        )
+
+    def test_the_same_hundred_euros_are_counted_once(self):
+        self._deposit_sale()
+        self._checkout_sale()
+        today = timezone.localdate()
+        result = kpis(self.salon, "month", today)
+        self.assertEqual(result["revenue"], 100)          # non 130
+        self.assertEqual(result["sales_count"], 1)        # un solo scontrino
+        self.assertEqual(result["avg_ticket"], 100)
+        self.assertEqual(result["deposit_cashed"], 30)
+        self.assertEqual(result["deposit_used"], 30)
+        self.assertEqual(result["cash_in"], 100)          # 30 + 70 entrati davvero
+
+    def test_a_deposit_alone_is_money_in_but_not_yet_revenue(self):
+        self._deposit_sale()
+        result = kpis(self.salon, "month", timezone.localdate())
+        self.assertEqual(result["revenue"], 0)
+        self.assertEqual(result["sales_count"], 0)
+        self.assertEqual(result["cash_in"], 30)
+
+    def test_the_revenue_chart_leaves_the_deposit_sale_out(self):
+        self._deposit_sale()
+        self._checkout_sale()
+        today = timezone.localdate()
+        series = revenue_series(self.salon, "month", "day", today)
+        of_today = [point for point in series if point["date"] == today]
+        self.assertEqual(len(of_today), 1)
+        self.assertEqual(of_today[0]["revenue"], 100)

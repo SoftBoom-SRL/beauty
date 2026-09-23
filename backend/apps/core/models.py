@@ -85,6 +85,11 @@ class SalonSettings(TimeStampedModel):
     # `deposit_reminder_minutes` (0 = nessun sollecito). Scelta del titolare.
     deposit_hold_minutes = models.PositiveSmallIntegerField(default=0)
     deposit_reminder_minutes = models.PositiveSmallIntegerField(default=0)
+    # Ritardo di sicurezza prima che un evento dell'agenda parta verso Yourang
+    # (0 = subito). In quei secondi l'evento resta trattenuto: se l'appuntamento
+    # viene corretto — o l'azione annullata con «torna indietro» — alla cliente
+    # arriva un messaggio solo, quello giusto. Vedi core.services.emit_event.
+    automation_delay_seconds = models.PositiveSmallIntegerField(default=30)
     # Motivazioni di annullamento / no-show personalizzate dal titolare
     # (lista di stringhe; vuota = quelle predefinite della dashboard).
     cancel_reasons = models.JSONField(default=list, blank=True)
@@ -156,10 +161,18 @@ class OutboxEvent(models.Model):
         SENDING = "sending"  # preso in carico da un worker
         SENT = "sent"
         FAILED = "failed"
+        # Sostituito da un evento successivo sullo stesso oggetto (o annullato
+        # con «torna indietro») mentre era ancora trattenuto dal ritardo: non
+        # verrà mai consegnato. Resta a database perché quando il titolare
+        # chiede «perché non è partito il messaggio?» la risposta si vede qui.
+        SUPERSEDED = "superseded"
 
     salon = models.ForeignKey(Salon, on_delete=models.CASCADE, related_name="outbox_events")
     event_type = models.CharField(max_length=60)  # es. appointment.created, client.otp
     payload = models.JSONField(default=dict, blank=True)
+    # Oggetto a cui l'evento si riferisce (es. "appointment:42"): due eventi con
+    # la stessa chiave ancora trattenuti si FONDONO invece di partire entrambi.
+    coalesce_key = models.CharField(max_length=80, blank=True, default="")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     attempts = models.PositiveSmallIntegerField(default=0)
     last_error = models.TextField(blank=True)
@@ -179,6 +192,7 @@ class OutboxEvent(models.Model):
         indexes = [
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["status", "next_attempt_at"]),
+            models.Index(fields=["salon", "coalesce_key", "status"]),
         ]
 
     def __str__(self):

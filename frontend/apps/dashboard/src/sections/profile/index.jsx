@@ -36,8 +36,11 @@ export default function ProfileSection() {
   const name = session?.user?.name || '';
   const initials = name.split(/\s+/).map((w) => w.charAt(0)).slice(0, 2).join('').toUpperCase() || '?';
   // fmtEur(0) says "Gratis" (price convention) — for KPI money we want "€0".
+  // Niente arrotondamento all'euro prima di formattare: con i centesimi a
+  // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
+  // cifra precisa e sbagliata.
   const eur = (n) => {
-    const v = Math.round(Number(n) || 0);
+    const v = Number(n) || 0;
     return v === 0 ? '€0' : fmtEur(v, lang);
   };
 

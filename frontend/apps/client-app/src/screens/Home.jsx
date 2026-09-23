@@ -157,8 +157,12 @@ function HomeLogged() {
                   style={{ fontSize: 13, fontWeight: 600, color: 'var(--muted)', textDecoration: 'underline', textUnderlineOffset: 3 }}>
                   {t('Annulla appuntamento', 'Cancel appointment')}
                 </button>
+                {/* La soglia è un'impostazione del salone, non un 24 scritto qui:
+                  * chi l'aveva alzata a 48 leggeva in app una promessa che la
+                  * cassa poi smentiva. Vedi `brand.cancelMinHours`. */}
                 <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
-                  {t('Sposti o annulli gratuitamente fino a 24h prima.', 'Reschedule or cancel free of charge up to 24h before.')}
+                  {t(`Sposti o annulli gratuitamente fino a ${brand.cancelMinHours}h prima.`,
+                    `Reschedule or cancel free of charge up to ${brand.cancelMinHours}h before.`)}
                 </div>
               </div>
             </div>

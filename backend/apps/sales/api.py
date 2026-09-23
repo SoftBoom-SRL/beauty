@@ -9,10 +9,10 @@ from decimal import Decimal
 from typing import Optional
 
 from django.apps import apps as django_apps
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Q, Sum
 from django.utils.dateparse import parse_date
-from ninja import Router
+from ninja import Query, Router
 from ninja.errors import HttpError
 
 from django.conf import settings as django_settings
@@ -24,7 +24,7 @@ from common.utils import salon_get
 from apps.core.services import emit_event, log_activity
 
 from . import stripe_service
-from .models import Sale, SaleLine
+from .models import Payment, Sale, SaleLine
 from .schemas import (
     ChargeNoShowOut,
     CheckoutIn,
@@ -40,7 +40,13 @@ from .schemas import (
     StripeConnectStatusOut,
     TodaySummaryOut,
 )
-from .services import finalize_sale, today_summary
+from .services import (
+    finalize_sale,
+    record_deposit_cashed,
+    record_no_show_charge,
+    settle_deposit_excess,
+    today_summary,
+)
 
 logger = logging.getLogger("youty.stripe")
 router = Router(tags=["sales"])
@@ -91,6 +97,7 @@ def _sale_out(sale: Sale) -> dict:
         "client_name": sale.client.full_name if sale.client_id else "",
         "location_id": sale.location_id,
         "total": sale.total,
+        "coupon_discount": sale.coupon_discount,
         "deposit_deducted": sale.deposit_deducted,
         "created_at": sale.created_at,
     }
@@ -123,47 +130,89 @@ def _breakdown(sale: Sale) -> list[dict]:
 # ---- Checkout e POS ----------------------------------------------------------
 
 
+def _close_deposit_link(appointment) -> None:
+    """Chiude il link della caparra a conto chiuso.
+
+    Il link restava pagabile anche dopo la cassa: caparra da 30 non pagata
+    online, cliente che salda 100 in salone e poi apre il link — il salone
+    incassava 130 per un conto da 100, senza rimborso né avviso. Un errore di
+    Stripe qui non deve far fallire un incasso già registrato.
+    """
+    try:
+        stripe_service.expire_deposit_checkout(appointment)
+    except Exception:  # noqa: BLE001 — il conto è chiuso, il link è un di più
+        logger.warning(
+            "Link caparra non chiuso dopo il checkout (appuntamento %s)",
+            appointment.id,
+            exc_info=True,
+        )
+
+
 @router.post("/checkout/{int:appointment_id}", auth=staff_auth, response=CheckoutOut)
 def checkout(request, appointment_id: int, data: CheckoutIn):
     ctx = request.auth
     require_scope(ctx, "sales")
     Appointment = django_apps.get_model("agenda", "Appointment")
-    appointment = salon_get(Appointment, ctx, appointment_id)
-    # Un appuntamento annullato o segnato come no-show non è stato erogato:
-    # incassarlo lo riporterebbe a «chiuso» e conterebbe nei ricavi un servizio
-    # che nessuno ha fatto. Il no-show si addebita con la sua funzione.
-    if appointment.status in ("cancelled", "no_show"):
-        raise HttpError(
-            400,
-            "Appuntamento annullato o segnato come no-show: non può essere incassato",
-        )
-    if Sale.objects.filter(appointment=appointment).exists():
-        raise HttpError(400, "Appuntamento già incassato")
-
-    # Non `deposit_amount`: quello che si detrae è la quota ancora in cassa,
-    # cioè al netto dei rimborsi già fatti su quella caparra.
-    deposit_deducted = appointment.deposit_credit
+    salon_get(Appointment, ctx, appointment_id)  # 404 fuori dal salone
     payload = data.dict()
-    try:
-        sale = finalize_sale(
-            ctx.salon,
-            kind=Sale.Kind.CHECKOUT,
-            blocks=payload["blocks"],
-            payments=payload["payments"],
-            client=appointment.client,
-            appointment=appointment,
-            location=appointment.location,
-            deposit_deducted=deposit_deducted,
-            actor=ctx.user,
-        )
-    except IntegrityError:
-        # Due checkout partiti insieme: il controllo qui sopra li lascia passare
-        # entrambi, il vincolo di unicità ne ferma uno. Senza questo ramo la
-        # cassiera vede un errore 500 invece del messaggio giusto.
-        raise HttpError(400, "Appuntamento già incassato")
 
-    appointment.status = "closed"
-    appointment.save()
+    with transaction.atomic():
+        # Rilettura sotto lock DENTRO la transazione della vendita: fra l'inizio
+        # della richiesta e adesso la cliente può aver pagato il link della
+        # caparra. Prima si decideva (e si salvava) sulla copia vecchia, e il
+        # save() pieno riportava `deposit_status` a «richiesta» azzerando il
+        # PaymentIntent: 30 € incassati su Stripe, non detratti e non più
+        # rimborsabili.
+        appointment = (
+            Appointment.objects.select_for_update()
+            .filter(pk=appointment_id, salon=ctx.salon)
+            .first()
+        )
+        if appointment is None:
+            raise HttpError(404, "Appuntamento non trovato")
+        # Un appuntamento annullato o segnato come no-show non è stato erogato:
+        # incassarlo lo riporterebbe a «chiuso» e conterebbe nei ricavi un servizio
+        # che nessuno ha fatto. Il no-show si addebita con la sua funzione.
+        if appointment.status in ("cancelled", "no_show"):
+            raise HttpError(
+                400,
+                "Appuntamento annullato o segnato come no-show: non può essere incassato",
+            )
+        if Sale.objects.filter(appointment=appointment).exists():
+            raise HttpError(400, "Appuntamento già incassato")
+
+        # Non `deposit_amount`: quello che si detrae è la quota ancora in cassa,
+        # cioè al netto dei rimborsi già fatti su quella caparra.
+        deposit_credit = appointment.deposit_credit
+        try:
+            sale = finalize_sale(
+                ctx.salon,
+                kind=Sale.Kind.CHECKOUT,
+                blocks=payload["blocks"],
+                payments=payload["payments"],
+                client=appointment.client,
+                appointment=appointment,
+                location=appointment.location,
+                deposit_deducted=deposit_credit,
+                coupon_code=payload["coupon_code"],
+                actor=ctx.user,
+            )
+        except IntegrityError:
+            # Due checkout partiti insieme: il controllo qui sopra li lascia passare
+            # entrambi, il vincolo di unicità ne ferma uno. Senza questo ramo la
+            # cassiera vede un errore 500 invece del messaggio giusto.
+            raise HttpError(400, "Appuntamento già incassato")
+
+        # Solo lo stato: ogni altra colonna resta quella scritta nel frattempo.
+        appointment.status = "closed"
+        appointment.save(update_fields=["status", "updated_at"])
+
+    # Da qui in poi si parla con Stripe: fuori dalla transazione, perché una
+    # rete lenta non deve tenere il lock sull'appuntamento.
+    _close_deposit_link(appointment)
+    # Caparra più alta del conto: `finalize_sale` ha detratto solo fino al
+    # totale, la differenza va restituita (prima il conto era impossibile).
+    settle_deposit_excess(appointment, deposit_credit - sale.deposit_deducted, actor=ctx.user)
 
     client = appointment.client
     service_names = [
@@ -203,6 +252,7 @@ def pos_sale(request, data: PosIn):
         blocks=payload["blocks"],
         payments=payload["payments"],
         client=client,
+        coupon_code=payload["coupon_code"],
         actor=ctx.user,
     )
     return _sale_detail(sale)
@@ -220,8 +270,10 @@ def list_sales(
     q: str = "",
     client_id: Optional[int] = None,
     operator_id: Optional[int] = None,
-    limit: int = 50,
-    offset: int = 0,
+    # Con limit/offset negativi lo slice del queryset esplodeva in 500: i limiti
+    # li mette lo schema, così la risposta è un 422 leggibile.
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
     """Storico vendite con KPI {revenue, count, items_count} sul filtro corrente."""
     ctx = request.auth
@@ -244,14 +296,20 @@ def list_sales(
 
     base = Sale.objects.filter(pk__in=qs.values("pk"))  # evita duplicati da join
     agg = base.aggregate(revenue=Sum("total"), count=Count("id"))
-    items_count = (
-        SaleLine.objects.filter(sale__in=base).aggregate(n=Sum("qty"))["n"] or 0
-    )
+    lines = SaleLine.objects.filter(sale__in=base)
+    revenue = agg["revenue"] or Decimal("0.00")
+    if operator_id:
+        # Filtrando per operatrice il fatturato è quello delle SUE righe: prima
+        # si sommavano le vendite intere, così di una vendita da 100 con 20 di
+        # Giulia e 80 di Anna a Giulia ne venivano attribuiti 100.
+        lines = lines.filter(operator_id=operator_id)
+        revenue = lines.aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
+    items_count = lines.aggregate(n=Sum("qty"))["n"] or 0
     items = base.select_related("client").order_by("-created_at")[offset : offset + limit]
     return {
         "count": agg["count"] or 0,
         "kpi": {
-            "revenue": (agg["revenue"] or Decimal("0.00")).quantize(Decimal("0.01")),
+            "revenue": revenue.quantize(Decimal("0.01")),
             "count": agg["count"] or 0,
             "items_count": items_count,
         },
@@ -261,11 +319,17 @@ def list_sales(
 
 @router.get("/today-summary", auth=staff_auth, response=TodaySummaryOut)
 def get_today_summary(request):
+    # Senza `require_scope`: è il riquadro incassi dell'agenda, che ogni
+    # operatrice vede aprendo la sua giornata. Sono totali di giornata, non lo
+    # scontrino di una cliente: il dettaglio, quello sì, chiede il permesso.
     return today_summary(request.auth.salon)
 
 
 @router.get("/{int:sale_id}", auth=staff_auth, response=SaleDetailOut)
 def sale_detail(request, sale_id: int):
+    # L'elenco chiede il permesso «vendite» e il dettaglio no: un'operatrice
+    # senza quel permesso si leggeva lo scontrino intero conoscendone l'id.
+    require_scope(request.auth, "sales")
     sale = salon_get(Sale, request.auth, sale_id)
     return _sale_detail(sale)
 
@@ -287,6 +351,9 @@ def charge_no_show(request, appointment_id: int):
     # ricalcolava qui il totale della visita, e con una caparra trattenuta la
     # carta veniva addebitata di 70 mentre risposta e registro dicevano 100.
     intent, amount = stripe_service.charge_full_amount(appointment)
+    # L'addebito è denaro davvero incassato: senza la vendita corrispondente un
+    # no-show da 80 € lasciava a zero il riepilogo di giornata e tutti i KPI.
+    record_no_show_charge(ctx.salon, appointment, amount=amount, actor=ctx.user)
     log_activity(
         ctx.salon,
         "sale.no_show_charged",
@@ -395,6 +462,32 @@ def stripe_connect_disconnect(request):
     return _connect_status(ctx.salon)
 
 
+def _account_recognised(appointment, account: str, metadata: dict) -> bool:
+    """L'evento arriva da un account Stripe che abbiamo usato noi per questo salone?
+
+    Serve a tenere fuori gli eventi di un salone collegato che dichiari nei
+    metadata l'id di un appuntamento altrui. Non basta però confrontare con
+    l'account ATTUALE: il PaymentIntent è nato sull'account di ALLORA, e
+    collegare o scollegare Stripe faceva scartare i pagamenti dei link già in
+    volo (`deposit.payment_ignored`), con lo slot liberato e i soldi fermi sulla
+    piattaforma. Per questo si accetta anche l'account firmato nei metadata al
+    momento della creazione (`acct`, vedi stripe_service.account_token): la
+    firma è nostra, quindi nessuno può dichiararne uno a piacere.
+    """
+    expected = stripe_service.salon_account_id(appointment.salon)
+    if (account or "") == (expected or ""):
+        return True
+    if stripe_service.account_token_matches(appointment.salon, metadata.get("acct") or "", account):
+        return True
+    log_activity(
+        appointment.salon,
+        "deposit.payment_ignored",
+        f"Evento Stripe da un account non riconosciuto — {appointment.client.full_name}",
+        payload={"appointment_id": appointment.id, "account": account or "", "expected": expected or ""},
+    )
+    return False
+
+
 def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> None:
     """payment_intent.succeeded: solo un intent di tipo `deposit` paga la caparra.
 
@@ -404,10 +497,10 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
     reinviare lo stesso evento) e solo se l'importo copre la caparra attesa.
 
     L'appuntamento viene cercato DENTRO il salone dichiarato nei metadata, e
-    l'account Connect che ha generato l'evento deve essere quello del salone:
-    senza questi due controlli un salone collegato poteva creare sul proprio
-    account un intent con l'id di un appuntamento altrui e farne risultare
-    pagata la caparra.
+    l'account Connect che ha generato l'evento deve essere uno di quelli usati
+    da noi per quel salone (vedi `_account_recognised`): senza questi due
+    controlli un salone collegato poteva creare sul proprio account un intent
+    con l'id di un appuntamento altrui e farne risultare pagata la caparra.
     """
     appointment_id = metadata.get("appointment_id")
     salon_id = metadata.get("salon_id")
@@ -420,14 +513,7 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
     appointment = qs.filter(pk=appointment_id).first()
     if appointment is None:
         return
-    expected_account = stripe_service.salon_account_id(appointment.salon)
-    if (account or "") != (expected_account or ""):
-        log_activity(
-            appointment.salon,
-            "deposit.payment_ignored",
-            f"Evento Stripe da un account non riconosciuto — {appointment.client.full_name}",
-            payload={"appointment_id": appointment.id, "account": account or "", "expected": expected_account or ""},
-        )
+    if not _account_recognised(appointment, account, metadata):
         return
     intent_id = obj.get("id") or ""
     kind = metadata.get("kind") or "deposit"
@@ -446,27 +532,16 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
         return
     if kind != "deposit":
         return
-    if appointment.deposit_status in ("paid", "refunding", "refunded", "forfeited"):
-        if intent_id and intent_id != appointment.deposit_payment_intent_id:
-            _refund_duplicate_deposit(appointment, intent_id, obj)
-        return  # già elaborato (o incasso doppio, appena restituito)
-    if appointment.status in ("cancelled", "no_show"):
-        # La cliente ha pagato dopo l'annullamento o dopo il rilascio automatico
-        # dello slot: il denaro è arrivato ma l'appuntamento non c'è più. Va
-        # restituito, non incassato in silenzio: si segna «da rimborsare» e si
-        # prova subito il rimborso (l'esito resta nel registro attività).
+
+    outcome = _apply_deposit_payment(appointment, intent_id, obj)
+
+    # Le chiamate a Stripe e gli eventi stanno FUORI dal lock: una rete lenta
+    # non deve tenere bloccato l'appuntamento (e quindi l'agenda).
+    if outcome == "duplicate":
+        _refund_duplicate_deposit(appointment, intent_id, obj)
+    elif outcome == "refund_due":
         from apps.agenda.services import settle_deposit_refund  # lazy
 
-        appointment.deposit_status = "refund_due"
-        appointment.deposit_payment_intent_id = intent_id
-        appointment.deposit_due_at = None
-        appointment.save(update_fields=["deposit_status", "deposit_payment_intent_id", "deposit_due_at", "updated_at"])
-        log_activity(
-            appointment.salon,
-            "deposit.paid_after_release",
-            f"Caparra pagata dopo l'annullamento, da restituire — {client_name}",
-            payload={"appointment_id": appointment.id, "payment_intent_id": intent_id, "amount": str(appointment.deposit_amount)},
-        )
         emit_event(
             appointment.salon,
             "deposit.paid_after_release",
@@ -480,53 +555,108 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
             },
         )
         settle_deposit_refund(appointment)
-        return
-    if appointment.deposit_status != "required":
-        log_activity(
+    elif outcome == "paid":
+        emit_event(
             appointment.salon,
-            "deposit.payment_ignored",
-            f"Pagamento caparra ricevuto ma non atteso ({appointment.deposit_status}) — {client_name}",
-            payload={"appointment_id": appointment.id, "payment_intent_id": intent_id},
-        )
-        return
-    expected = stripe_service._to_cents(appointment.deposit_amount or 0)
-    received = obj.get("amount_received", obj.get("amount"))
-    if received is not None and int(received) < expected:
-        log_activity(
-            appointment.salon,
-            "deposit.payment_mismatch",
-            f"Pagamento caparra insufficiente — {client_name}",
-            payload={
+            "deposit.paid",
+            {
                 "appointment_id": appointment.id,
-                "payment_intent_id": intent_id,
-                "expected_cents": expected,
-                "received_cents": int(received),
+                "client_id": appointment.client_id,
+                "client_name": client_name,
+                "phone": appointment.client.phone,
+                "lang": appointment.client.lang,
+                "amount": str(appointment.deposit_amount),
+                "start": appointment.start.isoformat(),
             },
         )
-        return
-    appointment.deposit_status = "paid"
-    appointment.deposit_payment_intent_id = intent_id
-    appointment.deposit_due_at = None  # caparra arrivata: niente più rilascio automatico
-    appointment.save(update_fields=["deposit_status", "deposit_payment_intent_id", "deposit_due_at", "updated_at"])
-    log_activity(
-        appointment.salon,
-        "deposit.paid",
-        f"Acconto pagato — {client_name}",
-        payload={"appointment_id": appointment.id, "payment_intent_id": intent_id},
-    )
-    emit_event(
-        appointment.salon,
-        "deposit.paid",
-        {
-            "appointment_id": appointment.id,
-            "client_id": appointment.client_id,
-            "client_name": client_name,
-            "phone": appointment.client.phone,
-            "lang": appointment.client.lang,
-            "amount": str(appointment.deposit_amount),
-            "start": appointment.start.isoformat(),
-        },
-    )
+
+
+def _apply_deposit_payment(appointment, intent_id: str, obj: dict) -> str:
+    """Applica il pagamento della caparra sotto lock; dice cosa è successo.
+
+    L'appuntamento viene RILETTO dentro la transazione: due consegne dello
+    stesso evento (Stripe le ripete) leggevano entrambe «richiesta» fuori da
+    ogni lock e scrivevano entrambe «pagata», e il secondo incasso restava in
+    cassa senza che nulla lo segnalasse. Qui si fanno solo scritture locali:
+    rimborsi ed eventi li fa il chiamante, a lock rilasciato.
+    """
+    Appointment = django_apps.get_model("agenda", "Appointment")
+    with transaction.atomic():
+        # La riga viene bloccata qui: una seconda consegna dello stesso evento
+        # aspetta, e quando entra rilegge lo stato già aggiornato.
+        if Appointment.objects.select_for_update().filter(pk=appointment.pk).first() is None:
+            return "gone"
+        appointment.refresh_from_db()
+        client_name = appointment.client.full_name
+        fields = ["deposit_status", "deposit_payment_intent_id", "deposit_due_at", "updated_at"]
+
+        if appointment.deposit_status in ("paid", "refunding", "refunded", "forfeited"):
+            if intent_id and intent_id != appointment.deposit_payment_intent_id:
+                return "duplicate"
+            return "known"  # già elaborato: nulla da fare
+        # Conto già chiuso o appuntamento non più in piedi: il denaro è arrivato
+        # ma non copre più niente. Sul conto chiuso la caparra non è stata
+        # detratta (era ancora «richiesta»), quindi il salone incasserebbe due
+        # volte lo stesso servizio. Si segna «da rimborsare» e si restituisce.
+        already_cashed = Sale.objects.filter(appointment=appointment).exists()
+        if appointment.status in ("cancelled", "no_show", "closed") or already_cashed:
+            appointment.deposit_status = "refund_due"
+            appointment.deposit_payment_intent_id = intent_id
+            appointment.deposit_due_at = None
+            appointment.save(update_fields=fields)
+            log_activity(
+                appointment.salon,
+                "deposit.paid_after_release",
+                (
+                    "Caparra pagata a conto già chiuso, da restituire"
+                    if appointment.status == "closed" or already_cashed
+                    else "Caparra pagata dopo l'annullamento, da restituire"
+                )
+                + f" — {client_name}",
+                payload={
+                    "appointment_id": appointment.id,
+                    "payment_intent_id": intent_id,
+                    "amount": str(appointment.deposit_amount),
+                },
+            )
+            return "refund_due"
+        if appointment.deposit_status != "required":
+            log_activity(
+                appointment.salon,
+                "deposit.payment_ignored",
+                f"Pagamento caparra ricevuto ma non atteso ({appointment.deposit_status}) — {client_name}",
+                payload={"appointment_id": appointment.id, "payment_intent_id": intent_id},
+            )
+            return "ignored"
+        expected = stripe_service._to_cents(appointment.deposit_amount or 0)
+        received = obj.get("amount_received", obj.get("amount"))
+        if received is not None and int(received) < expected:
+            log_activity(
+                appointment.salon,
+                "deposit.payment_mismatch",
+                f"Pagamento caparra insufficiente — {client_name}",
+                payload={
+                    "appointment_id": appointment.id,
+                    "payment_intent_id": intent_id,
+                    "expected_cents": expected,
+                    "received_cents": int(received),
+                },
+            )
+            return "mismatch"
+        appointment.deposit_status = "paid"
+        appointment.deposit_payment_intent_id = intent_id
+        appointment.deposit_due_at = None  # caparra arrivata: niente più rilascio automatico
+        appointment.save(update_fields=fields)
+        log_activity(
+            appointment.salon,
+            "deposit.paid",
+            f"Acconto pagato — {client_name}",
+            payload={"appointment_id": appointment.id, "payment_intent_id": intent_id},
+        )
+        # La caparra è incasso del giorno in cui arriva: al checkout verrà
+        # detratta da quanto resta da pagare, quindi non si conta due volte.
+        record_deposit_cashed(appointment.salon, appointment, method=Payment.Method.CARD)
+        return "paid"
 
 
 def _refund_duplicate_deposit(appointment, intent_id: str, obj: dict) -> None:

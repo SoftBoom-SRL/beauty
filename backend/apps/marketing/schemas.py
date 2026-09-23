@@ -93,6 +93,8 @@ class GiftCardKpiOut(Schema):
 
 class GiftCardListOut(Schema):
     kpi: GiftCardKpiOut
+    # Quante carte corrispondono al filtro: `items` è una pagina, i KPI no.
+    total: int = 0
     items: list[GiftCardOut]
 
 
@@ -138,7 +140,10 @@ class LoyaltyProgramOut(Schema):
 
     @staticmethod
     def resolve_accounts_count(obj):
-        return obj.accounts.count()
+        # L'elenco annota il conteggio nella query principale; quando manca
+        # (creazione/modifica del singolo programma) si ricade sul COUNT.
+        annotated = getattr(obj, "accounts_count", None)
+        return annotated if annotated is not None else obj.accounts.count()
 
 
 class LoyaltyAccountOut(Schema):
@@ -248,3 +253,9 @@ class WalletOut(Schema):
 class ClientGiftCardIn(Schema):
     value: Decimal
     recipient_name: str = ""
+
+
+class MarketingConsentIn(Schema):
+    """True = do il consenso, False = lo revoco (GDPR art. 7.3)."""
+
+    accepted: bool

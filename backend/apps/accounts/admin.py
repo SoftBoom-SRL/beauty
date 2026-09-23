@@ -4,7 +4,7 @@ from django.contrib.auth.models import Group
 from unfold.admin import ModelAdmin
 from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
 
-from .models import ClientOTP, Invitation, Membership, Role, User
+from .models import ClientOTP, Invitation, Membership, Role, StaffRefreshToken, User
 
 # Group nativo: re-registra con lo stile unfold
 admin.site.unregister(Group)
@@ -62,6 +62,18 @@ class InvitationAdmin(ModelAdmin):
     list_filter = ("salon", "status")
     search_fields = ("email",)
     readonly_fields = ("token", "created_at")
+
+
+@admin.register(StaffRefreshToken)
+class StaffRefreshTokenAdmin(ModelAdmin):
+    """Sessioni staff aperte. Serve per rispondere a «disconnetti quel
+    dispositivo» senza aspettare i trenta giorni di scadenza del refresh."""
+
+    list_display = ("user", "salon", "created_at", "expires_at", "revoked_at")
+    list_filter = ("salon", "rotated")
+    search_fields = ("user__email",)
+    # Il jti è il segreto che identifica la sessione: si guarda, non si scrive.
+    readonly_fields = ("user", "salon", "jti", "created_at", "expires_at", "rotated")
 
 
 @admin.register(ClientOTP)

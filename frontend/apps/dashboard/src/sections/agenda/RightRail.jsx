@@ -1,7 +1,7 @@
 // RightRail — cash-up (sales/today-summary), «da richiamare» (slot liberati per
 // caparra non pagata), AI opportunities placeholder, waitlist top-3
 import React from 'react';
-import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel } from '@youty/shared';
+import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel, toDateStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { fmtMoney, initialsOf, prefLabel, firstName } from './lib.js';
 
@@ -120,7 +120,7 @@ function ReleasedRail({ t, lang, released, canWrite, onRestore, onRebook, onOpen
                 <button onClick={() => onOpenAppt && onOpenAppt(a)} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.client?.full_name}</div>
                   <div className="t-sm tabnum" style={{ color: 'var(--muted)', fontSize: 11.5 }}>
-                    {fmtDateIt(String(a.start).slice(0, 10), { weekday: false })} · {timeLabel(minutesOfDay(a.start))} · {(a.items || []).map((i) => i.service_name).join(' + ')}
+                    {fmtDateIt(toDateStr(a.start), { weekday: false })} · {timeLabel(minutesOfDay(a.start))} · {(a.items || []).map((i) => i.service_name).join(' + ')}
                   </div>
                 </button>
                 {a.client?.phone && (

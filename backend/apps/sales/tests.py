@@ -403,6 +403,8 @@ class StripeWebhookTests(TestCase):
             start=timezone.now() + timezone.timedelta(days=2),
             deposit_status="required",
             deposit_amount=Decimal("15.00"),
+            # Caparra con scadenza in corso: il pagamento deve spegnerla.
+            deposit_due_at=timezone.now() + timezone.timedelta(minutes=30),
         )
 
     def _event(self, kind, amount=1500, intent="pi_1"):
@@ -453,6 +455,9 @@ class StripeWebhookTests(TestCase):
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_status, "paid")
         self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_1")
+        # Caparra arrivata: niente più conto alla rovescia in dashboard, e
+        # nessun rilascio automatico del posto.
+        self.assertIsNone(self.appointment.deposit_due_at)
         # Stripe può reinviare lo stesso evento: nessun doppio log
         self.assertEqual(self._post(self._event("deposit")).status_code, 200)
         self.assertEqual(ActivityLog.objects.filter(salon=self.salon, type="deposit.paid").count(), 1)
@@ -515,8 +520,11 @@ class ChargeNoShowTests(TestCase):
         self.assertEqual(amount, Decimal("50.00"))
         self.assertEqual(caught.exception.status_code, 409)
         create.assert_called_once()
+        # La carta entra nella chiave: un addebito rifiutato non deve bruciare
+        # per 24 h il ritentativo con un'altra carta.
         self.assertEqual(
-            create.call_args.kwargs["idempotency_key"], f"no-show-{self.salon.id}-{self.appointment.id}"
+            create.call_args.kwargs["idempotency_key"],
+            f"no-show-{self.salon.id}-{self.appointment.id}-pm_1",
         )
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.no_show_payment_intent_id, "pi_ns_1")
@@ -1012,3 +1020,550 @@ class NoShowAmountTests(TestCase):
         self.assertEqual(Decimal(response.json()["amount"]), Decimal("70.00"))
         logged = ActivityLog.objects.get(salon=self.salon, type="sale.no_show_charged")
         self.assertEqual(Decimal(logged.payload["amount"]), Decimal("70.00"))
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test")
+    def test_a_partly_refunded_deposit_no_longer_covers_the_whole_charge(self):
+        """Con 10 € già restituiti su 30, in cassa ne restano 20: l'addebito
+        deve scendere di 20, non di 30, altrimenti il salone ci perde 10."""
+        from . import stripe_service
+
+        self.appointment.deposit_refunded_amount = Decimal("10.00")
+        self.appointment.save(update_fields=["deposit_refunded_amount"])
+        self.assertEqual(
+            stripe_service.no_show_charge_amount(self.appointment), Decimal("80.00")
+        )
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test")
+    def test_the_no_show_charge_becomes_money_in_the_till(self):
+        """Prima restava solo una riga nel registro: riepilogo e KPI a zero."""
+        from apps.accounts.models import Membership, User
+
+        user = User.objects.create_user(email="ada@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        token = create_staff_tokens(user, self.salon)["access"]
+        with patch("stripe.PaymentIntent.create", return_value={"id": "pi_ns"}):
+            response = self.client.post(
+                f"/api/sales/appointments/{self.appointment.id}/charge-no-show",
+                "{}",
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        sale = Sale.objects.get(appointment=self.appointment)
+        self.assertEqual(sale.total, Decimal("70.00"))
+        self.assertEqual(sale.payments.get().method, "card")
+        self.assertEqual(today_summary(self.salon)["cash_in"], Decimal("70.00"))
+
+
+class CheckoutApiTests(TestCase):
+    """I controlli del checkout, dall'HTTP: erano senza un solo test.
+
+    Caparra detratta al netto dei rimborsi, secondo incasso rifiutato,
+    appuntamento annullato rifiutato, caparra più alta del conto.
+    """
+
+    def setUp(self):
+        from django.utils import timezone
+
+        from apps.accounts.models import Membership, Role, User
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.staff.models import Operator
+
+        self.Appointment = Appointment
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        self.operator = Operator.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Bianchi"
+        )
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Colore")
+        self.service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Colore",
+            duration_min=60, price=Decimal("100.00"),
+        )
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.operator,
+            start=timezone.now() + timezone.timedelta(days=1),
+        )
+        AppointmentService.objects.create(
+            appointment=self.appointment, service=self.service, operator=self.operator,
+            duration_min=60, price=Decimal("100.00"),
+        )
+
+    def _deposit(self, amount, *, refunded="0.00", status="paid", intent=""):
+        self.appointment.deposit_amount = Decimal(amount)
+        self.appointment.deposit_refunded_amount = Decimal(refunded)
+        self.appointment.deposit_status = status
+        self.appointment.deposit_payment_intent_id = intent
+        self.appointment.save()
+
+    def _checkout(self, price="100.00", paid="100.00", method="cash"):
+        import json
+
+        payments = [] if Decimal(paid) == 0 else [{"method": method, "amount": paid}]
+        body = {
+            "blocks": [
+                {
+                    "operator_id": self.operator.id,
+                    "lines": [
+                        {
+                            "line_type": "service",
+                            "service_id": self.service.id,
+                            "qty": 1,
+                            "unit_price": price,
+                        }
+                    ],
+                }
+            ],
+            "payments": payments,
+        }
+        return self.client.post(
+            f"/api/sales/checkout/{self.appointment.id}",
+            json.dumps(body),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_the_deposit_is_deducted_net_of_what_was_refunded(self):
+        """30 di caparra con 10 già restituiti: se ne detraggono 20, non 30."""
+        self._deposit("30.00", refunded="10.00")
+        response = self._checkout(paid="80.00")
+        self.assertEqual(response.status_code, 200, response.content)
+        sale = Sale.objects.get(appointment=self.appointment)
+        self.assertEqual(sale.total, Decimal("100.00"))
+        self.assertEqual(sale.deposit_deducted, Decimal("20.00"))
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, "closed")
+        # la quota già restituita non può essere detratta di nuovo
+        self.assertEqual(self._checkout(paid="80.00").status_code, 400)
+
+    def test_paying_the_whole_bill_without_the_deposit_is_refused(self):
+        self._deposit("30.00")
+        response = self._checkout(paid="100.00")
+        self.assertEqual(response.status_code, 422, response.content)
+        self.assertFalse(Sale.objects.filter(appointment=self.appointment).exists())
+
+    def test_a_second_checkout_is_refused(self):
+        self.assertEqual(self._checkout().status_code, 200)
+        response = self._checkout()
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(Sale.objects.filter(appointment=self.appointment).count(), 1)
+
+    def test_a_cancelled_or_no_show_appointment_cannot_be_cashed(self):
+        for status in ("cancelled", "no_show"):
+            self.appointment.status = status
+            self.appointment.save(update_fields=["status"])
+            response = self._checkout()
+            self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(Sale.objects.count(), 0)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test")
+    def test_a_deposit_bigger_than_the_bill_is_capped_and_given_back(self):
+        """Servizio ridotto dopo la prenotazione: prima il conto era impossibile
+        da chiudere (dovuto negativo → 422 per sempre)."""
+        self._deposit("50.00", intent="pi_dep")
+        with patch(
+            "stripe.Refund.create", return_value={"id": "re_x", "amount": 3000, "status": "succeeded"}
+        ) as refund:
+            response = self._checkout(price="20.00", paid="0")
+        self.assertEqual(response.status_code, 200, response.content)
+        sale = Sale.objects.get(appointment=self.appointment)
+        self.assertEqual(sale.total, Decimal("20.00"))
+        self.assertEqual(sale.deposit_deducted, Decimal("20.00"))
+        # i 30 di troppo tornano alla cliente, non restano in cassa
+        self.assertEqual(refund.call_args.kwargs["amount"], 3000)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_refunded_amount, Decimal("30.00"))
+        self.assertEqual(self.appointment.deposit_status, "paid")
+
+    def test_an_excess_that_stripe_cannot_return_is_written_down(self):
+        self._deposit("50.00")  # caparra incassata in salone: nessun intent
+        response = self._checkout(price="20.00", paid="0")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(
+            ActivityLog.objects.filter(
+                salon=self.salon, type="deposit.excess_refund_due"
+            ).exists()
+        )
+
+    def test_the_checkout_does_not_overwrite_a_deposit_paid_meanwhile(self):
+        """La cliente paga il link mentre la cassiera chiude il conto: il salvataggio
+        finale riportava la caparra a «richiesta» e cancellava il PaymentIntent."""
+        from apps.sales.api import finalize_sale as real_finalize
+
+        def _paid_meanwhile(*args, **kwargs):
+            self.Appointment.objects.filter(pk=self.appointment.pk).update(
+                deposit_status="paid", deposit_payment_intent_id="pi_late"
+            )
+            return real_finalize(*args, **kwargs)
+
+        with patch("apps.sales.api.finalize_sale", side_effect=_paid_meanwhile):
+            response = self._checkout()
+        self.assertEqual(response.status_code, 200, response.content)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, "closed")
+        self.assertEqual(self.appointment.deposit_status, "paid")
+        self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_late")
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test")
+    def test_closing_the_bill_closes_the_payment_link(self):
+        """Il link restava pagabile a conto chiuso: 100 in salone + 30 sul link."""
+        from . import stripe_service
+
+        self.appointment.deposit_status = "required"
+        self.appointment.deposit_amount = Decimal("30.00")
+        self.appointment.deposit_checkout_session_id = "cs_1"
+        self.appointment.save()
+        with patch.object(stripe_service, "expire_deposit_checkout") as expire:
+            self.assertEqual(self._checkout().status_code, 200)
+        expire.assert_called_once()
+
+    def test_the_sale_detail_asks_for_the_sales_permission(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.assertEqual(self._checkout().status_code, 200)
+        sale = Sale.objects.get(appointment=self.appointment)
+        other = User.objects.create_user(email="nina@theparlour.it", password="theparlour")
+        role = Role.objects.create(salon=self.salon, name="Sala", scopes=["agenda"])
+        Membership.objects.create(user=other, salon=self.salon, role=role)
+        token = create_staff_tokens(other, self.salon)["access"]
+        response = self.client.get(
+            f"/api/sales/{sale.id}", HTTP_AUTHORIZATION=f"Bearer {token}"
+        )
+        self.assertEqual(response.status_code, 403, response.content)
+
+    def test_a_negative_page_is_refused_not_a_500(self):
+        response = self.client.get("/api/sales/?limit=-1", **self.auth)
+        self.assertEqual(response.status_code, 422, response.content)
+
+    def test_filtering_by_operator_counts_only_her_lines(self):
+        """Una vendita da 100 con 20 di Giulia le veniva attribuita per intero."""
+        import json
+
+        from apps.staff.models import Operator
+
+        anna = Operator.objects.create(salon=self.salon, first_name="Anna", last_name="Neri")
+        body = {
+            "blocks": [
+                {"operator_id": self.operator.id, "lines": [
+                    {"line_type": "service", "service_id": self.service.id, "qty": 1, "unit_price": "20.00"}]},
+                {"operator_id": anna.id, "lines": [
+                    {"line_type": "service", "service_id": self.service.id, "qty": 1, "unit_price": "80.00"}]},
+            ],
+            "payments": [{"method": "cash", "amount": "100.00"}],
+        }
+        response = self.client.post(
+            f"/api/sales/checkout/{self.appointment.id}", json.dumps(body),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        listed = self.client.get(f"/api/sales/?operator_id={self.operator.id}", **self.auth)
+        self.assertEqual(listed.json()["kpi"]["revenue"], "20.00")
+
+
+class DepositIsCashOfItsOwnDayTests(TestCase):
+    """La caparra si conta il giorno in cui arriva, non quello del conto finale."""
+
+    def setUp(self):
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=operator,
+            start=timezone.now() + timezone.timedelta(days=2),
+            deposit_status="required", deposit_amount=Decimal("30.00"),
+        )
+        self.metadata = {
+            "appointment_id": str(self.appointment.id),
+            "salon_id": str(self.salon.id),
+            "kind": "deposit",
+        }
+
+    def test_the_deposit_paid_online_enters_the_till_that_day(self):
+        from .api import _payment_intent_succeeded
+
+        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        sale = Sale.objects.get(deposit_appointment=self.appointment)
+        self.assertEqual(sale.total, Decimal("30.00"))
+        self.assertEqual(sale.payments.get().method, "card")
+        summary = today_summary(self.salon)
+        self.assertEqual(summary["cash_in"], Decimal("30.00"))
+        # È un anticipo, non un conto: denaro in cassa, ma niente venduto e
+        # nessuno scontrino in più nel riepilogo.
+        self.assertEqual(summary["deposit_cashed"], Decimal("30.00"))
+        self.assertEqual(summary["total"], Decimal("0.00"))
+        self.assertEqual(summary["count"], 0)
+        # lo stesso evento ripetuto non incassa due volte
+        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        self.assertEqual(Sale.objects.filter(deposit_appointment=self.appointment).count(), 1)
+
+    def test_the_same_money_is_not_counted_twice_at_the_checkout(self):
+        from .api import _payment_intent_succeeded
+
+        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        self.appointment.refresh_from_db()
+        with patch(PATCH_LOYALTY):
+            finalize_sale(
+                self.salon, kind=Sale.Kind.CHECKOUT, client=self.client_obj,
+                appointment=self.appointment,
+                blocks=[{"operator_id": None, "lines": [
+                    {"line_type": "service", "qty": 1, "unit_price": Decimal("100.00")}]}],
+                payments=[{"method": "cash", "amount": Decimal("70.00")}],
+                deposit_deducted=self.appointment.deposit_credit,
+            )
+        summary = today_summary(self.salon)
+        self.assertEqual(summary["deposit_used"], Decimal("30.00"))
+        # 30 di caparra + 70 saldati: cento euro, contati una volta sola
+        self.assertEqual(summary["cash_in"], Decimal("100.00"))
+        # e il venduto è il conto, non conto + anticipo
+        self.assertEqual(summary["total"], Decimal("100.00"))
+        self.assertEqual(summary["count"], 1)
+
+    def test_paying_the_link_after_the_bill_is_given_back(self):
+        """Caparra pagata a conto già chiuso: prima diventava semplicemente
+        «pagata» e il salone teneva 130 € per un conto da 100."""
+        from .api import _payment_intent_succeeded
+
+        self.appointment.status = "closed"
+        self.appointment.save(update_fields=["status"])
+        Sale.objects.create(
+            salon=self.salon, kind=Sale.Kind.CHECKOUT, appointment=self.appointment,
+            client=self.client_obj, total=Decimal("100.00"),
+        )
+        _payment_intent_succeeded({"id": "pi_late", "amount_received": 3000}, self.metadata)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_status, "refund_due")
+        self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_late")
+        self.assertFalse(Sale.objects.filter(deposit_appointment=self.appointment).exists())
+
+    def test_a_payment_from_the_account_of_its_own_link_is_accepted(self):
+        """Il titolare collega Stripe mentre un link è in volo: l'evento nasce
+        sull'account di prima e veniva scartato con i soldi già incassati."""
+        from apps.core.models import SalonSettings
+
+        from . import stripe_service
+        from .api import _payment_intent_succeeded
+
+        token = stripe_service.account_token(self.salon)  # nessun account: piattaforma
+        SalonSettings.objects.update_or_create(
+            salon=self.salon, defaults={"stripe_account_id": "acct_nuovo"}
+        )
+        self.salon.refresh_from_db()
+        _payment_intent_succeeded(
+            {"id": "pi_1", "amount_received": 3000}, {**self.metadata, "acct": token}, ""
+        )
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_status, "paid")
+
+    def test_an_event_from_an_unknown_account_is_still_ignored(self):
+        from .api import _payment_intent_succeeded
+
+        _payment_intent_succeeded(
+            {"id": "pi_1", "amount_received": 3000},
+            {**self.metadata, "acct": "firma-inventata"},
+            "acct_estraneo",
+        )
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_status, "required")
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.payment_ignored").exists()
+        )
+
+
+class GiftCardQuantityTests(TestCase):
+    """qty>1 su una riga gift card: una riga per carta."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+
+    def test_three_cards_are_three_lines_each_linked_to_its_card(self):
+        """Prima ne restava collegata solo l'ultima: le altre due, incassate poi
+        da Fedeltà, creavano vendite per denaro già entrato qui."""
+        from apps.marketing.models import GiftCard
+
+        cards = [
+            GiftCard.objects.create(
+                salon=self.salon, code=f"GC-000{n}",
+                initial_value=Decimal("50.00"), balance=Decimal("50.00"),
+            )
+            for n in range(3)
+        ]
+        with patch(PATCH_LOYALTY), patch(PATCH_CREATE_GC, side_effect=cards) as create_gc:
+            sale = finalize_sale(
+                self.salon, kind=Sale.Kind.POS, client=self.client_obj,
+                blocks=[{"operator_id": None, "lines": [
+                    {"line_type": "gift_card", "value": Decimal("50.00"), "qty": 3}]}],
+                payments=[{"method": "cash", "amount": Decimal("150.00")}],
+            )
+        self.assertEqual(sale.total, Decimal("150.00"))
+        self.assertEqual(create_gc.call_count, 3)
+        lines = list(sale.lines.all())
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([l.qty for l in lines], [1, 1, 1])
+        self.assertEqual(
+            sorted(l.gift_card_id for l in lines), sorted(c.id for c in cards)
+        )
+
+
+class CouponAtTheTillTests(TestCase):
+    """Il buono sconto vale in cassa.
+
+    `validate_coupon` esisteva e non la chiamava nessuno: il programma fedeltà
+    emetteva buoni che la cassiera poteva solo scontare a mano — o rifiutare
+    davanti alla cliente.
+    """
+
+    def setUp(self):
+        from apps.marketing.models import Coupon
+
+        self.Coupon = Coupon
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+
+    def _coupon(self, kind="percent", value="20.00", client=None, code="SCONTO20", **extra):
+        return self.Coupon.objects.create(
+            salon=self.salon, code=code, kind=kind, value=Decimal(value), client=client, **extra
+        )
+
+    def _sale(self, *, coupon_code="", paid="100.00", client=None, lines=None):
+        # client=None → la cliente della scheda; client=False → vendita anonima.
+        with patch(PATCH_LOYALTY):
+            return finalize_sale(
+                self.salon,
+                kind=Sale.Kind.POS,
+                client=self.client_obj if client is None else (client or None),
+                blocks=[{"operator_id": None, "lines": lines or [
+                    {"line_type": "service", "qty": 1, "unit_price": Decimal("100.00")}]}],
+                payments=[{"method": "cash", "amount": Decimal(paid)}] if Decimal(paid) else [],
+                coupon_code=coupon_code,
+            )
+
+    def test_without_a_code_nothing_changes(self):
+        sale = self._sale()
+        self.assertEqual(sale.total, Decimal("100.00"))
+        self.assertEqual(sale.coupon_discount, Decimal("0.00"))
+
+    def test_a_percent_coupon_discounts_the_bill_and_is_burnt(self):
+        coupon = self._coupon()
+        sale = self._sale(coupon_code="sconto20", paid="80.00")  # anche in minuscolo
+        self.assertEqual(sale.total, Decimal("80.00"))
+        self.assertEqual(sale.coupon_discount, Decimal("20.00"))
+        coupon.refresh_from_db()
+        self.assertEqual(coupon.status, self.Coupon.Status.REDEEMED)
+        self.assertEqual(coupon.sale_id, sale.id)
+        self.assertIsNotNone(coupon.redeemed_at)
+
+    def test_the_payments_must_match_the_discounted_bill(self):
+        self._coupon()
+        with self.assertRaises(HttpError) as caught:
+            self._sale(coupon_code="SCONTO20", paid="100.00")
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertFalse(Sale.objects.exists())
+
+    def test_a_coupon_worth_more_than_the_bill_does_not_open_the_cash_drawer(self):
+        """Buono da 150 € su un conto da 100: sconta 100, non restituisce 50."""
+        self._coupon(kind="amount", value="150.00", code="REGALO50")
+        sale = self._sale(coupon_code="REGALO50", paid="0")
+        self.assertEqual(sale.total, Decimal("0.00"))
+        self.assertEqual(sale.coupon_discount, Decimal("100.00"))
+
+    def test_a_coupon_already_used_is_refused_and_the_sale_does_not_exist(self):
+        self._coupon(status=self.Coupon.Status.REDEEMED)
+        with self.assertRaises(HttpError) as caught:
+            self._sale(coupon_code="SCONTO20", paid="80.00")
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertFalse(Sale.objects.exists())
+
+    def test_a_coupon_of_somebody_else_is_refused_on_an_anonymous_sale(self):
+        """Il buono intestato vale solo per la sua cliente: al banco, senza
+        scheda collegata, chiunque ne conoscesse il codice lo userebbe."""
+        self._coupon(client=self.client_obj)
+        with self.assertRaises(HttpError) as caught:
+            self._sale(coupon_code="SCONTO20", paid="80.00", client=False)
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertFalse(Sale.objects.exists())
+        self.assertEqual(self.Coupon.objects.get().status, self.Coupon.Status.ACTIVE)
+
+    def test_an_expired_coupon_is_refused(self):
+        from django.utils import timezone
+
+        self._coupon(expires_at=timezone.now() - timezone.timedelta(days=1))
+        with self.assertRaises(HttpError) as caught:
+            self._sale(coupon_code="SCONTO20", paid="80.00")
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertFalse(Sale.objects.exists())
+
+    def test_a_gift_card_cannot_be_bought_at_a_discount(self):
+        """Scontare una carta da 100 incassandone 80 regala la differenza: è la
+        stessa ragione per cui lo sconto di riga sulle gift card è rifiutato."""
+        self._coupon()
+        with self.assertRaises(HttpError) as caught:
+            self._sale(
+                coupon_code="SCONTO20", paid="80.00",
+                lines=[{"line_type": "gift_card", "value": Decimal("100.00"), "qty": 1}],
+            )
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertFalse(Sale.objects.exists())
+
+    def test_the_discount_comes_off_before_the_deposit(self):
+        """100 di conto, 20 di buono, 30 di caparra: al banco restano 50."""
+        self._coupon()
+        with patch(PATCH_LOYALTY):
+            sale = finalize_sale(
+                self.salon, kind=Sale.Kind.CHECKOUT, client=self.client_obj,
+                blocks=[{"operator_id": None, "lines": [
+                    {"line_type": "service", "qty": 1, "unit_price": Decimal("100.00")}]}],
+                payments=[{"method": "cash", "amount": Decimal("50.00")}],
+                deposit_deducted=Decimal("30.00"),
+                coupon_code="SCONTO20",
+            )
+        self.assertEqual(sale.total, Decimal("80.00"))
+        self.assertEqual(sale.deposit_deducted, Decimal("30.00"))
+
+    def test_the_till_endpoint_accepts_the_code(self):
+        """Dall'HTTP, come la usa la cassiera."""
+        import json
+
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="cassa@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        coupon = self._coupon(kind="amount", value="15.00", code="MENO15")
+        body = {
+            "blocks": [{"operator_id": None, "lines": [
+                {"line_type": "service", "qty": 1, "unit_price": "100.00"}]}],
+            "payments": [{"method": "cash", "amount": "85.00"}],
+            "coupon_code": "MENO15",
+            "client_id": self.client_obj.id,
+        }
+        with patch(PATCH_LOYALTY):
+            res = self.client.post(
+                "/api/sales/pos", json.dumps(body), content_type="application/json", **auth
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["total"], "85.00")
+        self.assertEqual(res.json()["coupon_discount"], "15.00")
+        coupon.refresh_from_db()
+        self.assertEqual(coupon.status, self.Coupon.Status.REDEEMED)

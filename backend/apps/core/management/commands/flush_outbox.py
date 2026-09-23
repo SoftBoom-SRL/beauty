@@ -71,15 +71,20 @@ def _redacted(payload):
 
 
 def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
-    """Cancella gli eventi consegnati più vecchi di `days` giorni.
+    """Cancella gli eventi consegnati (o sostituiti) più vecchi di `days` giorni.
 
     Restavano per sempre, con dentro numeri di telefono e nomi delle clienti.
     Quelli falliti non si toccano: servono a capire cosa è andato storto.
+    I `superseded` — mai partiti perché fusi con un evento successivo o
+    annullati con «torna indietro» — hanno gli stessi dati dentro e seguono la
+    stessa sorte, contati dalla data di creazione visto che non sono mai stati
+    consegnati.
     """
     now = now or timezone.now()
+    cutoff = now - timezone.timedelta(days=days)
     deleted, _ = OutboxEvent.objects.filter(
-        status=OutboxEvent.Status.SENT,
-        sent_at__lt=now - timezone.timedelta(days=days),
+        Q(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
+        | Q(status=OutboxEvent.Status.SUPERSEDED, created_at__lt=cutoff)
     ).delete()
     return deleted
 
@@ -153,12 +158,19 @@ def deliver_event(event: OutboxEvent, *, client: httpx.Client | None = None) -> 
             client.close()
 
 
-def _claim(event: OutboxEvent, now) -> bool:
+def _claim(event: OutboxEvent) -> bool:
     """Prende in carico l'evento con un UPDATE condizionale.
 
     Ritorna False se un altro worker è arrivato prima: è questo a impedire che
     la stessa cliente riceva due volte lo stesso messaggio.
+
+    `claimed_at` è l'istante REALE della presa in carico, non quello di inizio
+    giro: con 200 eventi da consegnare, l'ultimo risultava preso in carico
+    minuti prima di quando è partito davvero e il giro successivo lo
+    considerava abbandonato mentre era ancora in volo — la cliente riceveva due
+    volte lo stesso OTP.
     """
+    now = timezone.now()
     claimed = OutboxEvent.objects.filter(
         pk=event.pk, status=OutboxEvent.Status.PENDING
     ).update(status=OutboxEvent.Status.SENDING, claimed_at=now)
@@ -190,7 +202,7 @@ def flush_pending(limit: int = 200) -> tuple[int, int]:
     sent = failed = 0
     with httpx.Client(timeout=TIMEOUT) as client:
         for event in pending:
-            if not _claim(event, now):
+            if not _claim(event):
                 continue
             if deliver_event(event, client=client):
                 sent += 1

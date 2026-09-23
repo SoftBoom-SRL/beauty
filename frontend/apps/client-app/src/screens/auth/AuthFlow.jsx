@@ -1,5 +1,6 @@
 // AuthFlow.jsx — client login: phone → OTP (via SMS) → session.
-// Unknown number (404) → inline registration form → OTP.
+// La registrazione è un'azione della schermata del codice, non una conseguenza
+// della risposta del server: vedi `sendOtp`.
 import React, { useState } from 'react';
 import { ApiError, Icon, PhoneInput, clientAuth, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../../ctx.jsx';
@@ -7,12 +8,18 @@ import { headFont } from '../../theme.js';
 
 export default function AuthFlow({ onClose }) {
   const { t, lang, setLang, brand } = useApp();
-  const [step, setStep] = useState('phone'); // phone | register | otp
+  const [step, setStep] = useState('phone'); // phone | register | otp | blocked
   const [phone, setPhone] = useState('');
   const [reg, setReg] = useState({ first_name: '', last_name: '', email: '' });
   const [code, setCode] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Numero per cui la registrazione è riuscita: solo lì sappiamo che un codice
+  // è davvero partito. Dopo un semplice «richiedi codice» il server non dice se
+  // il numero esiste, quindi il testo resta al condizionale — e cambiando
+  // numero si torna al condizionale da solo.
+  const [registeredPhone, setRegisteredPhone] = useState(null);
+  const codeSurelySent = !!registeredPhone && registeredPhone === phone.trim();
 
   const run = async (fn) => {
     if (busy) return;
@@ -21,14 +28,20 @@ export default function AuthFlow({ onClose }) {
     try { await fn(); } finally { setBusy(false); }
   };
 
+  /* Richiesta del codice. La risposta è SEMPRE la stessa, numero noto o no: il
+   * server non ammette più quali numeri sono in anagrafica (bastava ciclarli
+   * per farsi la rubrica del salone). Quindi non c'è nessun 404 da cui dedurre
+   * «cliente nuova»: si va sempre alla schermata del codice, con un messaggio
+   * al condizionale, e chi non è ancora registrata si registra da lì. */
   const sendOtp = () => run(async () => {
+    // Il codice appena rispedito rende invalido quello precedente: lasciarlo
+    // nel campo faceva fallire il tocco successivo con «codice non valido».
+    setCode('');
     try {
       await clientAuth.requestOtp(SALON_SLUG, phone.trim());
       setStep('otp');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        setStep('register'); // "Numero non registrato" → offer registration
-      } else if (err instanceof ApiError && err.status === 429) {
+      if (err instanceof ApiError && err.status === 429) {
         setError(t('Troppi codici richiesti. Riprova tra qualche minuto.', 'Too many codes requested. Try again in a few minutes.'));
       } else {
         setError(err?.message || t('Errore di rete', 'Network error'));
@@ -37,6 +50,7 @@ export default function AuthFlow({ onClose }) {
   });
 
   const doRegister = () => run(async () => {
+    setCode('');
     try {
       await clientAuth.register({
         salon_slug: SALON_SLUG,
@@ -46,9 +60,17 @@ export default function AuthFlow({ onClose }) {
         email: reg.email.trim(),
         lang,
       });
-      setStep('otp'); // register already issues the OTP
+      setRegisteredPhone(phone.trim()); // la registrazione emette il codice: qui lo sappiamo
+      setStep('otp');
     } catch (err) {
-      setError(err?.message || t('Errore di rete', 'Network error'));
+      // 400 = «numero già registrato». Da quando l'accesso non rivela più chi è
+      // in anagrafica, questo non basta a dire QUALE dei due casi sia: o la
+      // scheda esiste ed è attiva (il codice chiesto poco fa è davvero partito,
+      // basta inserirlo) oppure esiste ma è disattivata, e allora da qui non si
+      // entra. Non potendo distinguerli si mostra lo schermo dedicato, che dice
+      // entrambe le cose e lascia due uscite invece di un vicolo cieco.
+      if (err instanceof ApiError && err.status === 400) setStep('blocked');
+      else setError(err?.message || t('Errore di rete', 'Network error'));
     }
   });
 
@@ -120,9 +142,10 @@ export default function AuthFlow({ onClose }) {
 
         {step === 'register' && (
           <React.Fragment>
-            <div className="t-h3">{t('Numero non registrato', 'Number not registered')}</div>
+            <div className="t-h3">{t('Crea il tuo profilo', 'Create your profile')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Crea il tuo profilo: bastano nome e cognome.', 'Create your profile: just first and last name.')}
+              {t('È la prima volta qui? Bastano nome e cognome: ti invieremo subito il codice di accesso.',
+                'First time here? Just first and last name: we will send you the access code right away.')}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-input" placeholder={t('Nome', 'First name')} autoComplete="given-name"
@@ -139,6 +162,32 @@ export default function AuthFlow({ onClose }) {
               {busy ? t('Creazione…', 'Creating…') : t('Crea profilo e ricevi il codice', 'Create profile & get the code')}
             </button>
             <button className="press" style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+              onClick={() => { setStep('otp'); setError(null); }}>
+              {t('← Ho già un profilo: inserisco il codice', '← I already have a profile: enter the code')}
+            </button>
+          </React.Fragment>
+        )}
+
+        {/* «Numero già registrato»: o la cliente c'è già (e il codice chiesto
+          * poco fa le è arrivato) oppure la sua scheda è disattivata e da qui
+          * non si entra. Si dicono entrambe le cose e si lasciano due uscite:
+          * tornare al codice, o chiamare il salone se non arriva niente. */}
+        {step === 'blocked' && (
+          <React.Fragment>
+            <div className="t-h3">{t('Numero già registrato', 'Number already registered')}</div>
+            <div className="t-body" style={{ color: 'var(--muted)' }}>
+              {t('Questo numero è già in anagrafica: se hai ricevuto il codice, inseriscilo e accedi. Se non ti arriva nulla la scheda potrebbe non essere attiva: contatta il salone per riattivarla.',
+                'This number is already on file: if you got the code, enter it and sign in. If nothing arrives your profile may not be active: contact the salon to reactivate it.')}
+            </div>
+            <button className="btn btn--brand btn--block press" onClick={() => { setStep('otp'); setError(null); }}>
+              {t('Inserisci il codice', 'Enter the code')}
+            </button>
+            {brand.phone && (
+              <a href={`tel:${brand.phone}`} className="btn btn--ghost btn--block press" style={{ textDecoration: 'none' }}>
+                <Icon name="phone" size={17} color="var(--ink)" />{t('Chiama il salone', 'Call the salon')}
+              </a>
+            )}
+            <button className="press" style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer' }}
               onClick={() => { setStep('phone'); setError(null); }}>
               {t('← Usa un altro numero', '← Use another number')}
             </button>
@@ -149,7 +198,9 @@ export default function AuthFlow({ onClose }) {
           <React.Fragment>
             <div className="t-h3">{t('Inserisci il codice', 'Enter the code')}</div>
             <div className="t-body" style={{ color: 'var(--muted)' }}>
-              {t('Ti abbiamo inviato un codice a 6 cifre via SMS al numero ', 'We sent a 6-digit code by SMS to ')}<b>{phone}</b>.
+              {codeSurelySent
+                ? <React.Fragment>{t('Ti abbiamo inviato un codice a 6 cifre via SMS al numero ', 'We sent a 6-digit code by SMS to ')}<b>{phone}</b>.</React.Fragment>
+                : <React.Fragment>{t('Se il numero ', 'If ')}<b>{phone}</b>{t(' è registrato, ti abbiamo inviato un codice a 6 cifre via SMS.', ' is registered, we have sent a 6-digit code by SMS.')}</React.Fragment>}
             </div>
             {error && <div className="ca-err"><Icon name="alert" size={15} color="var(--danger)" />{error}</div>}
             <input className="ca-otp" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="······"
@@ -169,6 +220,18 @@ export default function AuthFlow({ onClose }) {
                 {t('Reinvia codice', 'Resend code')}
               </button>
             </div>
+            {/* L'unica via per chi è nuova: il server non può dirci che il
+              * numero non esiste, quindi glielo chiediamo noi. Deve restare
+              * ben visibile, altrimenti la cliente nuova aspetta un SMS che
+              * nessuno le ha mandato. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6 }}>
+              <div style={{ flex: 1, height: 1, background: 'var(--hair)' }} />
+              <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('oppure', 'or')}</span>
+              <div style={{ flex: 1, height: 1, background: 'var(--hair)' }} />
+            </div>
+            <button className="btn btn--ghost btn--block press" onClick={() => { setStep('register'); setError(null); }}>
+              {t('È la prima volta? Registrati', 'First time here? Sign up')}
+            </button>
           </React.Fragment>
         )}
       </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { staffAuth, useT, Icon, ApiError } from '@youty/shared';
 
 export default function LoginPage() {
@@ -27,9 +27,14 @@ export default function LoginPage() {
 
   // Login con Yourang (stile "accedi con Google"): il popup completa l'OAuth e
   // restituisce la sessione staff; qui la applichiamo e App.jsx entra nella shell.
+  const watchTimer = useRef(null);
+  const stopWatch = () => { clearInterval(watchTimer.current); watchTimer.current = null; };
+  useEffect(() => stopWatch, []);
+
   useEffect(() => {
     const onMsg = (e) => {
       if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
+      stopWatch();
       setYourangBusy(false);
       if (e.data.ok && e.data.mode === 'login' && e.data.session) {
         staffAuth.applySession(e.data.session);
@@ -46,6 +51,15 @@ export default function LoginPage() {
     const popup = window.open('/oauth-popup/start?mode=login', 'yourang-oauth', 'width=520,height=680');
     if (!popup) { setError(t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry')); return; }
     setYourangBusy(true);
+    // Chiudendo la finestra OAuth non arriva nessun postMessage: senza questa
+    // sorveglianza il pulsante restava per sempre su «Connessione…» e per
+    // riprovare bisognava ricaricare la pagina.
+    stopWatch();
+    watchTimer.current = setInterval(() => {
+      if (!popup.closed) return;
+      stopWatch();
+      setYourangBusy(false);
+    }, 600);
   };
 
   return (

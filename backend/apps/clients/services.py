@@ -23,14 +23,28 @@ def client_stats(client: Client) -> dict:
     except ImportError:
         return stats
 
-    from django.db.models import Count, Max, Sum
+    from django.db.models import Count, F, Max, Q, Sum
 
-    agg = Sale.objects.filter(client=client).aggregate(
-        visits=Count("id"), total=Sum("total"), last=Max("created_at")
+    sales = Sale.objects.filter(client=client)
+    # Una gift card comprata al banco è un incasso, non una visita: chi regala
+    # un buono non si è seduto in poltrona. Contarla gonfiava le visite e con
+    # esse le regole caparra («sotto le N visite chiedi la caparra»), che
+    # vedevano come abituale chi in salone non c'era mai stata. L'incasso
+    # invece resta nella spesa totale: quei soldi il salone li ha presi.
+    gift_only = (
+        sales.annotate(
+            lines_total=Count("lines"),
+            gift_lines=Count("lines", filter=Q(lines__line_type="gift_card")),
+        )
+        .filter(lines_total__gt=0, lines_total=F("gift_lines"))
+        .values_list("id", flat=True)
     )
-    stats["visits"] = agg["visits"] or 0
-    stats["total_spent"] = agg["total"] or Decimal("0")
-    stats["last_visit"] = agg["last"]
+    visits = sales.exclude(id__in=list(gift_only)).aggregate(
+        visits=Count("id"), last=Max("created_at")
+    )
+    stats["visits"] = visits["visits"] or 0
+    stats["last_visit"] = visits["last"]
+    stats["total_spent"] = sales.aggregate(total=Sum("total"))["total"] or Decimal("0")
     return stats
 
 
@@ -70,6 +84,7 @@ import datetime as dt
 import re
 
 from django.db import DataError, IntegrityError, transaction
+from django.utils import timezone
 from ninja.errors import HttpError
 
 from common.phone import canonical_phone, phone_key as _phone_key
@@ -127,9 +142,15 @@ def phone_key(phone: str) -> str:
 def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=None) -> dict:
     """Upsert massivo per import CSV (righe già mappate e normalizzate dal client).
 
-    Match per telefono (confronto su phone_key, tollerante a spazi e prefisso),
-    poi per email. Una riga senza telefono che non trova corrispondenza viene
-    saltata (il telefono è obbligatorio per creare un cliente). Con
+    Match per telefono (confronto su phone_key, tollerante a spazi e prefisso).
+    L'email è solo la rete di sicurezza per le righe SENZA telefono: una riga
+    che il suo numero ce l'ha e non corrisponde a nessuno è una persona nuova,
+    non la stessa scheda trovata per indirizzo. Cercare per email anche in quel
+    caso fondeva in una sola scheda tutte le righe di un file esportato con lo
+    stesso indirizzo di servizio (`info@salone.it`) — o madre e figlia — e
+    l'import rispondeva «249 aggiornati» senza un solo errore.
+    Una riga senza telefono che non trova corrispondenza viene saltata (il
+    telefono è obbligatorio per creare un cliente). Con
     update_existing=False i clienti già presenti non vengono toccati.
     Campi facoltativi: gender, birthday ('YYYY-MM-DD' | '--MM-DD'), origin,
     lang, note (nota privata), categories (nomi etichetta, create se mancanti).
@@ -185,8 +206,18 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                 note = (row.get("note") or "").strip()
                 categories = [c for c in (row.get("categories") or []) if str(c).strip()]
 
-                client = by_phone.get(phone_key(phone)) if phone else None
-                if client is None and email:
+                key = phone_key(phone)
+                if phone and not key:
+                    # «n/d», «-», «da chiedere»: phone_key non ricava nemmeno
+                    # una cifra. Senza questo controllo tutte queste righe
+                    # condividevano la chiave vuota e finivano l'una sopra
+                    # l'altra sulla stessa scheda.
+                    errors.append({"row": index, "reason": "Telefono non valido"})
+                    skipped += 1
+                    continue
+
+                client = by_phone.get(key) if key else None
+                if client is None and not phone and email:
                     client = by_email.get(email.lower())
 
                 if client is not None:
@@ -200,8 +231,11 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                         client.last_name = last_name
                     if email:
                         client.email = email
-                    if phone and phone_key(phone) not in by_phone:
-                        client.phone = canonical_phone(phone)
+                    # Il telefono non si riscrive mai: qui si arriva o con lo
+                    # stesso numero della scheda (match per telefono) o senza
+                    # numero (match per email). Prima veniva sostituito, e il
+                    # contatto della scheda finiva per essere quello dell'ultima
+                    # riga del file.
                     if gender:
                         client.gender = gender
                     if birthday:
@@ -228,8 +262,11 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                         birthday_year_known=year_known,
                         lang=lang or Client.Lang.IT,
                         origin=origin or "Import",
+                        # Cliente dal giorno dell'import: senza `since` il KPI
+                        # «nuovi clienti» resta a zero per sempre.
+                        since=timezone.localdate(),
                     )
-                    by_phone[phone_key(phone)] = client
+                    by_phone[key] = client
                     if email:
                         by_email[email.lower()] = client
                     created += 1

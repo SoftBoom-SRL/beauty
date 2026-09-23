@@ -3,7 +3,28 @@ import { ApiError, fmtEur, isoAtMin, minutesOfDay, parseISO, timeLabel, toDateSt
 
 export const DK_START = 8 * 60;   // grid 08:00
 export const DK_END = 20 * 60;    // grid 20:00
-export const PXM = 1.35;          // px per minute
+export const PXM = 1.35;          // px per minute (zoom 1)
+
+/* ---- Zoom delle viste calendario -------------------------------------------
+ * Quanto è alta un'ora sullo schermo. È una preferenza PERSONALE della
+ * postazione, non del salone: chi sta al banco su un monitor grande vuole
+ * vedere la giornata intera, chi lavora su un portatile vuole leggere i
+ * quarti d'ora. Non tocca MAI la fascia di prenotazione (Impostazioni →
+ * intervallo slot), che resta una regola del salone: qui si cambia solo la
+ * scala del disegno, come fanno i calendari professionali (Fresha ha uno
+ * "zoom" personale a cursore, Vagaro la spaziatura delle righe più il pinch,
+ * Apple "quante ore vedere per schermata").
+ * I passi sono moltiplicatori di PXM; «adatta» calcola un valore libero. */
+export const ZOOM_STEPS = [0.5, 0.65, 0.8, 1, 1.25, 1.6, 2];
+export const ZOOM_MIN = 0.4;
+export const ZOOM_MAX = 2.5;
+export const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(z) || 1));
+/** Passo successivo (dir +1) o precedente (dir −1) a partire da un valore libero. */
+export function zoomStep(current, dir) {
+  const z = clampZoom(current);
+  if (dir > 0) return clampZoom(ZOOM_STEPS.find((s) => s > z + 0.001) ?? ZOOM_MAX);
+  return clampZoom([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? ZOOM_MIN);
+}
 export const COLW = 158;          // min operator column width
 
 export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
@@ -252,7 +273,11 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
   // `excludeItemId`: serve allo stacco, dove si muove UN servizio solo. Gli
   // altri della stessa visita restano dov'erano e occupano davvero quel tempo,
   // quindi non si può escludere l'intero appuntamento come in uno spostamento.
-  const { excludeApptId = null, excludeItemId = null, excludePauseId = null, nowMin = null, t = (it) => it, rows = null } = opts;
+  // `sameClientId`: i trattamenti della STESSA cliente non si fanno concorrenza.
+  // Nail art sopra la manicure in posa è una seduta sola, non uno scontro di
+  // agenda: segnalarla come «occupata» costringeva a forzare un incastro che
+  // incastro non è.
+  const { excludeApptId = null, excludeItemId = null, excludePauseId = null, nowMin = null, sameClientId = null, t = (it) => it, rows = null } = opts;
   const endMin = startMin + Math.max(durMin || 0, 1);
   const win = (row?.windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
   const winLabel = win.map(([a, b]) => `${timeLabel(a)}–${timeLabel(b)}`).join(' · ');
@@ -296,6 +321,7 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
   }
   for (const a of candidates) {
     if (excludeApptId != null && a.id === excludeApptId) continue;
+    if (sameClientId != null && a.client?.id === sameClientId) continue;
     if (a.status === 'cancelled' || a.status === 'no_show') continue;
     for (const b of itemBlocks(a)) {
       if (excludeItemId != null && b.item.id === excludeItemId) continue;

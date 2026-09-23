@@ -7,6 +7,7 @@ e uno snapshot di durata/prezzo preso dal listino al momento della creazione.
 
 import datetime as dt
 
+from django.conf import settings
 from django.db import models
 
 from apps.core.models import TimeStampedModel
@@ -55,8 +56,12 @@ class Appointment(TimeStampedModel):
         blank=True,
         related_name="appointments",
     )
+    # PROTECT e non CASCADE: le API cancellano le clienti in modo morbido, ma
+    # dall'admin la cancellazione è reale e si portava dietro tutto lo storico
+    # delle visite (e i loro AppointmentService). Le vendite invece restavano,
+    # con client NULL: i ricavi non tornavano più a nessuna visita.
     client = models.ForeignKey(
-        "clients.Client", on_delete=models.CASCADE, related_name="appointments"
+        "clients.Client", on_delete=models.PROTECT, related_name="appointments"
     )
     operator = models.ForeignKey(  # operatrice principale (quella del primo servizio)
         "staff.Operator", on_delete=models.PROTECT, related_name="appointments"
@@ -200,6 +205,58 @@ class Pause(TimeStampedModel):
     @property
     def end(self) -> dt.datetime:
         return self.start + dt.timedelta(minutes=self.duration_min)
+
+
+class UndoEntry(models.Model):
+    """Un gesto dell'agenda che si può ancora annullare («torna indietro»).
+
+    In agenda si lavora a mano libera: si trascina, si stacca, si annulla, e
+    ogni tanto un gesto parte per sbaglio. Ogni mutazione scrive qui lo stato di
+    PRIMA (`before`), quello che ha prodotto (`after`) e ciò che ha creato
+    (`created`); `POST /api/agenda/undo` rimette le cose com'erano.
+
+    `after` non serve a ripristinare ma a difendersi: se nel frattempo qualcuno
+    ha toccato lo stesso appuntamento, lo stato attuale non combacia più e
+    l'annullamento viene rifiutato invece di cancellare il lavoro di una collega.
+
+    Lo storico è PER PERSONA (`actor`) e dura pochi minuti: «torna indietro»
+    annulla l'ultima cosa fatta da chi preme il tasto, non quella della
+    postazione accanto. Le azioni senza operatore (app cliente, automatismi)
+    non ci finiscono.
+    """
+
+    class Kind(models.TextChoices):
+        CREATE = "create", "Creazione"
+        MOVE = "move", "Spostamento"
+        EDIT = "edit", "Modifica"
+        SPLIT = "split", "Stacco"
+        CANCEL = "cancel", "Annullamento"
+        NO_SHOW = "no_show", "No-show"
+        STATUS = "status", "Cambio stato"
+        PAUSE_CREATE = "pause_create", "Pausa aggiunta"
+        PAUSE_UPDATE = "pause_update", "Pausa spostata"
+        PAUSE_DELETE = "pause_delete", "Pausa rimossa"
+
+    salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="undo_entries")
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+"
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    # Frase già pronta per l'avviso: «Spostamento di Sofia Ricci».
+    label = models.CharField(max_length=160)
+    before = models.JSONField(default=dict, blank=True)
+    after = models.JSONField(default=dict, blank=True)
+    created = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    undone_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["salon", "actor", "-created_at"])]
+        verbose_name_plural = "Undo entries"
+
+    def __str__(self):
+        return f"{self.get_kind_display()} · {self.label}"
 
 
 class WaitlistEntry(models.Model):

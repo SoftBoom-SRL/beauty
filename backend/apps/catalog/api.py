@@ -5,6 +5,7 @@ Endpoint pubblici (`/public/...`) senza auth: usati dalla web app cliente prima
 del login per mostrare listino e pacchetti del salone (solo elementi attivi).
 """
 
+import re
 from typing import Optional
 
 from django.db import transaction
@@ -15,6 +16,7 @@ from ninja.errors import HttpError
 
 from apps.core.models import Salon
 from apps.core.services import log_activity
+from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
@@ -35,12 +37,39 @@ from .schemas import (
 
 router = Router(tags=["catalog"])
 
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
+DEFAULT_CATEGORY_COLOR = "#E0E7FF"
+# PositiveIntegerField: oltre questo valore il database rifiuta la riga e al
+# client arriva un 500 invece del 400 che gli dice cosa correggere.
+MAX_CATEGORY_ORDER = 2147483647
+
+PUBLIC_CATALOG_MAX_PER_WINDOW = 120
+PUBLIC_CATALOG_WINDOW_SECONDS = 300
+
 
 def _get_salon_by_slug(slug: str) -> Salon:
     try:
         return Salon.objects.get(slug=slug)
     except Salon.DoesNotExist:
         raise HttpError(404, "Salone non trovato")
+
+
+def _public_ratelimit(request, salon: Salon, bucket: str) -> None:
+    """Endpoint pubblici senza auth: stesso tetto per IP della disponibilità in agenda."""
+    if not ratelimit.hit(
+        f"public-{bucket}:{salon.id}:{ratelimit.client_ip(request)}",
+        PUBLIC_CATALOG_MAX_PER_WINDOW,
+        PUBLIC_CATALOG_WINDOW_SECONDS,
+    ):
+        raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
+
+
+def _validate_category_in(data: CategoryIn) -> None:
+    """Colore e ordine finiscono grezzi in colonne strette: qui sono 400, non 500."""
+    if not (0 <= data.order <= MAX_CATEGORY_ORDER):
+        raise HttpError(400, "Ordine della categoria non valido")
+    if data.color is not None and not _HEX_COLOR_RE.match((data.color or "").strip()):
+        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
 
 
 # ---- Categorie servizi -------------------------------------------------------
@@ -55,7 +84,10 @@ def list_categories(request):
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
-    category = ServiceCategory.objects.create(salon=ctx.salon, **data.dict())
+    _validate_category_in(data)
+    payload = data.dict()
+    payload["color"] = (payload["color"] or DEFAULT_CATEGORY_COLOR).strip()
+    category = ServiceCategory.objects.create(salon=ctx.salon, **payload)
     log_activity(
         ctx.salon,
         "category.created",
@@ -70,8 +102,15 @@ def create_category(request, data: CategoryIn):
 def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
+    _validate_category_in(data)
     category = salon_get(ServiceCategory, ctx, category_id)
-    for name, value in data.dict().items():
+    payload = data.dict()
+    # Colore assente = invariato: un modulo che manda solo nome e ordine non
+    # deve riportare al grigio di fabbrica una categoria colorata a mano.
+    color = payload.pop("color")
+    if color is not None:
+        category.color = color.strip()
+    for name, value in payload.items():
         setattr(category, name, value)
     category.save()
     log_activity(
@@ -247,7 +286,7 @@ def create_package(request, data: PackageIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
     payload = data.dict()
-    items = payload.pop("items")
+    items = payload.pop("items") or []
     package = Package.objects.create(salon=ctx.salon, **payload)
     _sync_package_items(ctx, package, items)
     log_activity(
@@ -270,7 +309,11 @@ def update_package(request, package_id: int, data: PackageIn):
     package = salon_get(Package, ctx, package_id)
     payload = data.dict()
     items = payload.pop("items")
-    _sync_package_items(ctx, package, items)
+    # `items` assente = righe invariate. Prima il default era la lista vuota:
+    # un PUT che cambiava solo nome o prezzo cancellava i servizi del pacchetto,
+    # e il pacchetto continuava a essere venduto senza contenere più nulla.
+    if items is not None:
+        _sync_package_items(ctx, package, items)
     for name, value in payload.items():
         setattr(package, name, value)
     package.save()
@@ -308,6 +351,7 @@ def delete_package(request, package_id: int):
 def public_services(request, salon: str):
     """Listino pubblico raggruppato per categoria (ordinata), solo servizi attivi."""
     s = _get_salon_by_slug(salon)
+    _public_ratelimit(request, s, "services")
     categories = ServiceCategory.objects.filter(salon=s).order_by("order", "id").prefetch_related(
         Prefetch(
             "services",
@@ -330,6 +374,7 @@ def public_services(request, salon: str):
 def public_packages(request, salon: str):
     """Pacchetti pubblici attivi, con dettaglio dei servizi inclusi."""
     s = _get_salon_by_slug(salon)
+    _public_ratelimit(request, s, "packages")
     packages = Package.objects.filter(salon=s, active=True).prefetch_related("items__service")
     return [
         {

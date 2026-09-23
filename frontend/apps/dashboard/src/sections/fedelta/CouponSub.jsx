@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, fmtEur, parseISO, toDateStr, Icon, EmptyState } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
@@ -10,7 +10,9 @@ const LIMIT = 24;
 
 function couponValueLabel(c, lang) {
   if (!c) return '';
-  return c.kind === 'amount' ? '-' + fmtEur(Number(c.value), lang) : '-' + c.value + '%';
+  // i Decimal dell'API viaggiano come stringhe ("20.00"): senza Number() un
+  // coupon del 20% si leggeva «-20.00%» qui e «-20%» nella scheda cliente
+  return c.kind === 'amount' ? '-' + fmtEur(Number(c.value), lang) : '-' + Number(c.value) + '%';
 }
 
 export default function CouponSub() {
@@ -34,10 +36,17 @@ export default function CouponSub() {
     return () => clearTimeout(tm);
   }, [q]);
 
-  useEffect(() => { setOffset(0); }, [originF, statusF]);
+  /* Un solo effetto, con filtri e offset fra le dipendenze, e l'offset
+   * azzerato dallo stesso gestore che cambia il filtro (come fa ProdottiSub):
+   * con l'azzeramento in un effetto separato partivano due richieste — una con
+   * l'offset vecchio — e vinceva l'ultima che rispondeva, così si vedeva la
+   * pagina 3 mentre il pager in fondo diceva «1–24 di N».
+   * `reqSeq` scarta comunque le risposte in ritardo. */
+  const reqSeq = useRef(0);
+  const setFilter = (setter) => (v) => { setter(v); setOffset(0); };
 
-  const reload = () => {
-    let alive = true;
+  const reload = useCallback(() => {
+    const seq = ++reqSeq.current;
     setLoading(true);
     api.get('/api/marketing/coupons', {
       params: {
@@ -47,18 +56,17 @@ export default function CouponSub() {
         limit: LIMIT, offset,
       },
     }).then((res) => {
-      if (!alive) return;
+      if (seq !== reqSeq.current) return;
       setItems(res.items || []);
       setCount(res.count || 0);
     }).catch((err) => {
-      if (!alive) return;
+      if (seq !== reqSeq.current) return;
       setItems([]); setCount(0);
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    }).finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  };
+    }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
+  }, [originF, statusF, query, offset, fireToast, t]);
 
-  useEffect(reload, [originF, statusF, query, offset]);
+  useEffect(() => { reload(); }, [reload]);
 
   const blank = () => ({ _new: true, kind: 'percent', value: 10, client: null, expires_at: null });
 
@@ -94,8 +102,8 @@ export default function CouponSub() {
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[
-          { label: t('Origine', 'Origin'), value: originF, set: setOriginF, opts: [['all', t('Tutte', 'All')], ['manual', t('Manuale', 'Manual')], ['auto', t('Automatico', 'Automatic')], ['loyalty', t('Da fedeltà', 'From loyalty')]] },
-          { label: t('Stato', 'Status'), value: statusF, set: setStatusF, opts: [['all', t('Tutti', 'All')], ['active', t('Attivi', 'Active')], ['redeemed', t('Utilizzati', 'Redeemed')], ['expired', t('Scaduti', 'Expired')]] },
+          { label: t('Origine', 'Origin'), value: originF, set: setFilter(setOriginF), opts: [['all', t('Tutte', 'All')], ['manual', t('Manuale', 'Manual')], ['auto', t('Automatico', 'Automatic')], ['loyalty', t('Da fedeltà', 'From loyalty')]] },
+          { label: t('Stato', 'Status'), value: statusF, set: setFilter(setStatusF), opts: [['all', t('Tutti', 'All')], ['active', t('Attivi', 'Active')], ['redeemed', t('Utilizzati', 'Redeemed')], ['expired', t('Scaduti', 'Expired')]] },
         ]} />
         {canWrite && <button className="dk-btn dk-btn--clay" onClick={openNew} style={{ flexShrink: 0 }}><Icon name="plus" size={17} color="#fff" />{t('Nuovo coupon', 'New coupon')}</button>}
       </div>
