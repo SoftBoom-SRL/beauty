@@ -1,6 +1,6 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
@@ -8,8 +8,8 @@ import PaymentsPanel from './PaymentsPanel.jsx';
 import DkModal from '../../ui/DkModal.jsx';
 import useProductCatalog from './useProductCatalog.js';
 import {
-  couponDiscount, emptyPayments, findCoupon, inputCss, lineAmount, methodLabel, money, opName,
-  paymentsError, resolvePayments, round2,
+  centsToApi, centsToEur, emptyPayments, findCoupon, inputCss, lineCents, methodLabel, money, opName,
+  paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
 
 const stockMeta = (state, t) => {
@@ -69,7 +69,7 @@ export default function CartTab({ onGoHistory }) {
     });
   };
   const addGiftCard = () => {
-    const v = round2(giftAmt);
+    const v = centsToEur(toCents(giftAmt));
     if (!(v > 0)) return;
     setCart((c) => [...c, {
       key: 'g' + Date.now(), line_type: 'gift_card', name: 'Gift card · €' + v,
@@ -89,31 +89,55 @@ export default function CartTab({ onGoHistory }) {
   };
   const removeLine = (key) => setCart((c) => c.filter((l) => l.key !== key));
 
-  /* ---- totals (global discount maps to per-line discount_pct for lines without their own) ---- */
+  /* ---- totals (global discount maps to per-line discount_pct for lines without their own) ----
+   * In centesimi con gli arrotondamenti del server (money.js): è quello che il
+   * server ricalcola, e il pagamento deve coincidere al centesimo. */
   const effDisc = (l) => (l.line_type !== 'product' || l.is_gift ? 0 : (l.disc > 0 ? l.disc : globalDisc || 0));
+  // Si spedisce esattamente il prezzo da cui si è calcolato il conto.
   const asApiLine = (l) => (l.line_type === 'gift_card'
-    ? { line_type: 'gift_card', value: Number(l.value).toFixed(2), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
-    : { line_type: 'product', product_id: l.product_id, qty: l.qty, unit_price: Number(l.unit_price).toFixed(2), discount_pct: effDisc(l), is_gift: !!l.is_gift });
-  const lineVal = (l) => lineAmount({ ...l, discount_pct: effDisc(l) });
-  const subtotal = round2(cart.reduce((s, l) => s + lineAmount({ ...l, discount_pct: 0 }), 0));
-  const gross = round2(cart.reduce((s, l) => s + lineVal(l), 0));
+    ? { line_type: 'gift_card', value: centsToApi(toCents(l.value)), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
+    : { line_type: 'product', product_id: l.product_id, qty: l.qty, unit_price: centsToApi(toCents(l.unit_price)), discount_pct: effDisc(l), is_gift: !!l.is_gift });
+  const lineVal = (l) => centsToEur(lineCents({ ...l, discount_pct: effDisc(l) }));
   // Le gift card vendute restano fuori dal buono: scontarne una da 100
   // incassandone 80 significa regalare la differenza (regola del server).
-  const giftCardTotal = round2(cart.filter((l) => l.line_type === 'gift_card').reduce((s, l) => s + lineVal(l), 0));
-  const couponBase = round2(gross - giftCardTotal);
-  const couponAmt = couponDiscount(coupon, couponBase);
-  const total = round2(gross - couponAmt);
-  const discAmt = round2(subtotal - gross);
+  const totals = saleTotals(cart.map((l) => ({ ...l, discount_pct: effDisc(l) })), coupon);
+  const subtotalCents = cart.reduce((s, l) => s + lineCents({ ...l, discount_pct: 0 }), 0);
+  const couponBaseCents = totals.couponBaseCents;
+  const couponAmt = centsToEur(totals.discountCents);
+  const totalCents = totals.totalCents;
+  const total = centsToEur(totalCents);
+  const discAmt = centsToEur(subtotalCents - totals.grossCents);
   const itemCount = cart.reduce((s, l) => s + (l.qty || 1), 0);
-  const payErr = paymentsError(pay, total, t);
+  const payErr = paymentsError(pay, totalCents, t);
   const seller = operators.find((o) => o.id === Number(sellerId)) || null;
+
+  /* Il buono applicato va rivisto quando il conto cambia sotto di lui: prima
+   * restava «Buono applicato» a video e la vendita veniva respinta solo al
+   * Conferma (422), dopo aver tolto i prodotti o cambiato cliente (14-12).
+   * Il codice resta nel campo, per riapplicarlo con un clic. */
+  useEffect(() => {
+    if (coupon && !(couponBaseCents > 0)) {
+      setCoupon(null);
+      setCouponErr(t('Buono tolto: nel conto non resta niente da scontare (le gift card non si scontano)', 'Voucher removed: nothing left to discount (gift cards cannot be discounted)'));
+    }
+  }, [coupon, couponBaseCents]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changeClient = (c) => {
+    setClientSel(c);
+    // Un buono intestato vale solo per la sua cliente (come in findCoupon).
+    if (coupon?.client_id && coupon.client_id !== (c?.id ?? null)) {
+      setCoupon(null);
+      setCouponErr(coupon.client_name
+        ? t(`Buono tolto: è riservato a ${coupon.client_name}`, `Voucher removed: it is reserved for ${coupon.client_name}`)
+        : t('Buono tolto: è riservato a un’altra cliente', 'Voucher removed: it is reserved for another client'));
+    }
+  };
 
   const applyCoupon = async () => {
     if (couponBusy) return;
     setCouponBusy(true);
     setCouponErr(null);
     try {
-      if (!(couponBase > 0)) {
+      if (!(couponBaseCents > 0)) {
         setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
         return;
       }
@@ -134,7 +158,7 @@ export default function CartTab({ onGoHistory }) {
       const sale = await api.post('/api/sales/pos', {
         client_id: clientSel ? clientSel.id : null,
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
-        payments: resolvePayments(pay, total),
+        payments: resolvePayments(pay, totalCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
       });
       setDone(sale);
@@ -246,7 +270,7 @@ export default function CartTab({ onGoHistory }) {
           </div>
           <input value={giftName} onChange={(e) => setGiftName(e.target.value)} placeholder={t('Destinatario (facolt.)', 'Recipient (optional)')}
             style={{ border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13, fontWeight: 600, padding: '9px 12px', fontFamily: 'var(--sans)', background: 'var(--surface)', width: 160 }} />
-          <button className="dk-btn dk-btn--ghost" style={{ height: 38 }} disabled={!(round2(giftAmt) > 0)} onClick={addGiftCard}>
+          <button className="dk-btn dk-btn--ghost" style={{ height: 38 }} disabled={!(toCents(giftAmt) > 0)} onClick={addGiftCard}>
             <Icon name="plus" size={15} />{t('Aggiungi', 'Add')}
           </button>
         </div>
@@ -276,7 +300,7 @@ export default function CartTab({ onGoHistory }) {
           {/* client (optional) */}
           <div className="t-meta" style={{ marginBottom: 7 }}>{t('Cliente (facoltativo)', 'Client (optional)')}</div>
           <div style={{ marginBottom: 16 }}>
-            <ClientPicker value={clientSel} onChange={setClientSel} t={t} />
+            <ClientPicker value={clientSel} onChange={changeClient} t={t} />
           </div>
 
           {/* line items */}
@@ -403,7 +427,7 @@ export default function CartTab({ onGoHistory }) {
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
-            <PaymentsPanel value={pay} onChange={setPay} due={total} t={t} lang={lang} compact />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact />
           </div>
         </div>
 

@@ -1,15 +1,13 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
 import { api, fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { centsToEur, lineCents } from './money.js';
 
-export const round2 = (x) => Math.round((Number(x) + Number.EPSILON) * 100) / 100;
-
-/** Numero da un importo digitato a testo libero: accetta numeri o stringhe
- *  con virgola o punto ("12,50" / "12.50"); valori non validi → 0. */
-export const toNum = (x) => {
-  if (typeof x === 'number') return Number.isFinite(x) ? x : 0;
-  const n = parseFloat(String(x ?? '').replace(',', '.').replace(/[^0-9.]/g, ''));
-  return Number.isFinite(n) ? n : 0;
-};
+// Il denaro si conta in centesimi interi con gli arrotondamenti del server:
+// le regole stanno in money.js (senza dipendenze, quindi provate da npm test).
+export {
+  PAYMENT_TOLERANCE_CENTS, centsToApi, centsToEur, couponDiscountCents, emptyPayments,
+  giftPrefillRows, lineCents, paymentsError, paymentsMatch, resolvePayments, saleTotals, toCents,
+} from './money.js';
 
 /** Ripulisce ciò che si digita nel campo importo a testo libero: solo cifre e
  *  un unico separatore decimale (virgola o punto). */
@@ -39,46 +37,9 @@ export const opName = (o) => (o ? [o.first_name, o.last_name].filter(Boolean).jo
 
 export const svcLabel = (s, lang) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
 
-/** cart/checkout line value, mirroring the API rule:
- *  amount = qty × unit_price × (1 − discount_pct/100), 0 if is_gift; gift_card → value. */
-export function lineAmount(l) {
-  if (l.line_type === 'gift_card') return round2(l.value || 0);
-  if (l.is_gift) return 0;
-  return round2((l.qty || 1) * Number(l.unit_price || 0) * (1 - (l.discount_pct || 0) / 100));
-}
-
-/* ---------------- payments model ----------------
- * One shared shape for the single/split payment editor:
- *   { split: bool, method: 'cash', giftCode: '', rows: [{ method, amt, code }] }
- * resolvePayments() turns it into the API `payments[]` array. */
-
-export const emptyPayments = () => ({ split: false, method: 'cash', giftCode: '', rows: [] });
-
-export function resolvePayments(v, due) {
-  if (!v.split) {
-    const p = { method: v.method, amount: round2(due).toFixed(2) };
-    if (v.method === 'gift_card') p.gift_card_code = (v.giftCode || '').trim();
-    return [p];
-  }
-  return v.rows.map((r) => {
-    const p = { method: r.method, amount: round2(toNum(r.amt)).toFixed(2) };
-    if (r.method === 'gift_card') p.gift_card_code = (r.code || '').trim();
-    return p;
-  });
-}
-
-/** client-side validation matching the API ±0.01 rule; returns an error message or null. */
-export function paymentsError(v, due, t) {
-  const pays = resolvePayments(v, due);
-  if (pays.some((p) => p.method === 'gift_card' && !p.gift_card_code)) {
-    return t('Inserisci il codice della gift card', 'Enter the gift card code');
-  }
-  const sum = pays.reduce((s, p) => s + Number(p.amount), 0);
-  if (Math.abs(sum - due) > 0.011) {
-    return t('La somma dei pagamenti non corrisponde al totale', 'Payments must add up to the total');
-  }
-  return null;
-}
+/** cart/checkout line value in euro, for display: the API rule computed in
+ *  cents (see money.js lineCents). */
+export const lineAmount = (l) => centsToEur(lineCents(l));
 
 /* ---------------- buono sconto al banco ----------------
  * Il conto accetta un `coupon_code`: i buoni del programma fedeltà erano
@@ -88,17 +49,8 @@ export function paymentsError(v, due, t) {
  * l'ultima parola. Quello che si fa qui è solo mostrare il conto giusto prima
  * di premere «Incassa»: senza sapere lo sconto, il pagamento precompilato
  * chiederebbe l'importo pieno e la vendita verrebbe respinta con «I pagamenti
- * non corrispondono al totale». */
-
-/** Sconto in euro del buono su un imponibile, come lo calcola il server
- *  (marketing.services.coupon_discount): mai più dell'imponibile — un buono da
- *  50 € su un conto da 30 sconta 30, non trasforma la cassa in un bancomat. */
-export function couponDiscount(coupon, base) {
-  const amount = round2(base);
-  if (!coupon || !(amount > 0)) return 0;
-  const value = Number(coupon.value || 0);
-  return round2(Math.min(coupon.kind === 'percent' ? (amount * value) / 100 : value, amount));
-}
+ * non corrispondono al totale». Lo sconto lo calcola couponDiscountCents
+ * (money.js), in centesimi come marketing.services.coupon_discount. */
 
 /** Cerca il buono per codice e, se non è spendibile, dice PERCHÉ in una frase.
  *  Risolve { coupon } oppure { error }: gli stessi rifiuti del server

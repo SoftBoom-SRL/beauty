@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api, ApiError, Icon } from '@youty/shared';
 import { DkModal, DkSeg } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
-import { comStatusMeta, dtLocalToIso, isoToDtLocal } from './helpers.js';
+import { comStatusMeta, comWhenLabel, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
 
 const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 14,
@@ -20,6 +20,10 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
   const canWrite = hasScope('marketing');
   const sent = !isNew && comm.status === 'sent';
   const locked = !canWrite || sent;
+  // Una campagna programmata che si modifica torna in bozza sul server (che
+  // annulla l'invio in coda o presso Yourang): «Salva» la riprogramma subito
+  // alla data del campo, invece di lasciarla in bozza senza dirlo (14-09).
+  const wasScheduled = !isNew && comm.status === 'scheduled';
 
   const [title, setTitle] = useState(comm?.title || '');
   const [body, setBody] = useState(comm?.body || '');
@@ -62,7 +66,9 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     let cancelled = false;
     setClientBusy(true);
     const h = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: cq, limit: 12 } })
+      // solo schede attive: l'invio salta comunque le archiviate, e scegliere
+      // il doppione archiviato lasciava fuori la cliente vera (14-22)
+      api.get('/api/clients/', { params: { q: cq, is_active: true, limit: 12 } })
         .then((res) => { if (!cancelled) setClientResults(res.items || []); })
         .catch(() => { if (!cancelled) setClientResults([]); })
         .finally(() => { if (!cancelled) setClientBusy(false); });
@@ -81,7 +87,10 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     setAudience((a) => (a.includes(c.id) ? a.filter((x) => x !== c.id) : [...a, c.id]));
   };
 
-  const canSave = !!title.trim() && !!body.trim() && !locked;
+  // Una data già passata non si accetta: programmata, restava «Programmata»
+  // per sempre con una data vecchia (07-14).
+  const pastDate = isPastSchedule(scheduledAt);
+  const canSave = !!title.trim() && !!body.trim() && !locked && !pastDate;
 
   const selectedTagNames = useMemo(
     () => audience.map((id) => clientCategories.find((c) => c.id === id)).filter(Boolean).map((c) => c.name),
@@ -113,8 +122,27 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     setSaving(true);
     try {
       const saved = await persist();
-      fireToast({ msg: t('Comunicazione salvata', 'Communication saved'), icon: 'check' });
-      onSaved(saved);
+      if (!wasScheduled) {
+        fireToast({ msg: t('Comunicazione salvata', 'Communication saved'), icon: 'check' });
+        onSaved(saved);
+        return;
+      }
+      const when = dtLocalToIso(scheduledAt);
+      if (!when) {
+        // campo svuotato: resta in bozza, e lo si dice
+        fireToast({ msg: t('Salvata come bozza: l’invio programmato è annullato. Per programmarla di nuovo usa «Invia…».', 'Saved as a draft: the scheduled send is cancelled. Use “Send…” to schedule it again.'), icon: 'alert' });
+        onSaved(saved);
+        return;
+      }
+      try {
+        const rescheduled = await api.post(`/api/marketing/communications/${saved.id}/send`, { scheduled_at: when });
+        fireToast({ msg: t(`Comunicazione salvata · invio programmato per ${comWhenLabel(when, 'it')}`, `Communication saved · send scheduled for ${comWhenLabel(when, 'en')}`), icon: 'check' });
+        onSaved(rescheduled);
+      } catch (err) {
+        const why = err instanceof ApiError ? err.message : t('errore di rete', 'network error');
+        fireToast({ msg: t(`Salvata come bozza, ma non riprogrammata (${why}): usa «Invia…» per programmarla.`, `Saved as a draft but not rescheduled (${why}): use “Send…” to schedule it.`), icon: 'alert' });
+        onSaved(saved);
+      }
     } catch (err) {
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
     } finally {
@@ -182,6 +210,13 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
       {sent && (
         <div className="t-sm" style={{ color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: 10, padding: '10px 12px', marginBottom: 16 }}>
           {t('Comunicazione già inviata: non è più modificabile.', 'Already sent: no longer editable.')}
+        </div>
+      )}
+      {wasScheduled && canWrite && (
+        <div className="t-sm" style={{ color: 'var(--info)', background: 'var(--surface-2)', borderRadius: 10, padding: '10px 12px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="clock" size={14} color="var(--info)" />
+          {t(`Programmata per ${comWhenLabel(comm.scheduled_at, 'it')}: salvando, l’invio parte con le modifiche alla data indicata qui sotto.`,
+             `Scheduled for ${comWhenLabel(comm.scheduled_at, 'en')}: on save, the send goes out with your edits at the date below.`)}
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 22, alignItems: 'start' }}>
@@ -294,9 +329,16 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
 
           <div>
             <div className="t-meta" style={{ marginBottom: 5 }}>{t('Programma invio (opzionale)', 'Schedule send (optional)')}</div>
-            <input disabled={locked} type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} style={inputCss} />
+            <input disabled={locked} type="datetime-local" min={nowDtLocal()} value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} style={inputCss} />
+            {pastDate && !locked && (
+              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6 }}>
+                {t('La data è già passata: scegline una futura o svuota il campo.', 'That date has passed: pick a future one or clear the field.')}
+              </div>
+            )}
             <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
-              {t('Salvata qui come promemoria. L’invio (subito o programmato) avviene con "Invia…".', 'Saved here as a reminder. Delivery (now or scheduled) happens with "Send…".')}
+              {wasScheduled
+                ? t('Programmata: «Salva» la riprogramma a questa data con le modifiche. Svuota il campo per riportarla in bozza.', 'Scheduled: “Save” reschedules it at this date with your edits. Clear the field to turn it back into a draft.')
+                : t('Salvata qui come promemoria. L’invio (subito o programmato) avviene con "Invia…".', 'Saved here as a reminder. Delivery (now or scheduled) happens with "Send…".')}
             </div>
           </div>
 

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { api, ApiError, Icon, Toggle, NumInput } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
-import { LOYALTY_TYPES, EARN_METRICS, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward } from '../meta.js';
+import { LOYALTY_TYPES, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward, earnFields, earnMetricsFor } from '../meta.js';
 
 /** Create/edit a loyalty program mapped to the REAL LoyaltyProgramIn fields:
  * name, type, earn_metric, earn_ratio, reward_type, reward_value, reward_service_id,
@@ -15,6 +15,9 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const isNew = !!draft._new;
   const isPts = draft.type === 'points';
+  const isStamps = draft.type === 'stamps';
+  // Metrica e rapporto che partono davvero: per i timbri mai «per euro» (C18).
+  const earn = earnFields(draft.type, draft.earn_metric, draft.earn_ratio);
   const svcName = (s) => (lang === 'en' ? (s.name_en || s.name_it) : s.name_it);
   const rewardServiceName = () => {
     const s = services.find((x) => x.id === draft.reward_service_id);
@@ -30,8 +33,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
   const buildPayload = () => ({
     name: draft.name.trim(),
     type: draft.type,
-    earn_metric: draft.earn_metric,
-    earn_ratio: Number(draft.earn_ratio || 1).toFixed(2),
+    ...earn,
     reward_type: draft.reward_type,
     reward_value: needsValue ? Number(draft.reward_value || 0).toFixed(2) : '0.00',
     reward_service_id: needsService ? draft.reward_service_id : null,
@@ -106,12 +108,14 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
         })}
       </div>
 
-      {isPts && (
+      {/* Anche per i timbri: prima il selettore spariva e restava la metrica
+        * «per euro» del modello vuoto — un timbro per ogni euro speso (07-01). */}
+      {(isPts || isStamps) && (
         <div style={{ marginBottom: 16 }}>
-          <div className="t-meta" style={{ marginBottom: 8 }}>{t('I punti si accumulano per', 'Points are earned per')}</div>
+          <div className="t-meta" style={{ marginBottom: 8 }}>{isStamps ? t('Un timbro per', 'One stamp per') : t('I punti si accumulano per', 'Points are earned per')}</div>
           <div style={{ display: 'flex', gap: 7 }}>
-            {EARN_METRICS.map((m) => (
-              <button key={m.k} onClick={() => set({ earn_metric: m.k })} style={{ ...segBtn(draft.earn_metric === m.k), padding: '9px', fontSize: 12.5, borderRadius: 9 }}>{m[lang]}</button>
+            {earnMetricsFor(draft.type).map((m) => (
+              <button key={m.k} onClick={() => set({ earn_metric: m.k })} style={{ ...segBtn(earn.earn_metric === m.k), padding: '9px', fontSize: 12.5, borderRadius: 9 }}>{m[lang]}</button>
             ))}
           </div>
         </div>

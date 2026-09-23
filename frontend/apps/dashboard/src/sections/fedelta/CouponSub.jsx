@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, parseISO, toDateStr, Icon, EmptyState } from '@youty/shared';
+import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
 import CouponEditModal from './modals/CouponEditModal.jsx';
-import { COUPON_ORIGIN_META, COUPON_STATUS_META } from './meta.js';
+import { COUPON_ORIGIN_META, COUPON_STATUS_META, effectiveStatus } from './meta.js';
+import { salonDay, shortDate } from './dates.js';
 
 const LIMIT = 24;
 
@@ -18,6 +19,8 @@ function couponValueLabel(c, lang) {
 export default function CouponSub() {
   const { t, lang, hasScope, fireToast } = useDash();
   const canWrite = hasScope('marketing');
+  // chi non ha marketing né vendite vede i codici mascherati e non cerca per codice (C21)
+  const codesVisible = canWrite || hasScope('sales');
 
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
@@ -73,9 +76,12 @@ export default function CouponSub() {
   const openNew = () => setEdit(blank());
   const openExisting = (c) => setEdit({
     ...c,
+    // scaduto = non più modificabile né «utilizzabile», come per il server
+    status: effectiveStatus(c),
     client: c.client_id ? { id: c.client_id, full_name: c.client_name } : null,
-    // normalise the API's ISO datetime to a YYYY-MM-DD string for the modal's date input
-    expires_at: c.expires_at ? toDateStr(parseISO(c.expires_at)) : null,
+    // normalise the API's ISO datetime to a YYYY-MM-DD string for the modal's date input —
+    // il giorno del SALONE: col fuso del dispositivo la scadenza slittava a ogni salvataggio
+    expires_at: salonDay(c.expires_at),
   });
 
   const handleSaved = (msg) => {
@@ -98,7 +104,7 @@ export default function CouponSub() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
           <Icon name="search" size={18} color="var(--muted-2)" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Cerca per codice o cliente…', 'Search by code or client…')} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={codesVisible ? t('Cerca per codice o cliente…', 'Search by code or client…') : t('Cerca per cliente…', 'Search by client…')} />
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[
@@ -116,10 +122,12 @@ export default function CouponSub() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
           {items.map((c) => {
             const om = COUPON_ORIGIN_META[c.origin] || COUPON_ORIGIN_META.manual;
-            const sm = COUPON_STATUS_META[c.status] || COUPON_STATUS_META.active;
+            // scaduto si legge scaduto anche se la risposta dice ancora «attivo» (07-07)
+            const status = effectiveStatus(c);
+            const sm = COUPON_STATUS_META[status] || COUPON_STATUS_META.active;
             return (
               <div key={c.id} className="dk-card dk-hovercard" onClick={() => openExisting(c)}
-                style={{ padding: 18, opacity: c.status === 'active' ? 1 : 0.72, borderLeft: '3px solid ' + (c.status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
+                style={{ padding: 18, opacity: status === 'active' ? 1 : 0.72, borderLeft: '3px solid ' + (status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                   <div style={{ width: 42, height: 42, borderRadius: 12, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
                     <Icon name="coupon" size={21} color="var(--clay-ink)" />
@@ -135,7 +143,7 @@ export default function CouponSub() {
                 </div>
                 <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <Icon name="calendar" size={13} color="var(--muted-2)" />
-                  {c.expires_at ? t('Scade il ', 'Expires ') + parseISO(c.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT') : t('Nessuna scadenza', 'No expiry')}
+                  {c.expires_at ? t('Scade il ', 'Expires ') + shortDate(c.expires_at, lang) : t('Nessuna scadenza', 'No expiry')}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: om.color, background: om.bg, padding: '3px 9px', borderRadius: 99 }}>

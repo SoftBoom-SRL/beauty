@@ -1,24 +1,17 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, toDateStr, fmtEur, NumInput } from '@youty/shared';
+import { api, ApiError, Icon, todayStr, fmtEur, NumInput } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
+import { expiryInMonthsIso } from '../dates.js';
 
 const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
-
-/** now + n calendar months, end of day, as ISO string (for expires_at). */
-function monthsFromNowIso(months) {
-  const d = new Date();
-  d.setMonth(d.getMonth() + months);
-  d.setHours(23, 59, 0, 0);
-  return d.toISOString();
-}
 
 /** Sell a new gift card → POST /api/marketing/gift-cards
  * (value, buyer_client_id?, recipient_client_id?, recipient_name, paid+paid_method,
  * delivery_date?, expires_at?). The code is generated server-side (prototype showed a locally
  * generated code — dropped). Expiry presets map to a concrete expires_at datetime. */
-export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [] }) {
+export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [], canCash = true, canPayLater = true }) {
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState('amount'); // amount | service (trattamento)
   const [value, setValue] = useState(50);
@@ -34,13 +27,16 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [recipient, setRecipient] = useState(null);  // {id, full_name} | null
   const [recipientName, setRecipientName] = useState('');
   const [byName, setByName] = useState(false);   // destinataria come testo libero, senza scheda cliente
-  const [paid, setPaid] = useState(true);
+  // «Pagata ora» è un incasso (vendita e pagamento): lo registra chi ha
+  // `sales`; una carta «Da pagare» la crea chi ha `marketing` (07-04).
+  const [paid, setPaid] = useState(canCash);
   const [paidMethod, setPaidMethod] = useState('card');
   const [scheduled, setScheduled] = useState(false);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
-  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient);
+  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient)
+    && (paid ? canCash : canPayLater);
 
   const save = async () => {
     if (!canSave || saving) return;
@@ -55,7 +51,8 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         paid,
         paid_method: paid ? paidMethod : '',
         delivery_date: scheduled && deliveryDate ? deliveryDate : null,
-        expires_at: expiryMonths ? monthsFromNowIso(expiryMonths) : null,
+        // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
+        expires_at: expiryMonths ? expiryInMonthsIso(expiryMonths) : null,
       };
       await api.post('/api/marketing/gift-cards', payload);
       onSaved();
@@ -170,8 +167,10 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamento', 'Payment')}</div>
       <div style={{ display: 'flex', gap: 8, marginBottom: paid ? 10 : 16 }}>
-        <button style={segBtn(paid)} onClick={() => setPaid(true)}>{t('Pagata ora', 'Paid now')}</button>
-        <button style={segBtn(!paid)} onClick={() => setPaid(false)}>{t('Da pagare', 'Payment due')}</button>
+        <button style={{ ...segBtn(paid), opacity: canCash ? 1 : 0.5, cursor: canCash ? 'pointer' : 'not-allowed' }} disabled={!canCash} onClick={() => setPaid(true)}
+          title={canCash ? undefined : t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required to take payment')}>{t('Pagata ora', 'Paid now')}</button>
+        <button style={{ ...segBtn(!paid), opacity: canPayLater ? 1 : 0.5, cursor: canPayLater ? 'pointer' : 'not-allowed' }} disabled={!canPayLater} onClick={() => setPaid(false)}
+          title={canPayLater ? undefined : t('Serve il permesso "marketing" per una carta da pagare dopo', 'The "marketing" permission is required for a card paid later')}>{t('Da pagare', 'Payment due')}</button>
       </div>
       {paid && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -187,7 +186,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         <button style={segBtn(scheduled)} onClick={() => setScheduled(true)}>{t('Programmata', 'Scheduled')}</button>
       </div>
       {scheduled && (
-        <input type="date" min={toDateStr(new Date())} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
+        <input type="date" min={todayStr()} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
       )}
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Scadenza', 'Expiry')}</div>

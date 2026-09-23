@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, PhoneInput } from '@youty/shared';
+import { api, ApiError, Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 
 /** Client search-picker (predictive) with inline "new client" creation.
@@ -24,7 +24,9 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     let alive = true;
     setLoading(true);
     const tm = setTimeout(() => {
-      api.get('/api/clients/', { params: { q, limit: 8 } })
+      // Solo schede attive: un buono intestato al doppione archiviato di Maria
+      // Rossi veniva poi rifiutato in cassa alla Maria Rossi vera (14-22).
+      api.get('/api/clients/', { params: { q, is_active: true, limit: 8 } })
         .then((res) => { if (alive) setResults(res.items || []); })
         .catch(() => { if (alive) setResults([]); })
         .finally(() => { if (alive) setLoading(false); });
@@ -42,8 +44,12 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     setAdding(true);
   };
 
+  // Stessa regola del server (canonical_phone) e dell'app cliente: «333» si
+  // salvava come «+39333», una scheda con un numero che non esiste (14-19).
+  const phoneOk = isPlausiblePhone(nf.phone);
+
   const createClient = async () => {
-    if (creating || !nf.first_name.trim() || !nf.phone.trim()) return;
+    if (creating || !nf.first_name.trim() || !phoneOk) return;
     setCreating(true);
     try {
       const created = await api.post('/api/clients/', {
@@ -90,9 +96,14 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
                   <input value={nf.last_name} onChange={(e) => setNf((f) => ({ ...f, last_name: e.target.value }))} placeholder={t('Cognome', 'Last name')} style={nfInput} />
                 </div>
                 <PhoneInput value={nf.phone} onChange={(v) => setNf((f) => ({ ...f, phone: v }))} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
+                {nf.phone.trim() && !phoneOk && (
+                  <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>
+                    {t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 2 }}>
                   <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={() => setAdding(false)}>{t('Indietro', 'Back')}</button>
-                  <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5 }} disabled={creating || !nf.first_name.trim() || !nf.phone.trim()} onClick={createClient}>
+                  <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5 }} disabled={creating || !nf.first_name.trim() || !phoneOk} onClick={createClient}>
                     <Icon name="check" size={14} color="#fff" />{creating ? t('Creazione…', 'Creating…') : t('Crea e seleziona', 'Create & select')}
                   </button>
                 </div>

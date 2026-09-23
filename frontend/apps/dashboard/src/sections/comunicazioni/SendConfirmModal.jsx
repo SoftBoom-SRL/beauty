@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import { api, ApiError, Icon } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
-import { audienceSummary, dtLocalToIso, isoToDtLocal } from './helpers.js';
+import { audienceSummary, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
 
 const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 14,
@@ -19,7 +19,10 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
   const [when, setWhen] = useState(isoToDtLocal(comm.scheduled_at));
   const [sending, setSending] = useState(false);
 
-  const canConfirm = mode === 'now' || !!when;
+  // Mai una data passata: la bozza riaperta con la data di un mese fa partiva
+  // «Programmata» per sempre (07-14). Il server la rifiuta; qui si vede prima.
+  const past = mode === 'schedule' && isPastSchedule(when);
+  const canConfirm = mode === 'now' || (!!when && !past);
 
   const confirm = async () => {
     if (!canConfirm || sending) return;
@@ -90,7 +93,12 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
       {mode === 'schedule' && (
         <div style={{ marginBottom: 14 }}>
           <div className="t-meta" style={{ marginBottom: 5 }}>{t('Data e ora', 'Date & time')}</div>
-          <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} style={inputCss} />
+          <input type="datetime-local" min={nowDtLocal()} value={when} onChange={(e) => setWhen(e.target.value)} style={inputCss} />
+          {past && (
+            <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6 }}>
+              {t('La data è già passata: scegline una futura oppure invia subito.', 'That date has passed: pick a future one or send now.')}
+            </div>
+          )}
           <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
             {t('Es. la mattina di un cambio stagione o di un lancio.', 'E.g. the morning of a season change or a launch.')}
           </div>

@@ -36,6 +36,19 @@ export const isoToDtLocal = toDateTimeLocal;
 /** Valore di <input type="datetime-local"> -> ISO dell'istante (ora del salone). */
 export const dtLocalToIso = dateTimeLocalToIso;
 
+/** Adesso come valore di <input type="datetime-local"> (ora del salone): il
+ *  `min` dei campi di programmazione. */
+export const nowDtLocal = () => toDateTimeLocal(new Date());
+
+/** La data di programmazione è già passata (o è adesso)? Una bozza con una
+ *  data vecchia, programmata, restava «Programmata» per sempre con una data
+ *  passata, e cosa facesse Yourang con un invio già scaduto non era detto
+ *  (07-14): il server ora la rifiuta, qui lo si dice prima. */
+export function isPastSchedule(dtLocal, now = Date.now()) {
+  const iso = dateTimeLocalToIso(dtLocal);
+  return !!iso && Date.parse(iso) <= now;
+}
+
 /** Human summary of a communication's audience, given the salon's client categories. */
 export function audienceSummary(comm, clientCategories, t) {
   const audience = comm.audience || [];
