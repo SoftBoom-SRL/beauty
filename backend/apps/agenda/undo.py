@@ -566,13 +566,21 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
         entry.undone_at = timezone.now()
         entry.save(update_fields=["undone_at"])
         # Il registro tiene traccia anche dei ripensamenti, e il feed live lo usa
-        # per aggiornare da sé le altre postazioni.
+        # per aggiornare da sé le altre postazioni. `appointment_ids` sono le
+        # visite toccate, anche quelle tolte: un pannello aperto su un'altra
+        # visita non ha bisogno di rileggersi.
         log_activity(
             salon,
             "appointment.undone",
             f"Annullato: {entry.label}",
             actor=actor,
-            payload={"undo_id": entry.id, "kind": entry.kind},
+            payload={
+                "undo_id": entry.id,
+                "kind": entry.kind,
+                "appointment_ids": sorted(
+                    {a.id for a in touched} | set(entry.created.get("appointments", []))
+                ),
+            },
         )
     day = min(days) if days else None
     return {

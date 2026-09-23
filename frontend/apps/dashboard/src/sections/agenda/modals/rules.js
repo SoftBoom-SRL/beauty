@@ -56,7 +56,12 @@ export function movedMeanwhile(seen, fresh) {
  *  non dice quale gesto ha rimesso a posto: in quel caso si rilegge comunque. */
 export function eventConcerns(ev, id) {
   if (!ev || id == null) return false;
-  if (ev.type === 'appointment.undone') return true;
+  if (ev.type === 'appointment.undone') {
+    // l'annullamento dice quali visite ha toccato (anche quelle tolte); un
+    // server che non lo dice fa rileggere sempre
+    const ids = ev.payload?.appointment_ids;
+    return !Array.isArray(ids) || ids.some((x) => Number(x) === Number(id));
+  }
   const p = ev.payload || {};
   return [p.appointment_id, p.created_id].some((x) => x != null && Number(x) === Number(id));
 }

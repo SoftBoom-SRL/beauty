@@ -3300,6 +3300,21 @@ class UndoTests(AgendaTestBase):
             OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING).exists()
         )
 
+    def test_the_undone_event_says_which_visits_it_touched(self):
+        """Il pannello aperto su un'altra visita non deve rileggersi a ogni «Indietro»."""
+        from apps.core.models import ActivityLog
+
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            moved = self._book()
+            move_appointment(moved, _aware(self.day, 16), actor=self.user)
+            self.assertEqual(self._undo().status_code, 200)
+            booked = self._book(hour=12)
+            self.assertEqual(self._undo().status_code, 200)
+        logs = ActivityLog.objects.filter(salon=self.salon, type="appointment.undone").order_by("id")
+        self.assertEqual(logs[0].payload["appointment_ids"], [moved.id])
+        # anche la visita tolta: il suo pannello deve accorgersene e chiudersi
+        self.assertEqual(logs[1].payload["appointment_ids"], [booked.id])
+
     def test_undoing_a_booking_already_confirmed_warns_the_client(self):
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = self._book()

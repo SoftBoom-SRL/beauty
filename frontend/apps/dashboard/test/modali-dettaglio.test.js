@@ -90,8 +90,11 @@ test('gli eventi live che riguardano il pannello', () => {
   assert.ok(eventConcerns({ type: 'appointment.moved', payload: { appointment_id: 40 } }, 40));
   assert.ok(eventConcerns({ type: 'deposit.paid', payload: { appointment_id: '40' } }, 40));
   assert.ok(eventConcerns({ type: 'appointment.split', payload: { appointment_id: 7, created_id: 40 } }, 40));
-  // l'annullamento non dice quale appuntamento ha rimesso a posto
+  // un server che non dice quale appuntamento ha rimesso a posto: si rilegge
   assert.ok(eventConcerns({ type: 'appointment.undone', payload: { undo_id: 3, kind: 'move' } }, 40));
+  // quando lo dice, solo i pannelli di quelle visite (anche di una tolta)
+  assert.ok(eventConcerns({ type: 'appointment.undone', payload: { undo_id: 3, appointment_ids: [39, 40] } }, 40));
+  assert.ok(!eventConcerns({ type: 'appointment.undone', payload: { undo_id: 3, appointment_ids: [41] } }, 40));
   assert.ok(!eventConcerns({ type: 'appointment.moved', payload: { appointment_id: 41 } }, 40));
   assert.ok(!eventConcerns({ type: 'pause.created', payload: { pause_id: 40 } }, 40));
   assert.ok(!eventConcerns({ type: 'appointment.updated', payload: {} }, 40));
