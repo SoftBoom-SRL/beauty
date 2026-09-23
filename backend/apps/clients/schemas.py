@@ -255,6 +255,14 @@ class NoteUpdateIn(Schema):
 
 
 class TechnicalSheetOut(Schema):
+    """Serializzata da api._sheet_out (dizionari), non da istanze: niente resolver.
+
+    Dal modello ninja serializzava la foto con il suo `.url` nudo, mentre
+    technical_sheets/ si scarica solo con l'URL firmato: nella scheda tecnica
+    le foto erano sempre rotte (403), anche subito dopo il caricamento
+    (06-03). Un resolver qui cancellerebbe `author_name` dei dizionari.
+    """
+
     id: int
     client_id: int
     appointment_id: Optional[int] = None
@@ -272,13 +280,6 @@ class TechnicalSheetOut(Schema):
     author_id: Optional[int] = None
     author_name: str = ""
     created_at: datetime
-
-    @staticmethod
-    def resolve_author_name(obj) -> str:
-        author = getattr(obj, "author", None)
-        if not author:
-            return ""
-        return author.get_full_name() or author.email
 
 
 class TechnicalSheetIn(Schema):

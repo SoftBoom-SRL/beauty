@@ -6,6 +6,8 @@ GET (lista) e POST (creazione), nessun endpoint di update/delete.
 """
 
 import logging
+import re
+import unicodedata
 from decimal import Decimal
 from typing import Optional
 
@@ -292,6 +294,56 @@ def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) ->
     raise HttpError(400, DUPLICATE_PHONE)
 
 
+# Ricerca senza accenti: «nicolo» deve trovare «Nicolò» e «d'amico» la
+# «D’Amico» scritta con l'apostrofo tipografico (quello che mettono iPhone e
+# Word). `icontains` confronta i caratteri come sono, su PostgreSQL come su
+# SQLite (06-16, 13-22). Ogni lettera della ricerca diventa la classe delle sue
+# varianti accentate e la parola si cerca con `iregex`: in produzione è `~*`
+# di PostgreSQL, nei test la REGEXP che Django registra su SQLite, senza
+# estensioni da installare (unaccent vorrebbe i privilegi per crearla).
+_APOSTROPHES = "'’‘ʼ`´"
+_APOSTROPHE_CLASS = f"[{_APOSTROPHES}]"
+# Lettere senza scomposizione Unicode che si leggono come la lettera base.
+_EXTRA_VARIANTS = {"o": "øØ", "l": "łŁ", "d": "đĐ", "i": "ı"}
+
+
+def _letter_classes() -> dict[str, str]:
+    variants: dict[str, set] = {}
+    for code in range(0x00C0, 0x0250):  # Latin-1, Latin esteso A e B
+        ch = chr(code)
+        base = unicodedata.normalize("NFKD", ch)[0]
+        if base.isascii() and base.isalpha() and ch != base:
+            variants.setdefault(base.lower(), set()).add(ch)
+    for base, extra in _EXTRA_VARIANTS.items():
+        variants.setdefault(base, set()).update(extra)
+    return {
+        base: "[" + base + base.upper() + "".join(sorted(chars)) + "]"
+        for base, chars in variants.items()
+    }
+
+
+_LETTER_CLASSES = _letter_classes()
+
+
+def _accent_insensitive(word: str) -> str:
+    """Espressione regolare che trova `word` con o senza accenti e apostrofi tipografici."""
+    plain = "".join(
+        ch for ch in unicodedata.normalize("NFKD", word) if not unicodedata.combining(ch)
+    ).lower()
+    parts = []
+    for ch in plain:
+        for base, extra in _EXTRA_VARIANTS.items():
+            if ch in extra:
+                ch = base
+        if ch in _APOSTROPHES:
+            parts.append(_APOSTROPHE_CLASS)
+        elif ch in _LETTER_CLASSES:
+            parts.append(_LETTER_CLASSES[ch])
+        else:
+            parts.append(re.escape(ch))
+    return "".join(parts)
+
+
 def _search_filter(q: str) -> Q:
     """Filtro della ricerca in anagrafica: nome completo e numero formattato.
 
@@ -302,15 +354,17 @@ def _search_filter(q: str) -> Q:
 
     Ogni parola deve comparire da qualche parte nella scheda (AND fra le
     parole, OR fra i campi): «Sofia Ricci» trova solo Sofia Ricci, non tutte
-    le Sofia. Il numero si cerca sulla chiave normalizzata, la stessa che
+    le Sofia. Nome e cognome si confrontano senza accenti né apostrofi
+    tipografici. Il numero si cerca sulla chiave normalizzata, la stessa che
     riconosce la cliente al login.
     """
     words = [w for w in q.split() if w]
     condition = Q()
     for word in words:
+        pattern = _accent_insensitive(word)
         condition &= (
-            Q(first_name__icontains=word)
-            | Q(last_name__icontains=word)
+            Q(first_name__iregex=pattern)
+            | Q(last_name__iregex=pattern)
             | Q(phone__icontains=word)
             | Q(email__icontains=word)
         )
@@ -1020,7 +1074,7 @@ def list_sheets(request, client_id: int):
     # conserva: leggerli richiede il permesso «clienti», come scriverli.
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    return client.sheets.all()
+    return [_sheet_out(sh) for sh in client.sheets.select_related("author")]
 
 
 @router.post("/{int:client_id}/sheets", auth=staff_auth, response=TechnicalSheetOut)
@@ -1048,7 +1102,7 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
         actor=ctx.user,
         payload={"client_id": client.id, "sheet_id": sheet.id},
     )
-    return sheet
+    return _sheet_out(sheet)
 
 
 @router.post("/{int:client_id}/sheets/{int:sheet_id}/photo", auth=staff_auth, response=TechnicalSheetOut)
@@ -1069,7 +1123,7 @@ def upload_sheet_photo(request, client_id: int, sheet_id: int, photo: UploadedFi
     if sheet.photo:
         sheet.photo.delete(save=False)
     sheet.photo.save(stored, photo, save=True)
-    return sheet
+    return _sheet_out(sheet)
 
 
 # ---------------------------------------------------------------------------
