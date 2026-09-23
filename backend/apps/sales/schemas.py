@@ -52,6 +52,7 @@ class SaleLineOut(Schema):
     operator_id: Optional[int] = None
     operator_name: str = ""
     service_id: Optional[int] = None
+    service_name: str = ""
     product_id: Optional[int] = None
     product_name: str = ""
     gift_card_code: Optional[str] = None
@@ -59,7 +60,9 @@ class SaleLineOut(Schema):
     unit_price: Decimal
     discount_pct: int
     is_gift: bool
+    # Già al netto della quota di buono sconto della riga (`coupon_share`).
     amount: Decimal
+    coupon_share: Decimal = Decimal("0.00")
 
 
 class PaymentOut(Schema):
@@ -73,6 +76,8 @@ class SaleOut(Schema):
     id: int
     kind: str
     appointment_id: Optional[int] = None
+    # Vendita-caparra: l'appuntamento di cui è l'anticipo (vedi list_sales).
+    deposit_appointment_id: Optional[int] = None
     client_id: Optional[int] = None
     client_name: str = ""
     location_id: Optional[int] = None
@@ -120,6 +125,8 @@ class TodaySummaryOut(Schema):
     deposit_used: Decimal = Decimal("0.00")
     # Caparre arrivate oggi: denaro in cassa, ma non venduto di oggi.
     deposit_cashed: Decimal = Decimal("0.00")
+    # Caparre restituite oggi: denaro uscito, già tolto da `cash_in`.
+    deposit_refunded: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
 
 

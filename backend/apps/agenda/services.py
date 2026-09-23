@@ -1665,14 +1665,21 @@ def edit_appointment(
 
 
 def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
-    """Riporta la caparra al totale della visita quando questa si accorcia.
+    """Allinea la caparra a una visita che si è accorciata (servizio staccato o tolto).
 
-    Staccando un servizio (o togliendolo dalla lista) il totale può scendere
-    sotto la caparra già versata: il checkout avrebbe dovuto incassare un
-    importo negativo e rispondeva 422 per sempre, senza più modo di chiudere il
-    conto. La caparra scende al nuovo totale; l'eccedenza, se era già stata
-    incassata, resta scritta nel registro come «da rimborsare». Il denaro non si
-    muove da solo: lo restituisce lo staff, che decide come.
+    Caparra ancora da pagare: scende al nuovo totale, e il link già mandato —
+    che chiede l'importo di prima — viene chiuso e rifatto a transazione
+    conclusa. Prima restava quello vecchio: la cliente pagava 70 per una
+    caparra scesa a 30 e i 40 in più restavano su Stripe senza traccia (02-06,
+    05-07).
+
+    Caparra già versata: è denaro incassato e l'importo NON si tocca. Prima
+    scendeva al nuovo totale, così la quota detraibile non vedeva più
+    l'eccedenza (la cliente la perdeva) e, se lo staff la rimborsava come
+    chiedeva il registro, i rimborsi si confrontavano con la caparra ridotta e
+    la sottraevano una seconda volta: caparra «rimborsata», credito zero, la
+    cliente ripagava la visita (02-01, 05-06). Ora il checkout detrae fino al
+    totale e restituisce da sé l'eccedenza (`settle_deposit_excess`).
 
     Ritorna l'eccedenza (0 se non c'era).
     """
@@ -1681,25 +1688,53 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
         start=Decimal("0"),
     ).quantize(Decimal("0.01"))
     amount = Decimal(str(appointment.deposit_amount or 0)).quantize(Decimal("0.01"))
+
+    if appointment.deposit_status == Appointment.DepositStatus.PAID:
+        excess = appointment.deposit_credit - total
+        if excess > 0:
+            log_activity(
+                appointment.salon,
+                "deposit.excess",
+                f"Caparra superiore alla visita: al conto si detraggono {total} €, "
+                f"{excess} € tornano alla cliente — {appointment.client.full_name}",
+                actor=actor,
+                payload={
+                    "appointment_id": appointment.id,
+                    "amount": str(excess),
+                    "deposit_amount": str(amount),
+                    "total": str(total),
+                    "reason": "visita ridotta",
+                },
+            )
+        return max(excess, Decimal("0.00"))
+
     excess = amount - total
-    if excess <= 0:
-        return Decimal("0.00")
+    if excess <= 0 or appointment.deposit_status != Appointment.DepositStatus.REQUIRED:
+        return max(excess, Decimal("0.00"))
 
     appointment.deposit_amount = total
     appointment.save(update_fields=["deposit_amount", "updated_at"])
-    if appointment.deposit_status == Appointment.DepositStatus.PAID:
-        log_activity(
-            appointment.salon,
-            "deposit.refund_due",
-            f"Caparra eccedente da rimborsare ({excess} €) — {appointment.client.full_name}",
-            actor=actor,
-            payload={
-                "appointment_id": appointment.id,
-                "amount": str(excess),
-                "deposit_amount": str(total),
-                "reason": "visita ridotta",
-            },
-        )
+    if appointment.deposit_payment_link or appointment.deposit_checkout_session_id:
+        appointment_id = appointment.pk
+
+        def renew_link():
+            # Dopo il commit e fuori dal lock: si parla con Stripe, e il link
+            # nuovo deve leggere la caparra già ridotta.
+            from apps.sales.stripe_service import ensure_deposit_link  # lazy
+
+            fresh = (
+                Appointment.objects.select_related("salon", "salon__settings", "client")
+                .filter(pk=appointment_id)
+                .first()
+            )
+            if fresh is None:
+                return
+            try:
+                ensure_deposit_link(fresh, resend=True, actor=actor, reason="amount_changed")
+            except Exception:  # noqa: BLE001 — la modifica è salva, il link si rimanda a mano
+                logger.exception("Link caparra non rifatto dopo la riduzione (appuntamento %s)", appointment_id)
+
+        transaction.on_commit(renew_link)
     return excess
 
 
@@ -2236,18 +2271,21 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
     lo stato resta «da rimborsare» e il registro attività lo segnala: il
     rimborso va fatto a mano e poi confermato con `mark_deposit_refunded`.
     """
-    from apps.sales.stripe_service import refund_deposit  # lazy
+    from apps.sales.stripe_service import as_dict, refund_deposit  # lazy
 
     if appointment.deposit_status != Appointment.DepositStatus.REFUND_DUE:
         return appointment
     client_name = appointment.client.full_name
     refund = refund_deposit(appointment)
     if refund is not None:
+        # Il Refund di stripe-python non è un dict: `.get()` esplodeva DOPO che
+        # Stripe aveva già restituito i soldi, e la caparra restava «da rimborsare».
+        refund = as_dict(refund)
         # Lo stato lo decide Stripe, non il fatto che la chiamata sia passata:
         # un rimborso «pending» non è denaro già tornato alla cliente.
         record_deposit_refund(
             appointment,
-            refund_id=refund.get("id") or "",
+            refund_id=refund.get("id") or f"deposit-refund-{appointment.id}",
             cents=int(refund.get("amount") or 0) or _to_cents(appointment.deposit_amount),
             status=refund.get("status") or REFUND_DONE,
             actor=actor,
@@ -2266,6 +2304,15 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
 # Stati Stripe di un rimborso: solo «succeeded» è denaro tornato alla cliente.
 REFUND_DONE = "succeeded"
 REFUND_IN_FLIGHT = ("pending", "requires_action")
+# Voce di `deposit_refunds` con il totale restituito dichiarato da
+# `charge.refunded`, che non porta l'id del singolo rimborso: vale come
+# soglia minima. Prima non si salvava, e l'evento successivo la dimenticava.
+REFUND_FLOOR_KEY = "charge.refunded"
+# Un aggiornamento non può riportare indietro un rimborso: Stripe non garantisce
+# l'ordine degli eventi, e un `refund.created` «pending» arrivato in ritardo
+# faceva tornare «in corso» un rimborso già riuscito (05-14). Da riuscito si
+# può ancora passare a fallito: Stripe lo fa, di rado.
+_REFUND_STATUS_RANK = {"pending": 0, "requires_action": 0, "succeeded": 1, "failed": 2, "canceled": 2}
 
 
 def _to_cents(amount) -> int:
@@ -2273,12 +2320,28 @@ def _to_cents(amount) -> int:
 
 
 def _refunds_done_cents(refunds: dict) -> int:
-    """Centesimi dei soli rimborsi RIUSCITI fra quelli registrati."""
-    return sum(
+    """Centesimi dei soli rimborsi RIUSCITI fra quelli registrati.
+
+    Mai meno del totale dichiarato da `charge.refunded` (`REFUND_FLOOR_KEY`):
+    un rimborso fatto dalla dashboard Stripe può arrivare solo da lì.
+    """
+    refunds = refunds or {}
+    by_id = sum(
         int(row.get("amount_cents") or 0)
-        for row in (refunds or {}).values()
-        if (row.get("status") or "") == REFUND_DONE
+        for key, row in refunds.items()
+        if key != REFUND_FLOOR_KEY and (row.get("status") or "") == REFUND_DONE
     )
+    floor = int((refunds.get(REFUND_FLOOR_KEY) or {}).get("amount_cents") or 0)
+    return max(by_id, floor)
+
+
+def _sync_refund_moves(appointment: Appointment) -> None:
+    """Il rimborso esce dalla cassa del giorno in cui avviene (vedi sales.DepositRefund)."""
+    from apps.sales import services as sales_services  # lazy
+
+    sync = getattr(sales_services, "sync_deposit_refunds", None)
+    if sync is not None:
+        sync(appointment)
 
 
 @transaction.atomic
@@ -2295,14 +2358,25 @@ def record_deposit_refund(
 
     I rimborsi si conservano uno per id Stripe: lo stesso evento ripetuto non
     conta due volte e un aggiornamento successivo (pending → succeeded, oppure
-    → failed) corregge quello registrato prima. «Rimborsata» si scrive solo
-    quando i rimborsi RIUSCITI coprono l'intera caparra; un rimborso parziale
-    lascia la caparra pagata e riduce soltanto la quota detraibile al checkout.
+    → failed) corregge quello registrato prima — ma non lo riporta indietro:
+    un evento vecchio arrivato tardi non conta (vedi `_REFUND_STATUS_RANK`).
+    «Rimborsata» si scrive solo quando i rimborsi RIUSCITI coprono l'intera
+    caparra; un rimborso parziale lascia la caparra pagata e riduce soltanto la
+    quota detraibile al checkout.
 
     `floor_cents` è il totale già restituito dichiarato da `charge.refunded`:
     quell'evento non porta l'id del singolo rimborso, quindi vale come soglia
-    minima e non come voce a sé.
+    minima e non come voce a sé. Si conserva (il massimo visto), altrimenti
+    l'evento seguente lo dimenticava e lo stato restava «rimborsata» con zero
+    euro restituiti.
+
+    I confronti sono con `deposit_amount`, che per una caparra pagata è quanto
+    è arrivato davvero (una visita accorciata non lo abbassa più).
     """
+    # Prima il salone, poi la riga: lo stesso ordine di chi modifica l'agenda.
+    # Al contrario, su PostgreSQL un rimborso e uno spostamento dello stesso
+    # appuntamento potevano aspettarsi a vicenda (18-08).
+    lock_salon(appointment.salon)
     # Lock di riga PRIMA della rilettura: `deposit_refunds` si legge, si
     # modifica e si riscrive per intero. Stripe consegna gli eventi in
     # parallelo, e due rimborsi parziali finivano per sovrascriversi a vicenda —
@@ -2317,17 +2391,27 @@ def record_deposit_refund(
         raise HttpError(404, "Appuntamento non trovato")
     appointment.refresh_from_db()
     refunds = dict(appointment.deposit_refunds or {})
+    ignored_update = False
     if refund_id:
-        refunds[refund_id] = {"amount_cents": int(cents or 0), "status": status}
+        known = refunds.get(refund_id) or {}
+        rank = _REFUND_STATUS_RANK.get(status or "", 0)
+        if known and _REFUND_STATUS_RANK.get(known.get("status") or "", 0) > rank:
+            ignored_update = True
+        else:
+            refunds[refund_id] = {**known, "amount_cents": int(cents or 0), "status": status}
+    if floor_cents:
+        floor = refunds.get(REFUND_FLOOR_KEY) or {}
+        if int(floor_cents) > int(floor.get("amount_cents") or 0):
+            refunds[REFUND_FLOOR_KEY] = {"amount_cents": int(floor_cents), "status": "floor"}
 
     def _sum(predicate) -> int:
         return sum(
             int(row.get("amount_cents") or 0)
-            for row in refunds.values()
-            if predicate(row.get("status") or "")
+            for key, row in refunds.items()
+            if key != REFUND_FLOOR_KEY and predicate(row.get("status") or "")
         )
 
-    done = max(_refunds_done_cents(refunds), int(floor_cents or 0))
+    done = _refunds_done_cents(refunds)
     in_flight = _sum(lambda st: st in REFUND_IN_FLIGHT)
     deposit_cents = _to_cents(appointment.deposit_amount)
 
@@ -2335,11 +2419,17 @@ def record_deposit_refund(
     if deposit_cents > 0 and done >= deposit_cents:
         new_status = Appointment.DepositStatus.REFUNDED
     elif in_flight > 0:
+        # Anche un rimborso PARZIALE in volo rende la caparra «in corso»: la
+        # quota mostrata alla cassa è zero finché Stripe non conferma, e il
+        # checkout restituisce da sé la parte che non ha detratto
+        # (sales.services.deposit_retained). Lasciarla «pagata» avrebbe fatto
+        # detrarre anche i soldi che stanno tornando alla cliente.
         new_status = Appointment.DepositStatus.REFUNDING
-    elif previous == Appointment.DepositStatus.REFUNDING:
-        # Il rimborso in volo è fallito o è stato annullato: il denaro è ancora
-        # in cassa. Se l'appuntamento è annullato resta da restituire, se è
-        # ancora in piedi la caparra torna semplicemente pagata.
+    elif previous in (Appointment.DepositStatus.REFUNDING, Appointment.DepositStatus.REFUNDED):
+        # Il rimborso in volo è fallito o è stato annullato (o uno riuscito è
+        # stato poi respinto): il denaro è ancora in cassa. Se l'appuntamento è
+        # annullato resta da restituire, se è ancora in piedi la caparra torna
+        # semplicemente pagata.
         new_status = (
             Appointment.DepositStatus.REFUND_DUE
             if appointment.status == Appointment.Status.CANCELLED
@@ -2359,17 +2449,30 @@ def record_deposit_refund(
             "updated_at",
         ]
     )
-    if new_status != previous:
+    _sync_refund_moves(appointment)
+    failed_meanwhile = (
+        not ignored_update
+        and refund_id
+        and status in ("failed", "canceled")
+        and new_status == previous == Appointment.DepositStatus.REFUNDED
+    )
+    if new_status != previous or failed_meanwhile:
         labels = {
             Appointment.DepositStatus.REFUNDED: "Caparra rimborsata",
             Appointment.DepositStatus.REFUNDING: "Rimborso caparra in corso",
             Appointment.DepositStatus.REFUND_DUE: "Rimborso caparra non riuscito, da rifare",
             Appointment.DepositStatus.PAID: "Rimborso caparra non riuscito",
         }
+        label = labels.get(new_status, "Caparra aggiornata")
+        if failed_meanwhile:
+            # Stripe dichiara restituito il totale ma segnala un rimborso
+            # fallito: lo stato resta, e qualcuno deve guardarci.
+            label = "Stripe segnala un rimborso della caparra non riuscito: controlla il pagamento"
         log_activity(
             appointment.salon,
-            "deposit.refunded" if new_status == Appointment.DepositStatus.REFUNDED else "deposit.refund_update",
-            f"{labels.get(new_status, 'Caparra aggiornata')} — {appointment.client.full_name}",
+            "deposit.refunded" if new_status == Appointment.DepositStatus.REFUNDED and not failed_meanwhile
+            else "deposit.refund_update",
+            f"{label} — {appointment.client.full_name}",
             actor=actor,
             payload={
                 "appointment_id": appointment.id,
@@ -2389,8 +2492,23 @@ def mark_deposit_refunded(appointment: Appointment, *, actor=None) -> Appointmen
     Scrive anche l'importo e una voce fra i rimborsi: `deposit_refunded_amount`
     è «la somma dei rimborsi riusciti», e dopo una conferma manuale restava a
     zero — il dettaglio diceva «rimborsata» senza importo e le riconciliazioni
-    che sommano quel campo saltavano i rimborsi fatti in salone.
+    che sommano quel campo saltavano i rimborsi fatti in salone. Il rimborso
+    esce anche dall'incasso del giorno (02-11): prima la caparra da 20 € resa in
+    contanti restava in «Incassato oggi».
+
+    Lock e rilettura prima di decidere, come per i rimborsi Stripe: la conferma
+    arrivava su una copia letta all'inizio della richiesta e poteva cancellare
+    un rimborso registrato un istante prima dal webhook.
     """
+    lock_salon(appointment.salon)
+    locked = list(
+        Appointment.objects.select_for_update()
+        .filter(pk=appointment.pk)
+        .values_list("id", flat=True)
+    )
+    if not locked:
+        raise HttpError(404, "Appuntamento non trovato")
+    appointment.refresh_from_db()
     if appointment.deposit_status != Appointment.DepositStatus.REFUND_DUE:
         raise HttpError(400, "La caparra di questo appuntamento non è in attesa di rimborso")
     deposit_cents = _to_cents(appointment.deposit_amount)
@@ -2417,6 +2535,7 @@ def mark_deposit_refunded(appointment: Appointment, *, actor=None) -> Appointmen
             "updated_at",
         ]
     )
+    _sync_refund_moves(appointment)
     log_activity(
         appointment.salon,
         "deposit.refunded",
@@ -2470,17 +2589,43 @@ def schedule_deposit_hold(appointment: Appointment) -> None:
     now = timezone.now()
     if appointment.start <= now:
         return
-    appointment.deposit_due_at = min(now + dt.timedelta(minutes=hold), appointment.start)
+    # Il termine intero resta scritto a parte (`deposit_hold_until`): se la
+    # visita viene spostata, la scadenza si ricalcola dal nuovo inizio invece
+    # di restare tagliata su quello vecchio (vedi `_effective_deposit_due`).
+    appointment.deposit_hold_until = now + dt.timedelta(minutes=hold)
+    appointment.deposit_due_at = min(appointment.deposit_hold_until, appointment.start)
     appointment.deposit_reminder_sent_at = None
-    appointment.save(update_fields=["deposit_due_at", "deposit_reminder_sent_at", "updated_at"])
+    appointment.save(
+        update_fields=["deposit_due_at", "deposit_hold_until", "deposit_reminder_sent_at", "updated_at"]
+    )
 
 
 def clear_deposit_hold(appointment: Appointment) -> None:
-    """La caparra è arrivata: niente più scadenza né rilascio."""
-    if appointment.deposit_due_at is None:
+    """La caparra è arrivata (o non c'è modo di pagarla): niente più scadenza né rilascio."""
+    if appointment.deposit_due_at is None and appointment.deposit_hold_until is None:
         return
     appointment.deposit_due_at = None
-    appointment.save(update_fields=["deposit_due_at", "updated_at"])
+    appointment.deposit_hold_until = None
+    appointment.save(update_fields=["deposit_due_at", "deposit_hold_until", "updated_at"])
+
+
+def _effective_deposit_due(appointment: Appointment, hold: int):
+    """Scadenza vera della caparra: fine del termine, ma mai oltre l'inizio attuale.
+
+    `deposit_due_at` è tagliato sull'inizio che la visita aveva quando il
+    termine è stato fissato. Spostandola più avanti restava la scadenza di
+    prima: la visita spostata a martedì veniva liberata all'ora del vecchio
+    appuntamento, con «posto liberato» alla cliente (02-04). Per le caparre di
+    prima di `deposit_hold_until` il termine intero si ricostruisce dalla
+    creazione, senza mai anticipare la scadenza salvata.
+    """
+    hold_until = appointment.deposit_hold_until
+    if hold_until is None:
+        hold_until = max(
+            appointment.deposit_due_at,
+            appointment.created_at + dt.timedelta(minutes=hold),
+        )
+    return min(hold_until, appointment.start)
 
 
 @transaction.atomic
@@ -2609,10 +2754,23 @@ def process_deposit_holds(salon, *, now=None) -> dict:
             # si libera e soprattutto non le si scrive che l'appuntamento è
             # saltato. La caparra resta da incassare al banco.
             continue
+        due = _effective_deposit_due(appointment, hold)
+        if due != appointment.deposit_due_at:
+            # Visita spostata: la scadenza mostrata in agenda (e nel messaggio
+            # alla cliente) si allinea. Solo quella colonna, senza toccare
+            # `updated_at`: è un dato derivato, non una modifica di qualcuno.
+            Appointment.objects.filter(
+                pk=appointment.pk, deposit_due_at=appointment.deposit_due_at
+            ).update(deposit_due_at=due)
+            appointment.deposit_due_at = due
         if appointment.deposit_due_at <= now:
             with transaction.atomic():
+                # Prima il salone, poi la sola riga dell'appuntamento: il join
+                # FOR UPDATE bloccava anche cliente e salone DOPO l'appuntamento,
+                # l'ordine opposto a quello di chi modifica l'agenda (18-08).
+                lock_salon(salon)
                 locked = (
-                    Appointment.objects.select_for_update()
+                    Appointment.objects.select_for_update(of=("self",))
                     .filter(
                         pk=appointment.pk,
                         status=Appointment.Status.CONFIRMED,
@@ -2627,7 +2785,14 @@ def process_deposit_holds(salon, *, now=None) -> dict:
                 result["released"] += 1
             continue
         if reminder and appointment.deposit_reminder_sent_at is None:
-            remind_at = appointment.deposit_due_at - dt.timedelta(minutes=max(hold - reminder, 0))
+            # «Il sollecito parte dopo `deposit_reminder_minutes`» dalla
+            # prenotazione: si conta dal termine intero, non dalla scadenza
+            # tagliata sull'inizio. Con quella, per una prenotazione a ridosso
+            # il sollecito cadeva nel passato e partiva insieme al link (02-16).
+            hold_until = appointment.deposit_hold_until or appointment.deposit_due_at
+            remind_at = hold_until - dt.timedelta(minutes=max(hold - reminder, 0))
+            if remind_at >= appointment.deposit_due_at:
+                continue  # arriverebbe a termine già scaduto: niente sollecito
             if remind_at <= now:
                 # UPDATE condizionale: chi lo vince manda il sollecito, gli altri
                 # vedono 0 righe aggiornate e non mandano niente.
@@ -2637,6 +2802,15 @@ def process_deposit_holds(salon, *, now=None) -> dict:
                 if not claimed:
                     continue
                 appointment.deposit_reminder_sent_at = now
+                if appointment.deposit_payment_link:
+                    from apps.sales.stripe_service import refresh_deposit_link  # lazy
+
+                    # Il sollecito porta il link: a sessione già chiusa da
+                    # Stripe (24 ore al massimo) se ne apre una nuova. Se non ci
+                    # si riesce la scadenza è sospesa e un messaggio con una
+                    # pagina morta non serve a nessuno.
+                    if not refresh_deposit_link(appointment):
+                        continue
                 emit_event(salon, "deposit.reminder", _event_payload(appointment))
                 log_activity(
                     salon,

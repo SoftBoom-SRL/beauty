@@ -270,6 +270,18 @@ JWT_CLIENT_TTL_DAYS = int(os.getenv("JWT_CLIENT_TTL_DAYS", "30"))
 # Stripe — opzionale: senza chiave gli endpoint pagamento rispondono 503
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Con Stripe Connect gli eventi arrivano da DUE endpoint, ognuno col suo segreto
+# di firma: quello dell'account della piattaforma (caparre dei saloni non
+# collegati) e quello Connect (caparre dei saloni che hanno collegato il proprio
+# Stripe). Con il solo STRIPE_WEBHOOK_SECRET una delle due famiglie veniva
+# sempre rifiutata con «Firma webhook non valida»: la cliente pagava e la
+# caparra restava «richiesta» fino al rilascio dello slot. Si accettano tutti i
+# segreti indicati qui (STRIPE_WEBHOOK_SECRETS separati da virgola, per esempio
+# durante la rotazione di un segreto).
+STRIPE_CONNECT_WEBHOOK_SECRET = os.getenv("STRIPE_CONNECT_WEBHOOK_SECRET", "")
+STRIPE_WEBHOOK_SECRETS = [
+    secret.strip() for secret in os.getenv("STRIPE_WEBHOOK_SECRETS", "").split(",") if secret.strip()
+]
 # Stripe Connect (Standard): client_id della piattaforma (ca_...) per far
 # collegare al titolare il proprio account Stripe dalle Impostazioni.
 STRIPE_CONNECT_CLIENT_ID = os.getenv("STRIPE_CONNECT_CLIENT_ID", "")
@@ -293,7 +305,11 @@ YOURANG_PROXY_WEBHOOK_SECRET = os.getenv("YOURANG_PROXY_WEBHOOK_SECRET", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 # Origine dell'app cliente (per le pagine di ritorno del pagamento caparra).
-CLIENT_APP_ORIGIN = os.getenv("CLIENT_APP_ORIGIN", "http://localhost:5174")
+# Vuota di serie: se manca si ripiega su FRONTEND_ORIGIN, come dice DEPLOY.md.
+# Col vecchio default «http://localhost:5174» il ripiego non scattava mai e in
+# produzione, senza la variabile, la cliente che aveva pagato la caparra
+# tornava su localhost. In sviluppo si imposta nel .env.
+CLIENT_APP_ORIGIN = os.getenv("CLIENT_APP_ORIGIN", "")
 
 # Policy prenotazioni lato cliente (ore minime prima dell'appuntamento)
 CLIENT_MOVE_CANCEL_MIN_HOURS = int(os.getenv("CLIENT_MOVE_CANCEL_MIN_HOURS", "24"))

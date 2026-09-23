@@ -2459,10 +2459,12 @@ class DepositFitsTheVisitTests(AgendaTestBase):
             )
         original.refresh_from_db()
         self.assertEqual(original.total_price, Decimal("30.00"))
-        self.assertEqual(original.deposit_amount, Decimal("30.00"))
-        # resta pagata: i 30 ancora in cassa si detraggono al checkout
-        self.assertEqual(original.deposit_credit, Decimal("30.00"))
-        log = ActivityLog.objects.get(salon=self.salon, type="deposit.refund_due")
+        # La caparra versata non si tocca (02-01): abbassarla faceva sparire
+        # l'eccedenza dalla quota detraibile. Il checkout detrae fino al totale
+        # e restituisce da sé i 30 in più.
+        self.assertEqual(original.deposit_amount, Decimal("60.00"))
+        self.assertEqual(original.deposit_credit, Decimal("60.00"))
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.excess")
         self.assertEqual(log.payload["amount"], "30.00")
         self.assertEqual(created.deposit_amount, Decimal("0.00"))
 
@@ -2478,9 +2480,10 @@ class DepositFitsTheVisitTests(AgendaTestBase):
             )
         appointment.refresh_from_db()
         self.assertEqual(appointment.total_price, Decimal("50.00"))
-        self.assertEqual(appointment.deposit_amount, Decimal("50.00"))
+        # versata = incassata: resta 60, al checkout se ne detraggono 50 (02-01)
+        self.assertEqual(appointment.deposit_amount, Decimal("60.00"))
         self.assertTrue(
-            ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_due").exists()
+            ActivityLog.objects.filter(salon=self.salon, type="deposit.excess").exists()
         )
 
     def test_a_deposit_that_still_fits_is_left_alone(self):
