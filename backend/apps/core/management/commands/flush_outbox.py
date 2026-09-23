@@ -93,12 +93,14 @@ def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
     partire — hanno gli stessi dati dentro e seguono la stessa sorte, contati
     dalla data di creazione visto che non sono mai stati consegnati.
 
-    L'ultimo messaggio consegnato su ciascun oggetto (`coalesce_key`) resta
-    invece finché racconta qualcosa che deve ancora succedere (`expiry_of`): è
-    ciò che la cliente sa del suo appuntamento, e l'agenda lo confronta con lo
-    stato attuale per decidere se c'è da mandarle una rettifica. Cancellato
-    dopo trenta giorni, una prenotazione fatta due mesi prima restava senza
-    storia proprio quando la si spostava.
+    L'ultimo messaggio consegnato di ciascun tipo su ciascun oggetto
+    (`coalesce_key`) resta invece finché racconta qualcosa che deve ancora
+    succedere (`expiry_of`): è ciò che la cliente sa del suo appuntamento, e
+    l'agenda lo confronta con lo stato attuale per decidere se c'è da mandarle
+    una rettifica. Cancellato dopo trenta giorni, una prenotazione fatta due
+    mesi prima restava senza storia proprio quando la si spostava. Per tipo,
+    perché sulla stessa chiave possono viaggiare anche messaggi che non
+    descrivono l'appuntamento (una ricevuta della caparra).
     """
     now = now or timezone.now()
     cutoff = now - timezone.timedelta(days=days)
@@ -106,6 +108,7 @@ def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
     newer_sent = OutboxEvent.objects.filter(
         salon_id=OuterRef("salon_id"),
         coalesce_key=OuterRef("coalesce_key"),
+        event_type=OuterRef("event_type"),
         status=OutboxEvent.Status.SENT,
         id__gt=OuterRef("id"),
     )

@@ -320,8 +320,9 @@ class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         future = (timezone.now() + dt.timedelta(days=20)).isoformat()
         past = (timezone.now() - dt.timedelta(days=1)).isoformat()
-        first = emit_event(salon, "appointment.created", {"start": future}, coalesce_key="appointment:1")
+        first = emit_event(salon, "appointment.moved", {"start": future}, coalesce_key="appointment:1")
         last = emit_event(salon, "appointment.moved", {"start": future}, coalesce_key="appointment:1")
+        receipt = emit_event(salon, "deposit.paid", {"start": future}, coalesce_key="appointment:1")
         visit_over = emit_event(salon, "appointment.created", {"start": past}, coalesce_key="appointment:2")
         otp = emit_event(salon, "client.otp", {"code": "1"})
         OutboxEvent.objects.update(
@@ -329,7 +330,10 @@ class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
             sent_at=timezone.now() - dt.timedelta(days=PURGE_AFTER_DAYS + 10),
         )
         self.assertEqual(purge_delivered(), 3)
-        self.assertEqual(list(OutboxEvent.objects.values_list("id", flat=True)), [last.id])
+        # l'ultimo spostamento resta anche se dopo è arrivata la ricevuta della caparra
+        self.assertEqual(
+            sorted(OutboxEvent.objects.values_list("id", flat=True)), [last.id, receipt.id]
+        )
         self.assertFalse(OutboxEvent.objects.filter(id__in=[first.id, visit_over.id, otp.id]).exists())
 
 
