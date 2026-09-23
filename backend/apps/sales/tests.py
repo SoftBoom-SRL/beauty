@@ -605,6 +605,11 @@ class DepositLinkAndConnectTests(TestCase):
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_payment_link, "https://checkout.stripe.com/c/pay/cs_2")
         self.assertEqual(OutboxEvent.objects.filter(event_type="deposit.payment_link").count(), 2)
+        # partono DOPO i messaggi dell'appuntamento ancora trattenuti (stessa chiave)
+        self.assertEqual(
+            set(OutboxEvent.objects.filter(event_type="deposit.payment_link").values_list("coalesce_key", flat=True)),
+            {f"appointment:{self.appointment.id}"},
+        )
         # anche la cliente può chiederlo dall'app
         from common.auth import create_client_tokens
 
@@ -630,7 +635,10 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertEqual(self.appointment.deposit_status, "paid")
         self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_from_checkout")
         self.assertIsNone(self.appointment.deposit_due_at)
-        self.assertTrue(OutboxEvent.objects.filter(event_type="deposit.paid").exists())
+        self.assertEqual(
+            OutboxEvent.objects.get(event_type="deposit.paid").coalesce_key,
+            f"appointment:{self.appointment.id}",
+        )
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_CONNECT_CLIENT_ID="ca_test", FRONTEND_ORIGIN="https://beauty.example.com")
     def test_connect_start_callback_and_disconnect(self):
@@ -1142,6 +1150,11 @@ class CheckoutApiTests(TestCase):
         self.assertEqual(sale.deposit_deducted, Decimal("20.00"))
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.status, "closed")
+        # la richiesta di recensione parte dopo i messaggi della visita ancora in coda
+        self.assertEqual(
+            OutboxEvent.objects.get(event_type="visit.completed").coalesce_key,
+            f"appointment:{self.appointment.id}",
+        )
         # la quota già restituita non può essere detratta di nuovo
         self.assertEqual(self._checkout(paid="80.00").status_code, 400)
 

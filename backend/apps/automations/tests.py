@@ -84,6 +84,14 @@ class AutomationsApiTests(TestCase):
         self.assertEqual(
             OutboxEvent.objects.filter(salon=self.salon, event_type="automation.updated").count(), 4
         )
+        # 18-05: stessa chiave per tutte le versioni, così partono in ordine
+        self.assertEqual(
+            set(
+                OutboxEvent.objects.filter(salon=self.salon, event_type="automation.updated")
+                .values_list("coalesce_key", flat=True)
+            ),
+            {f"automation:{automation_id}"},
+        )
 
     def test_write_requires_marketing_scope(self):
         other_role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])

@@ -80,6 +80,7 @@ class RenameLabelTests(_Base):
         self.assertEqual(other.conditions, _label_rule("Nuova"))
         sent = OutboxEvent.objects.filter(event_type="automation.updated")
         self.assertEqual([e.payload["id"] for e in sent], [automation.id])
+        self.assertEqual(sent[0].coalesce_key, f"automation:{automation.id}")
         self.assertEqual(sent[0].payload["conditions"]["rules"][0]["value"], "Clienti VIP")
 
     def test_a_case_only_rename_is_rewritten_too(self):

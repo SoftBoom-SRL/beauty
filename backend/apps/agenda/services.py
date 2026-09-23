@@ -3039,7 +3039,12 @@ def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor
             "method": method,
         },
     )
-    emit_event(appointment.salon, "deposit.paid", _event_payload(appointment))
+    emit_event(
+        appointment.salon,
+        "deposit.paid",
+        _event_payload(appointment),
+        coalesce_key=appointment_event_key(appointment.id),
+    )
     return appointment
 
 
@@ -3180,7 +3185,12 @@ def process_deposit_holds(salon, *, now=None) -> dict:
                     # pagina morta non serve a nessuno.
                     if not refresh_deposit_link(appointment):
                         continue
-                emit_event(salon, "deposit.reminder", _event_payload(appointment))
+                emit_event(
+                    salon,
+                    "deposit.reminder",
+                    _event_payload(appointment),
+                    coalesce_key=appointment_event_key(appointment.id),
+                )
                 log_activity(
                     salon,
                     "deposit.reminder",

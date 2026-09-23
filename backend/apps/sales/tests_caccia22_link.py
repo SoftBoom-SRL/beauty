@@ -205,6 +205,7 @@ class LinkLifetimeTests(StripeTestBase):
         self.assertEqual(result["reminded"], 1)
         reminder = OutboxEvent.objects.get(event_type="deposit.reminder")
         self.assertEqual(reminder.payload["deposit_payment_link"], "https://checkout.stripe.com/c/pay/cs_new")
+        self.assertEqual(reminder.coalesce_key, f"appointment:{self.appointment.id}")
 
     def test_no_link_for_a_released_appointment(self):
         Appointment.objects.filter(pk=self.appointment.pk).update(status="cancelled", auto_released=True)

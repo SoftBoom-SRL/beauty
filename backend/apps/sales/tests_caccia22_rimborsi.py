@@ -55,6 +55,12 @@ class RefundLeavesTheTillTests(TestCase):
 
         appointment = self._appointment()
         mark_deposit_cashed(appointment, method="cash")      # 20 € in contanti al banco
+        from apps.core.models import OutboxEvent
+
+        # ordinato dietro ai messaggi dell'appuntamento (stessa chiave)
+        self.assertEqual(
+            OutboxEvent.objects.get(event_type="deposit.paid").coalesce_key, f"appointment:{appointment.id}"
+        )
         cancel_appointment(appointment, reason="imprevisto")  # il salone annulla: da rimborsare
         appointment.refresh_from_db()
         mark_deposit_refunded(appointment)                    # 20 € restituiti dalla cassa

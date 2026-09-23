@@ -158,14 +158,18 @@ def _rename_label_in_conditions(salon, old: str, new: str) -> tuple[int, int]:
         rule.save(update_fields=["conditions", "updated_at"])
     if automations:
         try:
-            from apps.automations.api import _definition  # lazy: la definizione è la loro
+            # lazy: la definizione e la chiave sono loro
+            from apps.automations.api import _definition, automation_event_key
         except ImportError:
             _definition = None
         for automation in automations:
             automation.conditions = _renamed(automation.conditions, old, new)
             automation.save(update_fields=["conditions", "updated_at"])
             if _definition is not None:
-                emit_event(salon, "automation.updated", _definition(automation))
+                emit_event(
+                    salon, "automation.updated", _definition(automation),
+                    coalesce_key=automation_event_key(automation.id),
+                )
     return len(rules), len(automations)
 
 
@@ -715,7 +719,9 @@ def list_client_appointments(request, client_id: int):
     # ne interroga una per appuntamento (più una SELECT sul salone, che non era
     # in select_related). Una cliente con 80 visite costava 160 query in più.
     gifts = gift_index(ctx.salon, [client.id])
-    return [_appointment_out(a, gifts) for a in appointments]
+    # `viewer`: chi non ha i permessi marketing o vendite vede i codici delle
+    # gift card mascherati, come in agenda (contratto C21).
+    return [_appointment_out(a, gifts, viewer=ctx) for a in appointments]
 
 
 # ---- Storico unificato (visite + note + schede) ---------------------------------
@@ -848,7 +854,7 @@ def client_history(request, client_id: int):
                 "kind": "visit",
                 "date": a.start,
                 "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
-                "appointment": _appointment_out(a, gifts),
+                "appointment": _appointment_out(a, gifts, viewer=ctx),
                 "operator_name": f"{a.operator.first_name} {a.operator.last_name}".strip() if a.operator_id else "",
                 "sale": _sale_out(sale) if sale else None,
                 "deposit_sale": _sale_out(deposit) if deposit else None,

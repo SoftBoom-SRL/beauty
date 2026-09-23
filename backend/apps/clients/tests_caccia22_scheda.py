@@ -256,3 +256,62 @@ class ArchivedPhoneTests(_Base):
         delete_client(self.request, stale.id)
         stale.refresh_from_db()
         self.assertFalse(stale.is_active)
+
+
+class GiftCodesOnTheCardTests(TestCase):
+    """C21: nella scheda cliente il codice di una gift card (denaro al portatore)
+    esce intero solo a chi ha i permessi marketing o vendite, come in agenda."""
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.marketing.services import create_gift_card
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.sofia = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331234567"
+        )
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Manicure", duration_min=60, price=Decimal("50.00")
+        )
+        operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
+        appointment = Appointment.objects.create(
+            salon=self.salon, client=self.sofia, operator=operator,
+            start=timezone.now() + dt.timedelta(days=2),
+        )
+        AppointmentService.objects.create(
+            appointment=appointment, service=service, operator=operator, duration_min=60, price=Decimal("50.00")
+        )
+        self.card = create_gift_card(
+            self.salon, Decimal("50.00"), gift_service=service, recipient_client=self.sofia,
+            paid=True, paid_method="cash",
+        )
+
+    def _codes(self, scopes):
+        auth = _staff_http(self.salon, scopes)
+        visits = self.client.get(f"/api/clients/{self.sofia.id}/appointments", **auth)
+        history = self.client.get(f"/api/clients/{self.sofia.id}/history", **auth)
+        self.assertEqual(visits.status_code, 200, visits.content)
+        self.assertEqual(history.status_code, 200, history.content)
+        from_history = [
+            g["code"] for e in history.json()["entries"] if e["kind"] == "visit" for g in e["appointment"]["gifts"]
+        ]
+        return [g["code"] for a in visits.json() for g in a["gifts"]], from_history
+
+    def test_reception_sees_only_the_last_digits(self):
+        visits, history = self._codes(("clients",))
+        for code in visits + history:
+            self.assertNotEqual(code, self.card.code)
+            self.assertTrue(code.endswith(self.card.code[-4:]))
+        self.assertEqual(len(visits), 1)
+        self.assertEqual(len(history), 1)
+
+    def test_marketing_sees_the_whole_code(self):
+        visits, history = self._codes(("clients", "marketing"))
+        self.assertEqual(visits + history, [self.card.code, self.card.code])

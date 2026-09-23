@@ -572,7 +572,17 @@ def ensure_deposit_link(appointment, *, resend: bool = False, actor=None, reason
         "resend": resend,
         "reason": reason,
     }
-    emit_event(appointment.salon, "deposit.payment_link", payload)
+    # Stessa chiave degli eventi dell'appuntamento: il link parte DOPO la
+    # conferma ancora trattenuta, non prima (vedi flush_outbox). Non si fonde
+    # con loro: le fusioni guardano solo i tipi `appointment.*`.
+    from apps.agenda.services import appointment_event_key  # lazy
+
+    emit_event(
+        appointment.salon,
+        "deposit.payment_link",
+        payload,
+        coalesce_key=appointment_event_key(appointment.id),
+    )
     if reason == "amount_changed":
         label = "Link caparra rifatto col nuovo importo"
     else:

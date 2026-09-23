@@ -256,6 +256,10 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
         for line in sale.lines.select_related("service")
         if line.service_id
     ]
+    from apps.agenda.services import appointment_event_key  # lazy
+
+    # Con la chiave dell'appuntamento: la richiesta di recensione non parte
+    # prima di un suo messaggio ancora trattenuto (ordinati, non fusi).
     emit_event(
         ctx.salon,
         "visit.completed",
@@ -269,6 +273,7 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
             "services": service_names,
             "total": str(sale.total),
         },
+        coalesce_key=appointment_event_key(appointment.id),
     )
     return {"sale": _sale_detail(sale), "breakdown": _breakdown(sale)}
 
@@ -602,7 +607,7 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
     if outcome == "duplicate":
         _refund_duplicate_deposit(appointment, intent_id, obj, account)
     elif outcome == "refund_due":
-        from apps.agenda.services import settle_deposit_refund  # lazy
+        from apps.agenda.services import appointment_event_key, settle_deposit_refund  # lazy
 
         emit_event(
             appointment.salon,
@@ -615,9 +620,12 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
                 "lang": appointment.client.lang,
                 "amount": str(appointment.deposit_amount),
             },
+            coalesce_key=appointment_event_key(appointment.id),
         )
         settle_deposit_refund(appointment)
     elif outcome == "paid":
+        from apps.agenda.services import appointment_event_key  # lazy
+
         emit_event(
             appointment.salon,
             "deposit.paid",
@@ -630,6 +638,7 @@ def _payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
                 "amount": str(appointment.deposit_amount),
                 "start": appointment.start.isoformat(),
             },
+            coalesce_key=appointment_event_key(appointment.id),
         )
         if excess_cents > 0:
             _refund_overpaid_deposit(appointment, intent_id, excess_cents, account)

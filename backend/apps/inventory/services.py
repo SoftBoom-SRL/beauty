@@ -20,10 +20,20 @@ def _lock_salon(salon) -> None:
     """Serializza dentro la transazione corrente le scritture di magazzino del salone.
 
     Va chiamata DENTRO un `atomic()`. Su SQLite è un no-op.
+
+    FOR NO KEY UPDATE come `agenda.services.lock_salon` (18-08): con FOR UPDATE
+    un checkout che scarica il magazzino teneva il salone in modo incompatibile
+    con i controlli delle chiavi esterne (FOR KEY SHARE) che chi ha inserito
+    righe legate al salone fa al COMMIT — deadlock, e un 500 a una delle due.
+    Fra loro queste chiamate restano serializzate.
     """
     from apps.core.models import Salon  # lazy: core non dipende da inventory
 
-    list(Salon.objects.select_for_update().filter(pk=salon.pk).values_list("id", flat=True))
+    list(
+        Salon.objects.select_for_update(no_key=True)
+        .filter(pk=salon.pk)
+        .values_list("id", flat=True)
+    )
 
 
 def apply_movement(

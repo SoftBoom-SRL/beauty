@@ -67,6 +67,13 @@ def _catalog_items(rows):
     return [{"value": value, "label_it": label_it, "label_en": label_en} for value, label_it, label_en in rows]
 
 
+def automation_event_key(automation_id) -> str:
+    """Chiave degli eventi di un'automazione: flush_outbox consegna in ordine
+    quelli con la stessa chiave, così Yourang non riceve una versione vecchia
+    dopo una nuova (un invio fallito e ritentato passava dopo il successivo)."""
+    return f"automation:{automation_id}"
+
+
 def _definition(automation: Automation) -> dict:
     """Definizione completa della regola, inviata a Yourang per la sincronizzazione."""
     return {
@@ -160,7 +167,10 @@ def create_automation(request, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(ctx.salon, "automation.updated", _definition(automation))
+    emit_event(
+        ctx.salon, "automation.updated", _definition(automation),
+        coalesce_key=automation_event_key(automation.id),
+    )
     return automation
 
 
@@ -182,7 +192,10 @@ def update_automation(request, automation_id: int, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(ctx.salon, "automation.updated", _definition(automation))
+    emit_event(
+        ctx.salon, "automation.updated", _definition(automation),
+        coalesce_key=automation_event_key(automation.id),
+    )
     return automation
 
 
@@ -203,7 +216,10 @@ def delete_automation(request, automation_id: int):
         actor=ctx.user,
         payload={"automation_id": automation_id_value},
     )
-    emit_event(ctx.salon, "automation.updated", definition)
+    emit_event(
+        ctx.salon, "automation.updated", definition,
+        coalesce_key=automation_event_key(automation_id_value),
+    )
     return OkOut()
 
 
@@ -227,7 +243,10 @@ def toggle_automation(request, automation_id: int):
             actor=ctx.user,
             payload={"automation_id": automation.id, "active": automation.active},
         )
-        emit_event(ctx.salon, "automation.updated", _definition(automation))
+        emit_event(
+            ctx.salon, "automation.updated", _definition(automation),
+            coalesce_key=automation_event_key(automation.id),
+        )
     return automation
 
 
