@@ -455,8 +455,9 @@ def _stamped_consents(stored, incoming: dict) -> dict:
 
 
 # Campi del PUT per cui `null` significa «svuota»: i testi facoltativi e le
-# due date. Sugli altri un null non ha un significato e finirebbe a 500 sulla
-# colonna NOT NULL (o, peggio, in archivio come valore che nessuno legge).
+# due date (per `category_ids` vuol dire «lascia le etichette come sono»).
+# Sugli altri un null non ha un significato e finirebbe a 500 sulla colonna
+# NOT NULL (o, peggio, in archivio come valore che nessuno legge).
 _NULL_MEANS_EMPTY = {"last_name": "", "email": "", "origin": "", "gender": ""}
 _NULLABLE = {"birthday", "since", "category_ids"}
 
