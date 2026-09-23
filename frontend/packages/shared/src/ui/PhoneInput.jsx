@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon.jsx';
-import { COUNTRIES, DEFAULT_ISO2, countryOf, splitPhone, joinPhone, formatNational } from '../phone.js';
+import { COUNTRIES, DEFAULT_ISO2, countryOf, splitPhone, joinPhone, formatNational, readPhoneField } from '../phone.js';
 
 // prefisso non in elenco: si mostra un globo e si conserva il numero com'è
 const UNKNOWN = { iso2: '', flag: '🌐', dial: '', name_it: 'Prefisso internazionale', name_en: 'International prefix' };
@@ -39,11 +39,14 @@ export function PhoneInput({
   const country = countryOf(iso2) || UNKNOWN;
 
   // Buffer delle cifre mentre il campo è a fuoco: lo 0 iniziale (che in E.164
-  // cade) non deve sparire sotto le dita di chi lo digita.
+  // cade) non deve sparire sotto le dita di chi lo digita. Tiene anche un «+»
+  // o un «00» appena battuti, finché il prefisso non si riconosce: vedi
+  // readPhoneField.
   const [raw, setRaw] = useState(null);
   const [focused, setFocused] = useState(false);
   const national = value ? parsed.national : '';
-  const shown = formatNational(iso2, raw != null ? raw : national);
+  const pending = raw != null && /^(\+|00)/.test(raw);
+  const shown = pending ? raw : formatNational(iso2, raw != null ? raw : national);
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -76,21 +79,25 @@ export function PhoneInput({
     const el = e.target;
     const text = el.value;
     const caret = el.selectionStart ?? text.length;
-    // incollato un numero completo ("+44…" / "0044…"): si riconosce il paese.
-    // Solo se il prefisso è davvero riconosciuto: chi sta ancora digitando
-    // "00" non deve vedersi svuotare il campo sotto le dita.
-    if (/^\s*(\+|00)/.test(text)) {
-      const p = splitPhone(text);
-      if (p.dial) {
-        caretDigits.current = p.national.length;
-        setIso2(p.iso2); setRaw(p.national); emit(p.iso2, p.national);
-        return;
-      }
+    // Numero con il prefisso, battuto o incollato («+44…», «0044…», «(+39)…»,
+    // «393331234567» con la bandiera italiana): il paese si riconosce e il
+    // prefisso passa nella bandiera. Un «+» o un «00» senza ancora un prefisso
+    // riconoscibile resta in campo com'è: chi lo sta digitando non deve
+    // vederselo sparire sotto le dita (e le cifre dopo finire in coda al +39).
+    const r = readPhoneField(iso2, text);
+    if (r.pending) {
+      caretDigits.current = null; // il testo resta quello battuto: cursore dov'è
+      setRaw(r.pending);
+      onChange?.('');
+      return;
     }
-    const digits = text.replace(/\D/g, '');
-    caretDigits.current = text.slice(0, caret).replace(/\D/g, '').length;
-    setRaw(digits);
-    emit(iso2, digits);
+    // Le cifre finite nella bandiera non contano per il cursore.
+    const moved = text.replace(/\D/g, '').length - r.national.length;
+    const before = text.slice(0, caret).replace(/\D/g, '').length;
+    caretDigits.current = Math.min(r.national.length, Math.max(0, before - moved));
+    if (r.iso2 !== iso2) setIso2(r.iso2);
+    setRaw(r.national);
+    emit(r.iso2, r.national);
   };
 
   const onNumberKey = (e) => {
@@ -115,7 +122,8 @@ export function PhoneInput({
   const close = useCallback(() => { setOpen(false); setQuery(''); setHi(0); }, []);
 
   const pick = (c) => {
-    let digits = raw != null ? raw : national;
+    // Un «+»/«00» ancora senza prefisso: il paese scelto dal menu lo sostituisce.
+    let digits = pending ? '' : (raw != null ? raw : national);
     // Prefisso non riconosciuto: le cifre in campo contengono ANCORA il
     // prefisso incollato. Anteporre quello scelto dava "+39 44 7911…".
     if (!country.dial && digits.startsWith(c.dial)) digits = digits.slice(c.dial.length);
