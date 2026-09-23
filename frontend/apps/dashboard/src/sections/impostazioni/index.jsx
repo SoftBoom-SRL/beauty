@@ -4,7 +4,7 @@
 // Categories open the global 'catsmgr' modal. Consumes deepLink 'log-today'.
 // Commissioni & Notifiche have no API backing → informational rows (fase 2 / Yourang).
 import React, { useEffect, useState } from 'react';
-import { Icon, api } from '@youty/shared';
+import { Icon, api, fmtDateIt, fmtTime } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import BookingsOptimPage from './BookingsOptimPage.jsx';
 import ActivityLogPage from './ActivityLogPage.jsx';
@@ -91,6 +91,18 @@ export default function ImpostazioniSection() {
     return () => window.removeEventListener('message', onMsg);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
+
+  /* Collegato da poco: la prima sincronizzazione gira in background sul server.
+   * Si ricontrolla ogni tanto finché non risulta fatta (o non compare un
+   * errore), così la riga non resta su «in corso» fino a ricaricare la pagina. */
+  const firstSyncRunning = !!yourang?.connected && !yourang?.last_sync_at && !yourang?.last_error;
+  useEffect(() => {
+    if (!isOwner || !firstSyncRunning) return undefined;
+    const timer = setInterval(() => {
+      api.get('/api/integrations/yourang/status').then(setYourang).catch(() => {});
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [isOwner, firstSyncRunning]);
 
   const connectYourang = () => {
     const popup = window.open('/oauth-popup/start?mode=connect', 'yourang-oauth', 'width=520,height=680');
@@ -207,17 +219,35 @@ export default function ImpostazioniSection() {
           onClick={() => setReasonsOpen(true)} />
       </Group>
 
-      {/* YOURANG — connessione OAuth + sync (titolare) */}
+      {/* YOURANG — connessione OAuth + sync (titolare).
+          La riga diceva «sincronizzati» anche con la sincronizzazione ferma o
+          parziale: l'errore restava solo a database (11-18, 17-13). Ora mostra
+          l'ultimo errore (C9), la prima sincronizzazione ancora in corso e
+          quando è avvenuta l'ultima. */}
       {isOwner && (
         <Group title={t('Integrazione Yourang', 'Yourang integration')}>
           <Row first icon="globe"
             label={t('Collega Yourang', 'Connect Yourang')}
             tag="Yourang"
             sub={yourang?.connected
-              ? t('Clienti, servizi e appuntamenti sincronizzati con Yourang.', 'Clients, services and appointments synced with Yourang.')
-              : t('Collega la piattaforma Yourang per sincronizzare clienti, servizi e prenotazioni.', 'Connect the Yourang platform to sync clients, services and bookings.')}
-            value={yourang?.connected ? t('Connesso', 'Connected') : t('Non connesso', 'Not connected')}
+              ? (yourang.last_sync_at
+                ? t('Clienti, servizi e appuntamenti sincronizzati con Yourang', 'Clients, services and appointments synced with Yourang') + ' · ' + t('ultima sincronizzazione', 'last sync') + ' ' + fmtDateIt(yourang.last_sync_at, { weekday: false }) + ' ' + fmtTime(yourang.last_sync_at)
+                : yourang.last_error
+                  ? t('La prima sincronizzazione non è riuscita.', 'The first sync did not succeed.')
+                  : t('Prima sincronizzazione in corso: clienti, servizi e appuntamenti arrivano da Yourang nei prossimi minuti.', 'First sync in progress: clients, services and appointments are arriving from Yourang in the next few minutes.'))
+              : yourang?.status === 'error'
+                ? t('Il collegamento con Yourang si è interrotto: ricollegalo.', 'The Yourang connection broke off: connect it again.')
+                : t('Collega la piattaforma Yourang per sincronizzare clienti, servizi e prenotazioni.', 'Connect the Yourang platform to sync clients, services and bookings.')}
+            value={yourang?.connected ? t('Connesso', 'Connected') : yourang?.status === 'error' ? t('Errore', 'Error') : t('Non connesso', 'Not connected')}
             onClick={connectYourang} />
+          {!!yourang?.last_error && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '12px 16px', borderTop: '1px solid var(--hair)' }}>
+              <Icon name="alert" size={16} color="var(--danger)" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div className="t-sm" style={{ color: 'var(--danger)', lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere' }}>
+                <b>{t('Ultimo errore di sincronizzazione', 'Last sync error')}:</b> {yourang.last_error}
+              </div>
+            </div>
+          )}
         </Group>
       )}
 

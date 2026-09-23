@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, Icon } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote } from './lib.jsx';
 
@@ -73,13 +74,59 @@ export default function RolesDrawer({ onClose }) {
     } catch (err) { toastErr(err, fireToast, t); }
   };
 
-  const delRole = async (role) => {
+  /* Eliminare un ruolo partiva al primo clic: chi lo aveva restava senza
+   * alcun permesso (la membership perde il ruolo) e gli inviti in attesa con
+   * quel ruolo sparivano. Un clic su «Elimina ruolo» mentre si rinominava
+   * «Front desk» lasciava la reception senza agenda né cassa (15-08). Ora si
+   * chiede, dicendo chi e cosa si perde. */
+  const [confirmDel, setConfirmDel] = useState(null); // { role, members: [..]|null, invites: n|null }
+  const [deleting, setDeleting] = useState(false);
+  const askDelete = async (role) => {
+    setConfirmDel({ role, members: null, invites: null });
+    try {
+      const [m, i] = await Promise.all([api.get('/api/auth/members'), api.get('/api/auth/invitations')]);
+      const members = (m || []).filter((x) => x.role?.id === role.id);
+      const invites = (i || []).filter((x) => x.status === 'pending' && x.role?.id === role.id).length;
+      setConfirmDel((c) => (c && c.role.id === role.id ? { ...c, members, invites } : c));
+    } catch {
+      setConfirmDel((c) => (c && c.role.id === role.id ? { ...c, members: [], invites: 0, unknown: true } : c));
+    }
+  };
+  const delRole = async () => {
+    const role = confirmDel?.role;
+    if (!role || deleting) return;
+    setDeleting(true);
     try {
       await api.del(`/api/auth/roles/${role.id}`);
       setRoles((l) => l.filter((r) => r.id !== role.id));
       if (openId === role.id) setOpenId(null);
+      setConfirmDel(null);
       fireToast({ msg: t('Ruolo eliminato', 'Role deleted'), icon: 'x' });
     } catch (err) { toastErr(err, fireToast, t); } // 400 if system
+    finally { setDeleting(false); }
+  };
+  const delDetail = () => {
+    const c = confirmDel;
+    if (!c) return '';
+    if (c.members === null) return t('Controllo chi ha questo ruolo…', 'Checking who holds this role…');
+    if (c.unknown) {
+      return t('Chi ha questo ruolo resterà senza alcun permesso finché non gliene assegni un altro, e gli inviti in attesa con questo ruolo verranno annullati.',
+        'Whoever holds this role will be left with no permissions until you assign another one, and pending invitations with this role will be cancelled.');
+    }
+    const names = c.members.map((x) => x.user?.name || x.user?.email).filter(Boolean);
+    const who = names.length > 3 ? names.slice(0, 3).join(', ') + '…' : names.join(', ');
+    const parts = [];
+    if (names.length) {
+      parts.push(t(`${names.length === 1 ? '1 persona lo ha' : names.length + ' persone lo hanno'} (${who}): ${names.length === 1 ? 'resterà' : 'resteranno'} senza alcun permesso finché non assegni un altro ruolo.`,
+        `${names.length === 1 ? '1 person holds it' : names.length + ' people hold it'} (${who}): they will have no permissions until you assign another role.`));
+    } else {
+      parts.push(t('Nessun membro ha questo ruolo.', 'No member holds this role.'));
+    }
+    if (c.invites) {
+      parts.push(t(`${c.invites === 1 ? 'L’invito in attesa' : `Gli ${c.invites} inviti in attesa`} con questo ruolo ${c.invites === 1 ? 'verrà annullato' : 'verranno annullati'}.`,
+        `${c.invites === 1 ? 'The pending invitation' : `The ${c.invites} pending invitations`} with this role will be cancelled.`));
+    }
+    return parts.join(' ');
   };
 
   const toggleScope = (roleId, sid) => setDrafts((ds) => {
@@ -182,7 +229,7 @@ export default function RolesDrawer({ onClose }) {
                                 <input value={d.name} onChange={(e) => setDrafts((ds) => ({ ...ds, [r.id]: { ...ds[r.id], name: e.target.value } }))} placeholder={t('Nome ruolo', 'Role name')} style={{ ...inputCss, flex: 1, fontSize: 13, padding: '8px 11px' }} />
                                 <button className="dk-btn dk-btn--clay" disabled={!dirty || !d.name.trim()} style={{ height: 38, fontSize: 13, opacity: dirty && d.name.trim() ? 1 : 0.5 }} onClick={() => saveRole(r)}><Icon name="check" size={15} color="#fff" />{t('Salva', 'Save')}</button>
                               </div>
-                              <button onClick={() => delRole(r)} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 12.5, fontWeight: 700, padding: 0 }}>
+                              <button onClick={() => askDelete(r)} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', fontSize: 12.5, fontWeight: 700, padding: 0 }}>
                                 <Icon name="x" size={13} color="var(--danger)" />{t('Elimina ruolo', 'Delete role')}
                               </button>
                             </React.Fragment>
@@ -198,6 +245,18 @@ export default function RolesDrawer({ onClose }) {
           </React.Fragment>
         )}
       </div>
+      <DkConfirm
+        open={!!confirmDel}
+        busy={deleting}
+        confirmDisabled={confirmDel?.members === null}
+        onClose={() => setConfirmDel(null)}
+        onConfirm={delRole}
+        title={t('Eliminare il ruolo?', 'Delete the role?')}
+        message={t(`«${confirmDel?.role?.name || ''}» verrà eliminato.`, `“${confirmDel?.role?.name || ''}” will be deleted.`)}
+        detail={delDetail()}
+        confirmLabel={t('Elimina ruolo', 'Delete role')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
     </DkDrawer>
   );
 }

@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api, Icon, EmptyState } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import DkModal from '../../../ui/DkModal.jsx';
+import DkConfirm from '../../../ui/DkConfirm.jsx';
 import HexInput from '../../../ui/HexInput.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { GD_PALETTE, PaletteGrid, inputCss, toastErr, LockNote } from '../lib.jsx';
@@ -26,7 +27,7 @@ const catName = (c, kind, lang) => (KINDS[kind].bilingual ? ((lang === 'en' && c
 
 // Accepts both `kind` (servizi agent) and `scope` (clienti agent) for the initial tab.
 export default function CategoriesManagerModal({ onClose, kind: kindProp, scope: scopeProp }) {
-  const { t, lang, hasScope, reload, fireToast } = useDash();
+  const { t, lang, hasScope, reload, fireToast, services } = useDash();
   const initialKind = kindProp ?? scopeProp;
   const [kind, setKind] = useState(initialKind && KINDS[initialKind] ? initialKind : 'clienti');
   const [lists, setLists] = useState({ clienti: null, servizi: null, magazzino: null });
@@ -55,29 +56,91 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     return { name: (d.name || '').trim() };
   };
 
+  // doppio clic su «Salva» = due categorie identiche (15-20)
+  const [saving, setSaving] = useState(false);
   const save = async (d) => {
+    if (saving) return;
+    setSaving(true);
     try {
+      let renamed = false;
       if (d._new) {
         const created = await api.post(cfg.base, { ...payloadOf(d), order: (list || []).length });
         setList(kind, [...(list || []), created]);
       } else {
+        const before = (list || []).find((c) => c.id === d.id);
         const upd = await api.put(`${cfg.base}/${d.id}`, { ...payloadOf(d), order: d.order ?? 0 });
         setList(kind, list.map((c) => (c.id === d.id ? upd : c)));
+        renamed = kind === 'clienti' && !!before && before.name !== upd.name;
       }
       syncCtx(kind);
       setEdit(null);
-      fireToast({ msg: t('Categoria salvata', 'Category saved'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+      /* Le condizioni di regole caparra e automazioni citano l'etichetta per
+       * nome: al rinomina il server le riscrive, e le viste aperte si
+       * ricaricano dal feed live (client_category.updated). */
+      fireToast({
+        msg: renamed
+          ? t('Etichetta rinominata: regole caparra e automazioni che la usano sono aggiornate', 'Label renamed: deposit rules and automations using it are updated')
+          : t('Categoria salvata', 'Category saved'),
+        icon: 'check',
+      });
+    } catch (err) { toastErr(err, fireToast, t); } // 400: nome già usato (anche con maiuscole diverse)
+    finally { setSaving(false); }
   };
 
-  const del = async (id) => {
+  /* Eliminare partiva al primo clic sulla «x» rossa accanto alla matita: «VIP»
+   * spariva da trecento schede cliente, una categoria magazzino dai suoi
+   * prodotti (15-08). Ora si chiede, dicendo quante schede la perdono. */
+  const [confirmDel, setConfirmDel] = useState(null); // { cat, kind, count: n|null }
+  const [deleting, setDeleting] = useState(false);
+  const askDelete = async (cat) => {
+    const k = kind;
+    setConfirmDel({ cat, kind: k, count: null });
+    let count;
     try {
-      await api.del(`${cfg.base}/${id}`);
-      setList(kind, list.filter((c) => c.id !== id));
-      syncCtx(kind);
+      if (k === 'clienti') count = (await api.get('/api/clients/', { params: { category_id: cat.id, limit: 1 } }))?.count;
+      else if (k === 'magazzino') count = (await api.get('/api/inventory/products', { params: { category_id: cat.id, include_inactive: true, limit: 1 } }))?.count;
+      else count = (services || []).filter((sv) => sv.category_id === cat.id).length;
+    } catch { count = undefined; }
+    setConfirmDel((c) => (c && c.cat.id === cat.id ? { ...c, count: Number.isFinite(count) ? count : -1 } : c));
+  };
+  const del = async () => {
+    const c = confirmDel;
+    if (!c || deleting) return;
+    setDeleting(true);
+    try {
+      await api.del(`${KINDS[c.kind].base}/${c.cat.id}`);
+      setList(c.kind, (lists[c.kind] || []).filter((x) => x.id !== c.cat.id));
+      syncCtx(c.kind);
       setEdit(null);
       fireToast({ msg: t('Categoria eliminata', 'Category deleted'), icon: 'x' });
-    } catch (err) { toastErr(err, fireToast, t); } // e.g. 400 if services attached
+    } catch (err) {
+      // 400 con il motivo: servizi collegati, o etichetta citata da una regola
+      // caparra o da un'automazione (il messaggio le nomina)
+      toastErr(err, fireToast, t);
+    } finally {
+      setDeleting(false);
+      setConfirmDel(null);
+    }
+  };
+  const delDetail = () => {
+    const c = confirmDel;
+    if (!c) return '';
+    if (c.count === null) return t('Controllo dove è usata…', 'Checking where it is used…');
+    if (c.kind === 'clienti') {
+      if (c.count < 0) return t('L’etichetta verrà tolta da tutte le schede cliente che la hanno.', 'The label will be removed from every client profile that has it.');
+      return c.count
+        ? t(`${c.count === 1 ? '1 cliente la ha' : c.count + ' clienti la hanno'}: l’etichetta verrà tolta da ${c.count === 1 ? 'quella scheda' : 'tutte quelle schede'}.`, `${c.count === 1 ? '1 client has' : c.count + ' clients have'} it: the label will be removed from ${c.count === 1 ? 'that profile' : 'all of them'}.`)
+        : t('Nessuna scheda cliente ha questa etichetta.', 'No client profile has this label.');
+    }
+    if (c.kind === 'magazzino') {
+      if (c.count < 0) return t('I prodotti di questa categoria resteranno senza categoria.', 'Products in this category will be left without a category.');
+      return c.count
+        ? t(`${c.count === 1 ? '1 prodotto resterà' : c.count + ' prodotti resteranno'} senza categoria.`, `${c.count === 1 ? '1 product' : c.count + ' products'} will be left without a category.`)
+        : t('Nessun prodotto è in questa categoria.', 'No product is in this category.');
+    }
+    return c.count > 0
+      ? t(`Contiene ${c.count === 1 ? '1 servizio' : c.count + ' servizi'}: spostali prima in un’altra categoria, altrimenti non si può eliminare.`, `It holds ${c.count === 1 ? '1 service' : c.count + ' services'}: move them to another category first, otherwise it cannot be deleted.`)
+      : t('Nessun servizio è in questa categoria.', 'No service is in this category.');
   };
 
   const reorder = async (fromI, toI) => {
@@ -156,7 +219,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
                 {canWrite && (
                   <React.Fragment>
                     <button className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 8 }} onClick={(e) => { e.stopPropagation(); setEdit({ ...c }); }}><Icon name="edit" size={14} /></button>
-                    <button className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 8 }} onClick={(e) => { e.stopPropagation(); del(c.id); }}><Icon name="x" size={14} color="var(--danger)" /></button>
+                    <button className="dk-iconbtn" title={t('Elimina', 'Delete')} style={{ width: 30, height: 30, borderRadius: 8 }} onClick={(e) => { e.stopPropagation(); askDelete(c); }}><Icon name="x" size={14} color="var(--danger)" /></button>
                   </React.Fragment>
                 )}
               </div>
@@ -166,17 +229,29 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
         )}
       </div>
 
-      {edit && <CatEditModal draft={edit} setDraft={setEdit} cfg={cfg} onSave={save} onDelete={del} onClose={() => setEdit(null)} t={t} />}
+      {edit && <CatEditModal draft={edit} setDraft={setEdit} cfg={cfg} onSave={save} saving={saving} onDelete={() => askDelete((list || []).find((x) => x.id === edit.id) || edit)} onClose={() => setEdit(null)} t={t} />}
+      <DkConfirm
+        open={!!confirmDel}
+        busy={deleting}
+        confirmDisabled={confirmDel?.count === null}
+        onClose={() => setConfirmDel(null)}
+        onConfirm={del}
+        title={confirmDel?.kind === 'clienti' ? t('Eliminare l’etichetta?', 'Delete the label?') : t('Eliminare la categoria?', 'Delete the category?')}
+        message={t(`«${confirmDel ? catName(confirmDel.cat, confirmDel.kind, lang) : ''}» verrà eliminata.`, `“${confirmDel ? catName(confirmDel.cat, confirmDel.kind, lang) : ''}” will be deleted.`)}
+        detail={delDetail()}
+        confirmLabel={t('Elimina', 'Delete')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
     </DkDrawer>
   );
 }
 
-function CatEditModal({ draft, setDraft, cfg, onSave, onDelete, onClose, t }) {
-  const canSave = cfg.bilingual ? (draft.name_it || '').trim() : (draft.name || '').trim();
+function CatEditModal({ draft, setDraft, cfg, onSave, saving, onDelete, onClose, t }) {
+  const canSave = !saving && (cfg.bilingual ? (draft.name_it || '').trim() : (draft.name || '').trim());
   return (
     <DkModal open onClose={onClose} title={draft._new ? t('Nuova categoria', 'New category') : t('Modifica categoria', 'Edit category')} width={440}
       foot={<React.Fragment>
-        {!draft._new && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={() => onDelete(draft.id)}><Icon name="x" size={16} color="var(--danger)" />{t('Elimina', 'Delete')}</button>}
+        {!draft._new && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={onDelete}><Icon name="x" size={16} color="var(--danger)" />{t('Elimina', 'Delete')}</button>}
         <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
         <button className="dk-btn dk-btn--clay" disabled={!canSave} onClick={() => canSave && onSave(draft)}><Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}</button>
       </React.Fragment>}>

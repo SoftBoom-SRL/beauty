@@ -4,7 +4,7 @@
 // so the invite token is displayed with a copy button only.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Avatar } from '@youty/shared';
+import { api, Icon, Avatar, salonTzOpts } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
@@ -28,6 +28,11 @@ export default function TeamDrawer({ onClose, onRoles }) {
   const isOwner = !!session?.is_owner;
   const myScopes = session?.scopes || [];
   const canAssign = (role) => isOwner || (role?.scopes || []).every((x) => myScopes.includes(x));
+  /* Né cambiare ruolo né rimuovere una collega il cui ruolo ATTUALE dà più di
+   * quanto si ha: il server lo rifiuta (403), come già la rimozione. Prima il
+   * menu restava attivo e «Nessun ruolo» toglieva alla Manager vendite,
+   * magazzino e listino con un clic di chi aveva il solo «team» (15-02). */
+  const canTouch = (m) => canAssign(m.role);
   const [members, setMembers] = useState(null);
   const [roles, setRoles] = useState([]);
   const [invitations, setInvitations] = useState(null);
@@ -133,8 +138,9 @@ export default function TeamDrawer({ onClose, onRoles }) {
                     <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600, flexShrink: 0 }}>{t('Accesso totale', 'Full access')}</span>
                   ) : (
                     <React.Fragment>
-                      <select value={m.role?.id ?? ''} onChange={(e) => setRole(m.id, e.target.value ? Number(e.target.value) : null)}
-                        style={{ border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13, fontWeight: 600, padding: '7px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', cursor: 'pointer', flexShrink: 0, color: 'var(--ink)' }}>
+                      <select value={m.role?.id ?? ''} disabled={!canTouch(m)} onChange={(e) => setRole(m.id, e.target.value ? Number(e.target.value) : null)}
+                        title={canTouch(m) ? undefined : t('Il suo ruolo dà permessi che tu non hai: può cambiarlo solo il titolare (o chi li ha tutti).', 'Their role grants permissions you do not hold: only the owner (or someone holding them all) can change it.')}
+                        style={{ border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13, fontWeight: 600, padding: '7px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', cursor: canTouch(m) ? 'pointer' : 'default', flexShrink: 0, color: 'var(--ink)', opacity: canTouch(m) ? 1 : 0.6 }}>
                         <option value="">{t('Nessun ruolo', 'No role')}</option>
                         {roles.map((r) => (
                           <option key={r.id} value={r.id} disabled={!canAssign(r) && m.role?.id !== r.id}>
@@ -143,7 +149,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
                         ))}
                       </select>
                       {m.user.id !== session?.user?.id && (
-                        <button className="dk-iconbtn" title={t('Rimuovi membro', 'Remove member')} onClick={() => setConfirmRemove(m)} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name="x" size={14} color="var(--danger)" /></button>
+                        <button className="dk-iconbtn" disabled={!canTouch(m)} title={canTouch(m) ? t('Rimuovi membro', 'Remove member') : t('Solo il titolare può rimuoverla', 'Only the owner can remove them')} onClick={() => canTouch(m) && setConfirmRemove(m)} style={{ width: 30, height: 30, borderRadius: 8, opacity: canTouch(m) ? 1 : 0.4 }}><Icon name="x" size={14} color="var(--danger)" /></button>
                       )}
                     </React.Fragment>
                   )}
@@ -163,13 +169,25 @@ export default function TeamDrawer({ onClose, onRoles }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.email}</div>
                           <div className="t-sm" style={{ color: 'var(--muted)' }}>
-                            {(i.role?.name || '—')} · {t('scade', 'expires')} {new Date(i.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT')}
+                            {/* giorno del salone, non del dispositivo (17-15, 15-22) */}
+                            {(i.role?.name || '—')} · {t('scade', 'expires')} {new Date(i.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts())}
                           </div>
                         </div>
                         <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '1px 7px', borderRadius: 99, flexShrink: 0 }}>{t('in attesa', 'pending')}</span>
                       </div>
-                      <CopyField value={i.token} t={t} fireToast={fireToast} />
-                      <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>{t('L’invio automatico arriva con Yourang (fase 2): per ora condividi il codice manualmente.', 'Automatic delivery ships with Yourang (phase 2): for now share the code manually.')}</div>
+                      {/* Il codice È l'account: arriva solo a chi potrebbe concedere
+                          quel ruolo (10-01). Per gli altri il server manda null. */}
+                      {i.token ? (
+                        <React.Fragment>
+                          <CopyField value={i.token} t={t} fireToast={fireToast} />
+                          <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>{t('L’invio automatico arriva con Yourang (fase 2): per ora condividi il codice manualmente.', 'Automatic delivery ships with Yourang (phase 2): for now share the code manually.')}</div>
+                        </React.Fragment>
+                      ) : (
+                        <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--muted)' }}>
+                          <Icon name="lock" size={13} color="var(--muted)" />
+                          {t('Il codice di questo invito lo vede solo chi può assegnare il suo ruolo, per esempio il titolare.', 'Only someone who can grant its role (e.g. the owner) can see this invitation code.')}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -213,8 +231,8 @@ export default function TeamDrawer({ onClose, onRoles }) {
         onConfirm={removeMember}
         title={t('Rimuovere dal team?', 'Remove from the team?')}
         message={t(
-          `${confirmRemove?.user?.full_name || confirmRemove?.user?.email || ''} perderà l'accesso al gestionale.`,
-          `${confirmRemove?.user?.full_name || confirmRemove?.user?.email || ''} will lose access to the app.`,
+          `${confirmRemove?.user?.name || confirmRemove?.user?.email || ''} perderà l'accesso al gestionale.`,
+          `${confirmRemove?.user?.name || confirmRemove?.user?.email || ''} will lose access to the app.`,
         )}
         detail={t('Gli appuntamenti e le vendite già registrate restano. Per riammetterla servirà un nuovo invito.',
           'Past appointments and sales stay. Re-admitting them needs a new invitation.')}

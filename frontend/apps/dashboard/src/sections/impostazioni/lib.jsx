@@ -5,6 +5,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ApiError, Icon, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
+import { dropCurrent } from './rules.js';
+
+// logica pura delle regole caparra: vive in rules.js (provata con node --test)
+export { depositFields, ruleSentence, amountForType } from './rules.js';
 
 /* ---------------- Google-Docs-like palette (GD_PALETTE port) ---------------- */
 export function gdHexFromHSL(h, s, l) {
@@ -89,25 +93,30 @@ export function CopyField({ value, t, fireToast }) {
    cmp ∈ eq,neq,lt,lte,gt,gte,contains */
 const CMP_NUM = [['gt', '>'], ['gte', '≥'], ['lt', '<'], ['lte', '≤'], ['eq', '=']];
 
-export function DkDrop({ value, onChange, options, narrow }) {
+export function DkDrop({ value, onChange, options, narrow, missingLabel, loose }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return undefined;
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    // Esc con il menu aperto chiude il menu e basta (preventDefault: vedi ui/layers.js)
+    const k = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); setOpen(false); } };
     document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
+    document.addEventListener('keydown', k);
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', k); };
   }, [open]);
-  const cur = options.find((o) => o.value === value) || options[0] || { label: '—' };
+  // Un valore salvato che non è fra le opzioni si vede com'è, in evidenza: non
+  // la prima opzione della lista (15-07).
+  const cur = dropCurrent(options, value, { missingLabel, loose });
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: narrow ? '0 10px' : '0 12px', border: '1px solid var(--hair)', borderRadius: 9, background: 'var(--surface)', cursor: 'pointer', fontSize: narrow ? 16 : 13.5, fontWeight: 700, color: 'var(--ink)' }}>
-        {cur.label}<Icon name="chevD" size={13} color="var(--muted)" />
+      <button onClick={() => setOpen((o) => !o)} title={cur.missing ? cur.label : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: narrow ? '0 10px' : '0 12px', border: '1px solid ' + (cur.missing ? 'var(--warn)' : 'var(--hair)'), borderRadius: 9, background: cur.missing ? 'var(--warn-tint)' : 'var(--surface)', cursor: 'pointer', fontSize: narrow ? 16 : 13.5, fontWeight: 700, color: cur.missing ? 'var(--warn)' : 'var(--ink)' }}>
+        {cur.missing && <Icon name="alert" size={13} color="var(--warn)" />}{cur.label}<Icon name="chevD" size={13} color="var(--muted)" />
       </button>
       {open && (
         <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, minWidth: narrow ? 64 : 200, padding: 5, zIndex: 30, boxShadow: 'var(--sh-pop)' }}>
           {options.map((o) => {
-            const on = o.value === value;
+            const on = cur.option === o;
             return (
               <button key={String(o.value)} className="dk-row" onClick={() => { onChange(o.value); setOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 9px', borderRadius: 8, textAlign: 'left', cursor: 'pointer' }}>
                 <span style={{ flex: 1, fontWeight: on ? 700 : 600, fontSize: narrow ? 15 : 13.5, color: on ? 'var(--ink)' : 'var(--ink-2)' }}>{o.label}</span>
@@ -142,7 +151,7 @@ export function DkCondRow({ rule, onChange, onRemove, t, lang, fields }) {
       ) : f.type === 'enum' ? (
         <React.Fragment>
           <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--muted)' }}>{f.cmp === 'contains' ? t('include', 'includes') : t('è', 'is')}</span>
-          <DkDrop value={rule.value} onChange={(v) => onChange({ value: v })} options={f.options} />
+          <DkDrop value={rule.value} onChange={(v) => onChange({ value: v })} options={f.options} missingLabel={f.missingLabel} loose={f.loose} />
         </React.Fragment>
       ) : (
         <React.Fragment>
@@ -158,36 +167,4 @@ export function DkCondRow({ rule, onChange, onRemove, t, lang, fields }) {
       <button className="dk-iconbtn" onClick={onRemove} aria-label="remove" style={{ width: 32, height: 32, display: 'grid', placeItems: 'center', borderRadius: 9, cursor: 'pointer', color: 'var(--muted)' }}><Icon name="x" size={16} /></button>
     </div>
   );
-}
-
-/* ---------------- deposit-rule fields (dkDepositFields port, API facts) ---------------- */
-export function depositFields(clientCategories, t, lang) {
-  return [
-    { id: 'reliability', type: 'num', defaultCmp: 'lt', defaultValue: 60, unit: '', label: { it: 'Affidabilità', en: 'Reliability' } },
-    { id: 'categories', type: 'enum', cmp: 'contains', label: { it: 'Etichetta cliente', en: 'Client label' }, options: clientCategories.map((c) => ({ value: c.name, label: c.name })) },
-    { id: 'total_spent', type: 'money', defaultCmp: 'lt', defaultValue: 100, unit: '€', label: { it: 'Totale speso', en: 'Total spent' } },
-    { id: 'visits', type: 'num', defaultCmp: 'lt', defaultValue: 2, unit: '', label: { it: 'Numero di visite', en: 'Number of visits' } },
-    { id: 'noshow_count', type: 'num', defaultCmp: 'gte', defaultValue: 1, unit: '', label: { it: 'No-show', en: 'No-shows' } },
-    { id: 'latecancel_count', type: 'num', defaultCmp: 'gte', defaultValue: 1, unit: '', label: { it: 'Cancellazioni tardive', en: 'Late cancellations' } },
-    { id: 'deposit_always', type: 'bool', label: { it: 'Deposito sempre richiesto', en: 'Deposit always required' } },
-  ];
-}
-
-/* ---------------- natural-language rule sentence (dkRuleSentence port) ---------------- */
-export function ruleSentence(conditions, fields, t, lang) {
-  const rules = (conditions && conditions.rules) || [];
-  if (!rules.length) return t('Tutte le clienti', 'All clients');
-  const joinTxt = (conditions.op === 'or') ? ` ${t('O', 'OR')} ` : ` ${t('E', 'AND')} `;
-  const CMP_TXT = { lt: '<', lte: '≤', gt: '>', gte: '≥', eq: '=', neq: '≠' };
-  return rules.map((r) => {
-    const f = fields.find((x) => x.id === r.field);
-    if (!f) return `${r.field} ${CMP_TXT[r.cmp] || r.cmp} ${r.value}`;
-    const label = f.label[lang] || f.label.it;
-    if (f.type === 'enum') {
-      const o = (f.options || []).find((x) => x.value === r.value);
-      return label + ' = ' + (o ? o.label : r.value);
-    }
-    if (f.type === 'bool') return label + (r.value ? '' : ' = No');
-    return label + ' ' + (CMP_TXT[r.cmp] || r.cmp) + ' ' + (f.type === 'money' ? '€' : '') + r.value;
-  }).join(joinTxt);
 }

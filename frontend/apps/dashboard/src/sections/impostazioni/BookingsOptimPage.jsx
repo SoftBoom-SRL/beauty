@@ -4,7 +4,7 @@
 // flexible_reward_pct → PUT /api/core/settings (owner-only).
 // Dropped (no API field): deposit-mode selector (covered by DepositRules below)
 // and the free-text "Le tue regole" builder (phase 2).
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { api, Icon, Toggle, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { useDash } from '../../ctx.jsx';
@@ -67,7 +67,14 @@ export default function BookingsOptimPage({ onBack }) {
   const [flexReward, setFlexReward] = useState(s.flexible_reward_pct || 10);
   const [saving, setSaving] = useState(false);
   const ro = !isOwner; // read-only for non-owners
+  // bozze delle regole deposito qui sotto (id → { dirty, save })
+  const ruleDrafts = useRef(new Map());
 
+  /* Un solo «Salva» per la pagina. Le regole caparra stanno subito sopra il
+   * grande pulsante, che salvava solo le impostazioni e tornava indietro: la
+   * bozza di una regola (acconto portato dal 30 al 50 %) spariva con la pagina
+   * e il toast diceva «Impostazioni salvate» (15-03). Ora salva anche le regole
+   * con modifiche in sospeso, e se una non passa si resta sulla pagina. */
   const save = async () => {
     if (saving) return;
     setSaving(true);
@@ -82,8 +89,15 @@ export default function BookingsOptimPage({ onBack }) {
         flexible_window_min: flexWindow,
         flexible_reward_pct: flexReward,
       });
-      await reload.salon();
-      fireToast({ msg: t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
+      reload.salon().catch(() => {});
+      const pending = [...ruleDrafts.current.values()].filter((r) => r.dirty);
+      let failed = 0;
+      for (const r of pending) {
+        if (!(await r.save())) failed += 1;
+      }
+      // la regola che non passa ha già mostrato il motivo del server: si resta qui
+      if (failed) return;
+      fireToast({ msg: pending.length ? t('Impostazioni e regole deposito salvate', 'Settings and deposit rules saved') : t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
       onBack();
     } catch (err) { toastErr(err, fireToast, t); }
     finally { setSaving(false); }
@@ -217,7 +231,7 @@ export default function BookingsOptimPage({ onBack }) {
       <div style={{ marginTop: 28 }}>
         <div className="t-meta" style={{ marginBottom: 10 }}>{t('Regole deposito · condizioni di dettaglio', 'Deposit rules · detailed conditions')}</div>
         <div className="dk-card" style={{ padding: 0 }}>
-          <DepositRules />
+          <DepositRules drafts={ruleDrafts} />
         </div>
       </div>
 
