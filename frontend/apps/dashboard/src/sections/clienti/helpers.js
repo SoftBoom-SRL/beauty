@@ -1,5 +1,6 @@
 // helpers.js — clienti section utilities (pure functions, no React).
 import { fmtTime, salonDateParts, todayStr } from '@youty/shared';
+import { composeReward } from '../fedelta/meta.js';
 
 /* Shared input style used across the section's forms (from the prototype). */
 export const inputCss = {
@@ -152,6 +153,16 @@ export function depositBadge(a) {
     case 'forfeited': return { kind: 'forfeited', amount: left, refunded };
     default: return null;   // nessuna caparra, o richiesta e non ancora pagata
   }
+}
+
+/** Premio di un programma fedeltà per il Wallet della scheda: la stessa
+ *  etichetta della sezione Fedeltà (composeReward). La versione locale
+ *  cercava 'percent'/'amount' dentro 'discount_pct'/'gift_card' e scriveva
+ *  «Premio: 10.00» (14-21, 07-16). */
+export function rewardLabel(p, services, lang) {
+  const s = p.reward_type === 'free_service' ? (services || []).find((x) => x.id === p.reward_service_id) : null;
+  const name = s ? ((lang === 'en' && s.name_en) ? s.name_en : s.name_it) : '';
+  return composeReward(p.reward_type, p.reward_value, name, lang);
 }
 
 /* wa.me link from a phone number (digits only, keeps leading country code). */
