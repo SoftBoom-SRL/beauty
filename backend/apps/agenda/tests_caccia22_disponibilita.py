@@ -321,6 +321,18 @@ class ClientMoveOperatorLeftTests(Caccia22Base):
         self.assertEqual(rows, [self.marta.id, self.marta.id])  # Marta è la prima idonea libera
         self.assertNotIn(paola.id, rows)
 
+    def test_a_cancelled_visit_is_still_refused_as_such(self):
+        appointment = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
+        appointment.status = Appointment.Status.CANCELLED
+        appointment.save(update_fields=["status"])
+        self._left(self.giulia)
+        self.marta.services.clear()  # nessuna collega: la ricerca non troverebbe posto
+        moved = self.post(
+            f"/api/agenda/client/appointments/{appointment.id}/move",
+            {"start": aware(self.day + dt.timedelta(days=1), 11).isoformat()}, self.client_auth(),
+        )
+        self.assertEqual(moved.status_code, 400, moved.content)
+
     def test_two_operators_gone_means_contact_the_salon(self):
         lia = self.operator("Lia", order=3)
         appointment = self.book(

@@ -1266,11 +1266,14 @@ def _client_move_reassignment(salon, appointment, start):
     sugli orari della collega, o la visita spostata ma ancora a chi non lavora
     più lì, senza nessuno che l'avesse in colonna.
     """
+    if appointment.status not in services.OPEN_STATUSES or start < timezone.now():
+        # visita chiusa o annullata, orario passato: li rifiuta lo spostamento
+        # stesso, con il suo 400
+        return None, None
     parsed, keep_service_ids = _visit_plan(appointment)
     location = _client_move_location(salon, appointment)
     missing = _unbookable_operator_ids(salon, parsed, location)
-    if not missing or start < timezone.now():
-        # (un orario passato lo rifiuta lo spostamento stesso, con il suo 400)
+    if not missing:
         return None, None
     if len(missing) > 1:
         raise HttpError(400, CLIENT_MOVE_NEEDS_SALON_MESSAGE)
