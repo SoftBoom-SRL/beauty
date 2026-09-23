@@ -24,7 +24,7 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
   const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
@@ -343,7 +343,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   /* «Torna indietro» del server, lo stesso del tasto in barra: rimette
    * l'appuntamento dov'era e, se il messaggio alla cliente non è ancora
    * partito, lo ferma. Rifare lo spostamento al contrario lo lasciava invece
-   * partire. */
+   * partire. Di norma passa dalla sezione (`undoAfter`): annulla QUEL gesto,
+   * con la stessa guardia del tasto in barra; questo resta solo di riserva. */
   async function undoLast() {
     try {
       const res = await api.post('/api/agenda/undo', {});
@@ -364,6 +365,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     const body = { start: isoAtMin(day.date, d.ns) };
     if (d.nop != null && d.nop !== d.origOp) { body.operator_id = d.nop; body.from_operator_id = d.origOp; }
     if (opts.force) body.force = true;
+    const mark = undoMark?.();   // voce più recente di «torna indietro» prima del gesto
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
       await api.post(`/api/agenda/appointments/${d.id}/move`, body);
@@ -372,7 +374,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
           msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns),
           icon: 'calendar',
           undo: t('Annulla', 'Undo'),
-          undoFn: () => undoLast(),
+          // annulla questo spostamento (la voce scritta dal gesto), poi ricarica la settimana
+          undoFn: undoAfter ? undoAfter(mark, () => refetchWeekRef.current()) : () => undoLast(),
         });
       }
       await refetchWeek();

@@ -187,6 +187,15 @@ export function weekLayout(list) {
   return out;
 }
 
+/** Vero se `value` ("YYYY-MM-DD" di <input type="date">) è una data da cui
+ *  saltare. Scrivendo l'anno a tastiera il campo passa per 0002, 0020, 0202:
+ *  sono date valide per il browser, e al primo tasto l'agenda saltava al 1902
+ *  (gli anni 0–99 di Date sono il Novecento). */
+export function plausibleDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  return !!m && Number(m[1]) >= 1900;
+}
+
 /* ---- waitlist helpers ---- */
 
 /** label for a WaitlistOut preference */
@@ -223,7 +232,11 @@ export function wlMatches(waitlist, appt) {
 /** rank waitlist entries for a freed slot (service match assumed) */
 export function wlRank(entries, appt) {
   const hour = Math.floor(aStartMin(appt) / 60);
-  const dow = (parseISO(appt.start).getDay() + 6) % 7;
+  // Giorno della settimana sul calendario del SALONE: getDay() sull'ISO
+  // dell'API legge il fuso del dispositivo, e da una postazione su un altro
+  // fuso (o a cavallo della mezzanotte UTC) il venerdì sera diventava sabato —
+  // «weekend» e «giorni precisi» premiavano le voci sbagliate.
+  const dow = (parseISO(toDateStr(appt.start)).getDay() + 6) % 7;
   const opIds = apptOperatorIds(appt);
   const score = (w) => {
     let s = 10;

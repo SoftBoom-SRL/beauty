@@ -69,17 +69,21 @@ const SHARED = `
 export * from ${JSON.stringify(FORMAT)};
 export const Avatar = () => null;
 export const Icon = () => null;
+export const NumInput = () => null;
 export const statusMeta = (s) => ({ label: String(s || ''), color: '#999' });
-export class ApiError extends Error {
+// la stessa classe per il componente e per il test (globalThis.__ApiError)
+export const ApiError = globalThis.__ApiError || (globalThis.__ApiError = class ApiError extends Error {
   constructor(status, message, data) { super(message); this.name = 'ApiError'; this.status = status; this.data = data; }
-}
+});
 const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
 `;
 const CTX = 'export const useDash = () => globalThis.__dash;';
 
-/** Compila `entry` (percorso dal frontend/) e ne restituisce i moduli esportati. */
-export async function loadComponent(entry) {
+/** Compila `entry` (percorso dal frontend/) e ne restituisce i moduli esportati.
+ *  `stubs`: nomi di file (es. 'RightRail.jsx') da sostituire con componenti muti
+ *  che portano lo stesso nome — si guardano le props che ricevono. */
+export async function loadComponent(entry, { stubs = [] } = {}) {
   const res = await build({
     entryPoints: [join(FRONT, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
@@ -91,9 +95,17 @@ export async function loadComponent(entry) {
         b.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'finto' }));
         b.onResolve({ filter: /^@youty\/shared$/ }, () => ({ path: 'shared', namespace: 'finto' }));
         b.onResolve({ filter: /ctx\.jsx$/ }, () => ({ path: 'ctx', namespace: 'finto' }));
-        b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => ({
-          contents: { react: REACT, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT,
-        }));
+        b.onResolve({ filter: /\.jsx$/ }, (a) => {
+          const base = a.path.split('/').pop();
+          return stubs.includes(base) ? { path: 'stub:' + base, namespace: 'finto' } : undefined;
+        });
+        b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => {
+          if (a.path.startsWith('stub:')) {
+            const name = a.path.slice(5).replace(/\.jsx$/, '');
+            return { contents: `export default function ${name}() { return null; }\nexport function ApptHoverCard() { return null; }`, loader: 'js' };
+          }
+          return { contents: { react: REACT, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT };
+        });
       },
     }],
   });
@@ -120,6 +132,10 @@ export function mount(Comp, props, { attach } = {}) {
     },
     get props() { return inst.props; },
     get dirty() { return inst.dirty; },
+    /** smontaggio: le pulizie degli effetti (ascoltatori, timer) */
+    unmount() {
+      for (const sl of inst.slots) if (sl && typeof sl.cleanup === 'function') sl.cleanup();
+    },
   };
   m.render();
   return m;

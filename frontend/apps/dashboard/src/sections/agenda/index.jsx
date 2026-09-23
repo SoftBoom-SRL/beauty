@@ -6,7 +6,7 @@ import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
   isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay,
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
-  moveIsNoop, moveHereTarget, AGENDA_LIVE_RE,
+  moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
@@ -19,6 +19,7 @@ export default function AgendaSection() {
     t, lang, operators, services, serviceCategories, hasScope,
     openModal, modal, fireToast, opColors, setOpColor, opPalette,
     setTab, setDeepLink, showRevenue, live, setAgendaPick, setAgendaDate, settings, session, locationId,
+    toastProps,
   } = useDash();
   const canWrite = hasScope('agenda');
   const noWrite = useCallback(() => fireToast({ msg: t('Il tuo ruolo non ha il permesso “agenda”: puoi solo consultare', 'Your role lacks the “agenda” permission: read only'), icon: 'lock' }), [fireToast, t]);
@@ -109,7 +110,8 @@ export default function AgendaSection() {
    * Arriva dal server perché l'annullamento è vero — rimette a posto i dati e
    * ferma i messaggi non ancora partiti — e perché deve rifiutarsi di
    * sovrascrivere quello che nel frattempo ha fatto un'altra postazione. */
-  const fetchUndo = useCallback(() => api.get('/api/agenda/undo').then(setUndoStack).catch(() => {}), []);
+  // restituisce anche la pila letta: serve a trovare la voce del gesto appena fatto (undoAfter)
+  const fetchUndo = useCallback(() => api.get('/api/agenda/undo').then((list) => { setUndoStack(list); return list; }).catch(() => null), []);
   const fetchSummary = useCallback(() => api.get('/api/sales/today-summary').then(setSummary).catch(() => {}), []);
   const fetchReleased = useCallback(() => api.get('/api/agenda/released').then(setReleased).catch(() => {}), []);
   const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
@@ -297,10 +299,21 @@ export default function AgendaSection() {
    * se il messaggio alla cliente non è ancora partito, lo ferma. Non chiede
    * conferme (in agenda non se ne chiedono): se non si può più tornare
    * indietro lo dice il server, e l'avviso riporta il suo motivo. */
+  /* Guardia in una ref, non nello stato: l'«Annulla» di un avviso tiene la
+   * funzione di quando è comparso, con `undoing` ancora falso. Premendo
+   * «Indietro» (o ⌘Z) e poi «Annulla» durante la richiesta partiva un secondo
+   * POST /undo senza id, che annullava anche il gesto di prima o rispondeva
+   * con un 409 falso. All'avvio si chiude anche l'avviso: non deve restare lì
+   * a offrire di annullare una cosa che si sta già annullando. */
+  const undoingRef = useRef(false);
+  const toastDoneRef = useRef(null);
+  toastDoneRef.current = toastProps?.onDone;
   const undoLast = useCallback(async (entryId) => {
     if (!canWrite) { noWrite(); return; }
-    if (undoing) return;
+    if (undoingRef.current) return;
+    undoingRef.current = true;
     setUndoing(true);
+    toastDoneRef.current?.();
     try {
       const res = await api.post('/api/agenda/undo', entryId ? { entry_id: entryId } : {});
       // Il gesto può aver riportato l'appuntamento su un altro giorno: senza
@@ -311,10 +324,27 @@ export default function AgendaSection() {
       if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
       else toastErr(err, t, fireToast);
     } finally {
+      undoingRef.current = false;
       setUndoing(false);
-      refetchAll();
+      refetchAllRef.current();
     }
-  }, [canWrite, noWrite, undoing, fireToast, t, refetchAll]);
+  }, [canWrite, noWrite, fireToast, t]);
+  const undoLastRef = useRef(undoLast);
+  undoLastRef.current = undoLast;
+
+  /* «Annulla» nell'avviso di un gesto: annulla QUEL gesto, non l'ultima voce
+   * di chi guarda. Le risposte di spostamenti e pause non dicono quale voce
+   * hanno scritto, quindi si segna la voce più recente nota PRIMA del gesto
+   * (`undoMark`) e dopo si rilegge la pila: la voce nuova è quella del gesto.
+   * Se non la si trova (pila non riletta), si ripiega sull'ultima voce come
+   * prima. `onDone`: chi ha fatto il gesto ricarica anche la sua vista. */
+  const undoStackRef = useRef(undoStack);
+  undoStackRef.current = undoStack;
+  const undoMark = useCallback(() => undoStackRef.current.reduce((m, e) => Math.max(m, e?.id || 0), 0), []);
+  const undoAfter = useCallback((mark, onDone) => {
+    const entry = fetchUndo().then((list) => (list || []).find((e) => e.id > mark)?.id ?? null);
+    return () => entry.then((id) => undoLastRef.current(id ?? undefined)).then(() => onDone?.());
+  }, [fetchUndo]);
 
   /* ⌘Z / Ctrl+Z: la scorciatoia che tutti provano d'istinto. Non ruba il tasto
    * a chi sta scrivendo in un campo né a un modale aperto, dove annullerebbe
@@ -360,6 +390,7 @@ export default function AgendaSection() {
     const fromDate = toDateStr(a.start);
     if (moveIsNoop(startMin, toOp, { startMin: fromMin, opId: fromOp, date: fromDate }, date)) return false;
     const otherDay = fromDate !== date;
+    const mark = undoMark();   // voce più recente prima del gesto (vedi undoAfter)
     setPending({ kind: 'appt', id: a.id, startMin, opId: toOp, fromOp });
     try {
       await api.post(`/api/agenda/appointments/${a.id}/move`, {
@@ -382,19 +413,21 @@ export default function AgendaSection() {
         : otherDay
           ? t('Spostato a ' + when, 'Moved to ' + when)
           : t('Spostato alle ' + when, 'Moved to ' + when);
+      // `undoAfter` rilegge anche la pila di «torna indietro»
+      const undoFn = opts.undo === false ? undefined : undoAfter(mark);
+      if (!undoFn) fetchUndo();   // la pila di «torna indietro» segue ogni gesto
       fireToast({
         msg: where + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
-        undo: opts.undo === false ? undefined : t('Annulla', 'Undo'),
+        undo: undoFn ? t('Annulla', 'Undo') : undefined,
         // Passa dal «torna indietro» del server, non da uno spostamento al
         // contrario: così l'orario torna quello di prima E il messaggio alla
         // cliente, se non è ancora partito, non parte affatto. Rifare la strada
         // al contrario ne avrebbe invece fatti partire due.
-        undoFn: opts.undo === false ? undefined : () => undoLast(),
+        undoFn,
       });
       // lo spostamento è scritto: un ricarico andato male non lo rende fallito
       await fetchDay().catch(() => {});
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
@@ -421,6 +454,7 @@ export default function AgendaSection() {
     // servizio restava qui.
     const iso = opts.dateIso || date;
     const otherDay = iso !== date;
+    const mark = undoMark();
     setPending({ kind: 'appt', id: appt.id, startMin: aMin(appt.start), opId: appt.operator_id });
     try {
       await api.post(`/api/agenda/appointments/${appt.id}/split`, {
@@ -438,10 +472,9 @@ export default function AgendaSection() {
           + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'scissors',
         undo: t('Annulla', 'Undo'),
-        undoFn: () => undoLast(),
+        undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
       });
       await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force) {
         await splitItem(appt, item, startMin, opId, { ...opts, force: true });
@@ -496,6 +529,7 @@ export default function AgendaSection() {
   const moveApptToDate = async (a, iso, startMin, opts = {}) => {
     if (!canWrite) { noWrite(); return; }
     if (iso === date) { moveAppt(a, startMin, a.operator_id); return; }
+    const mark = undoMark();
     try {
       // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
       // libero non lascia l'appuntamento marcato «forzato» senza motivo.
@@ -506,7 +540,7 @@ export default function AgendaSection() {
           + (opts.warn ? ' · ' + opts.warn : ''),
         icon: opts.warn ? 'alert' : 'calendar',
         undo: t('Annulla', 'Undo'),
-        undoFn: () => undoLast(),
+        undoFn: undoAfter(mark),
       });
       refetchAll();
     } catch (err) {
@@ -563,6 +597,7 @@ export default function AgendaSection() {
   };
 
   const movePause = async (p, startMin, opId, opts = {}) => {
+    const mark = undoMark();
     setPending({ kind: 'pause', id: p.id, startMin, opId });
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
@@ -571,11 +606,10 @@ export default function AgendaSection() {
           msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)) + (opts.warn ? ' · ' + opts.warn : ''),
           icon: opts.warn ? 'alert' : 'clock',
           undo: t('Annulla', 'Undo'),
-          undoFn: () => undoLast(),
+          undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
         });
-      }
+      } else fetchUndo();   // la pila di «torna indietro» segue ogni gesto
       await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
@@ -592,11 +626,12 @@ export default function AgendaSection() {
   };
 
   const deletePause = async (p) => {
+    const mark = undoMark();
     try {
       await api.del(`/api/agenda/pauses/${p.id}`);
-      fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: () => undoLast() });
+      // `undoAfter` rilegge anche la pila di «torna indietro»
+      fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: undoAfter(mark) });
       await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastErr(err, t, fireToast); }
   };
 
@@ -609,11 +644,25 @@ export default function AgendaSection() {
         id: it.id, service_id: it.service_id, operator_id: it.operator_id,
         duration_min: it.id === item.id ? newDur : it.duration_min,
       }));
-      await api.put(`/api/agenda/appointments/${appt.id}`, { items, force: !!opts.force });
+      /* La lista dei servizi è quella a video: se nel frattempo l'appuntamento
+       * è cambiato (un'altra postazione, il pannello) la si scriverebbe sopra
+       * alle modifiche altrui. Con `updated_at` in mano si chiede al server di
+       * scrivere solo se è ancora quello (contratto C2); senza — payload di un
+       * server che non lo manda — si scrive come prima. */
+      const body = { items, force: !!opts.force };
+      if (appt.updated_at) body.expected_updated_at = appt.updated_at;
+      await api.put(`/api/agenda/appointments/${appt.id}`, body);
       fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
       await fetchDay();
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
+      // 412: l'appuntamento è cambiato nel frattempo. Mai forzare: si ricarica
+      // la giornata e si dice perché il blocco è tornato com'è davvero.
+      if (err instanceof ApiError && err.status === 412) {
+        fireToast({ msg: t('L\'appuntamento è cambiato nel frattempo: giornata ricaricata, riprova', 'The appointment changed in the meantime: day reloaded, try again'), icon: 'alert' });
+        await fetchDay().catch(() => {});
+        return;
+      }
       // Allungare un trattamento mentre accanto c'è un'altra cliente (o oltre
       // l'orario di chiusura) rispondeva «Orario non più disponibile» e il
       // blocco tornava com'era: al banco si allunga e basta, come per gli
@@ -804,7 +853,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
@@ -1019,7 +1068,9 @@ function JumpPopover({ t, MONTHS, curM, curY, onClose, onMonth, onDate }) {
         </div>
         <div style={{ borderTop: '1px solid var(--hair)', paddingTop: 10 }}>
           <div className="t-meta" style={{ marginBottom: 6 }}>{t('Vai a una data', 'Jump to a date')}</div>
-          <input type="date" onChange={(e) => onDate(e.target.value)} style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13.5, padding: '8px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' }} />
+          {/* Si salta solo con una data piena: scrivendo l'anno a tastiera il
+              primo tasto dava «0002» e l'agenda finiva nel 1902. */}
+          <input type="date" onChange={(e) => { if (plausibleDate(e.target.value)) onDate(e.target.value); }} style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13.5, padding: '8px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' }} />
         </div>
       </div>
     </React.Fragment>
