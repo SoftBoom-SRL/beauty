@@ -15,7 +15,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("core", "0009_outboxevent_coalesce_key_and_more"),
+        ("core", "0010_caccia22_core_salon_is_demo"),
     ]
 
     operations = [
