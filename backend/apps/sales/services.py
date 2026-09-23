@@ -452,6 +452,7 @@ def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
         appointment.deposit_payment_intent_id,
         idempotency_key=f"deposit-excess-{appointment.salon_id}-{appointment.id}",
         amount_cents=cents,
+        account=stripe_service.deposit_account(appointment),
     )
     if refund is not None:
         from apps.agenda.services import record_deposit_refund  # lazy

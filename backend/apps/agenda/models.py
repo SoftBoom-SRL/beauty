@@ -104,6 +104,21 @@ class Appointment(TimeStampedModel):
     # nuova: due link aperti sulla stessa caparra significano due pagamenti
     # possibili, e il secondo arrivava senza che nessuno lo riconciliasse.
     deposit_checkout_session_id = models.CharField(max_length=80, blank=True, default="")
+    # Account Stripe su cui vive la caparra: quello della sessione del link e,
+    # a pagamento arrivato, quello dell'evento ("" = piattaforma). Rimborsi e
+    # chiusure dei link vanno lì: collegando o scollegando Stripe dopo il
+    # pagamento andavano sull'account nuovo, dove il PaymentIntent non esiste,
+    # e fallivano. None = caparra di prima di questo campo: si usa l'account
+    # attuale del salone.
+    deposit_stripe_account = models.CharField(max_length=64, null=True, blank=True, default=None)
+    # Quando Stripe chiude la sessione del link (al più 24 ore, anche senza
+    # scadenza della caparra). Passata quella, il link si rifà invece di
+    # rimandare alla cliente una pagina già chiusa.
+    deposit_link_expires_at = models.DateTimeField(null=True, blank=True)
+    # Fine del termine di pagamento fissata alla prenotazione, SENZA il taglio
+    # sull'inizio della visita che c'è in `deposit_due_at`: se la visita viene
+    # spostata, la scadenza vera si ricalcola da qui e dal nuovo inizio.
+    deposit_hold_until = models.DateTimeField(null=True, blank=True)
     # Slot liberato automaticamente per caparra non pagata: resta la traccia
     # (l'operatrice richiama la cliente e decide) e si può ripristinare.
     auto_released = models.BooleanField(default=False)

@@ -1179,14 +1179,21 @@ def edit_appointment(
 
 
 def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
-    """Riporta la caparra al totale della visita quando questa si accorcia.
+    """Allinea la caparra a una visita che si è accorciata (servizio staccato o tolto).
 
-    Staccando un servizio (o togliendolo dalla lista) il totale può scendere
-    sotto la caparra già versata: il checkout avrebbe dovuto incassare un
-    importo negativo e rispondeva 422 per sempre, senza più modo di chiudere il
-    conto. La caparra scende al nuovo totale; l'eccedenza, se era già stata
-    incassata, resta scritta nel registro come «da rimborsare». Il denaro non si
-    muove da solo: lo restituisce lo staff, che decide come.
+    Caparra ancora da pagare: scende al nuovo totale, e il link già mandato —
+    che chiede l'importo di prima — viene chiuso e rifatto a transazione
+    conclusa. Prima restava quello vecchio: la cliente pagava 70 per una
+    caparra scesa a 30 e i 40 in più restavano su Stripe senza traccia (02-06,
+    05-07).
+
+    Caparra già versata: è denaro incassato e l'importo NON si tocca. Prima
+    scendeva al nuovo totale, così la quota detraibile non vedeva più
+    l'eccedenza (la cliente la perdeva) e, se lo staff la rimborsava come
+    chiedeva il registro, i rimborsi si confrontavano con la caparra ridotta e
+    la sottraevano una seconda volta: caparra «rimborsata», credito zero, la
+    cliente ripagava la visita (02-01, 05-06). Ora il checkout detrae fino al
+    totale e restituisce da sé l'eccedenza (`settle_deposit_excess`).
 
     Ritorna l'eccedenza (0 se non c'era).
     """
@@ -1195,25 +1202,53 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
         start=Decimal("0"),
     ).quantize(Decimal("0.01"))
     amount = Decimal(str(appointment.deposit_amount or 0)).quantize(Decimal("0.01"))
+
+    if appointment.deposit_status == Appointment.DepositStatus.PAID:
+        excess = appointment.deposit_credit - total
+        if excess > 0:
+            log_activity(
+                appointment.salon,
+                "deposit.excess",
+                f"Caparra superiore alla visita: al conto si detraggono {total} €, "
+                f"{excess} € tornano alla cliente — {appointment.client.full_name}",
+                actor=actor,
+                payload={
+                    "appointment_id": appointment.id,
+                    "amount": str(excess),
+                    "deposit_amount": str(amount),
+                    "total": str(total),
+                    "reason": "visita ridotta",
+                },
+            )
+        return max(excess, Decimal("0.00"))
+
     excess = amount - total
-    if excess <= 0:
-        return Decimal("0.00")
+    if excess <= 0 or appointment.deposit_status != Appointment.DepositStatus.REQUIRED:
+        return max(excess, Decimal("0.00"))
 
     appointment.deposit_amount = total
     appointment.save(update_fields=["deposit_amount", "updated_at"])
-    if appointment.deposit_status == Appointment.DepositStatus.PAID:
-        log_activity(
-            appointment.salon,
-            "deposit.refund_due",
-            f"Caparra eccedente da rimborsare ({excess} €) — {appointment.client.full_name}",
-            actor=actor,
-            payload={
-                "appointment_id": appointment.id,
-                "amount": str(excess),
-                "deposit_amount": str(total),
-                "reason": "visita ridotta",
-            },
-        )
+    if appointment.deposit_payment_link or appointment.deposit_checkout_session_id:
+        appointment_id = appointment.pk
+
+        def renew_link():
+            # Dopo il commit e fuori dal lock: si parla con Stripe, e il link
+            # nuovo deve leggere la caparra già ridotta.
+            from apps.sales.stripe_service import ensure_deposit_link  # lazy
+
+            fresh = (
+                Appointment.objects.select_related("salon", "salon__settings", "client")
+                .filter(pk=appointment_id)
+                .first()
+            )
+            if fresh is None:
+                return
+            try:
+                ensure_deposit_link(fresh, resend=True, actor=actor, reason="amount_changed")
+            except Exception:  # noqa: BLE001 — la modifica è salva, il link si rimanda a mano
+                logger.exception("Link caparra non rifatto dopo la riduzione (appuntamento %s)", appointment_id)
+
+        transaction.on_commit(renew_link)
     return excess
 
 
@@ -2050,6 +2085,15 @@ def process_deposit_holds(salon, *, now=None) -> dict:
                 if not claimed:
                     continue
                 appointment.deposit_reminder_sent_at = now
+                if appointment.deposit_payment_link:
+                    from apps.sales.stripe_service import refresh_deposit_link  # lazy
+
+                    # Il sollecito porta il link: a sessione già chiusa da
+                    # Stripe (24 ore al massimo) se ne apre una nuova. Se non ci
+                    # si riesce la scadenza è sospesa e un messaggio con una
+                    # pagina morta non serve a nessuno.
+                    if not refresh_deposit_link(appointment):
+                        continue
                 emit_event(salon, "deposit.reminder", _event_payload(appointment))
                 log_activity(
                     salon,
