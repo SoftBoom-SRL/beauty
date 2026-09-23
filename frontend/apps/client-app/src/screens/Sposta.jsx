@@ -45,7 +45,17 @@ export default function Sposta() {
     setSlot(null);
     api.get('/api/agenda/client/availability', { params: availabilityParams(days[dayIdx]) })
       .then((list) => { if (alive) setSlots(list); })
-      .catch((err) => { if (alive) { setSlots([]); errToast(err, fireToast, t); } });
+      .catch((err) => {
+        if (!alive) return;
+        setSlots([]);
+        // 400 = questa visita dall'app non si sposta (per esempio due
+        // operatrici non più prenotabili: «Per spostare questa visita
+        // contatta il salone»). Si dice nel riquadro in alto, come il rifiuto
+        // del preavviso: sotto un toast restava «Nessun orario libero questo
+        // giorno: prova un altro giorno», e la cliente provava giorno per giorno.
+        if (err instanceof ApiError && err.status === 400) setPolicyErr(err.message);
+        else errToast(err, fireToast, t);
+      });
     return () => { alive = false; };
     // `days` fra le dipendenze: a mezzanotte la striscia scivola di un giorno
     // ma senza ricaricare restavano a video gli orari del giorno prima, con lo
@@ -181,7 +191,7 @@ export default function Sposta() {
               </div>
             )}
           </React.Fragment>
-        ) : (
+        ) : policyErr ? null : (
           <div style={{ padding: '28px 16px', borderRadius: 'var(--r-md)', border: '1px dashed var(--hair)', textAlign: 'center' }}>
             <Icon name="clock" size={26} color="var(--muted-2)" />
             <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 8 }}>
