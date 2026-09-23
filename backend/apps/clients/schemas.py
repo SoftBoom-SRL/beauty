@@ -168,6 +168,10 @@ class ImportRowIn(Schema):
     lang: str = ""              # it | en | ""
     note: str = ""              # diventa una nota privata sul cliente
     categories: list[str] = []  # nomi etichetta: create se mancanti
+    # «Cliente dal» del gestionale di provenienza ('YYYY-MM-DD' | ""). Senza,
+    # la scheda importata resta senza data: prima prendeva quella dell'import
+    # e tutta la rubrica storica risultava cliente «dal 2026» (06-07, 08-05).
+    since: str = ""
 
 
 # Tetto per richiesta. Ogni riga costa 2-5 query dentro un savepoint, in una
@@ -186,13 +190,20 @@ class ImportIn(Schema):
 class ImportErrorOut(Schema):
     row: int
     reason: str
+    # La scheda a cui la riga si riferisce, quando c'è (archiviata, email di
+    # un'altra persona): la dashboard può aprirla invece di un vicolo cieco.
+    client_id: Optional[int] = None
 
 
 class ImportOut(Schema):
     created: int
     updated: int
     skipped: int = 0
+    # Righe NON importate.
     errors: list[ImportErrorOut] = []
+    # Righe importate lasciando fuori un dato che non si poteva leggere (per
+    # esempio il 29/02 di un anno non bisestile): la cliente c'è, quel campo no.
+    warnings: list[ImportErrorOut] = []
 
 
 # ---- Note ----------------------------------------------------------------------

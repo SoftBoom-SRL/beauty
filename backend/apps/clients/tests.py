@@ -284,13 +284,16 @@ class ImportUpsertTests(ClientsTestCase):
         self.assertTrue(Client.objects.filter(salon=self.salon, phone="+393339998888").exists())
 
     def test_import_matches_by_email_when_no_phone_match(self):
-        existing = self.make_client(phone="+393330005555", email="giulia@example.com")
+        # Stessa persona (stesso nome): la riga senza telefono aggiorna la scheda.
+        # Con un nome diverso la salta (06-08, vedi tests_caccia22_import).
+        existing = self.make_client(first_name="Giulia", phone="+393330005555", email="giulia@example.com")
         result = import_rows(
-            self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": ""}]
+            self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": "", "lang": "en"}]
         )
         self.assertEqual((result["created"], result["updated"]), (0, 1))
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "Giulia")
+        self.assertEqual(existing.lang, "en")
 
     def test_import_row_without_phone_or_match_is_skipped(self):
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
@@ -335,9 +338,15 @@ class ImportUpsertTests(ClientsTestCase):
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 0)
 
     def test_imported_clients_get_a_since_date(self):
-        import_rows(self.salon, [{"first_name": "Anna", "phone": "+393330007777"}])
-        client = Client.objects.get(salon=self.salon, first_name="Anna")
-        self.assertEqual(client.since, timezone.localdate())
+        # «Cliente dal» è quello del file; senza colonna resta vuoto, non la
+        # data dell'import: la rubrica storica non è fatta di clienti nuove
+        # (06-07, 08-05).
+        import_rows(self.salon, [
+            {"first_name": "Anna", "phone": "+393330007777"},
+            {"first_name": "Bea", "phone": "+393330008888", "since": "2019-05-02"},
+        ])
+        self.assertIsNone(Client.objects.get(salon=self.salon, first_name="Anna").since)
+        self.assertEqual(Client.objects.get(salon=self.salon, first_name="Bea").since, dt.date(2019, 5, 2))
 
     def test_import_refuses_a_file_bigger_than_the_cap(self):
         """Ogni riga costa 2-5 query in una richiesta sincrona: senza tetto un
@@ -771,9 +780,12 @@ class ImportFlexibleTests(ClientsTestCase):
             {"first_name": "A", "phone": "+39222", "birthday": "--02-30"},  # data impossibile
             {"first_name": "B", "phone": "+39333", "gender": "male"},       # ok
         ])
-        self.assertEqual(result["created"], 1)
-        self.assertEqual(result["skipped"], 2)
-        self.assertEqual([e["row"] for e in result["errors"]], [0, 1])
+        # La data impossibile non costa più la cliente: entra senza compleanno,
+        # con un avviso (06-13).
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual([e["row"] for e in result["errors"]], [0])
+        self.assertEqual([w["row"] for w in result["warnings"]], [1])
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-media-"))
