@@ -172,3 +172,24 @@ export async function copyText(text, env = globalThis) {
 /** Chi non ha marketing né cassa riceve i codici mascherati («••••1234»,
  *  contratto C21): non vanno mostrati come se fossero il codice da usare. */
 export const usableCode = (code) => (code && !String(code).includes('•') ? String(code) : '');
+
+/* ---- «Riprogramma» ----------------------------------------------------------- */
+
+/** Riassegnazione proposta da uno slot di «Riprogramma» (contratto C1). Per le
+ *  righe di un'operatrice che non si prenota più (disattivata, di un'altra
+ *  sede) la ricerca propone una collega: lo spostamento la applica solo se la
+ *  si manda (operator_id + from_operator_id), e ne porta una coppia sola.
+ *  `assignment` è nell'ordine delle righe della visita.
+ *  Ritorna { pair: { from, to } | null, extra } — `extra` conta le altre
+ *  operatrici da riassegnare che uno spostamento solo non può portare. */
+export function slotReassignment(items, assignment) {
+  const rows = [...(items || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const pairs = [];
+  rows.forEach((it, i) => {
+    const a = assignment?.[i];
+    if (!a || a.operator_id == null || it.operator_id == null || a.operator_id === it.operator_id) return;
+    if (a.service_id != null && a.service_id !== it.service_id) return;   // righe non allineate: non si indovina
+    if (!pairs.some((p) => p.from === it.operator_id && p.to === a.operator_id)) pairs.push({ from: it.operator_id, to: a.operator_id });
+  });
+  return { pair: pairs[0] || null, extra: Math.max(0, pairs.length - 1) };
+}

@@ -7,7 +7,7 @@ import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
-import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode } from './rules.js';
+import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
 
@@ -688,7 +688,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   if (flow === 'reschedule') {
     return (
       <RescheduleFlow appt={appt} t={t} lang={lang} fireToast={fireToast} busy={busy} setBusy={setBusy}
-        onBack={() => setFlow(null)} onClose={onClose} onDone={onClose} />
+        onBack={() => setFlow(null)} onClose={onClose} onDone={onClose} onMutate={onMutate} />
     );
   }
 
@@ -1261,38 +1261,92 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
 }
 
 /* ---- Riprogramma: pick a new slot via availability, then POST /move ---- */
-function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone }) {
+function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone, onMutate }) {
   const [manual, setManual] = useState('');
-  const [needForce, setNeedForce] = useState(false); // orario fuori dagli slot liberi o 409
+  const [needForce, setNeedForce] = useState(false); // orario fuori dagli slot liberi o appena occupato
+  const needForceRef = useRef(false);
+  needForceRef.current = needForce;
   const apptDay = toDateStr(appt.start);   // giorno del salone, non quello UTC
   const [date, setDate] = useState(apptDay >= todayStr() ? apptDay : todayStr());
   const [slots, setSlots] = useState(null);
   const [selStart, setSelStart] = useState(null);
+  const selRef = useRef(null);
+  selRef.current = selStart;
+  const [reloadKey, setReloadKey] = useState(0);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const items = (appt.items || []).map((it) => ({ service_id: it.service_id, operator_id: it.operator_id }));
 
+  /* Orari liberi PER QUESTA VISITA (contratto C1): con exclude_appointment_id
+   * il server costruisce il piano dalla visita stessa — righe in ordine,
+   * durate e pose scritte, operatrici — e non la conta come occupata. Prima
+   * si cercava col listino di oggi e con la visita in agenda: spostarla di
+   * mezz'ora non era mai possibile e gli orari proposti a una visita allungata
+   * finivano in un 409 (01-05, 02-24, 13-17). `items` resta per un server che
+   * non conosce ancora il parametro. Si ricarica anche quando la visita cambia
+   * (il pannello la segue) o dopo un 409. */
+  const version = apptVersion(appt);
+  const lastDay = useRef(null);
   useEffect(() => {
-    let alive = true;
-    setSlots(null); setSelStart(null);
-    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id } })
-      .then((res) => { if (alive) setSlots(res); })
-      .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
-    return () => { alive = false; };
-  }, [date]); // eslint-disable-line react-hooks/exhaustive-deps
+    let on = true;
+    const sameDay = lastDay.current === date;
+    lastDay.current = date;
+    if (!sameDay) { setSlots(null); setSelStart(null); setNeedForce(false); }
+    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id, exclude_appointment_id: appt.id } })
+      .then((res) => {
+        if (!on) return;
+        setSlots(res);
+        const cur = selRef.current;
+        if (sameDay && cur && !needForceRef.current && !res.some((x) => x.start === cur)) {
+          setSelStart(null);
+          fireToast({ msg: t(`Le ${timeLabel(minutesOfDay(cur))} non sono più libere: scegli un altro orario`, `${timeLabel(minutesOfDay(cur))} is no longer free: pick another time`), icon: 'alert' });
+        }
+      })
+      .catch((err) => { if (on) { setSlots([]); toastErr(err, t, fireToast); } });
+    return () => { on = false; };
+  }, [date, version, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function move(force = false) {
+  async function move() {
     if (!selStart || busy) return;
     setBusy(true);
+    const when = timeLabel(minutesOfDay(selStart));
+    // La ricerca può proporre una collega per le righe di un'operatrice che
+    // non si prenota più: lo spostamento la applica solo se la si manda.
+    const sel = (slots || []).find((x) => x.start === selStart);
+    const re = sel ? slotReassignment(appt.items, sel.assignment) : { pair: null, extra: 0 };
+    const url = `/api/agenda/appointments/${appt.id}/move`;
+    const body = { start: selStart, ...(re.pair ? { operator_id: re.pair.to, from_operator_id: re.pair.from } : {}) };
     try {
-      await api.post(`/api/agenda/appointments/${appt.id}/move`, { start: selStart, force: force || needForce });
-      fireToast({ msg: t('Appuntamento riprogrammato alle ' + timeLabel(minutesOfDay(selStart)), 'Rescheduled to ' + timeLabel(minutesOfDay(selStart))) + (force || needForce ? t(' · forzato', ' · forced') : ''), icon: 'calendar' });
-      onDone();
+      let res, forced = false;
+      try {
+        // Sempre prima senza forzare: un orario a mano fuori dalla griglia
+        // degli slot ma libero restava segnato «forzato» per niente.
+        res = await api.post(url, { ...body, force: false });
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+        if (!needForce) {
+          // Era fra gli orari liberi: nel frattempo lo ha preso qualcun altro.
+          // Si ricarica e si lascia decidere: un altro orario, o di nuovo
+          // «Sposta qui» per forzare (prima l'avviso citava un «Sposta
+          // comunque» che non c'era).
+          if (alive.current) { setNeedForce(true); setReloadKey((k) => k + 1); }
+          fireToast({ msg: t(`Le ${when} sono state appena occupate: scegli un altro orario, o premi di nuovo «Sposta qui» per spostarla comunque (resterà segnata come forzata)`, `${when} was just taken: pick another time, or press “Move here” again to move it anyway (it will be marked as forced)`), icon: 'alert' });
+          return;
+        }
+        forced = true;
+        res = await api.post(url, { ...body, force: true });
+      }
+      fireToast({
+        msg: t('Appuntamento riprogrammato alle ' + when, 'Rescheduled to ' + when)
+          + (forced ? t(' · forzato', ' · forced') : '')
+          + (re.extra ? t(' · controlla chi fa i servizi: una sola operatrice non più disponibile si riassegna per volta', ' · check who performs the services: only one unavailable stylist is reassigned at a time') : ''),
+        icon: forced || re.extra ? 'alert' : 'calendar',
+      });
+      onMutate?.(res);
+      if (alive.current) onDone();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        // lo staff decide: altro orario o forzatura (straordinario, incastro)
-        setNeedForce(true);
-        fireToast({ msg: t('Orario occupato o fuori turno: puoi forzare con «Sposta comunque»', 'Time busy or off shift: you can override with “Move anyway”'), icon: 'alert' });
-      } else toastErr(err, t, fireToast);
-    } finally { setBusy(false); }
+      toastErr(err, t, fireToast);
+    } finally { setBusy(false); }   // `busy` è del pannello, che può essere ancora aperto
   }
   const applyManual = () => {
     if (!manual) return;
@@ -1308,7 +1362,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
       foot={
         <React.Fragment>
           <button className="dk-btn dk-btn--ghost" onClick={onBack}>{t('Indietro', 'Back')}</button>
-          <button className="dk-btn dk-btn--clay" disabled={!selStart || busy} onClick={() => move(false)}>
+          <button className="dk-btn dk-btn--clay" disabled={!selStart || busy} onClick={move}>
             <Icon name="calendar" size={16} color="#fff" />{t('Sposta qui', 'Move here')}{selStart ? ' · ' + timeLabel(minutesOfDay(selStart)) : ''}
           </button>
         </React.Fragment>
