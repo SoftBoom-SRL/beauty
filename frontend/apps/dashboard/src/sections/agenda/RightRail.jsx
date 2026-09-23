@@ -4,6 +4,7 @@ import React from 'react';
 import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel, toDateStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { fmtMoney, initialsOf, prefLabel, firstName } from './lib.js';
+import { cashUpLines } from './modals/rules.js';
 
 export default function RightRail({ summary, waitlist, released, onRestore, onRebook, onOpenAppt, onOpenLog, onOpenWaitlist, onOpenOpportunity }) {
   const { t, lang, showRevenue, hasScope } = useDash();
@@ -61,6 +62,13 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
   const checkout = Number(summary.checkout_total || 0);
   const pos = Number(summary.pos_total || 0);
   const checkoutPct = total > 0 ? Math.round((checkout / total) * 100) : 0;
+  const cash = cashUpLines(summary);
+  const partLabel = {
+    deposit_cashed: t('caparre incassate', 'deposits cashed'),
+    gift_card_redeemed: t('gift card usate', 'gift cards used'),
+    deposit_used: t('caparre detratte', 'deposits deducted'),
+    deposit_refunded: t('caparre rimborsate', 'deposits refunded'),
+  };
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -84,12 +92,17 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
             <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>
               {t('Appuntamenti', 'Appointments')} {fmtMoney(checkout, lang)} · {t('Banco', 'Counter')} {fmtMoney(pos, lang)}
             </div>
-            {Number(summary.gift_card_redeemed || 0) > 0 && (
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 3 }} title={t('La parte saldata con gift card era già stata incassata alla vendita della carta', 'The part settled with gift cards was already collected when the card was sold')}>
-                {t('Incassato oggi', 'Cash in today')} <b style={{ color: '#fff' }}>{fmtMoney(summary.cash_in, lang)}</b> · {t('gift card usate', 'gift cards used')} {fmtMoney(summary.gift_card_redeemed, lang)}
-              </div>
-            )}
           </React.Fragment>
+        )}
+        {/* Il denaro entrato davvero oggi, quando non coincide col venduto:
+            anche con il solo incasso di una caparra (venduto zero), e al
+            netto delle caparre restituite (05-16). */}
+        {cash?.show && (
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 3 }}
+            title={t('Il venduto di oggi, meno quello già incassato in un altro giorno (gift card, caparre versate prima), più le caparre versate oggi, meno quelle restituite', 'Today’s sales, minus what was collected on another day (gift cards, deposits paid earlier), plus deposits paid today, minus deposits refunded')}>
+            {t('Incassato oggi', 'Cash in today')} <b style={{ color: '#fff' }}>{fmtMoney(cash.cashIn, lang)}</b>
+            {cash.parts.map((p) => <span key={p.key}> · {partLabel[p.key]} {fmtMoney(p.amount, lang)}</span>)}
+          </div>
         )}
       </button>
     </div>

@@ -1,6 +1,58 @@
-import React, { useEffect } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 import { useEscLayer } from './layers.js';
 import { Icon } from '@youty/shared';
+
+/* ---- posto dei pannelli laterali ------------------------------------------
+ * Pannelli aperti, dal più vecchio. Ognuno scriveva da sé la classe che
+ * restringe l'area di lavoro: i drawer «Nuova prenotazione» e «Gruppo» non la
+ * mettevano (coprivano le ultime colonne proprio mentre si sceglie l'orario in
+ * agenda), e con due pannelli aperti quello che si chiudeva la toglieva anche
+ * all'altro. A z-index uguale, poi, vinceva l'ordine nel DOM: «Gruppo» aperto
+ * col dettaglio finiva nascosto dietro (13-19). */
+const openPanels = [];
+const PANEL_Z = 120;
+const PANEL_Z_MAX = 149;   // sotto il pulsante AI (150), le finestre con scrim (200) e i toast (300)
+
+function syncBody() {
+  if (typeof document === 'undefined') return;
+  const body = document.body;
+  if (!openPanels.length) {
+    body.classList.remove('dk-with-panel');
+    body.style.removeProperty('--dk-panel-w');
+    return;
+  }
+  body.classList.add('dk-with-panel');
+  body.style.setProperty('--dk-panel-w', Math.max(...openPanels.map((p) => p.width)) + 'px');
+}
+
+/**
+ * Il posto di un pannello laterale (DkPanel e i drawer che si disegnano da sé):
+ * finché è aperto l'area di lavoro si restringe della larghezza del pannello
+ * più largo aperto (vedi .dk-with-panel), e l'ultimo aperto sta sopra gli
+ * altri — lo stesso ordine con cui Esc li chiude (layers.js).
+ * Ritorna lo z-index da usare.
+ */
+export function usePanelSlot(width) {
+  const px = typeof width === 'number' ? width : (parseInt(width, 10) || 560);
+  const slot = useRef(null);
+  if (!slot.current) {
+    const top = openPanels.reduce((z, p) => Math.max(z, p.z), PANEL_Z - 1);
+    slot.current = { width: px, z: Math.min(PANEL_Z_MAX, top + 1) };
+  }
+  slot.current.width = px;
+  useLayoutEffect(() => {
+    const me = slot.current;
+    openPanels.push(me);
+    syncBody();
+    return () => {
+      const i = openPanels.indexOf(me);
+      if (i >= 0) openPanels.splice(i, 1);
+      syncBody();
+    };
+  }, []);
+  useLayoutEffect(() => { syncBody(); }, [px]);
+  return slot.current.z;
+}
 
 /**
  * Pannello laterale: sta a destra, sotto la barra in alto, e NON oscura quello
@@ -22,14 +74,7 @@ export default function DkPanel({ title, sub, onClose, foot, width = 560, childr
   /* Finché è aperto, l'area di lavoro si restringe di tanto quanto il pannello
    * (vedi .dk-with-panel): se restasse sotto, il pannello coprirebbe proprio
    * l'appuntamento che si sta modificando. */
-  useEffect(() => {
-    document.body.classList.add('dk-with-panel');
-    document.body.style.setProperty('--dk-panel-w', typeof width === 'number' ? width + 'px' : String(width));
-    return () => {
-      document.body.classList.remove('dk-with-panel');
-      document.body.style.removeProperty('--dk-panel-w');
-    };
-  }, [width]);
+  const zIndex = usePanelSlot(width);
 
   return (
     <div
@@ -37,7 +82,7 @@ export default function DkPanel({ title, sub, onClose, foot, width = 560, childr
       aria-label={typeof title === 'string' ? title : undefined}
       style={{
         position: 'fixed', top: 'var(--top-h)', right: 0, bottom: 0,
-        width, maxWidth: '100vw', zIndex: 120,
+        width, maxWidth: '100vw', zIndex,
         background: 'var(--surface)', borderLeft: '1px solid var(--hair)',
         boxShadow: 'var(--sh-pop)', display: 'flex', flexDirection: 'column',
         animation: 'dkSlideR 260ms var(--ease-emph)',
