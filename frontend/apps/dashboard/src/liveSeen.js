@@ -33,13 +33,23 @@ export function createSeen(limit = 2000) {
   };
 }
 
+/* I timer del browser vanno chiamati come funzioni libere: `timers.set(...)`
+ * con `set: setTimeout` li invoca come metodi di un altro oggetto, e Chrome e
+ * Safari rispondono «Illegal invocation» — ogni evento live avrebbe lanciato
+ * un errore invece di aggiornare la vista (Node non se ne accorge, per questo
+ * i test passavano). */
+const DEFAULT_TIMERS = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (handle) => clearTimeout(handle),
+};
+
 /** Debounce che NON perde eventi: `push(list)` accumula, e dopo `delay` ms di
  *  silenzio `deliver` riceve tutto quello arrivato nella finestra (una volta
  *  per id). Prima `useLive` passava solo gli eventi dell'ULTIMA consegna: se
  *  nei 250 ms arrivavano due consegne, l'evento di una cliente seguito da
  *  quello di un'altra si perdeva, e la scheda della prima — che filtra per
  *  `client_id` — non si ricaricava. `timers` si sostituisce nei test. */
-export function createBatcher(delay, deliver, timers = { set: setTimeout, clear: clearTimeout }) {
+export function createBatcher(delay, deliver, timers = DEFAULT_TIMERS) {
   let pending = [];
   let handle = null;
   return {

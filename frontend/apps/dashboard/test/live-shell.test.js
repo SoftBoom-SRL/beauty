@@ -94,3 +94,29 @@ test('useLive: le consegne arrivate nella stessa finestra passano tutte, una vol
   run();
   assert.deepEqual(got, [[1, 2]]);
 });
+
+test('useLive: con i timer veri non chiama setTimeout come metodo (Illegal invocation nel browser)', async () => {
+  // Chrome e Safari rifiutano setTimeout invocato con un `this` che non è la
+  // finestra: qui un setTimeout finto che si comporta allo stesso modo.
+  const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+  // (il modulo è già strict: una chiamata libera arriva con `this` undefined)
+  const strict = (real) => function (...args) {
+    if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation');
+    return real(...args);
+  };
+  globalThis.setTimeout = strict(realSet);
+  globalThis.clearTimeout = strict(realClear);
+  try {
+    const got = [];
+    const batcher = createBatcher(5, (list) => got.push(list.map((e) => e.id)));
+    batcher.push([ev(1)]);
+    batcher.push([ev(2)]);
+    await new Promise((resolve) => realSet(resolve, 30));
+    assert.deepEqual(got, [[1, 2]]);
+    batcher.push([ev(3)]);
+    batcher.cancel();
+  } finally {
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+  }
+});
