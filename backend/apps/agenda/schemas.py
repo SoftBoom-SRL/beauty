@@ -20,9 +20,19 @@ NAIVE_DATETIME_MESSAGE = (
 )
 
 
+# Anni plausibili per un'agenda. Un orario del 9999 passava la validazione e
+# poi esplodeva nell'aritmetica (fine = inizio + durata oltre l'anno massimo)
+# con un 500 invece di dire che la data non ha senso.
+MIN_YEAR = 2000
+MAX_YEAR = 2100
+YEAR_OUT_OF_RANGE_MESSAGE = f"Data fuori dall'intervallo ammesso ({MIN_YEAR}–{MAX_YEAR})"
+
+
 def _require_aware(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
         raise ValueError(NAIVE_DATETIME_MESSAGE)
+    if not (MIN_YEAR <= value.year <= MAX_YEAR):
+        raise ValueError(YEAR_OUT_OF_RANGE_MESSAGE)
     return value
 
 
@@ -43,7 +53,10 @@ class ItemEditIn(Schema):
     id: Optional[int] = None            # existing AppointmentService id (None = new item)
     service_id: int
     operator_id: Optional[int] = None   # None = first eligible free operator
-    duration_min: Optional[int] = None  # None = keep the duration already booked
+    # None = keep the duration already booked. Con un tetto, come posa e
+    # listino: un «600» battuto al posto di «60» passava, forzato dal
+    # ritentativo automatico, e bloccava l'agenda dell'operatrice per giorni.
+    duration_min: Optional[int] = Field(None, ge=1, le=12 * 60)
     # Attesa DOPO il servizio: la posa di un colore, o semplicemente il buco che
     # il salone vuole lasciare prima del trattamento successivo (la cliente
     # resta lì, l'operatrice nel frattempo è libera — è la stessa cosa per
@@ -129,6 +142,17 @@ class AppointmentUpdateIn(Schema):
     # normale al banco, e senza questo l'agenda rispondeva «Orario non più
     # disponibile» a un trascinamento che deve solo scrivere.
     force: bool = False
+    # `updated_at` della copia da cui parte chi scrive (AppointmentOut): se nel
+    # frattempo la visita è cambiata la modifica risponde 412, anche forzando.
+    # Il pannello rimasto aperto rimandava la lista vecchia e disfaceva gli
+    # spostamenti e gli stacchi fatti intanto dalla griglia o da un'altra
+    # postazione.
+    expected_updated_at: Optional[dt.datetime] = None
+
+    @field_validator("expected_updated_at")
+    @classmethod
+    def _expected_aware(cls, value):
+        return value if value is None else _require_aware(value)
 
 
 class PauseIn(Schema):
@@ -208,6 +232,45 @@ class AppointmentOut(Schema):
     auto_released: bool = False
     forced: bool = False
     items: list[ItemOut]
+    gifts: list[GiftOut] = []
+    # Versione della visita: va rimandata in `expected_updated_at` del PUT.
+    updated_at: Optional[dt.datetime] = None
+
+
+class ClientOperatorOut(Schema):
+    id: int
+    name: str
+
+
+class ClientServiceOut(Schema):
+    service_id: int
+    operator_id: int
+    name: str
+    duration_min: int
+    price: Decimal
+
+
+class ClientAppointmentOut(Schema):
+    """L'appuntamento come lo vede la cliente nell'app (vedi `_client_appointment_out`).
+
+    Niente nota interna, `forced`, `created_via` né motivo di annullamento: sono
+    appunti e dati del salone. Sposta, annulla e prenota dall'app rispondevano
+    con la scheda dello staff, e la nota scritta sulla cliente le arrivava nella
+    risposta.
+    """
+
+    id: int
+    start: dt.datetime
+    end: dt.datetime
+    status: str
+    operator: ClientOperatorOut
+    services: list[ClientServiceOut]
+    total_price: Decimal
+    deposit_status: str
+    deposit_amount: Decimal
+    deposit_due_at: Optional[dt.datetime] = None
+    deposit_payment_link: str = ""
+    auto_released: bool = False
     gifts: list[GiftOut] = []
 
 
