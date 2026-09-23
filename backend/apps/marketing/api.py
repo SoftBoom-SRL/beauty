@@ -37,6 +37,7 @@ from .schemas import (
     MarkPaidIn,
     OkOut,
     WalletOut,
+    codes_hidden,
 )
 from .services import (
     cancel_pending_send,
@@ -77,6 +78,27 @@ def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
     return value
 
 
+def _status_q(model, status: str) -> Q:
+    """Filtro di stato di coupon e gift card con la scadenza letta adesso (C21).
+
+    EXPIRED a database lo scrive solo un tentativo di riscatto: con il filtro
+    secco su `status` una carta scaduta la settimana scorsa stava fra le
+    «attive» — la nuova prenotazione la prometteva come regalo e la cassa poi
+    la rifiutava — e «Scadute» non la trovava. Stessa regola dell'uscita
+    (schemas.effective_status).
+    """
+    now = timezone.now()
+    if status == model.Status.ACTIVE:
+        return Q(status=model.Status.ACTIVE) & (
+            Q(expires_at__isnull=True) | Q(expires_at__gte=now)
+        )
+    if status == model.Status.EXPIRED:
+        return Q(status=model.Status.EXPIRED) | Q(
+            status=model.Status.ACTIVE, expires_at__lt=now
+        )
+    return Q(status=status)
+
+
 # ---- Coupon ------------------------------------------------------------------
 
 
@@ -89,20 +111,23 @@ def list_coupons(
     q: str = "",
     client_id: Optional[int] = None,
 ):
-    qs = Coupon.objects.filter(salon=request.auth.salon).select_related("client")
+    ctx = request.auth
+    qs = Coupon.objects.filter(salon=ctx.salon).select_related("client")
     if origin:
         qs = qs.filter(origin=origin)
     if status:
-        qs = qs.filter(status=status)
+        qs = qs.filter(_status_q(Coupon, status))
     if q:
-        qs = qs.filter(
-            Q(code__icontains=q)
-            | Q(client__first_name__icontains=q)
-            | Q(client__last_name__icontains=q)
-        )
+        match = Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
+        # A chi vede i codici mascherati la ricerca per codice direbbe comunque
+        # se un pezzo di codice esiste: carattere dopo carattere lo ricostruisce.
+        if not codes_hidden(ctx):
+            match |= Q(code__icontains=q)
+        qs = qs.filter(match)
     if client_id:
         qs = qs.filter(client_id=client_id)
-    return qs
+    # `id` come spareggio: le pagine restano stabili anche a parità di data.
+    return qs.order_by("-created_at", "-id")
 
 
 @router.post("/coupons", auth=staff_auth, response=CouponOut)
@@ -142,11 +167,18 @@ def update_coupon(request, coupon_id: int, data: CouponIn):
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
     value = _validate_coupon_value(data.kind, data.value)
-    coupon.client = _get_client(ctx, data.client_id) if data.client_id else None
-    coupon.kind = data.kind
-    coupon.value = value
-    coupon.expires_at = data.expires_at
-    coupon.save()
+    client = _get_client(ctx, data.client_id) if data.client_id else None
+    # UPDATE condizionato a status='active', solo sui campi della maschera. Il
+    # save() completo della copia letta a inizio richiesta riscriveva anche
+    # status e vendita: se nel frattempo la cassa aveva consumato il buono
+    # (mark_coupon_redeemed), tornava «attivo» e senza vendita — scontrino
+    # scontato e buono di nuovo spendibile.
+    updated = Coupon.objects.filter(
+        pk=coupon.pk, salon=ctx.salon, status=Coupon.Status.ACTIVE
+    ).update(client=client, kind=data.kind, value=value, expires_at=data.expires_at)
+    if not updated:
+        raise HttpError(422, "Coupon appena utilizzato o scaduto: non è più modificabile")
+    coupon.refresh_from_db()
     log_activity(
         ctx.salon,
         "coupon.updated",
@@ -225,20 +257,24 @@ def list_gift_cards(
     # select_related anche su gift_service: la riga «carta a trattamento» mostra
     # il nome del servizio, e senza questo ogni carta dell'elenco costava una
     # query in più.
-    qs = GiftCard.objects.filter(salon=request.auth.salon).select_related(
+    ctx = request.auth
+    qs = GiftCard.objects.filter(salon=ctx.salon).select_related(
         "buyer_client", "gift_service"
     )
     if status:
-        qs = qs.filter(status=status)
+        qs = qs.filter(_status_q(GiftCard, status))
     if payment_status:
         qs = qs.filter(payment_status=payment_status)
     if q:
-        qs = qs.filter(
-            Q(code__icontains=q)
-            | Q(recipient_name__icontains=q)
+        match = (
+            Q(recipient_name__icontains=q)
             | Q(buyer_client__first_name__icontains=q)
             | Q(buyer_client__last_name__icontains=q)
         )
+        # Codici mascherati: niente ricerca per pezzi di codice (vedi list_coupons).
+        if not codes_hidden(ctx):
+            match |= Q(code__icontains=q)
+        qs = qs.filter(match)
     if client_id:
         # il cliente può comparire come acquirente e/o destinatario della carta
         qs = qs.filter(Q(buyer_client_id=client_id) | Q(recipient_client_id=client_id))
@@ -269,13 +305,19 @@ def list_gift_cards(
     total = qs.count()
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
-    return {"kpi": kpi, "total": total, "items": list(qs[offset : offset + limit])}
+    items = list(qs.order_by("-created_at", "-id")[offset : offset + limit])
+    return {"kpi": kpi, "total": total, "items": items}
 
 
 @router.post("/gift-cards", auth=staff_auth, response=GiftCardOut)
 def create_gift_card_staff(request, data: GiftCardIn):
     ctx = request.auth
-    require_scope(ctx, "marketing")
+    # «Pagata ora» è un incasso: crea vendita e pagamento, quindi lo decide la
+    # cassa (`sales`), non il marketing. Il Front desk non poteva vendere una
+    # carta intestata alla destinataria (il POS crea solo carte con un nome
+    # scritto a mano), e un ruolo solo-marketing registrava incassi senza poter
+    # vedere la cassa. Una carta che nasce da pagare resta del marketing.
+    require_scope(ctx, "sales" if data.paid else "marketing")
     buyer = _get_client(ctx, data.buyer_client_id) if data.buyer_client_id else None
     # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio,
     # ignora l'eventuale `value` inviato. gift_service_id None => carta monetaria.
@@ -327,7 +369,9 @@ def create_gift_card_staff(request, data: GiftCardIn):
 @router.post("/gift-cards/{int:card_id}/mark-paid", auth=staff_auth, response=GiftCardOut)
 def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     ctx = request.auth
-    require_scope(ctx, "marketing")
+    # Incassare è della cassa (vedi create_gift_card_staff): la carta comprata
+    # dall'app la paga la cliente al banco, dove c'è chi ha `sales`.
+    require_scope(ctx, "sales")
     card = salon_get(GiftCard, ctx, card_id)
     # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
     # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
@@ -707,6 +751,22 @@ def client_wallet(request):
     )
     for card in cards:
         card._received = card.recipient_client_id == ctx.client.id
+        # Contratto C3, stessa regola di gift_index nell'agenda: pagata, con
+        # saldo (attiva e non scaduta la filtra già la query), e sua — ne è la
+        # destinataria, oppure l'ha comprata lei senza intestarla a nessuno.
+        # Una carta comprata «per Maria» (nome scritto a mano) è di Maria.
+        card._spendable = (
+            card.payment_status == GiftCard.PaymentStatus.PAID
+            and card.balance > 0
+            and (
+                card._received
+                or (
+                    card.buyer_client_id == ctx.client.id
+                    and card.recipient_client_id is None
+                    and card.recipient_name == ""
+                )
+            )
+        )
     coupons = (
         Coupon.objects.filter(
             salon=ctx.salon, client=ctx.client, status=Coupon.Status.ACTIVE
