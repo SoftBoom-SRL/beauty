@@ -200,7 +200,13 @@ def _gifts_out(appointment, gifts_by_client, hide_codes: bool = False) -> list[d
             "service_id": card.gift_service_id,
             "service_name": card.gift_service.name_it,
             "balance": card.balance,
-            "from_name": card.buyer_client.full_name if card.buyer_client_id else "",
+            # «In regalo da…» solo se l'ha comprata qualcun altro: una carta
+            # comprata per sé mostrava alla cliente «In regalo da» sé stessa.
+            "from_name": (
+                card.buyer_client.full_name
+                if card.buyer_client_id and card.buyer_client_id != appointment.client_id
+                else ""
+            ),
         }
         for card in cards
         if card.gift_service_id in service_ids

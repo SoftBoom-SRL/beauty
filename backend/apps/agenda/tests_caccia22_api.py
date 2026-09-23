@@ -314,3 +314,24 @@ class GiftCodesInTheAgendaTests(Caccia22Base):
         self.assertEqual(out["gifts"][0]["code"], self.card.code)
         self.assertTrue(AppointmentService.objects.filter(appointment=self.visit).exists())
         self.assertIsNotNone(S.spendable_gift_cards(self.salon, [self.anna.id]).first())
+
+
+# ---- «In regalo da…» solo per i regali veri ------------------------------------
+
+
+class GiftFromNameTests(Caccia22Base):
+    """Una carta comprata per sé mostrava alla cliente «In regalo da» sé stessa."""
+
+    def test_only_a_card_bought_by_someone_else_is_a_gift(self):
+        from apps.marketing.services import create_gift_card
+
+        from .api import _appointment_out
+
+        appt = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
+        own = create_gift_card(self.salon, Decimal("30.00"), gift_service=self.cut30,
+                               buyer_client=self.anna, paid=True, paid_method="cash")
+        gift = create_gift_card(self.salon, Decimal("30.00"), gift_service=self.cut30,
+                                buyer_client=self.bea, recipient_client=self.anna,
+                                paid=True, paid_method="cash")
+        names = {g["gift_card_id"]: g["from_name"] for g in _appointment_out(appt)["gifts"]}
+        self.assertEqual(names, {own.id: "", gift.id: self.bea.full_name})
