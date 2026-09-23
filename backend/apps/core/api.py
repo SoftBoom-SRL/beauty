@@ -215,7 +215,11 @@ def update_settings(request, data: SettingsIn):
             payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
     for name, value in payload.items():
         setattr(s, name, value)
-    s.save()
+    # Solo le colonne del payload: `s` è la copia letta a inizio richiesta, e un
+    # save() completo riscriveva anche quelle che altri hanno cambiato nel
+    # frattempo — il callback di Stripe Connect che salva `stripe_account_id`
+    # veniva annullato e il salone risultava scollegato.
+    s.save(update_fields=[*payload, "updated_at"])
     if default_lang is not None:
         ctx.salon.default_lang = default_lang
         ctx.salon.save(update_fields=["default_lang"])
@@ -244,7 +248,11 @@ def upload_logo(request, logo: UploadedFile = File(...)):
     # e il vecchio file resterebbe su disco (e scaricabile) per sempre.
     if s.logo:
         s.logo.delete(save=False)
-    s.logo.save(stored_name, logo)
+    # save=False e poi solo `logo`: il save() completo di FieldFile.save
+    # riscriveva l'intera riga letta a inizio richiesta (stripe_account_id
+    # compreso) sopra le scritture concorrenti.
+    s.logo.save(stored_name, logo, save=False)
+    s.save(update_fields=["logo", "updated_at"])
     log_activity(ctx.salon, "settings.updated", "Logo aggiornato", actor=ctx.user)
     return _settings_out(s)
 
@@ -256,7 +264,7 @@ def delete_logo(request):
     s = _settings(ctx.salon)
     if s.logo:
         s.logo.delete(save=False)
-    s.save()
+    s.save(update_fields=["logo", "updated_at"])
     log_activity(ctx.salon, "settings.updated", "Logo rimosso", actor=ctx.user)
     return _settings_out(s)
 
@@ -319,6 +327,28 @@ def delete_location(request, location_id: int):
 
 # ---- Regole deposito -------------------------------------------------------
 
+MAX_RULE_AMOUNT = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
+
+
+def _deposit_rule_fields(data: DepositRuleIn) -> dict:
+    """Campi della regola, validati.
+
+    Lo schema accettava qualunque importo: convertendo una regola da «Importo
+    fisso» 150 € a «% del totale» la dashboard salvava un acconto del 150 %, e
+    `compute_deposit` chiedeva come caparra l'intero prezzo del servizio.
+    """
+    fields = data.dict()
+    if fields["amount_type"] not in DepositRule.AmountType.values:
+        raise HttpError(400, "Tipo di acconto non valido: usa pct o fixed")
+    amount = fields["amount"]
+    if amount < 0:
+        raise HttpError(400, "L'acconto non può essere negativo")
+    if fields["amount_type"] == DepositRule.AmountType.PERCENT and amount > 100:
+        raise HttpError(400, "Un acconto in percentuale va da 0 a 100")
+    if amount > MAX_RULE_AMOUNT:
+        raise HttpError(400, "Importo dell'acconto fuori scala")
+    return fields
+
 
 @router.get("/deposit-rules", auth=staff_auth, response=list[DepositRuleOut])
 def list_deposit_rules(request):
@@ -330,7 +360,7 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **data.dict())
+    rule = DepositRule.objects.create(salon=ctx.salon, **_deposit_rule_fields(data))
     log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
@@ -340,7 +370,7 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in data.dict().items():
+    for name, value in _deposit_rule_fields(data).items():
         setattr(rule, name, value)
     rule.save()
     return rule
@@ -355,6 +385,17 @@ def delete_deposit_rule(request, rule_id: int):
 
 
 # ---- Registro attività -----------------------------------------------------
+
+
+def _activity_date(raw: str, label: str):
+    try:
+        parsed = parse_date(raw)
+    except ValueError:
+        # «2026-02-30» è ben scritta ma non esiste: parse_date solleva, ed era un 500.
+        parsed = None
+    if parsed is None:
+        raise HttpError(400, f"{label} non valida: usa il formato YYYY-MM-DD")
+    return parsed
 
 
 @router.get("/activity", auth=staff_auth, response=list[ActivityLogOut])
@@ -373,10 +414,10 @@ def list_activity(
         qs = qs.filter(type__startswith=type)
     if q:
         qs = qs.filter(summary__icontains=q)
-    if date_from and (d := parse_date(date_from)):
-        qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
-        qs = qs.filter(created_at__date__lte=d)
+    if date_from:
+        qs = qs.filter(created_at__date__gte=_activity_date(date_from, "Data iniziale"))
+    if date_to:
+        qs = qs.filter(created_at__date__lte=_activity_date(date_to, "Data finale"))
     return qs
 
 
