@@ -23,7 +23,9 @@ export default function ClientiSection() {
   const [catCounts, setCatCounts] = useState(null); // { __active: n, [catId]: n }
   const [refreshKey, setRefreshKey] = useState(0);
   const bump = useCallback(() => setRefreshKey((k) => k + 1), []);
-  useLive(/^client(_category)?\./, bump); // anagrafica creata/modificata altrove → lista reale
+  // anagrafica creata/modificata altrove → lista reale; solo gli eventi che
+  // cambiano le righe (una nota o un consenso non le toccano)
+  useLive(/^client\.(created|updated|deleted|imported)$|^client_category\./, bump);
 
   /* debounce the shared topbar search before hitting the API */
   const [q, setQ] = useState(search);
@@ -56,13 +58,24 @@ export default function ClientiSection() {
    * cambiando subito filtro le 50 clienti del filtro precedente finivano in
    * coda alla lista nuova, con il conteggio in testata che non tornava. */
   const reqSeq = useRef(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const shownParams = useRef(null);
   useEffect(() => {
     const seq = ++reqSeq.current;
-    setItems(null);
-    api.get('/api/clients/', { params: { ...listParams, limit: PAGE, offset: 0 } })
+    // Filtro o ricerca cambiati: da capo. Un aggiornamento (evento dal vivo,
+    // salvataggio in scheda) ricarica in silenzio le righe già scorse: prima
+    // la lista si svuotava e tornava ai primi 50, in cima, e chi scorreva
+    // «Mostra altri» su migliaia di clienti perdeva il segno a ogni
+    // salvataggio, suo o di un'altra postazione (14-24).
+    const fresh = shownParams.current !== listParams;
+    shownParams.current = listParams;
+    const loaded = fresh ? 0 : (itemsRef.current?.length || 0);
+    if (fresh) setItems(null);
+    api.get('/api/clients/', { params: { ...listParams, limit: Math.max(PAGE, loaded), offset: 0 } })
       .then((res) => { if (seq === reqSeq.current) { setItems(res.items); setCount(res.count); } })
       .catch((err) => {
-        if (seq !== reqSeq.current) return;
+        if (seq !== reqSeq.current || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
         setItems([]); setCount(0);
         fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
       });

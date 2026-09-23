@@ -239,6 +239,30 @@ export function buildBirthday({ d, m, y }) {
   const pad = (n) => String(n).padStart(2, '0');
   return y ? `${y}-${pad(m)}-${pad(d)}` : `--${pad(m)}-${pad(d)}`;
 }
+/** Giorni del mese; col calendario vero se l'anno (4 cifre) c'è, altrimenti
+ *  un anno bisestile (senza anno il 29 febbraio è un compleanno valido). */
+export function daysInMonth(m, y) {
+  if (!m) return 31;
+  const year = /^\d{4}$/.test(String(y || '')) ? Number(y) : 2000;
+  return new Date(Date.UTC(year, Number(m), 0)).getUTCDate();
+}
+
+/** Selettori del compleanno ({ d, m, y } come stringhe) + modifica →
+ *  { part, value }: lo stato dei selettori e la stringa API da salvare.
+ *  - un giorno che il nuovo mese (o anno) non ha si toglie: «31» e poi
+ *    aprile spariva a video ma restava nel valore, «--04-31», e il salvataggio
+ *    rispondeva 400 (14-23);
+ *  - senza giorno o mese il compleanno è '' (da cancellare): prima non si
+ *    emetteva niente e al salvataggio restava quello vecchio;
+ *  - un anno a metà (meno di 4 cifre) non conta ancora. */
+export function birthdayEdit(part, patch) {
+  const next = { ...part, ...patch };
+  if (next.d && next.m && Number(next.d) > daysInMonth(next.m, next.y)) next.d = '';
+  const year = /^\d{4}$/.test(next.y || '') ? Number(next.y) : null;
+  const value = next.d && next.m ? buildBirthday({ d: Number(next.d), m: Number(next.m), y: year }) : '';
+  return { part: next, value };
+}
+
 /** "15 marzo" · "15 marzo 1990" */
 export function formatBirthday(v, lang) {
   const b = parseBirthday(v);
