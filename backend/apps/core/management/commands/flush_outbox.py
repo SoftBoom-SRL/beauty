@@ -17,21 +17,31 @@ di partire: due worker in parallelo non possono mandare due volte lo stesso
 messaggio. Un evento rimasto `sending` oltre `STALE_CLAIM_SECONDS` (processo
 morto a metà invio) torna disponibile da solo.
 
-Senza `YOURANG_API_URL` il comando elenca soltanto i pendenti: è questo il
-motivo per cui gli OTP dell'app cliente «non arrivano» finché l'URL di
-consegna non è configurato (o Yourang non espone ancora l'endpoint).
+Gli eventi con la stessa `coalesce_key` (lo stesso appuntamento, lo stesso
+slot) partono nell'ordine in cui sono nati: uno non parte finché ce n'è uno
+più vecchio della stessa chiave ancora da consegnare. Un evento che non ha più
+senso (vedi `EXPIRY_FIELDS` / `EXPIRY_AGES`) passa a `expired` invece di
+partire in ritardo.
+
+Senza `YOURANG_API_URL` il comando elenca soltanto i pendenti (e fa le
+pulizie): è questo il motivo per cui gli OTP dell'app cliente «non arrivano»
+finché l'URL di consegna non è configurato (o Yourang non espone ancora
+l'endpoint).
 
 Uso: `python manage.py flush_outbox [--limit 200] [--loop --interval 5]`
 """
 
+import datetime as dt
 import logging
 import time
 
 import httpx
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from apps.core.models import OutboxEvent
 from common import ratelimit
@@ -76,17 +86,131 @@ def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
     Restavano per sempre, con dentro numeri di telefono e nomi delle clienti.
     Quelli falliti non si toccano: servono a capire cosa è andato storto.
     I `superseded` — mai partiti perché fusi con un evento successivo o
-    annullati con «torna indietro» — hanno gli stessi dati dentro e seguono la
-    stessa sorte, contati dalla data di creazione visto che non sono mai stati
-    consegnati.
+    annullati con «torna indietro» — e gli `expired` — scaduti prima di
+    partire — hanno gli stessi dati dentro e seguono la stessa sorte, contati
+    dalla data di creazione visto che non sono mai stati consegnati.
     """
     now = now or timezone.now()
     cutoff = now - timezone.timedelta(days=days)
     deleted, _ = OutboxEvent.objects.filter(
         Q(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
-        | Q(status=OutboxEvent.Status.SUPERSEDED, created_at__lt=cutoff)
+        | Q(
+            status__in=(OutboxEvent.Status.SUPERSEDED, OutboxEvent.Status.EXPIRED),
+            created_at__lt=cutoff,
+        )
     ).delete()
     return deleted
+
+
+# ---- Scadenza dei messaggi -------------------------------------------------------
+#
+# Il giorno in cui la consegna si accende (YOURANG_API_URL configurato dopo
+# settimane) o Yourang torna su dopo un fermo, partiva l'intero arretrato: OTP
+# scaduti da giorni, conferme e spostamenti di visite già passate, campagne di
+# mesi prima. Un messaggio scade in due modi, a seconda del tipo:
+# - quando è passato il momento di cui parla (primo campo presente del payload:
+#   l'inizio della visita o dello slot liberato, la scadenza della caparra o
+#   dell'invito);
+# - quando è più vecchio di un'età massima, contata da quando è diventato
+#   consegnabile (`due_at`: per un messaggio programmato è la sua data).
+# I tipi non elencati descrivono uno stato che a Yourang serve comunque, anche
+# in ritardo (anagrafica, definizioni delle automazioni): non scadono.
+EXPIRY_FIELDS = {
+    "appointment.created": ("start",),
+    "appointment.moved": ("start",),
+    "appointment.updated": ("start",),
+    "appointment.cancelled": ("start",),
+    "appointment.released_unpaid": ("start",),
+    "appointment.checked_in": ("end", "start"),
+    "slot.freed": ("start",),
+    "deposit.payment_link": ("due_at", "start"),
+    "deposit.reminder": ("deposit_due_at", "start"),
+    "deposit.paid": ("start",),
+    "team.invitation": ("expires_at",),
+}
+EXPIRY_AGES = {
+    # un codice di accesso vale dieci minuti (accounts.models.default_otp_expiry)
+    "client.otp": dt.timedelta(minutes=10),
+    "communication.send": dt.timedelta(hours=12),
+    "communication.cancel": dt.timedelta(hours=12),
+    "automation.triggered": dt.timedelta(hours=24),
+    "appointment.no_show": dt.timedelta(hours=48),
+    "visit.completed": dt.timedelta(hours=48),
+    "waitlist.deleted": dt.timedelta(hours=48),
+    "supplier.order": dt.timedelta(days=3),
+    "loyalty.reward": dt.timedelta(days=7),
+    "deposit.paid_after_release": dt.timedelta(days=7),
+}
+
+
+def _moment(value):
+    """Istante di un campo del payload (ISO 8601), None se assente o illeggibile."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = parse_datetime(value)
+    except ValueError:
+        return None
+    if moment is None:
+        return None
+    if timezone.is_naive(moment):
+        moment = timezone.make_aware(moment)
+    return moment
+
+
+def expiry_of(event: OutboxEvent):
+    """Fino a quando il messaggio ha senso (None = non scade)."""
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    for field in EXPIRY_FIELDS.get(event.event_type, ()):
+        moment = _moment(payload.get(field))
+        if moment is not None:
+            return moment
+    age = EXPIRY_AGES.get(event.event_type)
+    if age is None:
+        return None
+    base = event.due_at or event.created_at
+    # Una campagna porta anche la sua data: vale quella, se è più avanti.
+    scheduled = _moment(payload.get("scheduled_at"))
+    if scheduled is not None and scheduled > base:
+        base = scheduled
+    return base + age
+
+
+def expire_stale(now=None) -> int:
+    """Marca `expired` i pendenti che non ha più senso consegnare. Ritorna quanti.
+
+    Ogni candidato viene riletto sotto lock prima di scadere: nel frattempo una
+    correzione dell'agenda può averlo fuso con un orario nuovo, e lo si
+    sarebbe buttato via guardando il payload di prima.
+    """
+    now = now or timezone.now()
+    types = set(EXPIRY_FIELDS) | set(EXPIRY_AGES)
+    candidates = []
+    for event in OutboxEvent.objects.filter(
+        status=OutboxEvent.Status.PENDING, event_type__in=types
+    ).only("id", "event_type", "payload", "created_at", "due_at"):
+        deadline = expiry_of(event)
+        if deadline is not None and deadline < now:
+            candidates.append(event.id)
+    expired = 0
+    for event_id in candidates:
+        with transaction.atomic():
+            event = (
+                OutboxEvent.objects.select_for_update()
+                .filter(id=event_id, status=OutboxEvent.Status.PENDING)
+                .first()
+            )
+            deadline = expiry_of(event) if event is not None else None
+            if deadline is None or deadline >= now:
+                continue
+            event.status = OutboxEvent.Status.EXPIRED
+            event.next_attempt_at = None
+            event.last_error = f"Scaduto prima della consegna ({timezone.localtime(deadline):%d/%m %H:%M})"
+            event.save(update_fields=["status", "next_attempt_at", "last_error"])
+            expired += 1
+    if expired:
+        logger.info("outbox: %s eventi scaduti prima della consegna", expired)
+    return expired
 
 
 def _backoff_seconds(attempts: int) -> int:
@@ -169,14 +293,28 @@ def _claim(event: OutboxEvent) -> bool:
     minuti prima di quando è partito davvero e il giro successivo lo
     considerava abbandonato mentre era ancora in volo — la cliente riceveva due
     volte lo stesso OTP.
+
+    La scadenza si ricontrolla nell'UPDATE stesso, e dopo la presa in carico si
+    rilegge il contenuto: fra la lettura della coda e questo istante una
+    correzione dell'agenda può aver fuso l'evento (payload nuovo, trattenuta
+    allungata). Si consegnava la copia letta prima — l'orario vecchio — e al
+    salvataggio la si riscriveva sopra quella fusa.
     """
     now = timezone.now()
-    claimed = OutboxEvent.objects.filter(
-        pk=event.pk, status=OutboxEvent.Status.PENDING
-    ).update(status=OutboxEvent.Status.SENDING, claimed_at=now)
+    claimed = (
+        OutboxEvent.objects.filter(pk=event.pk, status=OutboxEvent.Status.PENDING)
+        .filter(_due(now))
+        .update(status=OutboxEvent.Status.SENDING, claimed_at=now)
+    )
     if claimed:
-        event.status = OutboxEvent.Status.SENDING
-        event.claimed_at = now
+        # Dopo il claim nessuno lo tocca più (la fusione guarda solo i
+        # `pending`): quello che si rilegge è ciò che parte.
+        event.refresh_from_db(
+            fields=[
+                "event_type", "payload", "status", "claimed_at", "attempts",
+                "next_attempt_at", "last_error", "coalesce_key",
+            ]
+        )
     return bool(claimed)
 
 
@@ -190,14 +328,29 @@ def release_stale_claims(now=None) -> int:
 
 
 def flush_pending(limit: int = 200) -> tuple[int, int]:
-    """Consegna fino a `limit` eventi pendenti e scaduti. Ritorna (consegnati, falliti)."""
+    """Consegna fino a `limit` eventi pendenti e scaduti. Ritorna (consegnati, falliti).
+
+    Un evento con `coalesce_key` aspetta che siano consegnati (o falliti,
+    sostituiti, scaduti) quelli più vecchi con la stessa chiave. Senza, la
+    conferma che aveva preso un 502 ripartiva col suo ritentativo DOPO
+    l'annullamento arrivato nel frattempo: l'ultima parola che la cliente
+    riceveva era «confermato», e si presentava a un appuntamento annullato.
+    """
     now = timezone.now()
     release_stale_claims(now)
+    expire_stale(now)
+    older_undelivered = OutboxEvent.objects.filter(
+        salon_id=OuterRef("salon_id"),
+        coalesce_key=OuterRef("coalesce_key"),
+        id__lt=OuterRef("id"),
+        status__in=(OutboxEvent.Status.PENDING, OutboxEvent.Status.SENDING),
+    )
     pending = list(
         OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
         .filter(_due(now))
+        .filter(Q(coalesce_key="") | ~Exists(older_undelivered))
         .select_related("salon")
-        .order_by("created_at")[:limit]
+        .order_by("created_at", "id")[:limit]
     )
     sent = failed = 0
     with httpx.Client(timeout=TIMEOUT) as client:
@@ -223,9 +376,34 @@ class Command(BaseCommand):
             help="cancella gli eventi consegnati più vecchi di N giorni (0 = mai)",
         )
 
+    def _housekeeping(self, options, *, expire: bool) -> None:
+        """Pulizie di ogni giro, che girano anche senza YOURANG_API_URL.
+
+        Prima uscivano solo a consegna attiva: finché l'URL mancava restavano
+        per sempre i messaggi sostituiti con dentro telefoni e nomi, i contatori
+        di rate limit e le istantanee di «torna indietro» — e il giorno in cui
+        l'URL arrivava partiva l'arretrato intero, anche quello senza più senso.
+        """
+        if expire:
+            expired = expire_stale()
+            if expired:
+                self.stdout.write(f"scaduti {expired} eventi mai consegnati")
+        purge_days = options.get("purge_days", PURGE_AFTER_DAYS)
+        if purge_days and purge_days > 0:
+            purged = purge_delivered(purge_days)
+            if purged:
+                self.stdout.write(f"cancellati {purged} eventi consegnati oltre i termini")
+        # Le finestre di rate limit scadute non servono più a nessuno: senza
+        # questa pulizia la tabella cresce per sempre.
+        ratelimit.purge_expired()
+        from apps.agenda.undo import purge_expired as purge_expired_undo  # lazy
+
+        purge_expired_undo()
+
     def handle(self, *args, **options):
-        pending = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
         if not settings.YOURANG_API_URL:
+            self._housekeeping(options, expire=True)
+            pending = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING)
             self.stdout.write(self.style.WARNING(
                 f"YOURANG_API_URL non configurato — {pending.count()} eventi restano in coda "
                 "(OTP, conferme e promemoria non vengono consegnati)."
@@ -243,13 +421,8 @@ class Command(BaseCommand):
                     raise
             if sent or failed:
                 self.stdout.write(f"consegnati {sent}, falliti {failed}")
-            if options["purge_days"] > 0:
-                purged = purge_delivered(options["purge_days"])
-                if purged:
-                    self.stdout.write(f"cancellati {purged} eventi consegnati oltre i termini")
-            # Le finestre di rate limit scadute non servono più a nessuno: senza
-            # questa pulizia la tabella cresce per sempre.
-            ratelimit.purge_expired()
+            # la scadenza l'ha già fatta flush_pending, prima di consegnare
+            self._housekeeping(options, expire=False)
             if not options["loop"]:
                 break
             time.sleep(max(1.0, options["interval"]))
