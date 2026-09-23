@@ -2,11 +2,61 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
+from django.utils import timezone
 from ninja import Schema
 
 
 class OkOut(Schema):
     ok: bool = True
+
+
+# ---- Codici al portatore e scadenza ------------------------------------------
+
+# Chi conosce il codice di una gift card o di un coupon lo spende in cassa: è
+# denaro al portatore. Le letture restano aperte a tutto lo staff (l'agenda
+# mostra i regali, la scheda cliente il portafoglio), ma il codice intero lo
+# vede solo chi lavora con quegli strumenti — marketing o cassa — come si fa
+# già con i webhook_token delle automazioni. Prima un'operatrice con la sola
+# agenda sfogliava codici e saldi di tutte le carte pagate del salone.
+CODE_SCOPES = frozenset({"marketing", "sales"})
+CODE_MASK = "••••"
+
+
+def codes_hidden(auth) -> bool:
+    """True se chi guarda è staff senza marketing né cassa.
+
+    Il contesto della cliente (app) non ha scope: vede solo le proprie carte e
+    il codice le serve per spenderle.
+    """
+    scopes = getattr(auth, "scopes", None)
+    if scopes is None:
+        return False
+    return not (getattr(auth, "is_owner", False) or CODE_SCOPES & set(scopes))
+
+
+def mask_code(code: str) -> str:
+    code = code or ""
+    return CODE_MASK + code[-4:] if len(code) > 4 else CODE_MASK
+
+
+def _code_for(obj, context) -> str:
+    request = (context or {}).get("request")
+    if request is not None and codes_hidden(getattr(request, "auth", None)):
+        return mask_code(obj.code)
+    return obj.code
+
+
+def effective_status(obj) -> str:
+    """Lo stato come lo vede chi legge: attivo ma oltre la scadenza = scaduto.
+
+    EXPIRED a database lo scrive solo un tentativo di riscatto, quindi una carta
+    scaduta la settimana scorsa risultava «attiva» negli elenchi dello staff (e
+    la nuova prenotazione la prometteva come regalo) mentre il filtro «Scadute»
+    non la trovava. Coupon e gift card hanno gli stessi valori di stato.
+    """
+    if obj.status == "active" and obj.expires_at and obj.expires_at < timezone.now():
+        return "expired"
+    return obj.status
 
 
 # ---- Coupon ------------------------------------------------------------------
@@ -32,6 +82,14 @@ class CouponOut(Schema):
     expires_at: Optional[datetime] = None
     redeemed_at: Optional[datetime] = None
     created_at: datetime
+
+    @staticmethod
+    def resolve_code(obj, context):
+        return _code_for(obj, context)
+
+    @staticmethod
+    def resolve_status(obj):
+        return effective_status(obj)
 
     @staticmethod
     def resolve_client_name(obj):
@@ -75,6 +133,14 @@ class GiftCardOut(Schema):
     expires_at: Optional[datetime] = None
     status: str
     created_at: datetime
+
+    @staticmethod
+    def resolve_code(obj, context):
+        return _code_for(obj, context)
+
+    @staticmethod
+    def resolve_status(obj):
+        return effective_status(obj)
 
     @staticmethod
     def resolve_buyer_name(obj):
@@ -158,6 +224,10 @@ class LoyaltyAccountOut(Schema):
         return obj.client.full_name
 
 
+class LoyaltyEnrollIn(Schema):
+    client_id: int
+
+
 # ---- Comunicazioni -----------------------------------------------------------
 
 
@@ -211,6 +281,10 @@ class WalletGiftCardOut(Schema):
     # Chi l'ha regalata / ricevuta, per mostrarlo nel wallet.
     buyer_name: Optional[str] = None
     received: bool = False
+    # Spendibile da QUESTA cliente in salone adesso (contratto C3): la stessa
+    # regola di `gift_index` dell'agenda. L'app sommava nel credito anche le
+    # carte da pagare e quelle comprate per un'altra persona.
+    spendable: bool = False
 
     @staticmethod
     def resolve_gift_service_name(obj):
@@ -223,6 +297,10 @@ class WalletGiftCardOut(Schema):
     @staticmethod
     def resolve_received(obj):
         return bool(getattr(obj, "_received", False))
+
+    @staticmethod
+    def resolve_spendable(obj):
+        return bool(getattr(obj, "_spendable", False))
 
 
 class WalletCouponOut(Schema):

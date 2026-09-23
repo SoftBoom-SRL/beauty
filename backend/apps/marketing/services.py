@@ -6,15 +6,16 @@ apps.sales.finalize_sale (import lazy lato sales): le firme NON vanno cambiate.
 """
 
 import math
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.apps import apps as django_apps
 from django.db import transaction
-from django.db.models import F, Sum
+from django.db.models import F
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from apps.core.services import emit_event, log_activity
+from apps.core.services import emit_event, log_activity, supersede_events
 from common.utils import human_code
 
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
@@ -200,7 +201,12 @@ def _issue_reward(program, client):
 
     if reward_type == LoyaltyProgram.RewardType.FREE_SERVICE:
         service = program.reward_service
-        if service is None:
+        # Un servizio a prezzo zero non diventa una carta (create_gift_card
+        # rifiuta il valore 0): l'errore saliva dentro la transazione della
+        # cassa e ogni scontrino di quella cliente veniva rifiutato. Il prezzo
+        # può essere stato azzerato dopo aver salvato il programma, quindi il
+        # controllo della maschera da solo non basta.
+        if service is None or Decimal(str(service.price or 0)) <= 0:
             return None
         card = create_gift_card(
             salon,
@@ -251,22 +257,78 @@ def _issue_reward(program, client):
 MAX_REWARDS_PER_SALE = 10
 
 
-def _points_earned(sale, program) -> int:
+def _loyalty_basis(sale) -> dict:
+    """Quanto della vendita conta per la fedeltà: una volta per vendita, non
+    una per programma.
+
+    - Le gift card vendute non danno punti: li darà la spesa fatta con la
+      carta. Contarle significava pagare due volte lo stesso denaro, una
+      all'acquisto e una al riscatto. Per la stessa ragione una vendita fatta
+      SOLO di gift card non è una visita: cinque carte di Natale in cinque
+      scontrini valevano cinque timbri.
+    - Il premio speso non fa guadagnare altro: una piega omaggio da 45 € pagata
+      con la carta premio accreditava 45 punti, e con i timbri per servizio
+      l'omaggio contava come timbro — il premio arrivava ogni nove visite
+      pagate invece che ogni dieci. Le carte premio sono quelle con
+      paid_method="loyalty" (vedi _issue_reward); i buoni premio abbassano già
+      `sale.total`, e contano solo se il conto l'hanno pagato per intero.
+    """
+    sold_cards = Decimal("0")
+    gift_card_lines = other_lines = services = 0
+    for line in sale.lines.all():
+        if line.line_type == "gift_card":
+            gift_card_lines += 1
+            sold_cards += Decimal(str(line.amount))
+        else:
+            other_lines += 1
+            if line.line_type == "service":
+                services += 1
+    reward_paid = Decimal("0")
+    reward_service_cards = set()
+    for payment in sale.payments.filter(
+        method="gift_card", gift_card__paid_method="loyalty"
+    ).select_related("gift_card"):
+        reward_paid += Decimal(str(payment.amount))
+        if payment.gift_card.gift_service_id:
+            reward_service_cards.add(payment.gift_card_id)
+    reward_coupon = sale.coupons.filter(origin=Coupon.Origin.LOYALTY).exists()
+    paid = Decimal(str(sale.total)) - sold_cards - reward_paid
+    return {
+        "paid": paid,
+        "only_gift_cards": gift_card_lines > 0 and other_lines == 0,
+        # Il conto l'ha pagato per intero un premio: non è una visita pagata.
+        "reward_only": (reward_paid > 0 or reward_coupon) and paid <= 0,
+        # Ogni carta «servizio omaggio» spesa copre un servizio del conto.
+        "services": max(0, services - len(reward_service_cards)),
+    }
+
+
+def _points_earned(sale, program, basis=None) -> int:
     """Punti maturati dalla vendita secondo la metrica del programma."""
-    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-        # Le gift card vendute non danno punti: li darà la spesa fatta con
-        # la carta. Contarle qui significava pagare due volte lo stesso
-        # denaro, una all'acquisto e una al riscatto.
-        gift_card_sold = sale.lines.filter(line_type="gift_card").aggregate(
-            total=Sum("amount")
-        )["total"] or Decimal("0")
-        base = Decimal(sale.total) - Decimal(gift_card_sold)
-        return math.floor(base * program.earn_ratio) if base > 0 else 0
-    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_VISIT:
-        return math.floor(program.earn_ratio)
+    basis = basis or _loyalty_basis(sale)
+    metric = program.earn_metric
+    # Un programma «A timbri» dà un timbro per visita o per servizio, MAI per
+    # euro: la dashboard creava le tessere timbri con la metrica «per euro»
+    # rimasta dal modello vuoto, e una piega da 45 € valeva 45 timbri — più
+    # premi a ogni scontrino. L'API ora rifiuta la combinazione e la
+    # migrazione 0004 ha corretto i programmi salvati; qui si resta al sicuro
+    # anche con un programma scritto da un'altra via. Il rapporto non conta:
+    # la maschera non lo mostra per i timbri, e un valore rimasto da «Punti»
+    # (2, oppure 0,5 che arrotondato dava zero timbri) cambiava la tessera
+    # senza che nessuno lo vedesse.
+    stamps = program.type == LoyaltyProgram.Type.STAMPS
+    if stamps and metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        metric = LoyaltyProgram.EarnMetric.PER_VISIT
+    if metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        paid = basis["paid"]
+        return math.floor(paid * program.earn_ratio) if paid > 0 else 0
+    if basis["only_gift_cards"] or basis["reward_only"]:
+        return 0
+    if metric == LoyaltyProgram.EarnMetric.PER_VISIT:
+        return 1 if stamps else math.floor(program.earn_ratio)
     # per_service
-    n_services = sale.lines.filter(line_type="service").count()
-    return math.floor(program.earn_ratio * n_services)
+    n_services = basis["services"]
+    return n_services if stamps else math.floor(program.earn_ratio * n_services)
 
 
 def accrue_loyalty(sale):
@@ -276,6 +338,7 @@ def accrue_loyalty(sale):
     if client is None:
         return
     salon = sale.salon
+    basis = None  # calcolata al primo programma che serve, poi riusata
     for program in LoyaltyProgram.objects.filter(salon=salon, active=True):
         # Lettura del saldo, emissione dei premi e scrittura stanno in una sola
         # transazione con la riga del conto bloccata. Prima erano una lettura, una
@@ -300,7 +363,9 @@ def accrue_loyalty(sale):
                     program=program, client=client
                 )
 
-            earned = _points_earned(sale, program)
+            if basis is None:
+                basis = _loyalty_basis(sale)
+            earned = _points_earned(sale, program, basis)
             if earned <= 0:
                 continue
 
@@ -425,37 +490,188 @@ def mark_coupon_redeemed(coupon, sale) -> bool:
 
 # ---- Comunicazioni -----------------------------------------------------------
 
+SEND_EVENT = "communication.send"
+# Annulla presso Yourang invii che potrebbe avere già in mano: payload
+# {communication_id, outbox_event_ids}. Gli id sono quelli degli eventi
+# `communication.send` consegnati, che Yourang ha ricevuto come `id` e come
+# Idempotency-Key «outbox-<id>»: annullarli due volte non cambia niente.
+CANCEL_EVENT = "communication.cancel"
+# Consenso marketing cambiato: {client_id, phone, lang, marketing}. Con
+# marketing=false Yourang toglie la cliente anche dagli invii che ha già.
+CONSENT_EVENT = "client.marketing_consent"
+
+
+def _scheduled_ahead(value, now) -> bool:
+    """La data programmata scritta nel payload è ancora da venire?"""
+    if not value:
+        return False  # invio immediato: è già partito, non c'è niente da fermare
+    try:
+        when = datetime.fromisoformat(str(value))
+    except ValueError:
+        return True  # illeggibile: meglio un annullamento inutile che un invio in più
+    if timezone.is_naive(when):
+        when = timezone.make_aware(when)
+    return when > now
+
 
 def cancel_pending_send(comm: Communication) -> int:
-    """Toglie dalla coda l'invio non ancora partito di questa comunicazione.
+    """Ferma l'invio di questa comunicazione che non è ancora partito.
 
-    Una comunicazione programmata lascia in outbox un evento con la data futura:
-    Yourang lo consegnerà comunque. Senza questa pulizia, riprogrammare una
-    comunicazione accodava un secondo evento (e ogni cliente riceveva il
-    messaggio due volte), ed eliminarla non fermava niente — il messaggio
-    partiva per una campagna che non esisteva più.
+    Una programmata ora resta TRATTENUTA in outbox fino alla sua data (vedi
+    send_communication): modificarla, riprogrammarla o eliminarla la marca
+    «superseded» e non partirà mai. Prima l'evento usciva subito, il worker lo
+    consegnava in pochi secondi e questa pulizia — che guardava solo i
+    `pending` — non trovava più niente: dopo «Modifica per riprogrammare» ogni
+    cliente riceveva due messaggi, il primo col refuso, e una campagna
+    eliminata partiva lo stesso (07-02).
 
-    Gli eventi già presi in carico da un worker (`sending`/`sent`) non si
-    recuperano: quelli restano. Ritorna quanti ne sono stati annullati.
+    Quello che Yourang può avere già ricevuto — consegnato prima di questa
+    correzione, preso in carico da un worker proprio adesso, o tentato e forse
+    arrivato con la risposta persa — non si richiama dalla coda: per quello si
+    accoda un `communication.cancel` con gli id da annullare, se la data non è
+    ancora passata. Un evento già annullato non si annulla una seconda volta.
+
+    Ritorna quanti invii sono stati fermati o annullati.
     """
     OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
-    return OutboxEvent.objects.filter(
-        salon=comm.salon,
-        event_type="communication.send",
-        status=OutboxEvent.Status.PENDING,
-        payload__communication_id=comm.id,
-    ).delete()[0]
+    sends = list(
+        OutboxEvent.objects.filter(
+            salon=comm.salon, event_type=SEND_EVENT, payload__communication_id=comm.id
+        ).exclude(status=OutboxEvent.Status.SUPERSEDED)
+    )
+    if not sends:
+        return 0
+    supersede_events([e for e in sends if e.status == OutboxEvent.Status.PENDING])
+    # Riletti dopo l'UPDATE: chi un worker ha preso in carico nel frattempo
+    # resta vivo, ed è in volo.
+    alive = set(
+        OutboxEvent.objects.filter(pk__in=[e.pk for e in sends])
+        .exclude(status=OutboxEvent.Status.SUPERSEDED)
+        .values_list("pk", flat=True)
+    )
+    stopped = {e.pk for e in sends if e.pk not in alive}
+    already = set()
+    for cancel in OutboxEvent.objects.filter(
+        salon=comm.salon, event_type=CANCEL_EVENT, payload__communication_id=comm.id
+    ).exclude(status=OutboxEvent.Status.SUPERSEDED):
+        already.update(cancel.payload.get("outbox_event_ids") or [])
+    now = timezone.now()
+    reached = [
+        e.pk
+        for e in sends
+        if (e.pk in alive or e.attempts > 0)
+        and e.pk not in already
+        and _scheduled_ahead((e.payload or {}).get("scheduled_at"), now)
+    ]
+    if reached:
+        emit_event(
+            comm.salon,
+            CANCEL_EVENT,
+            {"communication_id": comm.id, "outbox_event_ids": reached},
+        )
+    return len(stopped | set(reached))
+
+
+def settle_due_communications(salon, now=None) -> int:
+    """Le programmate con la data passata diventano «inviate».
+
+    Alla data l'evento parte (o è appena partito): restare «Programmata» per
+    sempre lasciava la campagna modificabile e rinviabile anche dopo l'invio.
+    `sent_at` è la data programmata, e `scheduled_at` si svuota come per
+    l'invio immediato, perché l'interfaccia non creda che parta un'altra volta.
+    """
+    now = now or timezone.now()
+    return Communication.objects.filter(
+        salon=salon, status=Communication.Status.SCHEDULED, scheduled_at__lte=now
+    ).update(
+        status=Communication.Status.SENT, sent_at=F("scheduled_at"), scheduled_at=None
+    )
+
+
+def drop_from_pending_sends(client) -> int:
+    """Toglie la cliente dagli invii marketing non ancora consegnati (07-03).
+
+    I destinatari si fissano quando si preme «Programma»: la cliente che
+    revocava il consenso il martedì riceveva comunque il sabato la promozione
+    programmata il lunedì (GDPR art. 7.3). Si riscrivono tutti gli invii
+    ancora in coda, anche quelli in attesa di un ritentativo: se il primo
+    tentativo era arrivato, Yourang scarta il ritentativo per la sua
+    Idempotency-Key e togliere un destinatario non cambia niente; se non era
+    arrivato, parte senza di lei. Quello che Yourang ha già in mano lo copre
+    CONSENT_EVENT. Ritorna quanti invii sono stati toccati.
+    """
+    OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
+    touched = 0
+    with transaction.atomic():
+        # Sotto lock: il worker che prende in carico l'evento aspetta la
+        # riscrittura, oppure l'ha già preso e qui non compare più.
+        events = OutboxEvent.objects.select_for_update().filter(
+            salon_id=client.salon_id,
+            event_type=SEND_EVENT,
+            status=OutboxEvent.Status.PENDING,
+        )
+        for event in events:
+            payload = dict(event.payload or {})
+            ids = payload.get("client_ids") or []
+            if client.id not in ids:
+                continue
+            payload["client_ids"] = [cid for cid in ids if cid != client.id]
+            langs = dict(payload.get("langs") or {})
+            langs.pop(str(client.id), None)
+            payload["langs"] = langs
+            event.payload = payload
+            event.save(update_fields=["payload"])
+            touched += 1
+    return touched
+
+
+def marketing_consent_changed(client, accepted: bool) -> None:
+    """Da chiamare dopo aver salvato il consenso marketing di una cliente.
+
+    La revoca vale anche per ciò che è già in coda: la cliente esce dagli invii
+    non ancora partiti, e Yourang riceve CONSENT_EVENT per quelli che ha già in
+    mano. Anche il consenso ridato si notifica, così Yourang toglie il blocco.
+    """
+    if not accepted:
+        drop_from_pending_sends(client)
+    emit_event(
+        client.salon,
+        CONSENT_EVENT,
+        {
+            "client_id": client.id,
+            "phone": client.phone,
+            "lang": client.lang,
+            "marketing": bool(accepted),
+        },
+    )
 
 
 def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
     """Risolve l'audience in client ids (consents.marketing=True) ed emette
-    `communication.send`. Se programmata l'evento esce SUBITO con scheduled_at
-    nel payload: l'invio alla data è demandato a Yourang.
+    `communication.send`.
+
+    Programmata: l'evento resta TRATTENUTO in outbox fino a `scheduled_at`
+    (next_attempt_at) e parte alla data, con scheduled_at nel payload. Finché è
+    in coda modifica ed eliminazione lo fermano davvero (cancel_pending_send);
+    prima usciva subito e da lì in poi nessuno lo richiamava più.
 
     `scheduled_at` omesso significa «usa la data salvata sulla comunicazione»;
     `scheduled_at=None` esplicito significa «invia adesso»."""
     salon = comm.salon
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
+
+    if scheduled_at is _UNSET:
+        scheduled_at = comm.scheduled_at
+    now = timezone.now()
+    if scheduled_at and timezone.is_naive(scheduled_at):
+        scheduled_at = timezone.make_aware(scheduled_at)
+    # Una bozza con una data vecchia diventava «Programmata» per sempre con la
+    # data nel passato, e cosa facesse Yourang con un invio già scaduto non lo
+    # sapeva nessuno (07-14).
+    if scheduled_at and scheduled_at <= now:
+        raise HttpError(
+            422, "La data di invio è già passata: scegline una futura oppure invia subito"
+        )
 
     # Solo chi ha il consenso marketing ATTIVO adesso: la revoca (GDPR art. 7.3)
     # si scrive sullo stesso campo, quindi chi l'ha ritirato sparisce da qui.
@@ -478,15 +694,16 @@ def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
         "langs": {str(c.id): c.lang for c in clients},
     }
 
-    if scheduled_at is _UNSET:
-        scheduled_at = comm.scheduled_at
     # Un invio nuovo sostituisce quello eventualmente ancora in coda: mai due
     # eventi vivi per la stessa comunicazione.
     cancel_pending_send(comm)
+    delay = 0
     if scheduled_at:
         comm.status = Communication.Status.SCHEDULED
         comm.scheduled_at = scheduled_at
         payload["scheduled_at"] = scheduled_at.isoformat()
+        # Per eccesso: l'evento non deve diventare consegnabile prima della data.
+        delay = math.ceil((scheduled_at - now).total_seconds())
         summary = f"Comunicazione «{comm.title}» programmata ({len(clients)} destinatari)"
     else:
         comm.status = Communication.Status.SENT
@@ -497,7 +714,13 @@ def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
         summary = f"Comunicazione «{comm.title}» inviata a {len(clients)} clienti"
     comm.save(update_fields=["status", "scheduled_at", "sent_at"])
 
-    emit_event(salon, "communication.send", payload)
+    emit_event(
+        salon,
+        SEND_EVENT,
+        payload,
+        delay_seconds=delay,
+        coalesce_key=f"communication:{comm.id}",
+    )
     log_activity(
         salon,
         "communication.send",

@@ -30,17 +30,21 @@ from .schemas import (
     GiftCardListOut,
     GiftCardOut,
     LoyaltyAccountOut,
+    LoyaltyEnrollIn,
     LoyaltyProgramIn,
     LoyaltyProgramOut,
     MarketingConsentIn,
     MarkPaidIn,
     OkOut,
     WalletOut,
+    codes_hidden,
 )
 from .services import (
     cancel_pending_send,
     create_gift_card,
+    marketing_consent_changed,
     send_communication,
+    settle_due_communications,
     unique_code,
 )
 
@@ -76,6 +80,27 @@ def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
     return value
 
 
+def _status_q(model, status: str) -> Q:
+    """Filtro di stato di coupon e gift card con la scadenza letta adesso (C21).
+
+    EXPIRED a database lo scrive solo un tentativo di riscatto: con il filtro
+    secco su `status` una carta scaduta la settimana scorsa stava fra le
+    «attive» — la nuova prenotazione la prometteva come regalo e la cassa poi
+    la rifiutava — e «Scadute» non la trovava. Stessa regola dell'uscita
+    (schemas.effective_status).
+    """
+    now = timezone.now()
+    if status == model.Status.ACTIVE:
+        return Q(status=model.Status.ACTIVE) & (
+            Q(expires_at__isnull=True) | Q(expires_at__gte=now)
+        )
+    if status == model.Status.EXPIRED:
+        return Q(status=model.Status.EXPIRED) | Q(
+            status=model.Status.ACTIVE, expires_at__lt=now
+        )
+    return Q(status=status)
+
+
 # ---- Coupon ------------------------------------------------------------------
 
 
@@ -88,20 +113,23 @@ def list_coupons(
     q: str = "",
     client_id: Optional[int] = None,
 ):
-    qs = Coupon.objects.filter(salon=request.auth.salon).select_related("client")
+    ctx = request.auth
+    qs = Coupon.objects.filter(salon=ctx.salon).select_related("client")
     if origin:
         qs = qs.filter(origin=origin)
     if status:
-        qs = qs.filter(status=status)
+        qs = qs.filter(_status_q(Coupon, status))
     if q:
-        qs = qs.filter(
-            Q(code__icontains=q)
-            | Q(client__first_name__icontains=q)
-            | Q(client__last_name__icontains=q)
-        )
+        match = Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
+        # A chi vede i codici mascherati la ricerca per codice direbbe comunque
+        # se un pezzo di codice esiste: carattere dopo carattere lo ricostruisce.
+        if not codes_hidden(ctx):
+            match |= Q(code__icontains=q)
+        qs = qs.filter(match)
     if client_id:
         qs = qs.filter(client_id=client_id)
-    return qs
+    # `id` come spareggio: le pagine restano stabili anche a parità di data.
+    return qs.order_by("-created_at", "-id")
 
 
 @router.post("/coupons", auth=staff_auth, response=CouponOut)
@@ -141,11 +169,18 @@ def update_coupon(request, coupon_id: int, data: CouponIn):
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
     value = _validate_coupon_value(data.kind, data.value)
-    coupon.client = _get_client(ctx, data.client_id) if data.client_id else None
-    coupon.kind = data.kind
-    coupon.value = value
-    coupon.expires_at = data.expires_at
-    coupon.save()
+    client = _get_client(ctx, data.client_id) if data.client_id else None
+    # UPDATE condizionato a status='active', solo sui campi della maschera. Il
+    # save() completo della copia letta a inizio richiesta riscriveva anche
+    # status e vendita: se nel frattempo la cassa aveva consumato il buono
+    # (mark_coupon_redeemed), tornava «attivo» e senza vendita — scontrino
+    # scontato e buono di nuovo spendibile.
+    updated = Coupon.objects.filter(
+        pk=coupon.pk, salon=ctx.salon, status=Coupon.Status.ACTIVE
+    ).update(client=client, kind=data.kind, value=value, expires_at=data.expires_at)
+    if not updated:
+        raise HttpError(422, "Coupon appena utilizzato o scaduto: non è più modificabile")
+    coupon.refresh_from_db()
     log_activity(
         ctx.salon,
         "coupon.updated",
@@ -224,20 +259,24 @@ def list_gift_cards(
     # select_related anche su gift_service: la riga «carta a trattamento» mostra
     # il nome del servizio, e senza questo ogni carta dell'elenco costava una
     # query in più.
-    qs = GiftCard.objects.filter(salon=request.auth.salon).select_related(
+    ctx = request.auth
+    qs = GiftCard.objects.filter(salon=ctx.salon).select_related(
         "buyer_client", "gift_service"
     )
     if status:
-        qs = qs.filter(status=status)
+        qs = qs.filter(_status_q(GiftCard, status))
     if payment_status:
         qs = qs.filter(payment_status=payment_status)
     if q:
-        qs = qs.filter(
-            Q(code__icontains=q)
-            | Q(recipient_name__icontains=q)
+        match = (
+            Q(recipient_name__icontains=q)
             | Q(buyer_client__first_name__icontains=q)
             | Q(buyer_client__last_name__icontains=q)
         )
+        # Codici mascherati: niente ricerca per pezzi di codice (vedi list_coupons).
+        if not codes_hidden(ctx):
+            match |= Q(code__icontains=q)
+        qs = qs.filter(match)
     if client_id:
         # il cliente può comparire come acquirente e/o destinatario della carta
         qs = qs.filter(Q(buyer_client_id=client_id) | Q(recipient_client_id=client_id))
@@ -268,13 +307,19 @@ def list_gift_cards(
     total = qs.count()
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
-    return {"kpi": kpi, "total": total, "items": list(qs[offset : offset + limit])}
+    items = list(qs.order_by("-created_at", "-id")[offset : offset + limit])
+    return {"kpi": kpi, "total": total, "items": items}
 
 
 @router.post("/gift-cards", auth=staff_auth, response=GiftCardOut)
 def create_gift_card_staff(request, data: GiftCardIn):
     ctx = request.auth
-    require_scope(ctx, "marketing")
+    # «Pagata ora» è un incasso: crea vendita e pagamento, quindi lo decide la
+    # cassa (`sales`), non il marketing. Il Front desk non poteva vendere una
+    # carta intestata alla destinataria (il POS crea solo carte con un nome
+    # scritto a mano), e un ruolo solo-marketing registrava incassi senza poter
+    # vedere la cassa. Una carta che nasce da pagare resta del marketing.
+    require_scope(ctx, "sales" if data.paid else "marketing")
     buyer = _get_client(ctx, data.buyer_client_id) if data.buyer_client_id else None
     # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio,
     # ignora l'eventuale `value` inviato. gift_service_id None => carta monetaria.
@@ -326,7 +371,9 @@ def create_gift_card_staff(request, data: GiftCardIn):
 @router.post("/gift-cards/{int:card_id}/mark-paid", auth=staff_auth, response=GiftCardOut)
 def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     ctx = request.auth
-    require_scope(ctx, "marketing")
+    # Incassare è della cassa (vedi create_gift_card_staff): la carta comprata
+    # dall'app la paga la cliente al banco, dove c'è chi ha `sales`.
+    require_scope(ctx, "sales")
     card = salon_get(GiftCard, ctx, card_id)
     # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
     # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
@@ -415,12 +462,25 @@ def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
         raise HttpError(422, "Modalità di accumulo non valida")
     if data.enrollment not in LoyaltyProgram.Enrollment.values:
         raise HttpError(422, "Modalità di iscrizione non valida")
+    # Una tessera «A timbri» salvata con la metrica «per euro» (quella del
+    # modello vuoto della dashboard, che per i timbri nasconde il selettore)
+    # dava un timbro per euro: una piega da 45 € valeva quattro premi.
+    stamps = data.type == LoyaltyProgram.Type.STAMPS
+    if stamps and data.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        raise HttpError(
+            400,
+            "Un programma a timbri dà un timbro per visita o per servizio, non per euro speso",
+        )
     # threshold=0 faceva accumulare punti che non diventavano mai un premio.
     if not 1 <= data.threshold <= MAX_THRESHOLD:
         raise HttpError(422, "La soglia dev'essere un numero di punti fra 1 e 1.000.000")
-    earn_ratio = Decimal(str(data.earn_ratio))
-    if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
-        raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
+    # Per i timbri il rapporto non si sceglie (un timbro a visita o a servizio,
+    # vedi services._points_earned): si scrive 1 qualunque cosa arrivi, così
+    # quello che la scheda mostra è quello che succede in cassa.
+    if not stamps:
+        earn_ratio = Decimal(str(data.earn_ratio))
+        if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
+            raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
     if Decimal(str(data.reward_value or 0)) > MAX_MONEY:
         raise HttpError(422, "Valore del premio fuori scala")
     if data.reward_type == "discount_pct" and Decimal(str(data.reward_value or 0)) > 100:
@@ -432,10 +492,21 @@ def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
     if data.reward_service_id:
         Service = django_apps.get_model("catalog", "Service")  # lazy
         program.reward_service = salon_get(Service, ctx, data.reward_service_id)
+        # Il listino ammette servizi a 0 €: come premio diventavano una carta da
+        # zero che nessuno può emettere, e alla soglia l'errore bloccava ogni
+        # incasso di quella cliente.
+        if data.reward_type == "free_service" and Decimal(
+            str(program.reward_service.price or 0)
+        ) <= 0:
+            raise HttpError(
+                422, "Il servizio da regalare ha prezzo zero: scegline uno a pagamento"
+            )
     else:
         program.reward_service = None
     for name, value in data.dict(exclude={"reward_service_id"}).items():
         setattr(program, name, value)
+    if stamps:
+        program.earn_ratio = Decimal("1")
     program.save()
     return program
 
@@ -502,10 +573,50 @@ def list_loyalty_accounts(request, program_id: int, client_id: Optional[int] = N
     tutte per mostrare i punti di una sola persona.
     """
     program = salon_get(LoyaltyProgram, request.auth, program_id)
-    qs = program.accounts.select_related("client")
+    # `id` come spareggio: con migliaia di iscritte a pari punti (i timbri
+    # vanno da 0 a 9) PostgreSQL non garantisce lo stesso ordine fra una
+    # pagina e l'altra, e una cliente poteva non cadere in nessuna pagina —
+    # «Non ancora iscritta» per chi era a un timbro dal premio.
+    qs = program.accounts.select_related("client").order_by("-points", "id")
     if client_id:
         qs = qs.filter(client_id=client_id)
     return qs
+
+
+@router.post(
+    # Stessa stringa di percorso dell'elenco: con «{int:program_id}» Django
+    # registrerebbe un secondo pattern, e la POST finirebbe sul primo (solo GET).
+    "/loyalty-programs/{program_id}/accounts",
+    auth=staff_auth,
+    response=LoyaltyAccountOut,
+)
+def enroll_loyalty_client(request, program_id: int, data: LoyaltyEnrollIn):
+    """Iscrive una cliente al programma dallo staff.
+
+    Con l'iscrizione «Su richiesta» o «A pagamento» nessuna via creava il conto
+    (accrue_loyalty iscrive da sola solo con «Automatica»): il programma si
+    salvava, il cassetto prometteva l'iscrizione su richiesta, e le nuove
+    clienti non maturavano niente, in silenzio.
+    """
+    ctx = request.auth
+    require_scope(ctx, "marketing")
+    program = salon_get(LoyaltyProgram, ctx, program_id)
+    if not program.active:
+        raise HttpError(400, "Programma disattivato: riattivalo per iscrivere nuove clienti")
+    client = _get_client(ctx, data.client_id)
+    # get_or_create: due clic ravvicinati non fanno esplodere la unique, il
+    # secondo trova il conto e riceve il 400.
+    account, created = LoyaltyAccount.objects.get_or_create(program=program, client=client)
+    if not created:
+        raise HttpError(400, "La cliente è già iscritta a questo programma")
+    log_activity(
+        ctx.salon,
+        "loyalty.enrolled",
+        f"{client.full_name} iscritta al programma fedeltà «{program.name}»",
+        actor=ctx.user,
+        payload={"program_id": program.id, "client_id": client.id, "account_id": account.id},
+    )
+    return account
 
 
 # ---- Comunicazioni -----------------------------------------------------------
@@ -514,10 +625,36 @@ def list_loyalty_accounts(request, program_id: int, client_id: Optional[int] = N
 @router.get("/communications", auth=staff_auth, response=list[CommunicationOut])
 @paginate(LimitOffsetPagination)
 def list_communications(request, status: str = ""):
-    qs = Communication.objects.filter(salon=request.auth.salon)
+    salon = request.auth.salon
+    # Le programmate arrivate alla data sono partite: la scheda le mostra fra
+    # le inviate, non più modificabili (07-02).
+    settle_due_communications(salon)
+    qs = Communication.objects.filter(salon=salon)
     if status:
         qs = qs.filter(status=status)
-    return qs
+    return qs.order_by("-created_at", "-id")
+
+
+def _locked_communication(ctx, comm_id: int) -> Communication:
+    """La comunicazione del salone, bloccata fino a fine transazione.
+
+    Modifica, invio ed eliminazione decidevano ciascuna sulla propria copia
+    letta a inizio richiesta: un «Programma» e una modifica nello stesso
+    momento lasciavano un invio vivo su una bozza.
+    """
+    comm = salon_get(Communication, ctx, comm_id)
+    return Communication.objects.select_for_update().get(pk=comm.pk)
+
+
+def _already_sent(comm: Communication) -> bool:
+    """Inviata, o programmata con la data già passata: l'evento è partito."""
+    if comm.status == Communication.Status.SENT:
+        return True
+    return (
+        comm.status == Communication.Status.SCHEDULED
+        and comm.scheduled_at is not None
+        and comm.scheduled_at <= timezone.now()
+    )
 
 
 def _check_audience(data: CommunicationIn):
@@ -548,25 +685,30 @@ def create_communication(request, data: CommunicationIn):
 def update_communication(request, comm_id: int, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    if comm.status == Communication.Status.SENT:
-        raise HttpError(422, "Comunicazione già inviata: non modificabile")
     _check_audience(data)
-    # Modificare una comunicazione già programmata annulla l'invio in coda e la
-    # riporta in bozza: altrimenti Yourang consegnava alla data la versione
-    # vecchia, e un nuovo «Invia» ne accodava una seconda copia.
-    cancel_pending_send(comm)
-    comm.status = Communication.Status.DRAFT
-    for name, value in data.dict().items():
-        setattr(comm, name, value)
-    comm.save()
-    log_activity(
-        ctx.salon,
-        "communication.updated",
-        f"Comunicazione «{comm.title}» aggiornata",
-        actor=ctx.user,
-        payload={"communication_id": comm.id},
-    )
+    fields = data.dict()
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        if _already_sent(comm):
+            raise HttpError(422, "Comunicazione già inviata: non modificabile")
+        # Modificare una comunicazione già programmata annulla l'invio in coda
+        # (o presso Yourang, se l'ha già ricevuto) e la riporta in bozza:
+        # altrimenti alla data partiva la versione vecchia, e un nuovo «Invia»
+        # ne accodava una seconda copia.
+        cancel_pending_send(comm)
+        comm.status = Communication.Status.DRAFT
+        for name, value in fields.items():
+            setattr(comm, name, value)
+        # Solo i campi della maschera: il save completo riscriveva anche
+        # sent_at e l'immagine della copia letta a inizio richiesta (18-07).
+        comm.save(update_fields=[*fields, "status"])
+        log_activity(
+            ctx.salon,
+            "communication.updated",
+            f"Comunicazione «{comm.title}» aggiornata",
+            actor=ctx.user,
+            payload={"communication_id": comm.id},
+        )
     return comm
 
 
@@ -574,18 +716,20 @@ def update_communication(request, comm_id: int, data: CommunicationIn):
 def delete_communication(request, comm_id: int):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    log_activity(
-        ctx.salon,
-        "communication.deleted",
-        f"Comunicazione «{comm.title}» eliminata",
-        actor=ctx.user,
-        payload={"communication_id": comm.id},
-    )
-    # Prima l'invio in coda partiva lo stesso: i clienti ricevevano il messaggio
-    # di una campagna che il salone aveva cancellato.
-    cancel_pending_send(comm)
-    comm.delete()
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        log_activity(
+            ctx.salon,
+            "communication.deleted",
+            f"Comunicazione «{comm.title}» eliminata",
+            actor=ctx.user,
+            payload={"communication_id": comm.id},
+        )
+        # Prima l'invio in coda partiva lo stesso: i clienti ricevevano il
+        # messaggio di una campagna che il salone aveva cancellato. Se Yourang
+        # l'aveva già ricevuto, ora gli arriva l'annullamento.
+        cancel_pending_send(comm)
+        comm.delete()
     return OkOut()
 
 
@@ -593,23 +737,27 @@ def delete_communication(request, comm_id: int):
 def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    # Si invia solo da bozza. Prima una comunicazione già programmata restava
-    # rinviabile all'infinito e ogni clic accodava un invio in più: la stessa
-    # promozione arrivava due, tre, dieci volte alla stessa cliente. Per
-    # cambiarle data si passa dalla modifica, che la riporta in bozza.
-    if comm.status != Communication.Status.DRAFT:
-        if comm.status == Communication.Status.SENT:
-            raise HttpError(422, "Comunicazione già inviata")
-        raise HttpError(
-            422, "Comunicazione già programmata: modificala per cambiarle data"
-        )
     # `scheduled_at` assente = «usa la data salvata»; `scheduled_at: null`
     # esplicito = «invia adesso» anche se una data è salvata.
     fields = data.dict(exclude_unset=True)
-    if "scheduled_at" in fields:
-        return send_communication(comm, scheduled_at=fields["scheduled_at"], actor=ctx.user)
-    return send_communication(comm, actor=ctx.user)
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        # Si invia solo da bozza. Prima una comunicazione già programmata
+        # restava rinviabile all'infinito e ogni clic accodava un invio in più:
+        # la stessa promozione arrivava due, tre, dieci volte alla stessa
+        # cliente. Per cambiarle data si passa dalla modifica, che la riporta in
+        # bozza.
+        if comm.status != Communication.Status.DRAFT:
+            if _already_sent(comm):
+                raise HttpError(422, "Comunicazione già inviata")
+            raise HttpError(
+                422, "Comunicazione già programmata: modificala per cambiarle data"
+            )
+        if "scheduled_at" in fields:
+            return send_communication(
+                comm, scheduled_at=fields["scheduled_at"], actor=ctx.user
+            )
+        return send_communication(comm, actor=ctx.user)
 
 
 # ---- Endpoint app cliente ----------------------------------------------------
@@ -642,6 +790,22 @@ def client_wallet(request):
     )
     for card in cards:
         card._received = card.recipient_client_id == ctx.client.id
+        # Contratto C3, stessa regola di gift_index nell'agenda: pagata, con
+        # saldo (attiva e non scaduta la filtra già la query), e sua — ne è la
+        # destinataria, oppure l'ha comprata lei senza intestarla a nessuno.
+        # Una carta comprata «per Maria» (nome scritto a mano) è di Maria.
+        card._spendable = (
+            card.payment_status == GiftCard.PaymentStatus.PAID
+            and card.balance > 0
+            and (
+                card._received
+                or (
+                    card.buyer_client_id == ctx.client.id
+                    and card.recipient_client_id is None
+                    and card.recipient_name == ""
+                )
+            )
+        )
     coupons = (
         Coupon.objects.filter(
             salon=ctx.salon, client=ctx.client, status=Coupon.Status.ACTIVE
@@ -722,6 +886,7 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
     client = request.auth.client
     now = timezone.now().isoformat()
     consents = dict(client.consents or {})
+    was_accepted = bool(consents.get("marketing"))
     consents["marketing"] = bool(data.accepted)
     # Si tiene traccia di QUANDO: il consenso va dimostrato, e la revoca pure.
     if data.accepted:
@@ -732,6 +897,11 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
         consents["marketing_at"] = ""
     client.consents = consents
     client.save(update_fields=["consents"])
+    # La revoca vale anche per le campagne già programmate o in coda (07-03):
+    # si ripete a ogni revoca, perché la cliente può essere finita in un invio
+    # anche quando il consenso era stato tolto da un'altra parte.
+    if not data.accepted or not was_accepted:
+        marketing_consent_changed(client, bool(data.accepted))
     log_activity(
         request.auth.salon,
         "client.consent_updated",

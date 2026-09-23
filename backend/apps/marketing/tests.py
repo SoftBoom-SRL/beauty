@@ -1034,9 +1034,11 @@ class CommunicationScheduleTests(TestCase):
         )
 
     def _pending(self):
+        # Gli invii annullati restano a registro come «superseded» (caccia del
+        # 22/09): qui contano solo quelli che possono ancora partire.
         return OutboxEvent.objects.filter(
             salon=self.salon, event_type="communication.send"
-        ).count()
+        ).exclude(status=OutboxEvent.Status.SUPERSEDED).count()
 
     def test_a_scheduled_communication_cannot_be_sent_again(self):
         when = (timezone.now() + timedelta(days=2)).isoformat()

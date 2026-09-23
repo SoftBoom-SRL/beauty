@@ -1,6 +1,7 @@
 import json
 import uuid as uuid_lib
 
+from django.db import transaction
 from ninja import Router
 from ninja.errors import HttpError
 
@@ -168,9 +169,12 @@ def update_automation(request, automation_id: int, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
     automation = salon_get(Automation, ctx, automation_id)
-    for name, value in _validated(data).items():
+    payload = _validated(data)
+    for name, value in payload.items():
         setattr(automation, name, value)
-    automation.save()
+    # Solo i campi della maschera: il save completo riscriveva con la copia
+    # letta a inizio richiesta anche `message_preview`, che sincronizza Yourang.
+    automation.save(update_fields=[*payload, "updated_at"])
     log_activity(
         ctx.salon,
         "automation.updated",
@@ -208,16 +212,22 @@ def toggle_automation(request, automation_id: int):
     ctx = request.auth
     require_scope(ctx, "marketing")
     automation = salon_get(Automation, ctx, automation_id)
-    automation.active = not automation.active
-    automation.save(update_fields=["active", "updated_at"])
-    log_activity(
-        ctx.salon,
-        "automation.updated",
-        f"Automazione {'attivata' if automation.active else 'disattivata'}: {automation.name}",
-        actor=ctx.user,
-        payload={"automation_id": automation.id, "active": automation.active},
-    )
-    emit_event(ctx.salon, "automation.updated", _definition(automation))
+    # Si inverte lo stato della riga bloccata, non quello della copia letta a
+    # inizio richiesta: due clic ravvicinati (o due postazioni) leggevano
+    # entrambi «attiva», scrivevano entrambi «spenta» e un clic spariva — con
+    # Yourang informato dello stato sbagliato (18-07).
+    with transaction.atomic():
+        automation = Automation.objects.select_for_update().get(pk=automation.pk)
+        automation.active = not automation.active
+        automation.save(update_fields=["active", "updated_at"])
+        log_activity(
+            ctx.salon,
+            "automation.updated",
+            f"Automazione {'attivata' if automation.active else 'disattivata'}: {automation.name}",
+            actor=ctx.user,
+            payload={"automation_id": automation.id, "active": automation.active},
+        )
+        emit_event(ctx.salon, "automation.updated", _definition(automation))
     return automation
 
 
