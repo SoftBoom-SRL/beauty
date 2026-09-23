@@ -11,6 +11,8 @@ from django.db import transaction
 from django.db.models import F
 from ninja.errors import HttpError
 
+from apps.core.services import log_activity
+
 from .models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement
 
 
@@ -84,6 +86,25 @@ def deduct_stock_for_sale(sale):
                 sale=sale,
                 author=getattr(sale, "created_by", None),
             )
+        )
+    if movements:
+        # Carichi e scarichi a mano ridisegnano il magazzino sulle altre
+        # postazioni (eventi `stock.*`), le vendite no: la vendita registra solo
+        # `sale.created`, che il magazzino non ascolta e che a un ruolo di solo
+        # magazzino non arriva nemmeno. Chi teneva aperto il magazzino vedeva
+        # ancora la tinta a 3 pezzi dopo averne venduti 3 (09-08). Nessun
+        # importo nell'evento: lo riceve chi ha il magazzino, non la cassa.
+        author = getattr(sale, "created_by", None)
+        log_activity(
+            sale.salon,
+            "stock.sold",
+            "Scarico da vendita: "
+            + ", ".join(f"{m.product.name} ×{format(-m.qty.normalize(), 'f')}" for m in movements),
+            actor=author if (author is not None and getattr(author, "pk", None)) else None,
+            payload={
+                "sale_id": sale.id,
+                "product_ids": sorted({m.product_id for m in movements}),
+            },
         )
     return movements
 

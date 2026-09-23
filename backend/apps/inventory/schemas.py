@@ -120,6 +120,9 @@ class ProductUnloadIn(Schema):
 
 
 class CsvRowIn(Schema):
+    # Prodotto scelto dall'elenco o abbinato dalla dashboard (C7): se c'è
+    # identifica il prodotto (del salone) e vince su SKU e nome.
+    product_id: Optional[int] = None
     name: str = ""
     sku: str = ""
     qty: Decimal
@@ -168,11 +171,20 @@ class MovementOut(Schema):
         return obj.product.name
 
     @staticmethod
-    def resolve_invoice_url(obj):
+    def resolve_invoice_url(obj, context=None):
+        if not obj.invoice:
+            return None
+        # La fattura del fornitore (prezzi d'acquisto, sconti, condizioni) è un
+        # documento di cassa: il link firmato solo al titolare e a chi ha
+        # «sales», come gli incassi. Prima bastava l'accesso al magazzino
+        # (10-09). Senza un contesto di richiesta non si espone nulla.
+        auth = getattr((context or {}).get("request"), "auth", None)
+        if auth is None or not (auth.is_owner or "sales" in auth.scopes):
+            return None
         # `inventory/invoices/` è un prefisso riservato in common/media.py: senza
         # token firmato la vista /media/ risponde 403 e il link della fattura
         # nello storico di magazzino non apriva mai nulla.
-        return signed_media_url(obj.invoice) if obj.invoice else None
+        return signed_media_url(obj.invoice)
 
     @staticmethod
     def resolve_author_name(obj):
