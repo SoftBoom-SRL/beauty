@@ -6,26 +6,39 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
 
-/* ---- small generic dropdown (field / operator pickers) — prototype port ---- */
-export function DkDrop({ value, onChange, options, narrow }) {
+/* ---- small generic dropdown (field / operator pickers) — prototype port ----
+ * Un valore salvato che non è fra le opzioni (l'etichetta rinominata o
+ * eliminata) si mostra com'è, in evidenza: prima compariva la PRIMA opzione e il
+ * filtro sembrava impostato su un'altra etichetta (15-07). `loose`: stesso testo
+ * senza badare a maiuscole e spazi, come confronta il server. */
+export function DkDrop({ value, onChange, options, narrow, missingLabel, loose }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    // Esc con il menu aperto chiude il menu e basta (preventDefault: vedi ui/layers.js)
+    const k = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); setOpen(false); } };
     document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
+    document.addEventListener('keydown', k);
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', k); };
   }, [open]);
-  const cur = options.find((o) => o.value === value) || options[0] || { label: '—' };
+  let found = options.find((o) => o.value === value);
+  if (!found && loose && typeof value === 'string') {
+    const key = value.trim().toLowerCase();
+    found = options.find((o) => typeof o.value === 'string' && o.value.trim().toLowerCase() === key);
+  }
+  const missing = !found && value != null && value !== '';
+  const cur = found || (missing ? { label: missingLabel ? missingLabel(value) : String(value) } : { label: '—' });
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: narrow ? '0 10px' : '0 12px', border: '1px solid var(--hair)', borderRadius: 9, background: 'var(--surface)', cursor: 'pointer', fontSize: narrow ? 16 : 13.5, fontWeight: 700, color: 'var(--ink)' }}>
-        {cur.label}<Icon name="chevD" size={13} color="var(--muted)" />
+      <button onClick={() => setOpen((o) => !o)} title={missing ? cur.label : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: narrow ? '0 10px' : '0 12px', border: '1px solid ' + (missing ? 'var(--warn)' : 'var(--hair)'), borderRadius: 9, background: missing ? 'var(--warn-tint)' : 'var(--surface)', cursor: 'pointer', fontSize: narrow ? 16 : 13.5, fontWeight: 700, color: missing ? 'var(--warn)' : 'var(--ink)' }}>
+        {missing && <Icon name="alert" size={13} color="var(--warn)" />}{cur.label}<Icon name="chevD" size={13} color="var(--muted)" />
       </button>
       {open && (
         <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, minWidth: narrow ? 64 : 200, padding: 5, zIndex: 30, boxShadow: 'var(--sh-pop)' }}>
           {options.map((o) => {
-            const on = o.value === value;
+            const on = o === found;
             return (
               <button key={o.value} className="dk-row" onClick={() => { onChange(o.value); setOpen(false); }} title={o.title} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 9px', borderRadius: 8, textAlign: 'left' }}>
                 <span style={{ flex: 1, fontWeight: on ? 700 : 600, fontSize: narrow ? 15 : 13.5, color: on ? 'var(--ink)' : 'var(--ink-2)' }}>{o.label}</span>

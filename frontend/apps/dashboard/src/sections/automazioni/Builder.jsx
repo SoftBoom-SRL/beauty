@@ -4,9 +4,10 @@
 // trigger_origin (yourang | webhook), active.
 // Execution (channel + message) lives on Yourang — shown read-only, with a live
 // client-side WhatsApp preview (token substitution) as a nicety.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, API_URL, Icon, Toggle } from '@youty/shared';
 import { DkSeg } from '../../ui/index.js';
+import { mergeRuleDraft } from './draft.js';
 import { useDash } from '../../ctx.jsx';
 import DkCondRow, { defaultRule, ruleForField } from './DkCondRow.jsx';
 import { DkStepper, DkCopyField, DkTrigStep, MiniMetric, DkEventMenu } from './controls.jsx';
@@ -51,6 +52,25 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
 
+  /* La regola cambia sotto il costruttore: interruttore della lista, un'altra
+   * postazione, il rinomina di un'etichetta che il server riscrive nelle
+   * condizioni. Prima la key del Builder conteneva `updated_at` e lo rimontava
+   * da zero, buttando filtri e anticipo non salvati (15-13); ora la bozza si
+   * fonde campo per campo con la versione nuova (quello che non si è toccato
+   * la segue, quello in modifica resta) e, se lo stesso campo è cambiato anche
+   * altrove, lo si dice. */
+  const [base, setBase] = useState(rule);   // versione del server da cui parte la bozza
+  const [stale, setStale] = useState(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    if (!rule || !base || rule === base) return;
+    const { draft: next, conflicts } = mergeRuleDraft(draftRef.current, initDraft(base, catalog), initDraft(rule, catalog));
+    setDraft(next);
+    setBase(rule);
+    if (conflicts.length) setStale(true);
+  }, [rule]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const ev = useMemo(
     () => catalog.events.find((e) => e.value === draft.event) || catalog.events[0] || { value: draft.event, label_it: draft.event, label_en: draft.event },
     [catalog.events, draft.event],
@@ -91,6 +111,7 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
         ? await api.put(`/api/automations/${rule.id}`, payload)
         : await api.post('/api/automations/', payload);
       fireToast({ msg: t('Automazione salvata', 'Automation saved'), icon: 'check' });
+      setStale(false);
       onSaved(saved);
     } catch (err) {
       if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
@@ -134,6 +155,19 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
           )}
         </div>
       </div>
+
+      {stale && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderRadius: 12, background: 'var(--warn-tint)', marginBottom: 16 }}>
+          <Icon name="alert" size={16} color="var(--warn)" />
+          <span className="t-sm" style={{ flex: 1, color: 'var(--ink-2)', fontWeight: 600, lineHeight: 1.45 }}>
+            {t('Questa automazione è stata modificata altrove mentre la stavi modificando: le tue modifiche non salvate restano, e salvando sostituiscono le altre.',
+              'This automation was changed elsewhere while you were editing it: your unsaved edits are kept, and saving replaces the other changes.')}
+          </span>
+          <button className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5, flexShrink: 0 }} onClick={() => { setDraft(initDraft(rule, catalog)); setStale(false); }}>
+            {t('Usa la versione salvata', 'Use the saved version')}
+          </button>
+        </div>
+      )}
 
       {/* reporting metrics — no API backing yet (delivery/open data will come from Yourang) */}
       <div style={{ display: 'flex', gap: 14, marginBottom: 8 }}>

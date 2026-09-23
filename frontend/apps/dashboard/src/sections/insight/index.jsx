@@ -9,9 +9,9 @@
 // - AI suggestion cards (INSIGHTS mock) replaced by one static "fase 2" card.
 // - Analyst drawer wired to POST /api/insights/ask which 501s until fase 2.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, Icon, fmtEur } from '@youty/shared';
+import { api, ApiError, EmptyState, Icon, fmtDateIt, fmtEur } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { buildAllKpis, loadFavs, saveFavs, prevPeriodAnchor, DEFAULT_FAVS } from './kpiDefs.js';
+import { buildAllKpis, loadFavs, saveFavs, comparisonRanges, DEFAULT_FAVS } from './kpiDefs.js';
 import KpiBand from './KpiBand.jsx';
 import { BarTrend, CategoryBars, OccupancyByWeekday, NewVsReturning, ClientsByCategory } from './Charts.jsx';
 import AskYoutyPanel from './AskYoutyPanel.jsx';
@@ -57,7 +57,10 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
   const dateCss = { border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13, padding: '7px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink)' };
   const [loading, setLoading] = useState(true);
   const [kpis, setKpis] = useState(null);
-  const [prevKpis, setPrevKpis] = useState(null);
+  const [curCmpKpis, setCurCmpKpis] = useState(null);  // periodo in corso fino a oggi (per «vs prec.»)
+  const [prevKpis, setPrevKpis] = useState(null);      // stesso tratto del periodo precedente
+  const [cmpRange, setCmpRange] = useState(null);      // intervallo di confronto mostrato nel tooltip
+  const [loadError, setLoadError] = useState(null);
   const [series, setSeries] = useState([]);
   const [byCategory, setByCategory] = useState([]);
   const [weekday, setWeekday] = useState([]);
@@ -85,22 +88,36 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
     if (mode === 'custom' && !applied) return; // intervallo scelto ma non ancora confermato: attende "Applica"
     let alive = true;
     setLoading(true);
+    setLoadError(null);
     const base = isCustom ? { date_from: applied.from, date_to: applied.to } : { period };
+    // Confronto solo per i periodi standard (per un intervallo libero non è
+    // definito), e alla pari: dall'inizio del periodo a oggi contro lo stesso
+    // tratto del periodo precedente, non contro il precedente intero (08-07).
+    const cmp = isCustom ? null : comparisonRanges(period);
     Promise.all([
       api.get('/api/insights/kpis', { params: base }),
-      // confronto col periodo precedente solo per i periodi standard (per un intervallo libero non è definito)
-      isCustom ? Promise.resolve(null)
-        : api.get('/api/insights/kpis', { params: { period, date: prevPeriodAnchor(period) } }).catch(() => null),
+      cmp ? api.get('/api/insights/kpis', { params: cmp.current }).catch(() => null) : null,
+      cmp ? api.get('/api/insights/kpis', { params: cmp.previous }).catch(() => null) : null,
       api.get('/api/insights/revenue-series', { params: { ...base, granularity } }),
       api.get('/api/insights/revenue-by-category', { params: base }),
       api.get('/api/insights/occupancy-by-weekday', { params: base }),
-    ]).then(([k, pk, rs, rc, ow]) => {
+    ]).then(([k, ck, pk, rs, rc, ow]) => {
       if (!alive) return;
-      setKpis(k); setPrevKpis(pk); setSeries(rs || []); setByCategory(rc || []); setWeekday(ow || []);
+      // senza uno dei due tratti le frecce non si mostrano: meglio nessuna
+      // freccia che un confronto fra un periodo parziale e uno intero
+      setKpis(k); setCurCmpKpis(ck && pk ? ck : null); setPrevKpis(ck && pk ? pk : null);
+      setCmpRange(cmp ? cmp.previous : null);
+      setSeries(rs || []); setByCategory(rc || []); setWeekday(ow || []);
     }).catch((err) => {
       if (!alive) return;
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-      else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
+      /* Se la richiesta fallisce (per esempio un intervallo oltre il limite)
+       * restavano a video i numeri della richiesta precedente sotto il titolo
+       * «intervallo scelto» (15-15): si svuota tutto e si dice perché. */
+      setKpis(null); setCurCmpKpis(null); setPrevKpis(null); setCmpRange(null);
+      setSeries([]); setByCategory([]); setWeekday([]);
+      const msg = err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+      setLoadError(msg);
+      fireToast({ msg, icon: 'alert' });
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [period, mode, applied, granularity, isCustom, fireToast, t]);
@@ -113,7 +130,11 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
     const v = Number(n) || 0;
     return v === 0 ? '€0' : fmtEur(v, lang);
   }, [lang]);
-  const allKpis = useMemo(() => buildAllKpis(kpis, prevKpis, t, lang, eur), [kpis, prevKpis, t, lang, eur]);
+  const allKpis = useMemo(() => buildAllKpis(kpis, prevKpis, t, lang, eur, curCmpKpis), [kpis, prevKpis, curCmpKpis, t, lang, eur]);
+  const cmpTitle = cmpRange
+    ? t('Confronto con lo stesso tratto del periodo precedente: ', 'Compared with the same stretch of the previous period: ')
+      + fmtDateIt(cmpRange.date_from, { weekday: false, year: true }) + ' – ' + fmtDateIt(cmpRange.date_to, { weekday: false, year: true })
+    : undefined;
 
   const totalRevenue = Number(kpis?.revenue || 0);
   const revenueDelta = allKpis.revenue?.delta;
@@ -177,7 +198,11 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
         <div style={{ flex: 1 }} />
       </div>
 
-      {loading ? <InsightSkeleton /> : (
+      {loading ? <InsightSkeleton /> : loadError ? (
+        <div className="dk-card" style={{ padding: '36px 24px' }}>
+          <EmptyState icon="alert" title={t('Dati non disponibili', 'Data not available')} sub={loadError} />
+        </div>
+      ) : (
         <React.Fragment>
           {/* BAND 1 · customizable favourites */}
           <KpiBand allKpis={allKpis} favs={favs} onToggleFav={toggleFav} t={t} />
@@ -206,7 +231,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
                       <span style={{ fontWeight: 700, fontSize: 13, color: revenueDelta >= 0 ? 'var(--ok)' : 'var(--danger)' }}>
                         {(revenueDelta >= 0 ? '+' : '') + revenueDelta + '%'}
                       </span>
-                      <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('vs prec.', 'vs prev.')}</span>
+                      <span className="t-sm" style={{ color: 'var(--muted)' }} title={cmpTitle}>{t('vs prec.', 'vs prev.')}</span>
                     </div>
                   )}
                 </div>
