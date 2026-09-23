@@ -916,6 +916,21 @@ class OutboxStatusApiTests(TestCase):
     def test_only_the_owner_sees_it(self):
         self.assertEqual(self.client.get("/api/core/outbox/status", **self.staff_auth).status_code, 403)
 
+    @override_settings(YOURANG_API_URL="https://yourang.example/events")
+    def test_scheduled_and_expired_are_counted_apart(self):
+        """Una campagna programmata non è una coda ferma; gli scaduti si vedono."""
+        from .models import OutboxEvent
+
+        emit_event(self.salon, "communication.send", {"communication_id": 1}, delay_seconds=3 * 86400)
+        late = emit_event(self.salon, "appointment.created", {"appointment_id": 1})
+        gone = emit_event(self.salon, "client.otp", {"code": "1"})
+        OutboxEvent.objects.filter(pk=gone.pk).update(status=OutboxEvent.Status.EXPIRED)
+        data = self.client.get("/api/core/outbox/status", **self.auth).json()
+        self.assertEqual((data["pending"], data["scheduled"], data["expired"]), (1, 1, 1))
+        self.assertEqual(data["pending_types"], ["appointment.created"])
+        late.refresh_from_db()
+        self.assertEqual(data["oldest_pending_at"][:19], late.due_at.isoformat()[:19])
+
 
 class StreamConnectionCapTests(TestCase):
     """Ogni stream live occupa un thread di gunicorn: oltre il tetto si risponde

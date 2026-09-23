@@ -135,8 +135,10 @@ class OutboxStatusOut(Schema):
     """Stato della consegna dei messaggi (OTP, conferme, promemoria) verso Yourang."""
 
     configured: bool            # YOURANG_API_URL impostato: senza, nulla parte
-    pending: int
+    pending: int                # da consegnare adesso (o in ritentativo)
+    scheduled: int = 0          # trattenuti fino a un istante futuro (programmati)
     failed: int
+    expired: int = 0            # scaduti prima di partire
     sent_24h: int
     oldest_pending_at: Optional[datetime] = None
     last_sent_at: Optional[datetime] = None

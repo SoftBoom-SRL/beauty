@@ -265,9 +265,12 @@ export default function ImpostazioniSection() {
               </span>
             </div>
             <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.5 }}>
+              {/* `scheduled` (campagne programmate, trattenuti) ed `expired` (scaduti
+                  prima di partire) arrivano a parte: un server che non li manda
+                  li lascia fuori dal testo. */}
               {outbox.configured
-                ? t(`${outbox.sent_24h} messaggi consegnati nelle ultime 24 ore · ${outbox.pending} in coda${outbox.failed ? ` · ${outbox.failed} non riusciti` : ''}.`,
-                    `${outbox.sent_24h} messages delivered in the last 24 hours · ${outbox.pending} queued${outbox.failed ? ` · ${outbox.failed} failed` : ''}.`)
+                ? t(`${outbox.sent_24h} messaggi consegnati nelle ultime 24 ore · ${outbox.pending} in coda${outbox.scheduled ? ` · ${outbox.scheduled} programmati per più tardi` : ''}${outbox.failed ? ` · ${outbox.failed} non riusciti` : ''}${outbox.expired ? ` · ${outbox.expired} scaduti prima dell’invio` : ''}.`,
+                    `${outbox.sent_24h} messages delivered in the last 24 hours · ${outbox.pending} queued${outbox.scheduled ? ` · ${outbox.scheduled} scheduled for later` : ''}${outbox.failed ? ` · ${outbox.failed} failed` : ''}${outbox.expired ? ` · ${outbox.expired} expired before sending` : ''}.`)
                 : t(`Codici OTP, conferme e promemoria restano in coda (${outbox.pending} in attesa) e non vengono inviati: manca l’indirizzo di consegna verso Yourang (YOURANG_API_URL) sul server. È questo il motivo se una cliente non riceve il codice per accedere all’app. Nel frattempo il codice si legge nel registro dell’outbox dall’amministrazione.`,
                     `OTP codes, confirmations and reminders stay queued (${outbox.pending} waiting) and are not sent: the delivery address to Yourang (YOURANG_API_URL) is missing on the server. That is why a client does not receive the code to sign in to the app. Meanwhile the code can be read in the outbox log from the admin.`)}
             </div>
