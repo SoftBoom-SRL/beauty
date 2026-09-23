@@ -266,6 +266,15 @@ export default function AgendaSection() {
       const day = toDateStr(a.start);
       if (day && day !== dateRef.current) setDate(day);
     }
+    /* Già aperto sulla stessa visita (un secondo clic sul blocco): riaprirlo
+     * rimontava il pannello e buttava servizi e nota non ancora salvati
+     * (13-05). Il pannello si rilegge da sé con gli eventi live; qui si
+     * rinfresca solo la copia che muove l'ombra e «Sposta qui». */
+    const cur = modalRef.current;
+    if (cur?.name === 'apptdetail' && cur.props?.appointment?.id === a.id) {
+      reloadOpenAppt(a.id);
+      return;
+    }
     openModal('apptdetail', {
       appointment: a,
       onMutate: () => { refetchAllRef.current(); extraMutate?.(); reloadOpenAppt(a.id); },
@@ -517,12 +526,10 @@ export default function AgendaSection() {
       return;
     }
     await moveAppt(cur, target.startMin, target.opId, { fromOp: target.fromOp });
-    try {
-      // il pannello si riapre sui dati freschi, altrimenti resterebbe a mostrare
-      // l'orario di prima mentre in griglia il blocco è già altrove
-      const fresh = await api.get(`/api/agenda/appointments/${a.id}`);
-      openApptDetail(fresh);
-    } catch { /* il pannello resta com'è: la griglia è comunque aggiornata */ }
+    // Il pannello NON si riapre: riaprirlo lo rimontava e perdeva le modifiche
+    // non salvate (13-05). Si rilegge da sé con l'evento live dello
+    // spostamento; qui si rinfresca subito la copia che muove l'ombra.
+    reloadOpenAppt(a.id);
   };
 
   /* Rilascio sopra un giorno della striscia: stesso orario, giorno nuovo. */

@@ -280,3 +280,25 @@ test('turni e assenze cambiati altrove ricaricano la giornata', async () => {
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(dayLoads() > before);
 });
+
+test('il pannello aperto non si rimonta: né al secondo clic sul blocco né dopo «Sposta qui»', async () => {
+  // 13-05: riaprirlo (openModal con un id nuovo) rimontava il pannello e
+  // buttava servizi e nota non ancora salvati. Il pannello si rilegge da sé
+  // con gli eventi live; la sezione rinfresca solo la copia dell'ombra.
+  const g = setup();
+  await ready(g);
+  g.dg().props.onOpenAppt(maria());
+  const panel = g.openLast();
+  g.dg().props.onOpenAppt(maria());                  // secondo clic sullo stesso blocco
+  assert.equal(g.dash.openModal.calls.length, 1, 'nessuna riapertura al secondo clic');
+  panel.onShowDate(THU);
+  await ready(g);
+  g.state.onMovePost = (body) => { g.state.appts[41] = { ...maria(), start: body.start }; };
+  g.dg().props.onSlotMenu(1, 10 * 60, 300, 300, { ok: true, code: 'ok', label: 'Disponibile' }, { ghostHit: true });
+  g.render();
+  g.button('Sposta qui').props.onClick();
+  await ready(g);
+  assert.ok(g.calls.post.some((p) => p.url === '/api/agenda/appointments/41/move'));
+  assert.equal(g.dash.openModal.calls.length, 1, 'il pannello resta quello aperto');
+  assert.equal(g.dg().props.ghost ?? null, null, 'la copia fresca è già su giovedì: niente più ombra');
+});
