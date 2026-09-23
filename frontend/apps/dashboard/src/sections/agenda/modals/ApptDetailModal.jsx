@@ -5,9 +5,11 @@ import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, f
 import DkModal from '../../../ui/DkModal.jsx';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
-import { useDash } from '../../../ctx.jsx';
+import { useDash, useLive } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
-import { depositDueLabel } from './rules.js';
+import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason } from './rules.js';
+
+const TERMINAL = ['closed', 'no_show', 'cancelled'];
 
 // Motivazioni predefinite: il titolare può sostituirle dalle Impostazioni
 // (settings.no_show_reasons / cancel_reasons); qui restano come fallback.
@@ -34,19 +36,133 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const cancelReasons = customReasons(settings?.cancel_reasons, CANCEL_REASONS);
   const [linkBusy, setLinkBusy] = useState(false);
 
+  /* Le risposte possono arrivare quando al posto di questo pannello ce n'è già
+   * un altro (si è aperto un altro appuntamento mentre il check-in era in
+   * volo): onClose e openModal sono globali, e chiudevano quello nuovo. */
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
+  /* note edit (salvata insieme ai servizi, dal piede del pannello) */
+  const [note, setNote] = useState(appointment?.note || '');
+  const noteDirty = note !== (appt?.note || '');
+
+  /* services edit → PUT /appointments/{id} with the full items list */
+  const itemSeq = useRef(1);
+  const mkEditItems = (list) => (list || []).map((it) => editRow(it, 'e' + (itemSeq.current++)));
+  const [editItems, setEditItems] = useState(() => mkEditItems(appointment?.items));
+  const [addingSvc, setAddingSvc] = useState(false);
+  const [savingItems, setSavingItems] = useState(false);
+  const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
+  // orari di riga mentre si digitano (vedi commitItemStart / commitItemEnd)
+  const [rowDrafts, setRowDrafts] = useState({});
+
+  /* ---- la copia dell'appuntamento e le modifiche in sospeso ---------------
+   * `appt` è l'ultima versione nota del server; servizi e nota modificati e
+   * non ancora salvati sono una bozza sopra di lei. Ogni versione nuova —
+   * risposta di un comando del pannello, trascinamento o ridimensionamento in
+   * griglia, «Indietro», caparra pagata online, un'altra postazione — si
+   * prende sempre, e la bozza ci viene riportata sopra (rebaseDraft) invece di
+   * sparire. Prima un effetto su [appt] rifaceva la lista dei servizi a ogni
+   * risposta: la «Piega» appena aggiunta spariva premendo «›» o inviando il
+   * link della caparra (13-05), mentre `appt` non seguiva niente di quello
+   * che succedeva fuori dal pannello e i suoi comandi ripartivano da una copia
+   * vecchia, disfacendo o raddoppiando le modifiche fatte intanto (13-03).
+   * `how`: 'mine' = risposta di un comando del pannello, 'saved' = risposta
+   * del salvataggio della bozza, 'external' = arrivata da fuori. */
+  const apptRef = useRef(appointment);
+  const draftRef = useRef(null);
+  draftRef.current = { rows: editItems, note };
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const cmdSeq = useRef(0);
+  function adopt(fresh, how = 'mine', extra = {}) {
+    if (!fresh) return;
+    const base = apptRef.current;
+    if (how === 'external' && (isOlder(fresh, base) || apptVersion(fresh) === apptVersion(base))) return;
+    if (how !== 'external') cmdSeq.current += 1;
+    apptRef.current = fresh;
+    setAppt(fresh);
+    if (how === 'saved') {
+      // la bozza è stata scritta: si riparte dalla risposta (le righe hanno id
+      // nuovi), ma una nota ribattuta mentre il salvataggio era in volo resta
+      const rows = mkEditItems(fresh.items);
+      const n = draftRef.current.note === extra.sentNote ? (fresh.note || '') : draftRef.current.note;
+      draftRef.current = { rows, note: n };
+      setEditItems(rows); setNote(n); setRowDrafts({}); setAddingSvc(false);
+      return;
+    }
+    const d = draftRef.current;
+    const wasDirty = itemsSig(d.rows) !== itemsSig(base?.items) || d.note !== (base?.note || '');
+    const r = rebaseDraft({ base, rows: d.rows, note: d.note, theirs: fresh });
+    draftRef.current = { rows: r.rows, note: r.note };
+    setEditItems(r.rows); setNote(r.note);
+    if (how !== 'external') return;
+    const ended = TERMINAL.includes(fresh.status) && !TERMINAL.includes(base?.status);
+    if (ended && flowRef.current) {
+      // no-show, annullamento o riprogrammazione a metà su una visita che
+      // intanto è stata chiusa o annullata: si torna al dettaglio
+      setFlow(null);
+      if (!wasDirty) fireToast({ msg: t('L’appuntamento è stato chiuso o annullato nel frattempo', 'The appointment was closed or cancelled in the meantime'), icon: 'info' });
+    }
+    if (!wasDirty) return;
+    // Chi aveva modifiche in sospeso deve sapere che sotto è cambiato qualcosa
+    // che le riguarda, prima di salvarle.
+    if (ended) {
+      fireToast({ msg: t('L’appuntamento è stato chiuso o annullato nel frattempo: le modifiche non salvate non si possono più salvare', 'The appointment was closed or cancelled in the meantime: unsaved changes can no longer be saved'), icon: 'alert' });
+    } else if (r.lost) {
+      fireToast({ msg: t('I servizi sono stati modificati nel frattempo: alcune tue modifiche non salvate non valevano più e sono state tolte. Controlla prima di salvare.', 'The services were changed in the meantime: some of your unsaved changes no longer applied and were dropped. Check before saving.'), icon: 'alert' });
+    } else if (itemsSig(fresh.items) !== itemsSig(base?.items) || (fresh.note || '') !== (base?.note || '')) {
+      fireToast({ msg: t('Servizi o nota cambiati nel frattempo: le tue modifiche non salvate sono state riportate sulla versione nuova. Controlla prima di salvare.', 'Services or note changed in the meantime: your unsaved changes were carried over to the new version. Check before saving.'), icon: 'alert' });
+    }
+  }
+
+  const fetchFresh = () => api.get(`/api/agenda/appointments/${apptRef.current.id}`);
+  const reloadSeq = useRef(0);
+  async function reload() {
+    if (!apptRef.current?.id) return;
+    const my = ++reloadSeq.current, since = cmdSeq.current;
+    try {
+      const fresh = await fetchFresh();
+      // una risposta partita prima di un comando del pannello, o superata da un
+      // ricarico più recente, riporterebbe indietro quello che si vede
+      if (!alive.current || my !== reloadSeq.current || since !== cmdSeq.current) return;
+      adopt(fresh, 'external');
+    } catch (err) {
+      if (!alive.current) return;
+      if (err instanceof ApiError && err.status === 404) {
+        fireToast({ msg: t('L’appuntamento non esiste più: è stato tolto con «Indietro» o da un’altra postazione', 'The appointment no longer exists: it was undone or removed from another workstation'), icon: 'info' });
+        onClose?.();
+      }
+    }
+  }
+  /* Il pannello segue l'appuntamento: si rilegge a ogni evento live che lo
+   * riguarda (i propri compresi — la versione uguale non cambia niente). */
+  useLive(/^(appointment|deposit|sale)\./, (events) => {
+    if (events.some((e) => eventConcerns(e, apptRef.current?.id))) reload();
+  });
+  /* Se chi ha aperto il pannello gli passa una versione nuova della stessa
+   * visita (la griglia dopo «Sposta qui»), la si prende come le altre. */
+  const propRef = useRef(appointment);
+  useEffect(() => {
+    if (!appointment || appointment === propRef.current) return;
+    propRef.current = appointment;
+    if (appointment.id === apptRef.current?.id) adopt(appointment, 'external');
+  }, [appointment]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* link di pagamento della caparra: crea (o rimanda come sollecito) e copia */
   async function sendDepositLink() {
     if (linkBusy) return;
     setLinkBusy(true);
     try {
-      const res = await api.post(`/api/sales/appointments/${appt.id}/deposit-link`, {});
-      setAppt((a) => ({ ...a, deposit_payment_link: res.url, deposit_due_at: res.due_at || a.deposit_due_at }));
-      fireToast({ msg: appt.deposit_payment_link ? t('Sollecito inviato alla cliente', 'Reminder sent to the client') : t('Link di pagamento inviato alla cliente', 'Payment link sent to the client'), icon: 'check' });
-      onMutate?.();
+      const cur = apptRef.current;
+      const res = await api.post(`/api/sales/appointments/${cur.id}/deposit-link`, {});
+      if (alive.current) adopt({ ...apptRef.current, deposit_payment_link: res.url, deposit_due_at: res.due_at || apptRef.current.deposit_due_at });
+      fireToast({ msg: cur.deposit_payment_link ? t('Sollecito inviato alla cliente', 'Reminder sent to the client') : t('Link di pagamento inviato alla cliente', 'Payment link sent to the client'), icon: 'check' });
+      onMutate?.(apptRef.current);
     } catch (err) {
       if (err instanceof ApiError && err.status === 503) fireToast({ msg: t('Pagamenti online non configurati: collega Stripe in Impostazioni → Pagamenti', 'Online payments not configured: connect Stripe in Settings → Payments'), icon: 'alert' });
       else toastErr(err, t, fireToast);
-    } finally { setLinkBusy(false); }
+    } finally { if (alive.current) setLinkBusy(false); }
   }
   /* Caparra incassata al banco (contanti o POS del salone). Senza questo,
    * l'unico modo di segnarla pagata era il pagamento online: dove Stripe non
@@ -56,26 +172,26 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (linkBusy) return;
     setLinkBusy(true);
     try {
-      const res = await api.post(`/api/agenda/appointments/${appt.id}/deposit-cashed`, { method });
-      setAppt(res);
+      const res = await api.post(`/api/agenda/appointments/${apptRef.current.id}/deposit-cashed`, { method });
+      if (alive.current) adopt(res);
       fireToast({ msg: t('Caparra incassata e registrata in cassa', 'Deposit cashed and recorded in the till'), icon: 'check' });
-      onMutate?.();
+      onMutate?.(res);
     } catch (err) { toastErr(err, t, fireToast); }
-    finally { setLinkBusy(false); }
+    finally { if (alive.current) setLinkBusy(false); }
   }
 
   async function restoreReleased(force = false) {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.post(`/api/agenda/appointments/${appt.id}/restore`, { force });
-      setAppt(res);
+      const res = await api.post(`/api/agenda/appointments/${apptRef.current.id}/restore`, { force });
+      if (alive.current) adopt(res);
       fireToast({ msg: t('Appuntamento ripristinato', 'Appointment restored'), icon: 'check' });
-      onMutate?.();
+      onMutate?.(res);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !force) fireToast({ msg: t('Lo slot non è più libero: usa «Ripristina comunque»', 'The slot is no longer free: use “Restore anyway”'), icon: 'alert' });
       else toastErr(err, t, fireToast);
-    } finally { setBusy(false); }
+    } finally { if (alive.current) setBusy(false); }
   }
 
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
@@ -93,30 +209,6 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   useEffect(() => {
     if (appt?.client?.id) api.get(`/api/clients/${appt.client.id}`).then(setClientDetail).catch(() => {});
   }, [appt?.client?.id]);
-
-  /* note edit (salvata insieme ai servizi, dal piede del pannello) */
-  const [note, setNote] = useState(appointment?.note || '');
-  const noteDirty = note !== (appt?.note || '');
-
-  /* services edit → PUT /appointments/{id} with the full items list */
-  const itemSeq = useRef(1);
-  const mkEditItems = (list) => (list || []).map((it) => ({
-    key: 'e' + (itemSeq.current++),
-    id: it.id,                        // existing item id (undefined for new lines → creates)
-    service_id: it.service_id,
-    operator_id: it.operator_id ?? null,
-    duration_min: it.duration_min,
-    soak_min: it.soak_min || 0,       // solo per l'anteprima degli orari a destra
-    price: Number(it.price) || 0,
-    name: it.service_name,
-  }));
-  const [editItems, setEditItems] = useState(() => mkEditItems(appointment?.items));
-  const [addingSvc, setAddingSvc] = useState(false);
-  const [savingItems, setSavingItems] = useState(false);
-  const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
-  // orari di riga mentre si digitano (vedi commitItemStart / commitItemEnd)
-  const [rowDrafts, setRowDrafts] = useState({});
-  useEffect(() => { setEditItems(mkEditItems(appt?.items)); setAddingSvc(false); setRowDrafts({}); }, [appt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Il servizio appena aggiunto finisce in fondo alla lista, spesso sotto il
    * bordo del pannello: lo si porta in vista e lo si illumina un istante, così
@@ -155,28 +247,57 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     showDate(toDateStr(d));
   };
 
-  /* `opts.base` è l'appuntamento da cui si parte: serve all'«Annulla», che
-   * scatta quando in pagina c'è già la versione spostata — senza, il confronto
-   * «è cambiato qualcosa?» guardava la copia vecchia e l'annullamento non
-   * faceva niente. */
-  async function applyMove({ startMin, operatorId, dateIso }, opts = {}) {
+  /* Spostamento dal pannello. Orario, giorno e operatrice di destinazione sono
+   * calcolati su quello che si vede, quindi prima di mandarli si rilegge la
+   * visita: se nel frattempo un trascinamento, «Indietro» o un'altra
+   * postazione l'hanno spostata, il comando si ferma e il pannello mostra la
+   * versione nuova. Prima «Passa a Bea» dopo aver trascinato il blocco dalle
+   * 10 alle 14 rimandava start 10:00 e disfaceva lo spostamento (13-03). */
+  async function applyMove({ startMin, operatorId, dateIso }) {
     if (movingBusy) return;
-    const base = opts.base || appt;
-    const baseDate = toDateStr(base.start);
-    const day = dateIso || baseDate;
-    const from = minutesOfDay(base.start);
-    const target = startMin ?? from;
-    const toOp = operatorId ?? base.operator_id;
-    const reassigned = toOp !== base.operator_id;
-    if (target === from && !reassigned && day === baseDate) return;
+    const seen = apptRef.current;
     setMovingBusy(true);
     try {
-      const res = await api.post(`/api/agenda/appointments/${base.id}/move`, {
+      let base = seen;
+      try {
+        const fresh = await fetchFresh();
+        if (!alive.current) return;
+        if (movedMeanwhile(seen, fresh)) {
+          adopt(fresh, 'external');
+          setTimeDraft(null);
+          fireToast({ msg: t('L’appuntamento è cambiato nel frattempo: controlla l’orario e riprova', 'The appointment changed in the meantime: check the time and try again'), icon: 'alert' });
+          return;
+        }
+        base = fresh;
+      } catch (err) {
+        // la visita non c'è più: lo dice (e chiude) il ricarico
+        if (err instanceof ApiError && err.status === 404) { reload(); return; }
+        // senza la rilettura si prova lo stesso: il server valida comunque
+      }
+      const baseDate = toDateStr(base.start);
+      const day = dateIso || baseDate;
+      const from = minutesOfDay(base.start);
+      const target = startMin ?? from;
+      const toOp = operatorId ?? base.operator_id;
+      const reassigned = toOp !== base.operator_id;
+      if (target === from && !reassigned && day === baseDate) return;
+      const body = {
         start: isoAtMin(day, target),
         ...(reassigned ? { operator_id: toOp, from_operator_id: base.operator_id } : {}),
-        force: !!opts.force,
-      });
-      setAppt(res);
+      };
+      let res;
+      try {
+        res = await api.post(`/api/agenda/appointments/${base.id}/move`, { ...body, force: false });
+      } catch (err) {
+        // Slot occupato o fuori turno: si scrive lo stesso, come in griglia — chi
+        // sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+        res = await api.post(`/api/agenda/appointments/${base.id}/move`, { ...body, force: true });
+      }
+      if (alive.current) adopt(res);
+      // Il gesto da annullare è questo: se ne prende l'id subito, così
+      // «Annulla» non disfa un gesto fatto dopo da un'altra scheda.
+      const entry = api.get('/api/agenda/undo').then((list) => (list?.[0]?.kind === 'move' ? list[0].id : null)).catch(() => null);
       const who = operators.find((x) => x.id === toOp);
       const when = day === baseDate ? timeLabel(target) : `${fmtDateIt(day)} · ${timeLabel(target)}`;
       fireToast({
@@ -185,31 +306,52 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           : t(`Spostato · ${when}`, `Moved · ${when}`),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
-        undoFn: () => applyMove({ startMin: from, operatorId: base.operator_id, dateIso: baseDate }, { force: true, base: res }),
+        undoFn: () => { undoMove(entry); },
       });
       onShowDate?.(day);     // l'agenda resta su quello che si è appena fatto
-      onMutate?.();
+      onMutate?.(res);
     } catch (err) {
-      // Slot occupato o fuori turno: si scrive lo stesso, come in griglia — chi
-      // sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
-      if (err instanceof ApiError && err.status === 409 && !opts.force) {
-        setMovingBusy(false);
-        await applyMove({ startMin, operatorId, dateIso }, { ...opts, base, force: true });
-        return;
-      }
-      setTimeDraft(null);
+      if (alive.current) setTimeDraft(null);
       toastErr(err, t, fireToast);
-    } finally { setMovingBusy(false); }
+    } finally { if (alive.current) setMovingBusy(false); }
   }
 
-  /* margin (behind a small toggle) */
+  /* «Annulla» dell'avviso: il «torna indietro» del server, come la griglia, e
+   * poi il pannello si rilegge (le righe tornano con i loro id). Prima rifaceva
+   * lo spostamento al contrario forzandolo: la visita restava «Forzata», nelle
+   * visite divise la parte della collega cambiava mano, e il messaggio ancora
+   * trattenuto diventava un secondo «spostato» per la cliente (13-06, 03-07,
+   * 17-05). Il 409 dice il motivo vero (conto chiuso, cambiata nel frattempo,
+   * posto occupato): si mostra così com'è. */
+  async function undoMove(entryPromise) {
+    const entryId = await entryPromise;
+    try {
+      const res = await api.post('/api/agenda/undo', entryId ? { entry_id: entryId } : {});
+      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
+      if (res.date) onShowDate?.(res.date);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
+      else toastErr(err, t, fireToast);
+    } finally {
+      if (alive.current) reload();
+      onMutate?.();
+    }
+  }
+
+  /* margin (behind a small toggle) — si rilegge quando cambiano servizi,
+   * operatrici o prezzo: restava quello di prima del salvataggio (13-24). */
   const [showMargin, setShowMargin] = useState(false);
   const [margin, setMargin] = useState(null);
+  const marginKey = appt ? `${appt.id}|${itemsSig(appt.items)}|${appt.total_price}|${appt.status}` : '';
   useEffect(() => {
-    if (showMargin && !margin && appt?.id) {
-      api.get(`/api/agenda/appointments/${appt.id}/margin`).then(setMargin).catch((err) => { toastErr(err, t, fireToast); setShowMargin(false); });
-    }
-  }, [showMargin]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!showMargin || !appt?.id) return undefined;
+    let on = true;
+    setMargin(null);
+    api.get(`/api/agenda/appointments/${appt.id}/margin`)
+      .then((m) => { if (on) setMargin(m); })
+      .catch((err) => { if (on) { toastErr(err, t, fireToast); setShowMargin(false); } });
+    return () => { on = false; };
+  }, [showMargin, marginKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!appt) return null;
   const o = operators.find((x) => x.id === appt.operator_id);
@@ -220,7 +362,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   // toDateStr e non slice(0, 10): `start` è l'istante in UTC, e il giorno
   // del salone può essere quello dopo (appuntamento delle 23:30).
   const dateStr = toDateStr(appt.start);
-  const terminal = ['closed', 'no_show', 'cancelled'].includes(appt.status);
+  const terminal = TERMINAL.includes(appt.status);
 
   /* ---- editable services (only when live + can write) ---- */
   const itemsEditable = !terminal && canWrite;
@@ -249,7 +391,6 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
   const eligibleOps = (serviceId) => operators.filter((op) => (op.service_ids || []).includes(serviceId));
   const svcDisplayName = (it) => { const s = svcOf(it.service_id); return s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : (it.name || it.service_name || ''); };
-  const itemsSig = (list) => JSON.stringify((list || []).map((i) => [i.id ?? null, i.service_id, i.operator_id ?? null, Number(i.duration_min) || 0, Number(i.soak_min) || 0]));
   const itemsDirty = itemsSig(editItems) !== itemsSig(appt.items);
   const editTotal = editItems.reduce((s, it) => s + Number(it.price || 0), 0);
   /* Orario di ogni riga: i servizi sono in fila dall'inizio della visita, posa
@@ -336,10 +477,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
     const wanted = hmToMin(hm);
     if (index === 0) {
-      // è l'inizio della visita: si sposta tutto. Prima si salva quello che c'è
-      // in sospeso, altrimenti la risposta del server lo cancellerebbe.
+      // è l'inizio della visita: si sposta tutto. Quello che c'è in sospeso
+      // resta in bozza anche dopo lo spostamento (vedi adopt), e si salva
+      // quando lo si decide.
       if (wanted === startMin) return;
-      if (dirty) await saveChanges();
       applyMove({ startMin: Math.max(0, Math.min(23 * 60 + 55, wanted)) });
       return;
     }
@@ -360,12 +501,39 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
    * pulsante viveva in fondo alla lista dei servizi, cioè fuori dallo schermo
    * proprio dopo aver aggiunto una riga — si modificava e non si salvava. */
   const dirty = itemsDirty || noteDirty;
-  async function saveChanges(opts = {}) {
-    if (savingItems || !editItems.length || !dirty) return;
+  /* Il PUT manda lo stato completo dei servizi: prima si rilegge la visita e
+   * si scrive sulla versione letta (`expected_updated_at`, contratto C2). Se
+   * nel frattempo sono cambiati proprio servizi o nota, la bozza viene
+   * riportata sulla versione nuova e si chiede di ricontrollare: prima la
+   * lista vecchia rimetteva nella visita il servizio staccato in griglia
+   * (pagato due volte) o cancellava quello aggiunto da una collega (13-03).
+   * Il 412 (un'altra scrittura fra la rilettura e il salvataggio) non si
+   * forza mai: si ricarica e lo si dice. Ritorna true se ha salvato. */
+  async function saveChanges() {
+    if (savingItems || !editItems.length || !dirty) return false;
     setSavingItems(true);
     try {
-      const res = await api.put(`/api/agenda/appointments/${appt.id}`, {
-        ...(opts.force ? { force: true } : {}),
+      const seen = apptRef.current;
+      let target = seen;
+      try {
+        const fresh = await fetchFresh();
+        if (!alive.current) return false;
+        const touched = (itemsDirty && itemsSig(fresh.items) !== itemsSig(seen.items))
+          || (noteDirty && (fresh.note || '') !== (seen.note || ''))
+          || TERMINAL.includes(fresh.status);
+        if (touched) {
+          adopt(fresh, 'external');
+          fireToast({ msg: t('L’appuntamento è cambiato nel frattempo: controlla le modifiche e salva di nuovo', 'The appointment changed in the meantime: check your changes and save again'), icon: 'alert' });
+          return false;
+        }
+        target = fresh;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) { reload(); return false; }
+        // senza la rilettura resta la protezione del server (412)
+      }
+      const sentNote = note;
+      const body = {
+        ...(target.updated_at ? { expected_updated_at: target.updated_at } : {}),
         ...(itemsDirty ? {
           items: editItems.map((it) => ({
             ...(it.id != null ? { id: it.id } : {}),   // existing → id; new → omitted; omitted rows → removed
@@ -377,25 +545,36 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           })),
         } : {}),
         ...(noteDirty ? { note } : {}),
-      });
-      setAppt(res);
-      fireToast({
-        msg: t('Appuntamento aggiornato', 'Appointment updated') + (opts.force ? t(' · si sovrappone a un altro impegno', ' · overlaps another booking') : ''),
-        icon: opts.force ? 'alert' : 'check',
-      });
-      onMutate?.();
-    } catch (err) {
-      // 409 = l'operatrice scelta è occupata in quella fascia (o si sfora la
-      // chiusura). Come in griglia non ci si ferma: si scrive lo stesso e lo si
-      // dice nell'avviso. Il 400 (non abilitata al servizio) resta un no.
-      if (err instanceof ApiError && err.status === 409 && !opts.force) {
-        setSavingItems(false);
-        await saveChanges({ force: true });
-        return;
+      };
+      let res, forced = false;
+      try {
+        res = await api.put(`/api/agenda/appointments/${target.id}`, body);
+      } catch (err) {
+        // 409 = l'operatrice scelta è occupata in quella fascia (o si sfora la
+        // chiusura). Come in griglia non ci si ferma: si scrive lo stesso e lo si
+        // dice nell'avviso. Il 400 (non abilitata al servizio) resta un no.
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+        forced = true;
+        res = await api.put(`/api/agenda/appointments/${target.id}`, { ...body, force: true });
       }
-      toastErr(err, t, fireToast);
-    } finally { setSavingItems(false); }
+      if (alive.current) adopt(res, 'saved', { sentNote });
+      fireToast({
+        msg: t('Appuntamento aggiornato', 'Appointment updated') + (forced ? t(' · si sovrappone a un altro impegno', ' · overlaps another booking') : ''),
+        icon: forced ? 'alert' : 'check',
+      });
+      onMutate?.(res);
+      return true;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        if (alive.current) reload();
+        fireToast({ msg: err.message, icon: 'alert' });
+      } else toastErr(err, t, fireToast);
+      return false;
+    } finally { if (alive.current) setSavingItems(false); }
   }
+  /* Le azioni che portano altrove partono dalla versione salvata: «Incassa»
+   * con la «Piega» aggiunta e non salvata faceva il conto senza (13-05). */
+  const saveFirst = async () => !dirty || !itemsEditable || saveChanges();
 
   const openClient = () => { setSelClient(appt.client.id); setTab('clienti'); onClose(); };
 
@@ -403,33 +582,50 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (busy) return false;
     setBusy(true);
     try {
-      await api.post(`/api/agenda/appointments/${appt.id}/${action}`, body || {});
+      await api.post(`/api/agenda/appointments/${apptRef.current.id}/${action}`, body || {});
       fireToast({ msg: toastMsg, icon });
       return true;
     } catch (err) { toastErr(err, t, fireToast); return false; }
-    finally { setBusy(false); }
+    finally { if (alive.current) setBusy(false); }
   }
 
-  const checkIn = async () => { if (await lifecycle('check-in', null, t('Check-in registrato', 'Checked in'), 'check')) onClose(); };
-  const startAppt = async () => { if (await lifecycle('start', null, t('Trattamento avviato', 'Treatment started'), 'clock')) onClose(); };
+  const checkIn = async () => {
+    if (!(await saveFirst()) || !alive.current) return;
+    if (await lifecycle('check-in', null, t('Check-in registrato', 'Checked in'), 'check') && alive.current) onClose();
+  };
+  const startAppt = async () => {
+    if (!(await saveFirst()) || !alive.current) return;
+    if (await lifecycle('start', null, t('Trattamento avviato', 'Treatment started'), 'clock') && alive.current) onClose();
+  };
+  const checkout = async () => {
+    if (!(await saveFirst()) || !alive.current) return;
+    openModal('sell', { appointment: apptRef.current, onDone: onMutate });
+  };
+  const startReschedule = async () => {
+    if (!(await saveFirst()) || !alive.current) return;
+    setFlow('reschedule');
+  };
 
   /* cancel / no-show → then offer the freed slot to matching waitlist entries */
   async function destroy(kind) {
     const reasons = kind === 'no-show' ? noShowReasons : cancelReasons;
     const label = (reasons.find((r) => r[0] === reason) || [])[1] || '';
-    const fullReason = [label, reasonNote].filter(Boolean).join(' — ');
+    const fullReason = joinReason(label, reasonNote);
+    const freed = apptRef.current;
     const ok = await lifecycle(
       kind, { reason: fullReason },
       kind === 'no-show' ? t('No-show registrato · slot liberato', 'No-show recorded · slot freed') : t('Appuntamento cancellato · slot liberato', 'Appointment cancelled · slot freed'),
       kind === 'no-show' ? 'alert' : 'x'
     );
-    if (!ok) return;
+    if (!ok || !alive.current) return;
+    onMutate?.();
     try {
       const wl = await api.get('/api/agenda/waitlist');
-      const matches = wlMatches(wl, appt);
-      if (matches.length) { openModal('freedslot', { appointment: appt, matches }); return; }
+      if (!alive.current) return;
+      const matches = wlMatches(wl, freed);
+      if (matches.length) { openModal('freedslot', { appointment: freed, matches }); return; }
     } catch { /* ignore — just close */ }
-    onClose();
+    if (alive.current) onClose();
   }
 
   /* ---- reason picker (shared by no-show + cancel) ---- */
@@ -543,10 +739,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                 </button>
               )}
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--soft')} style={{ flex: 1, height: 42 }} onClick={() => openModal('sell', { appointment: appt, onDone: onMutate })}>
+                <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--soft')} style={{ flex: 1, height: 42 }} onClick={checkout}>
                   <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />{t('Incassa', 'Check out')}
                 </button>
-                <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={() => setFlow('reschedule')}
+                <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={startReschedule}
                   title={t('Cerca un orario libero o sposta a un altro giorno (per l’ora e la persona di oggi bastano i comandi qui sopra)', 'Find a free time or move to another day (for today’s time and stylist use the controls above)')}>
                   <Icon name="calendar" size={16} />{t('Riprogramma', 'Reschedule')}
                 </button>
@@ -746,10 +942,11 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                     setBusy(true);
                     try {
                       const res = await api.post(`/api/agenda/appointments/${appt.id}/deposit-refunded`, {});
-                      setAppt(res);
+                      if (alive.current) adopt(res);
                       fireToast({ msg: t('Caparra segnata come rimborsata', 'Deposit marked as refunded'), icon: 'check' });
+                      onMutate?.(res);
                     } catch (err) { toastErr(err, t, fireToast); }
-                    finally { setBusy(false); }
+                    finally { if (alive.current) setBusy(false); }
                   }}>
                   <Icon name="check" size={14} />{t('Segna rimborsata', 'Mark refunded')}
                 </button>
