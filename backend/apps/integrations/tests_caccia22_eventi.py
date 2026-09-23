@@ -419,3 +419,42 @@ class ItemRowRepairTests(_EventCase):
         AppointmentService.objects.filter(appointment=appt).delete()
         self._import("evt-rows")
         self.assertEqual(appt.items.count(), 1)
+
+
+class PlaceholderReassignOverHttpTests(_EventCase):
+    """Dopo l'unione con AG-DISP (01-06): una prenotazione Yourang si passa a una
+    collega nata dopo il segnaposto con lo stesso «sposta» della dashboard, e le
+    sue righe si ridimensionano col PUT; sulla base d147276 la riassegnazione
+    rispondeva 400 per idoneità."""
+
+    def test_the_dashboard_can_hand_it_to_a_colleague(self):
+        import json
+
+        from apps.accounts.models import Membership
+        from common.auth import create_staff_tokens
+
+        Membership.objects.create(user=self.user, salon=self.salon, is_owner=True)
+        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"}
+        appt = self._import("evt-reassign")
+        bea = Operator.objects.create(salon=self.salon, first_name="Bea")  # nata dopo il segnaposto
+        res = self.client.post(
+            f"/api/agenda/appointments/{appt.id}/move",
+            json.dumps({"start": appt.start.isoformat(), "operator_id": bea.id,
+                        "from_operator_id": appt.operator_id, "force": True}),
+            content_type="application/json", **auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        appt.refresh_from_db()
+        self.assertEqual(appt.operator_id, bea.id)
+        self.assertEqual(set(appt.items.values_list("operator_id", flat=True)), {bea.id})
+        item = appt.items.get()
+        res = self.client.put(
+            f"/api/agenda/appointments/{appt.id}",
+            json.dumps({"items": [{"id": item.id, "service_id": item.service_id, "operator_id": bea.id,
+                                   "duration_min": 90}],
+                        "expected_updated_at": res.json()["updated_at"], "force": True}),
+            content_type="application/json", **auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        appt.refresh_from_db()
+        self.assertEqual(appt.total_duration_min, 90)
