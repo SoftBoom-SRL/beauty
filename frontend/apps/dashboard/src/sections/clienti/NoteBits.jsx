@@ -183,7 +183,9 @@ export function NoteCard({ note, clientId, canWrite, onChanged, onDeleted, compa
         <div style={{ flex: 1, minWidth: 0 }}>
           {editing ? (
             <div>
-              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus style={{ ...inputCss, fontSize: 14, lineHeight: 1.5 }} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveText(); if (e.key === 'Escape') { setText(note.text); setEditing(false); } }} />
+              {/* Esc annulla la modifica e basta: preventDefault dice alla pila
+                  delle finestre (ui/layers.js) di non chiudere anche quella sotto */}
+              <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus style={{ ...inputCss, fontSize: 14, lineHeight: 1.5 }} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveText(); if (e.key === 'Escape') { e.preventDefault(); setText(note.text); setEditing(false); } }} />
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5 }} onClick={() => { setText(note.text); setEditing(false); }}>{t('Annulla', 'Cancel')}</button>
                 <button type="button" className="dk-btn dk-btn--clay" style={{ height: 32, fontSize: 12.5 }} onClick={saveText}><Icon name="check" size={14} color="#fff" />{t('Salva', 'Save')}</button>

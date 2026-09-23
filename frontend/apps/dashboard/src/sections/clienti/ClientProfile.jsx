@@ -5,7 +5,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
-import { initialsOf, relMeta, toClientIn, waHref, formatBirthday, daysToBirthday, genderLabel, genderGlyph, dateLabel } from './helpers.js';
+import { initialsOf, relMeta, waHref, formatBirthday, daysToBirthday, dateLabel } from './helpers.js';
+import { genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
 import StoricoTab from './tabs/StoricoTab.jsx';
 import TechSheetTab from './tabs/TechSheetTab.jsx';
 import NotesTab from './tabs/NotesTab.jsx';
@@ -15,7 +16,7 @@ import ConsensiTab from './tabs/ConsensiTab.jsx';
 const catIdsOf = (cl) => (cl?.categories || []).map((x) => x.id);
 
 export default function ClientProfile({ clientId, onChanged, onDeleted }) {
-  const { t, lang, fireToast, hasScope, clientCategories, openModal } = useDash();
+  const { t, lang, fireToast, hasScope, clientCategories, openModal, live } = useDash();
   const canWrite = hasScope('clients');
 
   const [c, setC] = useState(null);
@@ -39,9 +40,15 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       .catch((err) => { if (!dead) { setFailed(true); toastErr(err); } });
     return () => { dead = true; };
   }, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // la scheda cambia altrove (altra postazione, altra scheda) → ricarico in silenzio
-  useLive(/^client\.(updated|deleted)/, (events) => {
-    if (events.some((e) => e.payload?.client_id === clientId)) api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+  // la scheda cambia altrove → ricarico in silenzio. Non solo `client.updated`
+  // della dashboard: anche il consenso revocato dall'app (client.consent_updated),
+  // la carta salvata, un import, e le vendite di questa cliente — senza, visite
+  // e «Valore totale» restavano quelli dell'apertura dopo un incasso a un'altra
+  // cassa (14-20) e la reception rimandava i consensi vecchi (14-05).
+  useLive(/^(client|sale)\./, (events) => {
+    if (events.some((e) => e.payload?.client_id === clientId || e.type === 'client.imported')) {
+      api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+    }
   });
 
   /* waiting-list badge (needs agenda read scope; fail silently) */
@@ -54,13 +61,14 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     return () => { dead = true; };
   }, [clientId, hasScope]);
 
-  /* PUT helper — always sends the FULL ClientIn (partial bodies would reset
-   * unspecified fields to schema defaults). Response is a ClientOut: merge it
-   * over the detail to keep visits/total_spent/last_visit.
+  /* PUT helper — manda SOLO il campo che il pulsante cambia (C15, vedi
+   * helpers.js): il resto della copia letta all'apertura può essere vecchio
+   * (consensi revocati dall'app, lingua, promemoria) e non va rimandato. La
+   * risposta è un ClientOut: si fonde sul dettaglio per tenere
+   * visits/total_spent/last_visit.
    *
-   * Corpo completo + due clic ravvicinati = l'uno cancella l'altro: «VIP» e
-   * poi «Colore» partivano entrambi dalla stessa lista di etichette e la
-   * seconda PUT riscriveva la prima. Due difese:
+   * Due clic ravvicinati non devono annullarsi: «VIP» e poi «Colore» partivano
+   * dalla stessa lista di etichette e la seconda PUT riscriveva la prima.
    *  - le chiamate si mettono in coda, una alla volta;
    *  - `patch` può essere una funzione (prev) => patch, valutata al momento
    *    dell'invio sull'ultimo stato noto (cRef), non su quello del render in
@@ -73,7 +81,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     const run = queue.current.then(async () => {
       const prev = cRef.current;
       if (!prev) return false;
-      const body = toClientIn(prev, typeof patch === 'function' ? patch(prev) : patch);
+      const body = typeof patch === 'function' ? patch(prev) : patch;
       try {
         const res = await api.put(`/api/clients/${clientId}`, body);
         cRef.current = { ...prev, ...res };   // la prossima in coda parte da qui
@@ -143,6 +151,12 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     c.origin || null,
   ].filter(Boolean).join(' · ');
   const openEdit = () => openModal('newclient', { client: c, onSaved: (u) => { setC((prev) => ({ ...prev, ...u })); onChanged && onChanged(); } });
+  // Scheda archiviata: prima non c'era modo di riattivarla, benché la conferma
+  // dell'archiviazione lo promettesse (06-02). PUT {is_active: true} da solo.
+  const archived = c.is_active === false;
+  const reactivate = () => updateClient({ is_active: true }, { msg: t(`Scheda di ${c.full_name} riattivata`, `${c.full_name}'s profile reactivated`), icon: 'check' });
+  // la cliente archiviata che ha provato a rientrare (app o modulo contatti)
+  const asked = archived ? (live?.events || []).find((e) => e.type === 'client.reactivation_requested' && e.payload?.client_id === c.id) : null;
 
   const tabs = [
     ['storico', t('Storico', 'History')],
@@ -192,13 +206,26 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
           {canWrite && (
             <button className="dk-btn dk-btn--ghost" onClick={openEdit} title={t('Modifica dati anagrafici', 'Edit personal details')}><Icon name="edit" size={16} />{t('Modifica', 'Edit')}</button>
           )}
-          {canWrite && (
+          {canWrite && !archived && (
             <button className="dk-iconbtn" title={t('Archivia cliente', 'Archive client')} onClick={() => setConfirmDel(true)} style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, var(--hair))' }}>
               <Icon name="x" size={16} color="var(--danger)" />
             </button>
           )}
         </div>
       </div>
+
+      {archived && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--paper-2)', border: '1px solid var(--hair)', borderRadius: 12, margin: '-6px 0 18px' }}>
+          <Icon name="alert" size={18} color="var(--muted)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink-2)' }}>{t('Scheda archiviata', 'Archived profile')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1 }}>
+              {asked ? asked.summary : t('Non compare nelle liste e non si può prenotare; lo storico resta.', 'Hidden from lists and cannot be booked; history is kept.')}
+            </div>
+          </div>
+          {canWrite && <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5, flexShrink: 0 }} onClick={reactivate}><Icon name="refresh" size={14} color="#fff" />{t('Riattiva', 'Reactivate')}</button>}
+        </div>
+      )}
 
       {/* labels — client categories from the catalog, editable via PUT category_ids */}
       <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', position: 'relative', margin: '-6px 0 20px' }}>

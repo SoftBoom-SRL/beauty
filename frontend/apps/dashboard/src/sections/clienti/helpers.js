@@ -1,5 +1,6 @@
 // helpers.js — clienti section utilities (pure functions, no React).
-import { fmtTime, salonDateParts } from '@youty/shared';
+import { fmtTime, salonDateParts, todayStr } from '@youty/shared';
+import { composeReward } from '../fedelta/meta.js';
 
 /* Shared input style used across the section's forms (from the prototype). */
 export const inputCss = {
@@ -23,59 +24,162 @@ export function relRange(key) {
   return {};
 }
 
+/** Segnalazioni `client.reactivation_requested` ancora da gestire, una per
+ *  scheda, dalla più recente. Gli eventi del feed arrivano dal più recente:
+ *  una riattivazione successiva (`client.updated` con `is_active` fra i
+ *  `fields`) chiude le segnalazioni precedenti della stessa scheda. */
+export function reactivationRequests(events, dismissed = new Set()) {
+  const handled = new Set(), out = [];
+  for (const e of events || []) {
+    const id = e.payload?.client_id;
+    if (!id) continue;
+    if (e.type === 'client.updated' && (e.payload.fields || []).includes('is_active')) { handled.add(id); continue; }
+    if (e.type !== 'client.reactivation_requested' || handled.has(id) || dismissed.has(e.id)) continue;
+    handled.add(id);
+    out.push(e);
+  }
+  return out;
+}
+
 export function initialsOf(name) {
   return String(name || '')
     .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 }
 
-/* Costruisce il corpo ClientIn da un ClientOut/ClientDetailOut + patch.
+/* Il PUT della scheda porta SOLO i campi cambiati (contratto C15).
  *
- * Si mandano tutti i campi che lo schema accetta: il PUT applica solo quelli
- * presenti nel corpo, ma un corpo parziale lascerebbe fuori i campi che il
- * modulo mostra e l'operatrice crede di aver confermato.
+ * Prima ogni salvataggio — un'etichetta, la lingua, «Rimuovi caparra» —
+ * rimandava tutta la copia letta all'apertura della scheda, consensi compresi:
+ * se nel frattempo la cliente aveva revocato il marketing dall'app, un clic
+ * della reception glielo ridava e cancellava la data della revoca (14-05); lo
+ * stesso per lingua, email e promemoria cambiati dall'app (06-10). Il server
+ * applica solo i campi presenti nel corpo: quello che l'operatrice non ha
+ * toccato non si manda.
  *
- * Gli identificativi Stripe NON sono più fra questi e non vanno rimessi: lo
- * schema li ha tolti apposta perché il server li scrive da sé quando la carta
- * viene registrata davvero, e accettarli dal client permetteva di copiare la
- * carta della cliente A sulla scheda B e addebitarle un no-show. Continuare a
- * mandarli non serviva a niente: venivano ignorati. */
-export function toClientIn(c, patch = {}) {
-  return {
-    first_name: c.first_name,
-    last_name: c.last_name || '',
-    phone: c.phone,
-    email: c.email || '',
-    wa: !!c.wa,
-    lang: c.lang || 'it',
-    category_ids: (c.categories || []).map((x) => x.id),
-    reliability: c.reliability ?? 100,
-    origin: c.origin || '',
-    gender: c.gender || '',
-    birthday: c.birthday || null,   // 'YYYY-MM-DD' | '--MM-DD' | null (l'API accetta entrambi)
-    since: c.since || null,
-    consents: { ...(c.consents || {}) },
-    whatsapp_reminders: !!c.whatsapp_reminders,
-    deposit_always: !!c.deposit_always,
-    is_active: c.is_active !== false,
-    ...patch,
-  };
+ * Gli identificativi Stripe non si mandano mai: li scrive il server quando la
+ * carta viene registrata davvero (accettarli dal client permetteva di copiare
+ * la carta della cliente A sulla scheda B). */
+
+/* Campi del modulo «Modifica cliente», letti dalla scheda come il modulo li
+ * mostra (stesso «vuoto»), così un campo non toccato risulta uguale. */
+const EDITABLE = {
+  first_name: (c) => c.first_name || '',
+  last_name: (c) => c.last_name || '',
+  phone: (c) => c.phone || '',
+  wa: (c) => !!c.wa,
+  email: (c) => c.email || '',
+  lang: (c) => c.lang || 'it',
+  category_ids: (c) => (c.categories || []).map((x) => x.id),
+  gender: (c) => c.gender || '',
+  birthday: (c) => c.birthday || null,   // 'YYYY-MM-DD' | '--MM-DD' | null
+  origin: (c) => c.origin || '',
+  since: (c) => c.since || null,
+  deposit_always: (c) => !!c.deposit_always,
+  whatsapp_reminders: (c) => !!c.whatsapp_reminders,
+};
+
+const sameIds = (a, b) => a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
+
+/** Scheda letta all'apertura + valori del modulo → solo le chiavi cambiate.
+ *  Le chiavi sconosciute del modulo si ignorano (non sono campi della scheda). */
+export function clientChanges(orig, next) {
+  const out = {};
+  for (const [k, v] of Object.entries(next)) {
+    const read = EDITABLE[k];
+    if (!read) continue;
+    const before = read(orig || {});
+    const same = Array.isArray(before) ? sameIds(before, v || []) : before === v;
+    if (!same) out[k] = v;
+  }
+  return out;
 }
+
+/* ---- Consensi: le date le scrive il server (C15) ----
+ * Quando un flag cambia il server segna `<flag>_at` (dato) o
+ * `<flag>_revoked_at` (revocato). Qui si mostra solo quello che c'è davvero:
+ * la scheda prometteva di conservare «la data di raccolta» che nessuno
+ * scriveva (14-14). */
+const isStamp = (v) => typeof v === 'string' && v !== '' && !Number.isNaN(Date.parse(v));
+
+/** → { kind: 'given' | 'revoked', at: ISO } oppure null se la data non c'è. */
+export function consentStamp(consents, key) {
+  const cs = consents || {};
+  if (cs[key]) return isStamp(cs[`${key}_at`]) ? { kind: 'given', at: cs[`${key}_at`] } : null;
+  return isStamp(cs[`${key}_revoked_at`]) ? { kind: 'revoked', at: cs[`${key}_revoked_at`] } : null;
+}
+
+const MONTHS_SHORT = {
+  it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+};
+const monthShort = (m, lang) => (lang === 'en' ? MONTHS_SHORT.en : MONTHS_SHORT.it)[m - 1];
 
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
 export function dateTimeLabel(iso, lang) {
   if (!iso) return '';
   // Ora del salone, non del dispositivo (vedi shared/format.js).
   const p = salonDateParts(iso);
-  const months = lang === 'en'
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return `${p.day} ${months[p.month - 1]} ${p.year} · ${fmtTime(iso)}`;
+  return `${p.day} ${monthShort(p.month, lang)} ${p.year} · ${fmtTime(iso)}`;
 }
 
 /* "12 mar 2026" from an ISO date/datetime. */
 export function dateLabel(iso, lang) {
   if (!iso) return '';
+  // Una data pura («cliente dal» 2021-05-10) è già un giorno del calendario:
+  // letta come istante (mezzanotte UTC) e riportata sul fuso del salone,
+  // in un salone a ovest di Greenwich diventava il giorno prima.
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso));
+  if (d) return `${Number(d[3])} ${monthShort(Number(d[2]), lang)} ${d[1]}`;
   return dateTimeLabel(iso, lang).split(' · ')[0];
+}
+
+/** Giorno e mese della timeline dello storico, sul calendario del SALONE:
+ *  `new Date(iso).getDate()` era il giorno del dispositivo, e da una postazione
+ *  su un altro fuso le visite serali cambiavano giorno (14-13, 06-18).
+ *  → { day, month: 'mar', year: '' | '25' } (anno solo se non è quello in corso). */
+export function timelineDate(iso, lang, today = todayStr()) {
+  const p = salonDateParts(iso);
+  return {
+    day: p.day,
+    month: monthShort(p.month, lang),
+    year: p.year === Number(String(today).slice(0, 4)) ? '' : String(p.year).slice(2),
+  };
+}
+
+/** Caparra di una visita come va mostrata nello storico, o null se non c'è.
+ *  Prima si guardava solo «pagata» e se ne mostrava l'intero `deposit_amount`:
+ *  dopo un rimborso parziale di 10 € su 30 la scheda diceva 30 €, e una
+ *  caparra da restituire o in rimborso non compariva affatto (14-25).
+ *  → { kind: 'paid'|'refund_due'|'refunding'|'refunded'|'forfeited', amount, refunded } */
+export function depositBadge(a) {
+  const amount = Number(a?.deposit_amount || 0);
+  const refunded = Number(a?.deposit_refunded_amount || 0);
+  // in centesimi interi: gli importi arrivano come stringhe decimali del server
+  const left = Math.max(0, Math.round(amount * 100) - Math.round(refunded * 100)) / 100;
+  switch (a?.deposit_status) {
+    case 'paid': {
+      // quello che resta in cassa e si detrae al conto (deposit_credit)
+      const credit = a.deposit_credit != null ? Number(a.deposit_credit) : left;
+      return credit > 0
+        ? { kind: 'paid', amount: credit, refunded }
+        : { kind: 'refunded', amount: refunded || amount, refunded };
+    }
+    case 'refund_due': return { kind: 'refund_due', amount: left, refunded };
+    case 'refunding': return { kind: 'refunding', amount: left, refunded };
+    case 'refunded': return { kind: 'refunded', amount: refunded || amount, refunded };
+    case 'forfeited': return { kind: 'forfeited', amount: left, refunded };
+    default: return null;   // nessuna caparra, o richiesta e non ancora pagata
+  }
+}
+
+/** Premio di un programma fedeltà per il Wallet della scheda: la stessa
+ *  etichetta della sezione Fedeltà (composeReward). La versione locale
+ *  cercava 'percent'/'amount' dentro 'discount_pct'/'gift_card' e scriveva
+ *  «Premio: 10.00» (14-21, 07-16). */
+export function rewardLabel(p, services, lang) {
+  const s = p.reward_type === 'free_service' ? (services || []).find((x) => x.id === p.reward_service_id) : null;
+  const name = s ? ((lang === 'en' && s.name_en) ? s.name_en : s.name_it) : '';
+  return composeReward(p.reward_type, p.reward_value, name, lang);
 }
 
 /* wa.me link from a phone number (digits only, keeps leading country code). */
@@ -110,8 +214,9 @@ export function sheetVal(sheet, key) {
   return v || '';
 }
 
-/* ---- Genere: definizione condivisa in ui/GenderPicker.jsx ---- */
-export { GENDERS, genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
+/* ---- Genere: definizione condivisa in ui/GenderPicker.jsx ----
+ * Si importa da lì, non da qui: ri-esportarla tirava un .jsx dentro questo
+ * modulo di funzioni pure, che così non si poteva provare con `npm test`. */
 
 /* ---- Compleanno: 'YYYY-MM-DD' (anno noto) oppure '--MM-DD' (solo giorno e mese) ----
  * Alcune clienti non vogliono dire l'età ma dicono volentieri quando festeggiano:
@@ -134,6 +239,30 @@ export function buildBirthday({ d, m, y }) {
   const pad = (n) => String(n).padStart(2, '0');
   return y ? `${y}-${pad(m)}-${pad(d)}` : `--${pad(m)}-${pad(d)}`;
 }
+/** Giorni del mese; col calendario vero se l'anno (4 cifre) c'è, altrimenti
+ *  un anno bisestile (senza anno il 29 febbraio è un compleanno valido). */
+export function daysInMonth(m, y) {
+  if (!m) return 31;
+  const year = /^\d{4}$/.test(String(y || '')) ? Number(y) : 2000;
+  return new Date(Date.UTC(year, Number(m), 0)).getUTCDate();
+}
+
+/** Selettori del compleanno ({ d, m, y } come stringhe) + modifica →
+ *  { part, value }: lo stato dei selettori e la stringa API da salvare.
+ *  - un giorno che il nuovo mese (o anno) non ha si toglie: «31» e poi
+ *    aprile spariva a video ma restava nel valore, «--04-31», e il salvataggio
+ *    rispondeva 400 (14-23);
+ *  - senza giorno o mese il compleanno è '' (da cancellare): prima non si
+ *    emetteva niente e al salvataggio restava quello vecchio;
+ *  - un anno a metà (meno di 4 cifre) non conta ancora. */
+export function birthdayEdit(part, patch) {
+  const next = { ...part, ...patch };
+  if (next.d && next.m && Number(next.d) > daysInMonth(next.m, next.y)) next.d = '';
+  const year = /^\d{4}$/.test(next.y || '') ? Number(next.y) : null;
+  const value = next.d && next.m ? buildBirthday({ d: Number(next.d), m: Number(next.m), y: year }) : '';
+  return { part: next, value };
+}
+
 /** "15 marzo" · "15 marzo 1990" */
 export function formatBirthday(v, lang) {
   const b = parseBirthday(v);
@@ -142,12 +271,16 @@ export function formatBirthday(v, lang) {
   const base = lang === 'en' ? `${months[b.m - 1]} ${b.d}` : `${b.d} ${months[b.m - 1]}`;
   return b.y ? `${base} ${b.y}` : base;
 }
-/** giorni al prossimo compleanno (0 = oggi), null se non impostato */
-export function daysToBirthday(v) {
+/** giorni al prossimo compleanno (0 = oggi), null se non impostato.
+ *  «Oggi» è quello del SALONE (todayStr): con la mezzanotte del dispositivo
+ *  una postazione su un altro fuso annunciava il compleanno il giorno sbagliato.
+ *  Aritmetica in UTC: niente ore saltate col cambio dell'ora. */
+export function daysToBirthday(v, today = todayStr()) {
   const b = parseBirthday(v);
   if (!b) return null;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  let next = new Date(today.getFullYear(), b.m - 1, b.d);
-  if (next < today) next = new Date(today.getFullYear() + 1, b.m - 1, b.d);
-  return Math.round((next - today) / 86400000);
+  const [y, m, d] = String(today).split('-').map(Number);
+  const t0 = Date.UTC(y, m - 1, d);
+  let next = Date.UTC(y, b.m - 1, b.d);
+  if (next < t0) next = Date.UTC(y + 1, b.m - 1, b.d);
+  return Math.round((next - t0) / 86400000);
 }

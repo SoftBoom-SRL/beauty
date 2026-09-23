@@ -4,199 +4,17 @@
 //    contenuto), con anteprima dei valori
 // 3) verifica: righe normalizzate (telefono, genere, compleanno con o senza
 //    anno, etichette), avvisi per riga, scelta se aggiornare gli esistenti
-// → POST /api/clients/import a blocchi → esito con errori per riga.
+// → POST /api/clients/import a blocchi → esito con errori e avvisi per riga.
+// Parsing, riconoscimento e normalizzazione stanno in ../importCsv.js.
 import React, { useMemo, useRef, useState } from 'react';
-import { api, ApiError, Icon, Toggle } from '@youty/shared';
+import { api, ApiError, Icon, Toggle, isPlausiblePhone } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { inputCss, formatBirthday } from '../helpers.js';
-
-/* ---------- parsing ---------- */
-const DELIMS = [',', ';', '\t', '|'];
-export function detectDelimiter(text) {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 8);
-  let best = ',', bestScore = -1;
-  DELIMS.forEach((d) => {
-    const counts = lines.map((l) => (l.split(d).length - 1));
-    const min = Math.min(...counts), avg = counts.reduce((a, b) => a + b, 0) / (counts.length || 1);
-    const score = min > 0 ? avg + min * 2 : 0;
-    if (score > bestScore) { bestScore = score; best = d; }
-  });
-  return best;
-}
-/** RFC 4180: virgolette, delimitatori dentro le virgolette, CRLF. → string[][] */
-export function parseCsv(text, delim) {
-  const rows = []; let row = []; let cell = ''; let q = false;
-  const s = text.replace(/^﻿/, '');
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (q) {
-      if (ch === '"') { if (s[i + 1] === '"') { cell += '"'; i++; } else q = false; }
-      else cell += ch;
-    } else if (ch === '"') q = true;
-    else if (ch === delim) { row.push(cell); cell = ''; }
-    else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && s[i + 1] === '\n') i++;
-      row.push(cell); rows.push(row); row = []; cell = '';
-    } else cell += ch;
-  }
-  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-  return rows.map((r) => r.map((c) => c.trim())).filter((r) => r.some((c) => c));
-}
-
-/* ---------- campi e riconoscimento ---------- */
-export const FIELDS = (t) => ([
-  { k: 'ignore', label: t('— ignora —', '— ignore —') },
-  { k: 'full_name', label: t('Nome e cognome', 'Full name') },
-  { k: 'first_name', label: t('Nome', 'First name') },
-  { k: 'last_name', label: t('Cognome', 'Last name') },
-  { k: 'phone', label: t('Telefono', 'Phone') },
-  { k: 'email', label: 'Email' },
-  { k: 'gender', label: t('Genere', 'Gender') },
-  { k: 'birthday', label: t('Compleanno / data di nascita', 'Birthday / date of birth') },
-  { k: 'categories', label: t('Etichette', 'Labels') },
-  { k: 'origin', label: t('Come ci ha conosciuto', 'Source') },
-  { k: 'lang', label: t('Lingua', 'Language') },
-  { k: 'note', label: t('Note', 'Notes') },
-]);
-const SYN = {
-  full_name: ['nome completo', 'nominativo', 'nome e cognome', 'cliente', 'client', 'full name', 'fullname', 'name', 'ragione sociale', 'contatto', 'contact'],
-  first_name: ['nome', 'first name', 'firstname', 'first_name', 'given name', 'given'],
-  last_name: ['cognome', 'surname', 'last name', 'lastname', 'last_name', 'family name'],
-  phone: ['telefono', 'tel', 'tel.', 'cell', 'cellulare', 'mobile', 'phone', 'whatsapp', 'numero', 'number', 'recapito'],
-  email: ['email', 'e-mail', 'mail', 'posta'],
-  gender: ['genere', 'sesso', 'gender', 'sex'],
-  birthday: ['compleanno', 'nascita', 'data di nascita', 'data nascita', 'birthday', 'birth', 'dob', 'born', 'birthdate', 'nato il', 'nata il'],
-  categories: ['etichette', 'etichetta', 'tag', 'tags', 'categoria', 'categorie', 'labels', 'label', 'gruppo', 'gruppi', 'segmento'],
-  origin: ['origine', 'fonte', 'provenienza', 'source', 'origin', 'come ci ha conosciuto', 'canale'],
-  lang: ['lingua', 'language', 'lang', 'idioma'],
-  note: ['note', 'notes', 'nota', 'commenti', 'commento', 'osservazioni', 'annotazioni', 'memo'],
-};
-const norm = (s) => String(s || '').toLowerCase().replace(/[_\-]/g, ' ').replace(/\s+/g, ' ').trim();
-export function guessFieldByHeader(header) {
-  const h = norm(header);
-  if (!h) return 'ignore';
-  // "nome" da solo è ambiguo: se c'è anche "cognome" lo decide guessMapping
-  for (const [k, list] of Object.entries(SYN)) if (list.some((w) => h === w)) return k;
-  for (const [k, list] of Object.entries(SYN)) if (list.some((w) => h.includes(w))) return k;
-  return 'ignore';
-}
-const looksPhone = (v) => /^[+\d][\d\s./()-]{6,}$/.test(String(v || '').trim()) && (String(v).replace(/\D/g, '').length >= 8);
-const looksEmail = (v) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(v || '').trim());
-const looksDate = (v) => !!parseFlexibleDate(String(v || ''), 'dmy');
-export function guessFieldByContent(values) {
-  const vals = values.filter((v) => String(v || '').trim()).slice(0, 30);
-  if (!vals.length) return 'ignore';
-  const share = (fn) => vals.filter(fn).length / vals.length;
-  if (share(looksEmail) > 0.6) return 'email';
-  if (share(looksPhone) > 0.6) return 'phone';
-  if (share(looksDate) > 0.6) return 'birthday';
-  if (share((v) => !!parseGender(v)) > 0.8) return 'gender';
-  return 'text';
-}
-export function looksLikeHeader(row) {
-  return row.some((c) => guessFieldByHeader(c) !== 'ignore') && !row.some((c) => looksPhone(c) || looksEmail(c));
-}
-/** mappatura iniziale colonna → campo */
-export function guessMapping(header, rows) {
-  const n = Math.max(header?.length || 0, ...rows.map((r) => r.length));
-  const map = [];
-  const used = new Set();
-  for (let i = 0; i < n; i++) {
-    let k = header ? guessFieldByHeader(header[i]) : 'ignore';
-    if (k === 'ignore' || !header) {
-      const byContent = guessFieldByContent(rows.map((r) => r[i]));
-      if (byContent !== 'text') k = byContent;
-      else if (!header) k = 'text';
-    }
-    map.push(k);
-  }
-  // colonne di testo senza intestazione: prima = nome (o nome completo), seconda = cognome
-  const textIdx = map.map((k, i) => (k === 'text' ? i : -1)).filter((i) => i >= 0);
-  if (textIdx.length >= 2) { map[textIdx[0]] = 'first_name'; map[textIdx[1]] = 'last_name'; }
-  else if (textIdx.length === 1) map[textIdx[0]] = 'full_name';
-  // "nome" con "cognome" presente resta nome; "nome" senza cognome → nome completo
-  if (map.includes('first_name') && !map.includes('last_name') && header) {
-    const i = map.indexOf('first_name');
-    if (norm(header[i]) === 'nome' || norm(header[i]) === 'name') map[i] = 'full_name';
-  }
-  return map.map((k) => {
-    if (k === 'text') return 'ignore';
-    if (used.has(k) && k !== 'ignore' && k !== 'categories' && k !== 'note') return 'ignore';
-    used.add(k); return k;
-  });
-}
-
-/* ---------- normalizzazione valori ---------- */
-const MONTHS = { gen: 1, gennaio: 1, jan: 1, january: 1, feb: 2, febbraio: 2, february: 2, mar: 3, marzo: 3, march: 3, apr: 4, aprile: 4, april: 4, mag: 5, maggio: 5, may: 5, giu: 6, giugno: 6, jun: 6, june: 6, lug: 7, luglio: 7, jul: 7, july: 7, ago: 8, agosto: 8, aug: 8, august: 8, set: 9, settembre: 9, sep: 9, sept: 9, september: 9, ott: 10, ottobre: 10, oct: 10, october: 10, nov: 11, novembre: 11, november: 11, dic: 12, dicembre: 12, dec: 12, december: 12 };
-const pad = (n) => String(n).padStart(2, '0');
-const valid = (d, m) => m >= 1 && m <= 12 && d >= 1 && d <= new Date(2000, m, 0).getDate();
-const fixYear = (y) => { if (y.length === 4) return Number(y); const n = Number(y); const cur = new Date().getFullYear() % 100; return n <= cur ? 2000 + n : 1900 + n; };
-/** → 'YYYY-MM-DD' | '--MM-DD' | null. order: 'dmy' | 'mdy' per le date numeriche ambigue */
-export function parseFlexibleDate(raw, order = 'dmy') {
-  const s = String(raw || '').trim().toLowerCase();
-  if (!s) return null;
-  let m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ t].*)?$/.exec(s);
-  if (m) { const y = +m[1], mo = +m[2], d = +m[3]; return valid(d, mo) ? `${y}-${pad(mo)}-${pad(d)}` : null; }
-  m = /^--?(\d{1,2})-(\d{1,2})$/.exec(s);
-  if (m) { const mo = +m[1], d = +m[2]; return valid(d, mo) ? `--${pad(mo)}-${pad(d)}` : null; }
-  m = /^(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2}|\d{4}))?$/.exec(s);
-  if (m) {
-    let a = +m[1], b = +m[2];
-    let d = a, mo = b;
-    if (order === 'mdy') { d = b; mo = a; }
-    if (!valid(d, mo) && valid(mo, d)) { [d, mo] = [mo, d]; } // unico ordine possibile
-    if (!valid(d, mo)) return null;
-    return m[3] ? `${fixYear(m[3])}-${pad(mo)}-${pad(d)}` : `--${pad(mo)}-${pad(d)}`;
-  }
-  m = /^(\d{1,2})\s+([a-zà-ú]+)\.?(?:\s+(\d{4}))?$/.exec(s);
-  if (m) { const mo = MONTHS[m[2]] || MONTHS[m[2].slice(0, 3)]; const d = +m[1]; if (!mo || !valid(d, mo)) return null; return m[3] ? `${m[3]}-${pad(mo)}-${pad(d)}` : `--${pad(mo)}-${pad(d)}`; }
-  m = /^([a-z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?$/.exec(s);
-  if (m) { const mo = MONTHS[m[1]] || MONTHS[m[1].slice(0, 3)]; const d = +m[2]; if (!mo || !valid(d, mo)) return null; return m[3] ? `${m[3]}-${pad(mo)}-${pad(d)}` : `--${pad(mo)}-${pad(d)}`; }
-  return null;
-}
-export function parseGender(raw) {
-  const s = String(raw || '').trim().toLowerCase();
-  if (!s) return '';
-  if (/^(f|femm\w*|donna|woman|female|w|she|signora|sig\.?ra)$/.test(s)) return 'female';
-  if (/^(m|masc\w*|uomo|man|male|he|signore|sig\.?)$/.test(s)) return 'male';
-  if (/^(altro|other|x|nb|non binario|non-binary)$/.test(s)) return 'other';
-  return '';
-}
-const parseLang = (raw) => { const s = String(raw || '').trim().toLowerCase(); if (/^(it|ita|italiano|italian)$/.test(s)) return 'it'; if (/^(en|eng|english|inglese)$/.test(s)) return 'en'; return ''; };
-const cleanPhone = (raw) => String(raw || '').replace(/[^\d+]/g, ' ').replace(/\s+/g, ' ').trim().replace(/\s/g, '');
-const phoneKey = (p) => { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('0039')) d = d.slice(4); else if (d.startsWith('39') && d.length > 10) d = d.slice(2); return d; };
-
-/** applica la mappatura → righe normalizzate con avvisi */
-export function buildRows(dataRows, mapping, { dateOrder = 'dmy' } = {}) {
-  const out = [];
-  const seenPhones = new Map();
-  dataRows.forEach((cells, idx) => {
-    const r = { first_name: '', last_name: '', phone: '', email: '', gender: '', birthday: '', origin: '', lang: '', note: '', categories: [] };
-    const warn = [];
-    let full = '';
-    mapping.forEach((k, i) => {
-      const v = String(cells[i] ?? '').trim();
-      if (!v || k === 'ignore') return;
-      if (k === 'full_name') full = v;
-      else if (k === 'phone') { r.phone = cleanPhone(v); if (!phoneKey(r.phone)) { warn.push('phone'); r.phone = ''; } }
-      else if (k === 'gender') { r.gender = parseGender(v); if (!r.gender) warn.push('gender:' + v); }
-      else if (k === 'birthday') { const b = parseFlexibleDate(v, dateOrder); if (b) r.birthday = b; else warn.push('birthday:' + v); }
-      else if (k === 'categories') r.categories = [...r.categories, ...v.split(/[,;|/]+/).map((x) => x.trim()).filter(Boolean)];
-      else if (k === 'lang') r.lang = parseLang(v);
-      else if (k === 'note') r.note = r.note ? r.note + '\n' + v : v;
-      else if (k === 'email') { if (looksEmail(v)) r.email = v; else warn.push('email:' + v); }
-      else r[k] = v;
-    });
-    if (full && !r.first_name) { const parts = full.split(/\s+/); r.first_name = parts[0]; r.last_name = r.last_name || parts.slice(1).join(' '); }
-    else if (full && !r.last_name) { r.last_name = full.replace(r.first_name, '').trim(); }
-    if (!r.first_name) warn.push('name');
-    if (!r.phone) warn.push('nophone');
-    if (r.phone) { const k = phoneKey(r.phone); if (seenPhones.has(k)) warn.push('dup:' + (seenPhones.get(k) + 1)); else seenPhones.set(k, idx); }
-    out.push({ ...r, _idx: idx, _warn: warn, _skip: !r.first_name || (!r.phone && !r.email) });
-  });
-  return out;
-}
+import { inputCss, formatBirthday, dateLabel } from '../helpers.js';
+import {
+  FIELDS, buildRows, decodeCsvBytes, detectDelimiter, fileLineOf, guessMapping,
+  looksLikeHeader, looksMojibake, parseCsvLines,
+} from '../importCsv.js';
 
 /* ---------- componente ---------- */
 /* Fuori dal componente: ridefinito a ogni render sarebbe un tipo nuovo ogni
@@ -207,11 +25,47 @@ const Steps = ({ step }) => (
   </div>
 );
 
+const ENC_LABEL = { 'utf-8': 'UTF-8', 'windows-1252': 'Windows-1252', 'iso-8859-1': 'ISO-8859-1' };
+
+/* Codifica del file, in ogni passo: stava solo nel primo, che caricando un
+ * file si salta, e un CSV di Excel italiano entrava con «�» al posto degli
+ * accenti senza che nessuno lo vedesse (14-08). */
+function EncodingPicker({ encoding, used, mojibake, onChange, t }) {
+  return (
+    <label className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>{t('Codifica', 'Encoding')}
+      <select value={encoding} onChange={(e) => onChange(e.target.value)} style={{ ...inputCss, width: 'auto', padding: '5px 8px', fontSize: 12.5 }}>
+        <option value="auto">{t('automatica', 'auto')}{encoding === 'auto' && used ? ` (${ENC_LABEL[used] || used})` : ''}</option>
+        <option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252 (Excel IT)</option><option value="iso-8859-1">ISO-8859-1</option>
+      </select>
+      {mojibake && <span style={{ color: 'var(--warn)', fontWeight: 700 }}>{t('accenti strani? prova un’altra codifica', 'odd accents? try another encoding')}</span>}
+    </label>
+  );
+}
+
+/* Righe dell'esito (errori o avvisi del server), col numero di riga del file.
+ * `client_id` indica la scheda coinvolta (archiviata, email di un'altra
+ * persona): si apre invece di lasciare un vicolo cieco. */
+function RowList({ items, onOpen, t }) {
+  return (
+    <div className="dk-card" style={{ maxHeight: 200, overflowY: 'auto', boxShadow: 'none', border: '1px solid var(--hair)' }}>
+      {items.map((e, i) => (
+        <div key={i} className="t-sm" style={{ padding: '7px 12px', borderTop: i ? '1px solid var(--hair)' : 'none', display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ flex: 1 }}><b>{t('Riga', 'Row')} {e.line}</b>{e.name ? ` · ${e.name}` : ''} — {e.reason}</span>
+          {e.client_id && <button type="button" onClick={() => onOpen(e.client_id)} style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay-ink)', background: 'transparent', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>{t('Apri scheda', 'Open profile')}</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CHUNK = 250;
+
 export default function BulkImportModal({ onClose }) {
-  const { t, lang, fireToast } = useDash();
+  const { t, lang, fireToast, setSelClient, setTab, tab } = useDash();
   const [step, setStep] = useState(1);
   const [file, setFile] = useState(null);
-  const [encoding, setEncoding] = useState('utf-8');
+  const [encoding, setEncoding] = useState('auto');
+  const [usedEnc, setUsedEnc] = useState(null);   // quella con cui il file è stato letto
   const [text, setText] = useState('');
   const [delim, setDelim] = useState(null);      // null = auto
   const [hasHeader, setHasHeader] = useState(null); // null = auto
@@ -224,73 +78,116 @@ export default function BulkImportModal({ onClose }) {
   const fileRef = useRef(null);
   const FIELD_LIST = FIELDS(t);
 
+  // Durante l'invio la finestra non si chiude (Esc, X, clic fuori): chiusa a
+  // metà l'import proseguiva in background e nessuno ne vedeva l'esito (14-18).
+  const close = () => { if (!busy) onClose(); };
+
   const effDelim = delim || (text ? detectDelimiter(text) : ',');
-  const table = useMemo(() => (text ? parseCsv(text, effDelim) : []), [text, effDelim]);
+  const records = useMemo(() => (text ? parseCsvLines(text, effDelim) : []), [text, effDelim]);
+  const table = useMemo(() => records.map((r) => r.cells), [records]);
   const headerAuto = table.length ? looksLikeHeader(table[0]) : false;
   const effHeader = hasHeader == null ? headerAuto : hasHeader;
   const header = effHeader ? table[0] : null;
-  const dataRows = effHeader ? table.slice(1) : table;
+  const dataRows = useMemo(() => (effHeader ? table.slice(1) : table), [table, effHeader]);
+  // numero di riga nel FILE di ogni riga di dati (intestazione e righe vuote comprese)
+  const dataLines = useMemo(() => (effHeader ? records.slice(1) : records).map((r) => r.line), [records, effHeader]);
   const nCols = Math.max(header?.length || 0, ...dataRows.map((r) => r.length), 0);
-  const effMapping = mapping && mapping.length === nCols ? mapping : guessMapping(header, dataRows);
-  const rows = useMemo(() => buildRows(dataRows, effMapping, { dateOrder }), [dataRows, effMapping, dateOrder]);
+  const effMapping = useMemo(
+    () => (mapping && mapping.length === nCols ? mapping : guessMapping(header, dataRows)),
+    [mapping, nCols, header, dataRows],
+  );
+  const rows = useMemo(
+    () => buildRows(dataRows, effMapping, { dateOrder, lines: dataLines, plausiblePhone: isPlausiblePhone }),
+    [dataRows, effMapping, dateOrder, dataLines],
+  );
   const ready = rows.filter((r) => !r._skip);
   const mappedKeys = new Set(effMapping);
-  const mojibake = /[ÃÂ][\x80-\xBF]|�/.test(text);
+  const mojibake = looksMojibake(text);
 
-  const readFile = (f, enc) => {
+  /* `fresh`: file nuovo, colonne da rilevare di nuovo. Lo stesso file riletto
+   * in un'altra codifica ha le stesse colonne: la mappatura scelta resta. */
+  const readFile = (f, enc, fresh) => {
     const r = new FileReader();
-    r.onload = () => { setText(String(r.result)); setMapping(null); setStep(2); };
-    r.readAsText(f, enc);
+    r.onload = () => {
+      const { text: decoded, encoding: used } = decodeCsvBytes(new Uint8Array(r.result), enc);
+      setText(decoded); setUsedEnc(used);
+      if (fresh) { setMapping(null); setStep(2); }
+    };
+    r.readAsArrayBuffer(f);
   };
-  const onFile = (e) => { const f = e.target.files?.[0]; if (!f) return; setFile(f); readFile(f, encoding); e.target.value = ''; };
-  const changeEncoding = (enc) => { setEncoding(enc); if (file) readFile(file, enc); };
+  const onFile = (e) => { const f = e.target.files?.[0]; if (!f) return; setFile(f); readFile(f, encoding, true); e.target.value = ''; };
+  const changeEncoding = (enc) => { setEncoding(enc); if (file) readFile(file, enc, false); };
+  const encodingPicker = file && <EncodingPicker encoding={encoding} used={usedEnc} mojibake={mojibake} onChange={changeEncoding} t={t} />;
 
-  const doImport = async () => {
-    setBusy(true); setProgress(0);
-    const payload = ready.map(({ _idx, _warn, _skip, ...r }) => r);
-    const CHUNK = 250;
-    const total = { created: 0, updated: 0, skipped: 0, errors: [] };
+  /* Invio a blocchi. Se un blocco fallisce, quelli già entrati restano entrati:
+   * l'esito lo dice e si riprende da lì. Rilanciare tutto da capo con
+   * «aggiorna esistenti» ricreava ogni nota già importata (14-18). */
+  const doImport = async (startAt = 0, before = null) => {
+    const payload = ready.map(({ _idx, _line, _warn, _skip, ...r }) => r);
+    setBusy(true); setProgress(Math.round((startAt / Math.max(1, payload.length)) * 100)); setResult(null);
+    const total = before
+      ? { created: before.created, updated: before.updated, skipped: before.skipped, errors: [...before.errors], warnings: [...before.warnings] }
+      : { created: 0, updated: 0, skipped: 0, errors: [], warnings: [] };
+    let i = startAt;
     try {
-      for (let i = 0; i < payload.length; i += CHUNK) {
+      for (; i < payload.length; i += CHUNK) {
         const res = await api.post('/api/clients/import', { rows: payload.slice(i, i + CHUNK), update_existing: updateExisting });
         total.created += res.created; total.updated += res.updated; total.skipped += res.skipped || 0;
-        // Il server numera gli errori dentro il blocco inviato: `e.row + i` è
-        // l'indice in `payload`, che salta le righe scartate. Chi corregge il
-        // file cerca però la riga del FILE, la stessa numerata nell'anteprima
-        // del passo 3: si riporta l'indice originale (`_idx`).
-        (res.errors || []).forEach((e) => {
-          const k = e.row + i;
-          const src = ready[k];
-          total.errors.push({
-            ...e,
-            row: src ? src._idx : k,
-            name: `${payload[k]?.first_name || ''} ${payload[k]?.last_name || ''}`.trim(),
-          });
+        // Il server numera le righe dentro il blocco inviato, che salta le
+        // righe scartate: chi corregge il file cerca la riga del FILE, la
+        // stessa numerata nell'anteprima del passo 3.
+        const at = (e) => ({
+          ...e,
+          line: fileLineOf(ready, i, e.row),
+          name: `${payload[i + e.row]?.first_name || ''} ${payload[i + e.row]?.last_name || ''}`.trim(),
         });
+        (res.errors || []).forEach((e) => total.errors.push(at(e)));
+        // righe entrate lasciando fuori un dato illeggibile (server con `warnings`)
+        (res.warnings || []).forEach((e) => total.warnings.push(at(e)));
         setProgress(Math.min(100, Math.round(((i + CHUNK) / payload.length) * 100)));
       }
       total.skipped += rows.length - ready.length;
       setResult(total);
       fireToast({ msg: t(`Importati ${total.created} nuovi · ${total.updated} aggiornati`, `${total.created} added · ${total.updated} updated`), icon: 'check' });
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      const msg = err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+      setResult({ ...total, failedAt: i, failMsg: msg });
+      fireToast({ msg, icon: 'alert' });
     } finally { setBusy(false); }
   };
 
+  const openClient = (id) => { setSelClient(id); if (tab !== 'clienti') setTab('clienti'); onClose(); };
+
   const warnLabel = (w) => {
-    const [k, v] = w.split(':');
+    const cut = w.indexOf(':');
+    const k = cut < 0 ? w : w.slice(0, cut);
+    const v = cut < 0 ? '' : w.slice(cut + 1);
     return ({
       name: t('nome mancante', 'missing name'), nophone: t('senza telefono: verrà cercato per email', 'no phone: matched by email only'), phone: t('telefono non valido', 'invalid phone'),
-      gender: t(`genere non riconosciuto: “${v}”`, `unrecognised gender: “${v}”`), birthday: t(`data non riconosciuta: “${v}”`, `unrecognised date: “${v}”`), email: t(`email non valida: “${v}”`, `invalid email: “${v}”`),
+      badphone: t(`telefono da controllare: “${v}” (entra così com’è)`, `phone to check: “${v}” (imported as is)`),
+      phonesci: t(`numero rovinato da Excel: “${v}” — esporta la colonna come testo`, `number mangled by Excel: “${v}” — export the column as text`),
+      gender: t(`genere non riconosciuto: “${v}”`, `unrecognised gender: “${v}”`), birthday: t(`data non valida: “${v}”`, `invalid date: “${v}”`), email: t(`email non valida: “${v}”`, `invalid email: “${v}”`),
+      since: t(`«cliente dal» non valido: “${v}” (serve una data con l’anno, non futura)`, `invalid “client since”: “${v}” (needs a full, non-future date)`),
       dup: t(`stesso telefono della riga ${v}`, `same phone as row ${v}`),
     })[k] || w;
   };
 
   /* ---- esito ---- */
   if (result) {
+    const failed = result.failedAt != null;
+    const resumeLine = failed ? fileLineOf(ready, result.failedAt, 0) : null;
     return (
-      <DkModal open onClose={onClose} title={t('Importazione completata', 'Import complete')} width={520}
-        foot={<button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>}>
+      <DkModal open onClose={close} title={failed ? t('Importazione interrotta', 'Import interrupted') : t('Importazione completata', 'Import complete')} width={560}
+        foot={<React.Fragment>
+          {failed && <button className="dk-btn dk-btn--ghost" onClick={() => doImport(result.failedAt, result)}><Icon name="refresh" size={15} />{t(`Riprendi dalla riga ${resumeLine}`, `Resume from row ${resumeLine}`)}</button>}
+          <button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>
+        </React.Fragment>}>
+        {failed && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)', marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+            <Icon name="alert" size={15} color="var(--warn)" style={{ marginTop: 2, flexShrink: 0 }} />
+            <span>{t(`Si è fermata alla riga ${resumeLine}: ${result.failMsg}. Le righe precedenti sono già in rubrica (i conteggi qui sotto); da lì in poi non è stato inviato niente.`, `It stopped at row ${resumeLine}: ${result.failMsg}. Earlier rows are already saved (counts below); nothing from there on was sent.`)}</span>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, padding: '8px 0 14px' }}>
           {[[result.created, t('nuovi clienti', 'new clients'), 'plus', 'var(--ok)', 'var(--ok-tint)'], [result.updated, t('aggiornati', 'updated'), 'refresh', 'var(--warn)', 'var(--warn-tint)'], [result.skipped, t('saltati', 'skipped'), 'x', 'var(--muted)', 'var(--paper-2)']].map(([n, l, icon, c, bg]) => (
             <div key={l} className="dk-card" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: 14, boxShadow: 'none', border: '1px solid var(--hair)' }}>
@@ -302,9 +199,13 @@ export default function BulkImportModal({ onClose }) {
         {result.errors.length > 0 && (
           <div>
             <div className="t-meta" style={{ marginBottom: 6 }}>{t('Righe non importate', 'Rows not imported')} · {result.errors.length}</div>
-            <div className="dk-card" style={{ maxHeight: 200, overflowY: 'auto', boxShadow: 'none', border: '1px solid var(--hair)' }}>
-              {result.errors.map((e, i) => <div key={i} className="t-sm" style={{ padding: '7px 12px', borderTop: i ? '1px solid var(--hair)' : 'none' }}><b>{t('Riga', 'Row')} {e.row + 1}</b>{e.name ? ` · ${e.name}` : ''} — {e.reason}</div>)}
-            </div>
+            <RowList items={result.errors} onOpen={openClient} t={t} />
+          </div>
+        )}
+        {result.warnings.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div className="t-meta" style={{ marginBottom: 6 }}>{t('Importate con un avviso', 'Imported with a warning')} · {result.warnings.length}</div>
+            <RowList items={result.warnings} onOpen={openClient} t={t} />
           </div>
         )}
       </DkModal>
@@ -312,9 +213,11 @@ export default function BulkImportModal({ onClose }) {
   }
 
   const stepTitle = ['', t('1 · Sorgente', '1 · Source'), t('2 · Colonne', '2 · Columns'), t('3 · Verifica', '3 · Review')][step];
+  const showSince = mappedKeys.has('since');
+  const gridCols = `40px 1fr 1fr 1fr 1.2fr 44px 1fr${showSince ? ' 0.9fr' : ''} 1fr`;
 
   return (
-    <DkModal open onClose={onClose} title={t('Importa clienti', 'Import clients')} sub={stepTitle} width={780}
+    <DkModal open onClose={close} title={t('Importa clienti', 'Import clients')} sub={stepTitle} width={820}
       foot={<React.Fragment>
         <span className="t-sm" style={{ marginRight: 'auto', color: 'var(--muted)' }}>
           {table.length ? t(`${dataRows.length} righe · ${ready.length} importabili`, `${dataRows.length} rows · ${ready.length} importable`) : ''}
@@ -336,7 +239,7 @@ export default function BulkImportModal({ onClose }) {
       {/* ── 1. sorgente ── */}
       {step === 1 && (
         <div>
-          <div onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) { setFile(f); readFile(f, encoding); } }}
+          <div onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) { setFile(f); readFile(f, encoding, true); } }}
             onClick={() => fileRef.current?.click()} role="button" tabIndex={0}
             style={{ border: '1.5px dashed var(--line-strong)', borderRadius: 14, padding: '22px 20px', textAlign: 'center', cursor: 'pointer', background: 'var(--surface-2)', marginBottom: 14 }}>
             <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" onChange={onFile} style={{ display: 'none' }} />
@@ -346,7 +249,7 @@ export default function BulkImportModal({ onClose }) {
             {file && <div className="t-sm" style={{ marginTop: 8, fontWeight: 700, color: 'var(--ink)' }}>{file.name} · {Math.round(file.size / 1024)} KB</div>}
           </div>
           <div className="t-meta" style={{ marginBottom: 6 }}>{t('oppure incolla', 'or paste')}</div>
-          <textarea value={text} onChange={(e) => { setText(e.target.value); setMapping(null); setFile(null); }} rows={6} placeholder={'Nome;Cognome;Telefono;Email;Genere;Compleanno\nSofia;Ricci;+39 348 221 0094;sofia@email.it;F;15/03\nGiada;Neri;333 118 4420;;donna;24/12/1990'} style={{ ...inputCss, fontFamily: 'var(--mono, monospace)', fontSize: 12.5, resize: 'vertical' }} />
+          <textarea value={text} onChange={(e) => { setText(e.target.value); setMapping(null); setFile(null); setUsedEnc(null); }} rows={6} placeholder={'Nome;Cognome;Telefono;Email;Genere;Compleanno\nSofia;Ricci;+39 348 221 0094;sofia@email.it;F;15/03\nGiada;Neri;333 118 4420;;donna;24/12/1990'} style={{ ...inputCss, fontFamily: 'var(--mono, monospace)', fontSize: 12.5, resize: 'vertical' }} />
           {text && (
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
               <label className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{t('Separatore', 'Delimiter')}
@@ -354,14 +257,7 @@ export default function BulkImportModal({ onClose }) {
                   <option value="auto">{t('automatico', 'auto')} ({effDelim === '\t' ? 'TAB' : effDelim})</option><option value=",">,</option><option value=";">;</option><option value={'\t'}>TAB</option><option value="|">|</option>
                 </select>
               </label>
-              {file && (
-                <label className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{t('Codifica', 'Encoding')}
-                  <select value={encoding} onChange={(e) => changeEncoding(e.target.value)} style={{ ...inputCss, width: 'auto', padding: '5px 8px', fontSize: 12.5 }}>
-                    <option value="utf-8">UTF-8</option><option value="windows-1252">Windows-1252 (Excel IT)</option><option value="iso-8859-1">ISO-8859-1</option>
-                  </select>
-                  {mojibake && <span style={{ color: 'var(--warn)', fontWeight: 700 }}>{t('accenti strani? prova Windows-1252', 'odd accents? try Windows-1252')}</span>}
-                </label>
-              )}
+              {encodingPicker}
               <span className="t-sm" style={{ color: 'var(--muted)' }}>{table.length} {t('righe rilevate', 'rows detected')}</span>
             </div>
           )}
@@ -376,10 +272,11 @@ export default function BulkImportModal({ onClose }) {
               <Toggle on={effHeader} onChange={(v) => { setHasHeader(v); setMapping(null); }} />{t('La prima riga è l’intestazione', 'First row is the header')}
               {hasHeader == null && <span className="t-sm" style={{ color: 'var(--muted-2)' }}>· {t('rilevato', 'detected')}</span>}
             </label>
+            {encodingPicker}
             <div style={{ flex: 1 }} />
             <button type="button" onClick={() => setMapping(null)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}>{t('Rileva di nuovo', 'Auto-detect again')}</button>
           </div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 10 }}>{t('Per ogni colonna del file scegli il campo di destinazione. “Nome e cognome” viene diviso alla prima parola; le etichette si separano con virgola, punto e virgola o barra.', 'For each file column pick the destination field. “Full name” is split at the first word; labels may be separated by comma, semicolon or slash.')}</div>
+          <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 10 }}>{t('Per ogni colonna del file scegli il campo di destinazione. “Nome e cognome” si divide dopo la prima parola, “Cognome e nome” dopo il cognome (de, di, della… compresi): al passo 3 nome e cognome si vedono separati. Le etichette si separano con virgola, punto e virgola o barra.', 'For each file column pick the destination field. “First and last name” is split after the first word, “Last and first name” after the surname (de, di, della… included): step 3 shows first and last name apart. Labels may be separated by comma, semicolon or slash.')}</div>
           <div style={{ overflowX: 'auto', border: '1px solid var(--hair)', borderRadius: 12 }}>
             <table style={{ borderCollapse: 'collapse', minWidth: '100%', fontSize: 12.5 }}>
               <thead>
@@ -402,7 +299,7 @@ export default function BulkImportModal({ onClose }) {
               </tbody>
             </table>
           </div>
-          {mappedKeys.has('birthday') && (
+          {(mappedKeys.has('birthday') || mappedKeys.has('since')) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
               <span className="t-sm" style={{ fontWeight: 600 }}>{t('Date numeriche ambigue (es. 03/04):', 'Ambiguous numeric dates (e.g. 03/04):')}</span>
               {[['dmy', t('giorno/mese/anno', 'day/month/year')], ['mdy', t('mese/giorno/anno', 'month/day/year')]].map(([k, l]) => (
@@ -423,19 +320,26 @@ export default function BulkImportModal({ onClose }) {
               <Toggle on={updateExisting} onChange={setUpdateExisting} />
               <span>{t('Aggiorna i clienti già in rubrica', 'Update clients already on file')} <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 500 }}>· {t('stesso telefono o email; i campi vuoti nel file non cancellano nulla', 'same phone or email; blank cells never erase data')}</span></span>
             </label>
+            <div style={{ flex: 1 }} />
+            {encodingPicker}
           </div>
           <div className="dk-card" style={{ overflow: 'hidden', maxHeight: 340, overflowY: 'auto', boxShadow: 'none', border: '1px solid var(--hair)' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '34px 1.4fr 1fr 1.2fr 70px 1fr 1fr', gap: 8, padding: '8px 12px', background: 'var(--surface-2)', borderBottom: '1px solid var(--hair)', position: 'sticky', top: 0 }}>
-              {['#', t('Nome', 'Name'), t('Telefono', 'Phone'), 'Email', t('Gen.', 'Gen.'), t('Compleanno', 'Birthday'), t('Etichette / note', 'Labels / notes')].map((h) => <span key={h} className="t-meta" style={{ fontSize: 10 }}>{h}</span>)}
+            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, padding: '8px 12px', background: 'var(--surface-2)', borderBottom: '1px solid var(--hair)', position: 'sticky', top: 0 }}>
+              {['#', t('Nome', 'First name'), t('Cognome', 'Last name'), t('Telefono', 'Phone'), 'Email', t('Gen.', 'Gen.'), t('Compleanno', 'Birthday'), ...(showSince ? [t('Cliente dal', 'Since')] : []), t('Etichette / note', 'Labels / notes')].map((h) => <span key={h} className="t-meta" style={{ fontSize: 10 }}>{h}</span>)}
             </div>
             {rows.slice(0, 200).map((r) => (
-              <div key={r._idx} style={{ display: 'grid', gridTemplateColumns: '34px 1.4fr 1fr 1.2fr 70px 1fr 1fr', gap: 8, padding: '7px 12px', borderTop: '1px solid var(--hair-2)', alignItems: 'center', fontSize: 12.5, opacity: r._skip ? 0.55 : 1, background: r._skip ? 'var(--danger-tint)' : r._warn.length ? 'color-mix(in srgb, var(--warn-tint) 60%, transparent)' : 'transparent' }}>
-                <span className="t-sm tabnum" style={{ color: 'var(--muted-2)' }}>{r._idx + 1}</span>
-                <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[r.first_name, r.last_name].filter(Boolean).join(' ') || <span style={{ color: 'var(--danger)' }}>{t('nome mancante', 'missing name')}</span>}</span>
-                <span className="tabnum" style={{ color: r.phone ? 'var(--ink-2)' : 'var(--muted-2)' }}>{r.phone || '—'}</span>
+              <div key={r._idx} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, padding: '7px 12px', borderTop: '1px solid var(--hair-2)', alignItems: 'center', fontSize: 12.5, opacity: r._skip ? 0.55 : 1, background: r._skip ? 'var(--danger-tint)' : r._warn.length ? 'color-mix(in srgb, var(--warn-tint) 60%, transparent)' : 'transparent' }}>
+                {/* la riga del FILE, la stessa degli errori dell'esito (14-17) */}
+                <span className="t-sm tabnum" style={{ color: 'var(--muted-2)' }}>{r._line}</span>
+                {/* nome e cognome separati: concatenati sembravano giusti anche
+                    quando «ROSSI MARIA» finiva con nome ROSSI (14-16) */}
+                <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.first_name || <span style={{ color: 'var(--danger)' }}>{t('nome mancante', 'missing name')}</span>}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: r.last_name ? 'var(--ink-2)' : 'var(--muted-2)' }}>{r.last_name || '—'}</span>
+                <span className="tabnum" style={{ color: r.phone ? 'var(--ink-2)' : 'var(--muted-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.phone || '—'}</span>
                 <span style={{ color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.email || '—'}</span>
                 <span style={{ color: 'var(--muted)' }}>{r.gender === 'female' ? '♀' : r.gender === 'male' ? '♂' : r.gender === 'other' ? '⚧' : '—'}</span>
                 <span style={{ color: 'var(--muted)' }}>{r.birthday ? formatBirthday(r.birthday, lang) : '—'}</span>
+                {showSince && <span style={{ color: 'var(--muted)' }}>{r.since ? dateLabel(r.since, lang) : '—'}</span>}
                 <span style={{ color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={[...r.categories, r.note].filter(Boolean).join(' · ')}>{[...r.categories, r.note ? '📝' : ''].filter(Boolean).join(', ') || '—'}</span>
                 {r._warn.length > 0 && <div style={{ gridColumn: '2 / -1', display: 'flex', gap: 6, flexWrap: 'wrap' }}>{r._warn.map((w) => <span key={w} style={{ fontSize: 11, fontWeight: 600, color: r._skip && (w === 'name' || w === 'nophone') ? 'var(--danger)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><Icon name="alert" size={10} color="currentColor" />{warnLabel(w)}</span>)}</div>}
               </div>

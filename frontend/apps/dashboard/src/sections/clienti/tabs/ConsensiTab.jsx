@@ -3,27 +3,38 @@
 import React from 'react';
 import { Icon, Toggle } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
+import { consentStamp, dateTimeLabel } from '../helpers.js';
 
 export default function ConsensiTab({ c, updateClient, canWrite }) {
-  const { t } = useDash();
+  const { t, lang } = useDash();
   const consents = c.consents || {};
 
-  // i consensi si rileggono dall'ultimo stato noto al momento dell'invio:
-  // spuntando due caselle di seguito la seconda PUT ripristinava la prima
+  // Solo il flag toccato (C15): il server lo fonde con quelli salvati e ne
+  // scrive la data. Rimandare l'intero dizionario letto all'apertura ridava il
+  // marketing a chi l'aveva appena revocato dall'app (14-05); e due caselle
+  // spuntate di seguito non si annullano più, perché ognuna manda solo sé.
   const setConsent = (key, v) => updateClient(
-    (prev) => ({ consents: { ...(prev.consents || {}), [key]: v } }),
+    { consents: { [key]: v } },
     { msg: v ? t('Consenso attivato', 'Consent enabled') : t('Consenso revocato', 'Consent revoked'), icon: v ? 'check' : 'x' },
   );
+  // la data che il server ha registrato, se c'è: niente data, niente promessa
+  const stampOf = (key) => {
+    const s = consentStamp(consents, key);
+    if (!s) return null;
+    const when = dateTimeLabel(s.at, lang);
+    return s.kind === 'given' ? t(`Concesso il ${when}`, `Given on ${when}`) : t(`Revocato il ${when}`, `Revoked on ${when}`);
+  };
   const setWa = (v) => updateClient(
     { whatsapp_reminders: v },
     { msg: v ? t('Promemoria WhatsApp attivati', 'WhatsApp reminders enabled') : t('Promemoria WhatsApp disattivati', 'WhatsApp reminders disabled'), icon: 'whatsapp' },
   );
 
-  const Row = ({ label, sub, on, onChange, first }) => (
+  const Row = ({ label, sub, stamp, on, onChange, first }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '15px 14px', borderTop: first ? 'none' : '1px solid var(--hair)' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>{label}</div>
         {sub && <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5 }}>{sub}</div>}
+        {stamp && <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, marginTop: 2 }}>{stamp}</div>}
       </div>
       <span className="t-sm" style={{ fontWeight: 700, color: on ? 'var(--ok)' : 'var(--muted-2)' }}>{on ? t('Attivo', 'On') : 'Off'}</span>
       {canWrite ? <Toggle on={!!on} onChange={onChange} /> : <span style={{ width: 8 }} />}
@@ -36,16 +47,19 @@ export default function ConsensiTab({ c, updateClient, canWrite }) {
         <Row first
           label={t('Autorizzazione addebito carta', 'Card charge authorization')}
           sub={t('Addebito no-show e cancellazioni tardive', 'No-show & late-cancel charge')}
+          stamp={stampOf('card_charge')}
           on={consents.card_charge}
           onChange={(v) => setConsent('card_charge', v)} />
         <Row
           label={t('Privacy & trattamento dati', 'Privacy & data')}
           sub={t("Obbligatorio per l'anagrafica", 'Required for records')}
+          stamp={stampOf('privacy')}
           on={consents.privacy}
           onChange={(v) => setConsent('privacy', v)} />
         <Row
           label={t('Comunicazioni marketing', 'Marketing messages')}
           sub={t('Promozioni e novità', 'Promotions and news')}
+          stamp={stampOf('marketing')}
           on={consents.marketing}
           onChange={(v) => setConsent('marketing', v)} />
         <Row

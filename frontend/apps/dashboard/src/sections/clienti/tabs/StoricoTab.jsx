@@ -8,9 +8,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, EmptyState, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, statusMeta } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
-import { dateLabel, sheetVal } from '../helpers.js';
+import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
 
-const monthShort = (d, lang) => d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { month: 'short' }).replace('.', '');
+/** fmtEur(0) scrive «Gratis» (convenzione dei listini): una caparra a zero è «€0». */
+const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
 
 export default function StoricoTab({ c }) {
   const { t, lang, fireToast, hasScope, openModal, modal } = useDash();
@@ -26,7 +27,8 @@ export default function StoricoTab({ c }) {
       .catch((err) => { setHist({ entries: [], counts: {} }); fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); })
   ), [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setHist(null); load(); }, [load]);
-  useLive(/^(appointment|sale|visit|client\.note|client\.sheet)/, () => load());
+  // `deposit.`: una caparra pagata o rimborsata altrove cambia l'etichetta della visita
+  useLive(/^(appointment|sale|visit|deposit|client\.note|client\.sheet)/, () => load());
   // la scheda tecnica si crea in un modale del registro: al suo chiudersi ricarico
   const [prevModal, setPrevModal] = useState(modal);
   useEffect(() => { if (prevModal && !modal && prevModal.name === 'techsheet') load(); setPrevModal(modal); }, [modal]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -36,6 +38,11 @@ export default function StoricoTab({ c }) {
   }
 
   const entries = hist.entries || [];
+  // Senza il permesso «vendite» il server toglie gli incassi da ogni visita
+  // (C5): `sale: null` vuol dire «nascosto», non «non pagato». Prima ogni
+  // visita chiusa risultava «non incassato» e l'operatrice diceva alla
+  // reception che la cliente l'ultima volta non aveva pagato (06-05, 17-04).
+  const salesHidden = !!hist.sales_hidden;
   const upcoming = entries.filter((e) => e.kind === 'visit' && e.upcoming);
   const past = entries.filter((e) => !(e.kind === 'visit' && e.upcoming));
   const visible = past.filter((e) => filter === 'all' || (filter === 'visits' && (e.kind === 'visit' || e.kind === 'sale')) || (filter === 'notes' && (e.kind === 'note' || (e.kind === 'visit' && e.notes.length))) || (filter === 'sheets' && (e.kind === 'sheet' || (e.kind === 'visit' && e.sheets.length))));
@@ -79,7 +86,7 @@ export default function StoricoTab({ c }) {
             <span className="t-meta" style={{ color: 'var(--clay-ink)' }}>{t('Prossimi appuntamenti', 'Upcoming appointments')} · {upcoming.length}</span>
             <Icon name="chevD" size={13} color="var(--muted-2)" style={{ transform: showUpcoming ? 'none' : 'rotate(-90deg)', transition: 'transform 140ms' }} />
           </button>
-          {showUpcoming && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{upcoming.slice().reverse().map((e) => <VisitCard key={'u' + e.appointment.id} e={e} lang={lang} t={t} upcoming />)}</div>}
+          {showUpcoming && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{upcoming.slice().reverse().map((e) => <VisitCard key={'u' + e.appointment.id} e={e} lang={lang} t={t} upcoming salesHidden={salesHidden} />)}</div>}
         </div>
       )}
 
@@ -91,19 +98,19 @@ export default function StoricoTab({ c }) {
           <div style={{ position: 'absolute', left: 61, top: 8, bottom: 8, width: 2, background: 'var(--hair)' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {visible.map((e, i) => {
-              const d = new Date(e.date);
+              const d = timelineDate(e.date, lang);
               const key = e.kind + (e.appointment?.id || e.sale?.id || e.note?.id || e.sheet?.id || i);
               const dot = e.kind === 'visit' ? 'var(--clay)' : e.kind === 'sale' ? 'var(--info)' : e.kind === 'note' ? 'var(--muted-2)' : 'var(--warn)';
               return (
                 <div key={key} style={{ position: 'relative' }}>
                   {/* data a sinistra */}
                   <div style={{ position: 'absolute', left: -78, top: 2, width: 52, textAlign: 'right' }}>
-                    <div className="t-num" style={{ fontSize: 20, lineHeight: 1, fontWeight: 700 }}>{d.getDate()}</div>
-                    <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, textTransform: 'capitalize' }}>{monthShort(d, lang)} {d.getFullYear() !== new Date().getFullYear() ? String(d.getFullYear()).slice(2) : ''}</div>
+                    <div className="t-num" style={{ fontSize: 20, lineHeight: 1, fontWeight: 700 }}>{d.day}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, textTransform: 'capitalize' }}>{d.month} {d.year}</div>
                   </div>
                   <span style={{ position: 'absolute', left: -22, top: 8, width: 12, height: 12, borderRadius: 99, background: dot, border: '2px solid var(--surface)', boxShadow: '0 0 0 1px var(--hair)' }} />
                   {e.kind === 'visit' && (
-                    <VisitCard e={e} lang={lang} t={t} canWrite={canWrite}
+                    <VisitCard e={e} lang={lang} t={t} canWrite={canWrite} salesHidden={salesHidden}
                       composerOpen={composer === e.appointment.id}
                       onCompose={() => setComposer(composer === e.appointment.id ? null : e.appointment.id)}
                       onSheet={() => openModal('techsheet', { clientId: c.id, apptId: e.appointment.id, apptLabel: `${dateLabel(e.date, lang)} · ${(e.appointment.items || []).map((x) => x.service_name).join(' + ')}`, viewSheetId: e.sheets[0]?.id || null })}
@@ -143,11 +150,25 @@ export default function StoricoTab({ c }) {
 }
 
 /* ---- una visita: servizi, operatrici, stato, incasso, note, schede ---- */
-function VisitCard({ e, lang, t, upcoming, canWrite, composerOpen, onCompose, onSheet, composer, noteCards }) {
+function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, onCompose, onSheet, composer, noteCards }) {
   const a = e.appointment;
   const sm = statusMeta(a.status, t);
   const start = minutesOfDay(a.start), end = minutesOfDay(a.end);
   const cancelled = a.status === 'cancelled' || a.status === 'no_show';
+  // l'incasso di una visita passata è nascosto a chi non ha «vendite» (C5);
+  // il prezzo «previsto» di una visita futura è dell'agenda e resta
+  const saleHidden = salesHidden && !upcoming;
+  const dep = depositBadge(a);
+  const depLook = dep && {
+    paid: { color: 'var(--ok)', label: eur0(dep.amount, lang),
+      title: dep.refunded > 0
+        ? t(`Caparra incassata: ${eur0(dep.amount, lang)} ancora a credito, ${eur0(dep.refunded, lang)} già rimborsati`, `Deposit collected: ${eur0(dep.amount, lang)} still on credit, ${eur0(dep.refunded, lang)} already refunded`)
+        : t('Caparra incassata', 'Deposit collected') },
+    refund_due: { color: 'var(--warn)', label: t(`Caparra da rimborsare ${eur0(dep.amount, lang)}`, `Deposit to refund ${eur0(dep.amount, lang)}`), title: t('Annullata in tempo: la caparra va restituita', 'Cancelled in time: the deposit must be returned') },
+    refunding: { color: 'var(--warn)', label: t('Rimborso caparra in corso', 'Deposit refund in progress'), title: eur0(dep.amount, lang) },
+    refunded: { color: 'var(--muted)', label: t(`Caparra rimborsata ${eur0(dep.amount, lang)}`, `Deposit refunded ${eur0(dep.amount, lang)}`), title: '' },
+    forfeited: { color: 'var(--ink-2)', label: t(`Caparra trattenuta ${eur0(dep.amount, lang)}`, `Deposit retained ${eur0(dep.amount, lang)}`), title: '' },
+  }[dep.kind];
   return (
     <div className="dk-card" style={{ boxShadow: 'none', border: '1px solid ' + (upcoming ? 'color-mix(in srgb, var(--clay) 40%, var(--hair))' : 'var(--hair)'), overflow: 'hidden', opacity: cancelled ? 0.75 : 1 }}>
       <div style={{ padding: '12px 14px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
@@ -157,7 +178,7 @@ function VisitCard({ e, lang, t, upcoming, canWrite, composerOpen, onCompose, on
             <span className="tabnum" style={{ fontWeight: 700, fontSize: 14.5 }}>{timeLabel(start)}–{timeLabel(end)}</span>
             <span className="t-sm" style={{ color: 'var(--muted)' }}>· {fmtDur(a.total_duration_min, lang)}</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.tint, padding: '2px 8px', borderRadius: 99 }}>{sm.label}</span>
-            {a.deposit_status === 'paid' && <span title={t('Caparra incassata', 'Deposit collected')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--ok)' }}><Icon name="wallet" size={11} color="var(--ok)" />{fmtEur(Number(a.deposit_amount), lang)}</span>}
+            {depLook && <span title={depLook.title} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: depLook.color }}><Icon name="wallet" size={11} color={depLook.color} />{depLook.label}</span>}
             {a.created_via === 'app' && <span className="t-sm" style={{ fontSize: 11, color: 'var(--muted-2)' }}>· {t('dall’app', 'from the app')}</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 6 }}>
@@ -174,8 +195,14 @@ function VisitCard({ e, lang, t, upcoming, canWrite, composerOpen, onCompose, on
           {a.cancel_reason && <div className="t-sm" style={{ marginTop: 6, color: 'var(--danger)' }}>{t('Motivo', 'Reason')}: {a.cancel_reason}</div>}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div className="t-num" style={{ fontSize: 17, fontWeight: 700 }}>{fmtEur(Number(e.sale ? e.sale.total : a.total_price), lang)}</div>
-          <div className="t-sm" style={{ color: e.sale ? 'var(--ok)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{e.sale ? t('incassato', 'paid') : upcoming ? t('previsto', 'expected') : t('non incassato', 'not paid')}</div>
+          {saleHidden ? (
+            <div className="t-sm" title={t('Richiede il permesso vendite', 'Requires the sales permission')} style={{ color: 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{t('importo riservato', 'amount restricted')}</div>
+          ) : (
+            <React.Fragment>
+              <div className="t-num" style={{ fontSize: 17, fontWeight: 700 }}>{fmtEur(Number(e.sale ? e.sale.total : a.total_price), lang)}</div>
+              <div className="t-sm" style={{ color: e.sale ? 'var(--ok)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{e.sale ? t('incassato', 'paid') : upcoming ? t('previsto', 'expected') : t('non incassato', 'not paid')}</div>
+            </React.Fragment>
+          )}
         </div>
       </div>
 

@@ -1,91 +1,96 @@
 // WalletTab.jsx — staff view of the client's wallet: coupons, loyalty points,
-// gift cards. Coupon e gift card si filtrano lato server per `client_id`; la
-// fedeltà no (l'elenco iscritte non ha quel filtro), quindi si scorrono le
-// pagine fino a trovarla — e se il programma è più grande del tetto qui sotto
-// il saldo si dichiara «non verificabile» invece di dire «non iscritta».
-import React, { useEffect, useState } from 'react';
+// gift cards. Tutto si filtra lato server per `client_id`, anche il conto
+// fedeltà: scorrere le pagine dell'elenco iscritte ordinato per punti (a pari
+// merito in ordine non garantito su PostgreSQL) poteva non trovarla mai, e la
+// cliente a 9 timbri su 10 risultava «non iscritta» (14-06, 07-06).
+import React, { useEffect, useRef, useState } from 'react';
 import { api, EmptyState, Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
-import { useDash } from '../../../ctx.jsx';
+import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
-import { dateLabel } from '../helpers.js';
-
-/* scansione dell'elenco iscritte a un programma fedeltà: pagine da 200,
- * al massimo 5.000 tessere — oltre, il saldo non è verificabile da qui. */
-const LOYALTY_PAGE = 200;
-const LOYALTY_MAX = 5000;
+import { dateLabel, rewardLabel } from '../helpers.js';
 
 /** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): una gift card
  *  consumata ha saldo «€0», non è un regalo. */
 const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
 
-/** → { points } se la cliente è iscritta, { points: null } se non lo è,
- *  { unknown: true } se l'elenco è più lungo di quanto possiamo scorrere. */
+/* Caricamento fallito: non è «nessun coupon». Prima un errore di rete si
+ * leggeva come elenco vuoto, e alla cliente si diceva che non aveva buoni. */
+const FAILED = 'failed';
+
+/** → { points } se la cliente è iscritta, { points: null } se non lo è. */
 async function loyaltyPointsOf(programId, clientId) {
-  for (let offset = 0; offset < LOYALTY_MAX; offset += LOYALTY_PAGE) {
-    const res = await api.get(`/api/marketing/loyalty-programs/${programId}/accounts`, {
-      params: { limit: LOYALTY_PAGE, offset },
-    });
-    const items = res.items || [];
-    const mine = items.find((a) => a.client_id === clientId);
-    if (mine) return { points: mine.points };
-    const seen = offset + items.length;
-    if (!items.length || seen >= Number(res.count ?? seen)) return { points: null };
-  }
-  return { unknown: true };
+  const res = await api.get(`/api/marketing/loyalty-programs/${programId}/accounts`, {
+    params: { client_id: clientId },
+  });
+  const mine = (res.items || []).find((a) => a.client_id === clientId);
+  return { points: mine ? mine.points : null };
+}
+
+function LoadFailed({ msg, onRetry, t }) {
+  return (
+    <div className="t-sm" style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 2px 2px', fontWeight: 600 }}>
+      <Icon name="alert" size={13} color="var(--danger)" />{msg}
+      <button type="button" onClick={onRetry} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'transparent', border: 'none', cursor: 'pointer' }}>{t('Riprova', 'Retry')}</button>
+    </div>
+  );
 }
 
 export default function WalletTab({ c }) {
   const { t, lang, services, fireToast } = useDash();
-  const [coupons, setCoupons] = useState(null);
+  const [coupons, setCoupons] = useState(null);   // null = in caricamento · FAILED · []
   const [gifts, setGifts] = useState(null);
-  const [loyalty, setLoyalty] = useState(null);   // [{ program, points }]
+  const [loyalty, setLoyalty] = useState(null);   // [{ program, points } | { program, failed }]
   const [giftView, setGiftView] = useState(null);
+  const [rev, setRev] = useState(0);
+  const retry = () => setRev((n) => n + 1);
 
+  // Saldo gift card riscattata a un'altra cassa, coupon emesso, punti del
+  // premio: la scheda aperta si aggiorna da sola (14-20). Le vendite di altre
+  // clienti non la riguardano.
+  useLive(/^(coupon|giftcard|loyalty|sale)[._]/, (events) => {
+    if (events.some((e) => e.payload?.client_id == null || e.payload.client_id === c.id)) retry();
+  });
+
+  const shownFor = useRef(null);
   useEffect(() => {
     let dead = false;
-    setCoupons(null); setGifts(null); setLoyalty(null);
+    // Scheda nuova: scheletri. Ricarica della stessa: i dati restano a video
+    // finché arrivano quelli nuovi, e se la ricarica fallisce restano quelli.
+    if (shownFor.current !== c.id) { setCoupons(null); setGifts(null); setLoyalty(null); shownFor.current = c.id; }
+    const keepOr = (cur) => (Array.isArray(cur) ? cur : FAILED);
 
     // filtro lato server: cercare per nome e scremare qui lasciava fuori i
     // coupon oltre il centesimo risultato, e la scheda diceva «nessun coupon»
     api.get('/api/marketing/coupons', { params: { client_id: c.id } })
       .then((res) => { if (!dead) setCoupons(res.items || []); })
-      .catch(() => { if (!dead) setCoupons([]); });
+      .catch(() => { if (!dead) setCoupons(keepOr); });
 
     // filtro lato server: la cliente come acquirente o destinataria
     api.get('/api/marketing/gift-cards', { params: { client_id: c.id } })
       .then((res) => { if (!dead) setGifts(res.items || []); })
-      .catch(() => { if (!dead) setGifts([]); });
+      .catch(() => { if (!dead) setGifts(keepOr); });
 
     api.get('/api/marketing/loyalty-programs', { params: { active: true } })
       .then(async (programs) => {
         const active = (programs || []).filter((p) => p.active);
         const rows = await Promise.all(active.map(async (p) => {
           try { return { program: p, ...(await loyaltyPointsOf(p.id, c.id)) }; }
-          catch { return { program: p, unknown: true }; }
+          catch { return { program: p, failed: true }; }
         }));
         if (!dead) setLoyalty(rows);
       })
-      .catch(() => { if (!dead) setLoyalty([]); });
+      .catch(() => { if (!dead) setLoyalty(keepOr); });
 
     return () => { dead = true; };
-  }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [c.id, rev]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + eur0(cp.value, lang);
-  const rewardLabel = (p) => {
-    const rt = p.reward_type || '';
-    if (rt.includes('percent')) return t(`Sconto ${Number(p.reward_value)}%`, `${Number(p.reward_value)}% off`);
-    if (rt.includes('amount')) return t(`Buono ${eur0(p.reward_value, lang)}`, `${eur0(p.reward_value, lang)} voucher`);
-    if (rt.includes('service')) {
-      const s = services.find((x) => x.id === p.reward_service_id);
-      return s ? ((lang === 'en' && s.name_en) ? s.name_en : s.name_it) : t('Servizio omaggio', 'Free service');
-    }
-    return p.reward_value ? String(p.reward_value) : '—';
-  };
 
-  const available = (coupons || []).filter((x) => x.status === 'active').length;
-  const used = (coupons || []).length - available;
-  const activeGifts = (gifts || []).filter((g) => g.status === 'active').length;
+  const couponList = Array.isArray(coupons) ? coupons : [];
+  const available = couponList.filter((x) => x.status === 'active').length;
+  const used = couponList.length - available;
+  const activeGifts = (Array.isArray(gifts) ? gifts : []).filter((g) => g.status === 'active').length;
 
   return (
     <div style={{ maxWidth: 660 }}>
@@ -94,7 +99,9 @@ export default function WalletTab({ c }) {
         <Icon name="coupon" size={15} color="var(--clay-ink)" />
         <span className="t-meta">{t('Coupon · sconti', 'Coupons · discounts')}</span>
       </div>
-      {coupons == null ? <div className="skel" style={{ height: 70, borderRadius: 12, marginBottom: 16 }} /> : (
+      {coupons == null ? <div className="skel" style={{ height: 70, borderRadius: 12, marginBottom: 16 }} /> : coupons === FAILED ? (
+        <LoadFailed t={t} onRetry={retry} msg={t('Coupon non caricati: non è detto che non ce ne siano.', 'Coupons not loaded: there may be some.')} />
+      ) : (
         <React.Fragment>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <div className="dk-card" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', boxShadow: 'none', border: '1px solid var(--hair)' }}>
@@ -153,9 +160,11 @@ export default function WalletTab({ c }) {
         <Icon name="star" size={15} color="var(--clay-ink)" />
         <span className="t-meta">{t('Fedeltà · raccolta punti', 'Loyalty · points balance')}</span>
       </div>
-      {loyalty == null ? <div className="skel" style={{ height: 90, borderRadius: 12 }} /> : loyalty.length ? (
+      {loyalty == null ? <div className="skel" style={{ height: 90, borderRadius: 12 }} /> : loyalty === FAILED ? (
+        <LoadFailed t={t} onRetry={retry} msg={t('Programmi fedeltà non caricati.', 'Loyalty programs not loaded.')} />
+      ) : loyalty.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {loyalty.map(({ program: p, points, unknown }) => {
+          {loyalty.map(({ program: p, points, failed }) => {
             const val = points != null ? points : 0;
             const pctDone = Math.min(100, Math.round(val / Math.max(1, p.threshold) * 100));
             const reached = val >= p.threshold;
@@ -167,16 +176,16 @@ export default function WalletTab({ c }) {
                   <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="star" size={16} color={p.color || 'var(--clay-ink)'} /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{p.name}</div>
-                    <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Premio: ', 'Reward: ')}{rewardLabel(p)}</div>
+                    <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Premio: ', 'Reward: ')}{rewardLabel(p, services, lang)}</div>
                   </div>
-                  <div className="t-num" style={{ fontSize: 16 }}>{unknown ? '—' : val}<span style={{ color: 'var(--muted-2)', fontSize: 13 }}>/{p.threshold}</span></div>
+                  <div className="t-num" style={{ fontSize: 16 }}>{failed ? '—' : val}<span style={{ color: 'var(--muted-2)', fontSize: 13 }}>/{p.threshold}</span></div>
                 </div>
                 <ProgressBar value={pctDone} color={reached ? 'var(--ok)' : (p.color || 'var(--clay)')} />
-                {/* «non verificabile» non è «non iscritta»: senza questa
+                {/* «non caricato» non è «non iscritta»: senza questa
                     distinzione una cliente con 9 timbri su 10 risultava fuori
                     dal programma e nessuno le riconosceva il premio */}
-                {unknown
-                  ? <div className="t-sm" style={{ marginTop: 8, color: 'var(--warn)', fontWeight: 600 }}>{t('Saldo non verificabile: programma troppo numeroso', 'Balance not verifiable: program too large')}</div>
+                {failed
+                  ? <LoadFailed t={t} onRetry={retry} msg={t('Saldo non caricato.', 'Balance not loaded.')} />
                   : points == null
                   ? <div className="t-sm" style={{ marginTop: 8, color: 'var(--muted-2)' }}>{t('Non ancora iscritta al programma', 'Not enrolled yet')}</div>
                   : reached
@@ -196,7 +205,9 @@ export default function WalletTab({ c }) {
         <span className="t-meta">{t('Gift card · buoni regalo', 'Gift cards')}</span>
         {activeGifts > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ok)', background: 'var(--ok-tint)', padding: '2px 8px', borderRadius: 99 }}>{activeGifts} {t('attive', 'active')}</span>}
       </div>
-      {gifts == null ? <div className="skel" style={{ height: 76, borderRadius: 12 }} /> : gifts.length ? (
+      {gifts == null ? <div className="skel" style={{ height: 76, borderRadius: 12 }} /> : gifts === FAILED ? (
+        <LoadFailed t={t} onRetry={retry} msg={t('Gift card non caricate: non è detto che non ce ne siano.', 'Gift cards not loaded: there may be some.')} />
+      ) : gifts.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {gifts.map((g) => {
             const spent = g.status !== 'active';
