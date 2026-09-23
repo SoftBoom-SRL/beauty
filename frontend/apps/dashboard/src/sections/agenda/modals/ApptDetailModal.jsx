@@ -7,7 +7,7 @@ import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
-import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason } from './rules.js';
+import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode } from './rules.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
 
@@ -353,6 +353,29 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     return () => { on = false; };
   }, [showMargin, marginKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* «No-show» compare quando la visita è cominciata: col pannello aperto da
+   * prima dell'orario si ridisegna a quell'ora, senza doverlo riaprire. */
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    if (appt?.status !== 'confirmed') return undefined;
+    const wait = Date.parse(appt.start) - Date.now();
+    if (!(wait > 0) || wait > 12 * 3600000) return undefined;
+    const id = setTimeout(() => setClockTick((n) => n + 1), wait + 1000);
+    return () => clearTimeout(id);
+  }, [appt?.status, appt?.start]);
+
+  /* «Copia link»: la conferma si dà solo se la copia è riuscita; se non lo è,
+   * il link resta scritto nel pannello da copiare a mano (13-25). */
+  const [linkCopyFailed, setLinkCopyFailed] = useState(false);
+  async function copyDepositLink() {
+    const ok = await copyText(apptRef.current?.deposit_payment_link);
+    if (!alive.current) return;
+    setLinkCopyFailed(!ok);
+    fireToast(ok
+      ? { msg: t('Link copiato', 'Link copied'), icon: 'check' }
+      : { msg: t('Copia non riuscita: il link è scritto nel pannello, selezionalo e copialo a mano', 'Copy failed: the link is shown in the panel, select it and copy it by hand'), icon: 'alert' });
+  }
+
   if (!appt) return null;
   const o = operators.find((x) => x.id === appt.operator_id);
   const col = opColors[appt.operator_id] || 'var(--clay)';
@@ -434,10 +457,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   };
   const removeServiceItem = (key) => setEditItems((l) => l.filter((x) => x.key !== key));
   const setItemDuration = (key, raw) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: raw === '' ? '' : Math.max(0, parseInt(raw, 10) || 0) } : x)));
-  const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.max(5, parseInt(x.duration_min, 10) || 5) } : x)));
+  // 12 ore al massimo, come ItemEditIn sul server: un «600» battuto al posto
+  // di «60» finiva in un 422 in inglese senza dire quale campo (17-12)
+  const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.min(MAX_ITEM_MIN, Math.max(5, parseInt(x.duration_min, 10) || 5)) } : x)));
   const setItemOperator = (key, opId) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
 
-  const setItemGap = (key, minutes) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, soak_min: Math.max(0, minutes) } : x)));
+  const setItemGap = (key, minutes) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, soak_min: Math.min(MAX_ITEM_MIN, Math.max(0, minutes)) } : x)));
 
   /* ---- ora di inizio e di fine di OGNI servizio ----------------------------
    * Ogni trattamento ha il suo orario, e fra uno e l'altro ci può essere un
@@ -460,7 +485,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     const it = editItems[index], span = itemSpans[index];
     clearDraft(it.key, 'to');
     if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
-    const active = Math.max(5, hmToMin(hm) - span.from);
+    const active = Math.min(MAX_ITEM_MIN, Math.max(5, hmToMin(hm) - span.from));
     setItemDuration(it.key, String(active));
     const next = editItems[index + 1];
     if (next && span.gap > 0) {
@@ -486,6 +511,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     }
     const prev = editItems[index - 1], prevSpan = itemSpans[index - 1];
     const gap = wanted - prevSpan.to;
+    if (gap > MAX_ITEM_MIN) {
+      fireToast({ msg: t('Fra un servizio e l’altro l’attesa può essere al massimo di 12 ore', 'The wait between two services can be at most 12 hours'), icon: 'alert' });
+      return;
+    }
     if (gap < 0) {
       fireToast({
         msg: t(`${svcDisplayName(it)} non può cominciare prima che finisca ${svcDisplayName(prev)} (${timeLabel(prevSpan.to)}): per farli insieme trascinalo nella colonna di una collega`,
@@ -539,9 +568,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             ...(it.id != null ? { id: it.id } : {}),   // existing → id; new → omitted; omitted rows → removed
             service_id: it.service_id,
             operator_id: it.operator_id ?? null,
-            duration_min: Math.max(5, parseInt(it.duration_min, 10) || 5),
+            duration_min: Math.min(MAX_ITEM_MIN, Math.max(5, parseInt(it.duration_min, 10) || 5)),
             // l'attesa dopo il servizio: posa del listino o buco voluto
-            soak_min: Math.max(0, parseInt(it.soak_min, 10) || 0),
+            soak_min: Math.min(MAX_ITEM_MIN, Math.max(0, parseInt(it.soak_min, 10) || 0)),
           })),
         } : {}),
         ...(noteDirty ? { note } : {}),
@@ -628,8 +657,11 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (alive.current) onClose();
   }
 
-  /* ---- reason picker (shared by no-show + cancel) ---- */
-  const ReasonPicker = ({ reasons }) => (
+  /* ---- reason picker (shared by no-show + cancel) ----
+   * Si chiama come funzione e non come <ReasonPicker/>: definito qui dentro è
+   * un componente nuovo a ogni render, e React rimontava la textarea a ogni
+   * tasto (il campo perdeva il fuoco dopo ogni lettera). */
+  const reasonPicker = ({ reasons }) => (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 9 }}>
         <div className="t-meta">{t('Motivazione (per le statistiche)', 'Reason (for statistics)')}</div>
@@ -644,7 +676,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         })}
       </div>
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Nota (facoltativa)', 'Note (optional)')}</div>
+      {/* motivazione + nota vanno in un campo da 255 caratteri (ReasonIn): oltre,
+          il no-show non veniva registrato e l'avviso era in inglese (17-12) */}
       <textarea value={reasonNote} onChange={(e) => setReasonNote(e.target.value)} placeholder={t('Aggiungi un dettaglio…', 'Add a detail…')} rows={2}
+        maxLength={reasonNoteMax((reasons.find((r) => r[0] === reason) || [])[1] || '')}
         style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 12, padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--sans)', resize: 'vertical', outline: 'none', boxSizing: 'border-box', background: 'var(--surface)' }} />
     </div>
   );
@@ -673,7 +708,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
           <FlowSteps steps={noShowSteps(appt, matchCount, t, lang)} />
         </div>
-        <ReasonPicker reasons={noShowReasons} />
+        {reasonPicker({ reasons: noShowReasons })}
       </DkPanel>
     );
   }
@@ -694,7 +729,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
           <FlowSteps steps={cancelSteps(appt, matchCount, t, lang)} />
         </div>
-        <ReasonPicker reasons={cancelReasons} />
+        {reasonPicker({ reasons: cancelReasons })}
       </DkPanel>
     );
   }
@@ -753,10 +788,15 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
               più piccole. Prima erano due scritte grigie come il resto. */}
           {!terminal && canWrite && (
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
-                onClick={() => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); }}>
-                <Icon name="alert" size={14} color="var(--danger)" />No-show
-              </button>
+              {/* Solo per chi era attesa e non è arrivata: il server rifiuta il
+                  no-show di chi è già in salone o di una visita non ancora
+                  cominciata (caparra trattenuta e storico sporcato). */}
+              {canMarkNoShow(appt) && (
+                <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
+                  onClick={() => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); }}>
+                  <Icon name="alert" size={14} color="var(--danger)" />No-show
+                </button>
+              )}
               <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
                 onClick={() => { setFlow('cancel'); setReason(null); setReasonNote(''); }}>
                 <Icon name="x" size={14} color="var(--danger)" />{t('Cancella', 'Cancel booking')}
@@ -771,7 +811,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 11.5, fontWeight: 700, color: sm.color, background: sm.tint, padding: '3px 9px', borderRadius: 99 }}>{sm.label}</span>
             {appt.forced && <span title={t('Inserito o spostato forzando le regole (fuori turno o sovrapposizione)', 'Inserted or moved overriding the rules (off shift or overlap)')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="alert" size={11} color="var(--warn)" />{t('Forzato', 'Forced')}</span>}
-            {(appt.gifts || []).length > 0 && <span title={(appt.gifts || []).map((g) => `${g.service_name} · ${g.code}${g.from_name ? ' · ' + t('da', 'from') + ' ' + g.from_name : ''}`).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="gift" size={11} color="var(--clay-ink)" />{t('Regalo', 'Gift')}{(appt.gifts || [])[0]?.from_name ? ' · ' + t('da', 'from') + ' ' + appt.gifts[0].from_name : ''}</span>}
+            {(appt.gifts || []).length > 0 && <span title={(appt.gifts || []).map((g) => [g.service_name, usableCode(g.code), g.from_name ? t('da', 'from') + ' ' + g.from_name : ''].filter(Boolean).join(' · ')).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="gift" size={11} color="var(--clay-ink)" />{t('Regalo', 'Gift')}{(appt.gifts || [])[0]?.from_name ? ' · ' + t('da', 'from') + ' ' + appt.gifts[0].from_name : ''}</span>}
             {(clientDetail?.categories || []).slice(0, 2).map((c) => (
               <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
             ))}
@@ -916,9 +956,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                       <Icon name="send" size={13} />{appt.deposit_payment_link ? t('Sollecita', 'Remind') : t('Invia link di pagamento', 'Send payment link')}
                     </button>
                     {appt.deposit_payment_link && (
-                      <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12 }} onClick={() => { navigator.clipboard?.writeText(appt.deposit_payment_link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); }}>
+                      <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12 }} onClick={copyDepositLink}>
                         <Icon name="copy" size={13} />{t('Copia link', 'Copy link')}
                       </button>
+                    )}
+                    {appt.deposit_payment_link && linkCopyFailed && (
+                      <input readOnly value={appt.deposit_payment_link} onFocus={(e) => e.currentTarget.select()} aria-label={t('Link di pagamento', 'Payment link')}
+                        style={{ flexBasis: '100%', minWidth: 0, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', fontSize: 12, fontFamily: 'var(--mono, monospace)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none' }} />
                     )}
                     {/* Il salone che non incassa online non aveva nessun modo di
                         registrare la caparra pagata al banco: il termine scadeva
@@ -954,13 +998,24 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             </div>
           )}
 
-          {/* note edit → PUT /appointments/{id} */}
+          {/* note edit → PUT /appointments/{id}. Si scrive solo dove la si può
+              anche salvare: su una visita chiusa (o senza il permesso agenda)
+              il campo era modificabile, il pulsante di salvataggio non
+              compariva e l'avviso rimandava a un tasto che non c'era (13-23). */}
           <div>
             <div className="t-meta" style={{ marginBottom: 6 }}>{t('Nota appuntamento', 'Appointment note')}</div>
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t('Aggiungi una nota…', 'Add a note…')}
-              style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 12, padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--sans)', resize: 'vertical', outline: 'none', boxSizing: 'border-box', background: 'var(--surface)' }} />
-            {noteDirty && (
-              <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 5 }}>{t('Nota modificata: si salva col pulsante in fondo.', 'Note changed: save it with the button below.')}</div>
+            {itemsEditable ? (
+              <React.Fragment>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t('Aggiungi una nota…', 'Add a note…')}
+                  style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 12, padding: '10px 12px', fontSize: 13.5, fontFamily: 'var(--sans)', resize: 'vertical', outline: 'none', boxSizing: 'border-box', background: 'var(--surface)' }} />
+                {noteDirty && (
+                  <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 5 }}>{t('Nota modificata: si salva col pulsante in fondo.', 'Note changed: save it with the button below.')}</div>
+                )}
+              </React.Fragment>
+            ) : (
+              <div className="t-sm" style={{ whiteSpace: 'pre-wrap', color: appt.note ? 'var(--ink-2)' : 'var(--muted-2)', padding: '8px 12px', borderRadius: 12, background: 'var(--surface-2)' }}>
+                {appt.note || t('Nessuna nota', 'No note')}
+              </div>
             )}
           </div>
 
@@ -1001,8 +1056,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                 const gift = (appt.gifts || []).find((g) => g.service_id === it.service_id);
                 return (
                   <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-                    <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={`${t('Gift card', 'Gift card')} ${gift.code}`} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name="gift" size={10} color="var(--clay-ink)" />{t('Regalo', 'Gift')}</span>}</span>
-                    <span className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(it.duration_min, lang)} · {fmtEur(Number(it.price), lang)}</span>
+                    <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={[t('Gift card', 'Gift card'), usableCode(gift.code)].filter(Boolean).join(' ')} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name="gift" size={10} color="var(--clay-ink)" />{t('Regalo', 'Gift')}</span>}</span>
+                    <span className="t-sm" style={{ color: 'var(--muted)' }}>{[operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name, fmtDur(it.duration_min, lang), fmtEur(Number(it.price), lang)].filter(Boolean).join(' · ')}</span>
                   </div>
                 );
               })}
@@ -1034,6 +1089,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                   // nuove: era l'unico modo per sapere su chi finiva un servizio
                   // aggiunto, e per passarne uno alla collega senza trascinare.
                   const eligible = eligibleOps(it.service_id);
+                  // Chi ha già la riga resta scritta anche se nel frattempo non
+                  // è più abilitata al servizio o è stata disattivata: prima
+                  // nessuna pillola era accesa e non si capiva chi avesse il
+                  // servizio (13-13).
+                  const holder = it.operator_id != null && !eligible.some((op) => op.id === it.operator_id)
+                    ? { id: it.operator_id, name: operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name || '—', active: operators.some((x) => x.id === it.operator_id) }
+                    : null;
                   const span = itemSpans[i];
                   return (
                     <div key={it.key} ref={it.key === justAdded ? addedRef : undefined}
@@ -1068,7 +1130,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                           title={t('Fine del lavoro: quello che viene dopo è attesa', 'End of the work: what follows is waiting')}
                           aria-label={t('Ora di fine del servizio', 'Service end time')}
                           style={timeCellCss} />
-                        <NumInput integer min={5} value={it.duration_min} emptyValue=""
+                        <NumInput integer min={5} max={MAX_ITEM_MIN} value={it.duration_min} emptyValue=""
                           onChange={(v) => setItemDuration(it.key, v)} onBlur={() => clampItemDuration(it.key)}
                           aria-label={t('Durata in minuti', 'Duration in minutes')}
                           style={{ width: 48, marginLeft: 4, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'var(--sans)', textAlign: 'right', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
@@ -1103,6 +1165,17 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                         );
                       })()}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
+                        {holder && (
+                          <React.Fragment>
+                            <span className="dk-pill dk-pill--tint dk-pill--on" style={{ '--pill-c': opColors[holder.id] || 'var(--muted-2)', padding: '2px 9px 2px 3px', fontSize: 11.5, cursor: 'default' }}>
+                              <Avatar initials={initialsOf(holder.name)} size={18} color={opColors[holder.id] || 'var(--muted-2)'} ring />
+                              <span>{holder.name}</span>
+                            </span>
+                            <span className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              <Icon name="alert" size={11} color="var(--warn)" />{holder.active ? t('non più abilitata a questo servizio', 'no longer enabled for this service') : t('non più attiva', 'no longer active')}
+                            </span>
+                          </React.Fragment>
+                        )}
                         {eligible.length > 0 ? (
                           <React.Fragment>
                             {eligible.map((op) => {
@@ -1122,7 +1195,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                               </button>
                             )}
                           </React.Fragment>
-                        ) : (
+                        ) : !holder && (
                           <span className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                             <Icon name="alert" size={12} color="var(--danger)" />{t('Nessuna operatrice abilitata a questo servizio', 'No stylist can perform this service')}
                           </span>

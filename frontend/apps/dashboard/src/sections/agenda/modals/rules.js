@@ -166,3 +166,9 @@ export async function copyText(text, env = globalThis) {
     return false;
   }
 }
+
+/* ---- gift card -------------------------------------------------------------- */
+
+/** Chi non ha marketing né cassa riceve i codici mascherati («••••1234»,
+ *  contratto C21): non vanno mostrati come se fossero il codice da usare. */
+export const usableCode = (code) => (code && !String(code).includes('•') ? String(code) : '');
