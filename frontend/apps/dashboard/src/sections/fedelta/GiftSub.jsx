@@ -149,7 +149,10 @@ export default function GiftSub() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
           <Icon name="search" size={18} color="var(--muted-2)" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Cerca per codice, acquirente o destinataria…', 'Search by code, buyer or recipient…')} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={canCreate
+            ? t('Cerca per codice, acquirente o destinataria…', 'Search by code, buyer or recipient…')
+            // codici mascherati (C21): il server non cerca per codice
+            : t('Cerca per acquirente o destinataria…', 'Search by buyer or recipient…')} />
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[

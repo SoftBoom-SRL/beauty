@@ -19,6 +19,8 @@ function couponValueLabel(c, lang) {
 export default function CouponSub() {
   const { t, lang, hasScope, fireToast } = useDash();
   const canWrite = hasScope('marketing');
+  // chi non ha marketing né vendite vede i codici mascherati e non cerca per codice (C21)
+  const codesVisible = canWrite || hasScope('sales');
 
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
@@ -102,7 +104,7 @@ export default function CouponSub() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
           <Icon name="search" size={18} color="var(--muted-2)" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Cerca per codice o cliente…', 'Search by code or client…')} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={codesVisible ? t('Cerca per codice o cliente…', 'Search by code or client…') : t('Cerca per cliente…', 'Search by client…')} />
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[
