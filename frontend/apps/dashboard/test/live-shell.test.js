@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createSeen } from '../src/liveSeen.js';
+import { createBatcher, createSeen } from '../src/liveSeen.js';
 import { isChunkLoadError, reloadOnce, reloadPending, RELOAD_KEY, RELOAD_WINDOW_MS } from '../src/shell/chunkReload.js';
 
 const ev = (id, type = 'appointment.created') => ({ id, type, summary: `evento ${id}`, actor_id: 2 });
@@ -72,4 +72,25 @@ test('11-11: senza sessionStorage non si ricarica da soli (nessun ciclo possibil
   const broken = { getItem: () => { throw new Error('SecurityError'); }, setItem: () => {} };
   assert.equal(reloadOnce({ storage: broken, reload: () => { reloads += 1; } }), false);
   assert.equal(reloads, 0);
+});
+
+test('useLive: le consegne arrivate nella stessa finestra passano tutte, una volta per id', () => {
+  // timer finti: `run()` fa scattare quello in attesa
+  let pending = null;
+  const timers = { set: (fn) => { pending = fn; return 1; }, clear: () => { pending = null; } };
+  const run = () => { const fn = pending; pending = null; fn?.(); };
+  const got = [];
+  const batcher = createBatcher(250, (list) => got.push(list.map((e) => e.id)), timers);
+  // due consegne ravvicinate: la cliente 7, poi la cliente 8 (e un doppione)
+  batcher.push([ev(1, 'client.updated')]);
+  batcher.push([ev(2, 'client.updated'), ev(1, 'client.updated')]);
+  run();
+  // prima arrivava solo l'ultima consegna, e la scheda della cliente 7 restava vecchia
+  assert.deepEqual(got, [[1, 2]]);
+  batcher.push([]);                  // una consegna senza eventi utili non riarma niente
+  assert.equal(pending, null);
+  batcher.push([ev(3)]);
+  batcher.cancel();                  // smontaggio: niente callback dopo
+  run();
+  assert.deepEqual(got, [[1, 2]]);
 });

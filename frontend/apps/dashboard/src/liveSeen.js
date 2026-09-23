@@ -32,3 +32,39 @@ export function createSeen(limit = 2000) {
     },
   };
 }
+
+/** Debounce che NON perde eventi: `push(list)` accumula, e dopo `delay` ms di
+ *  silenzio `deliver` riceve tutto quello arrivato nella finestra (una volta
+ *  per id). Prima `useLive` passava solo gli eventi dell'ULTIMA consegna: se
+ *  nei 250 ms arrivavano due consegne, l'evento di una cliente seguito da
+ *  quello di un'altra si perdeva, e la scheda della prima — che filtra per
+ *  `client_id` — non si ricaricava. `timers` si sostituisce nei test. */
+export function createBatcher(delay, deliver, timers = { set: setTimeout, clear: clearTimeout }) {
+  let pending = [];
+  let handle = null;
+  return {
+    push(list) {
+      if (!list || !list.length) return;
+      pending.push(...list);
+      timers.clear(handle);
+      handle = timers.set(() => {
+        handle = null;
+        const seen = new Set();
+        const batch = pending.filter((e) => {
+          const id = e && e.id;
+          if (id == null) return true;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        pending = [];
+        deliver(batch);
+      }, delay);
+    },
+    cancel() {
+      timers.clear(handle);
+      handle = null;
+      pending = [];
+    },
+  };
+}

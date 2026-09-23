@@ -18,6 +18,9 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
   const [adding, setAdding] = useState(false);
   const [nf, setNf] = useState({ first_name: '', last_name: '', phone: '' });
   const [creating, setCreating] = useState(false);
+  // Scheda archiviata con lo stesso numero (409 della creazione, 06-02): si
+  // riattiva quella invece di fermarsi su «telefono già registrato».
+  const [archived, setArchived] = useState(null);   // { id, name }
 
   useEffect(() => {
     if (!open || !q.trim()) { setResults([]); return; }
@@ -34,13 +37,14 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     return () => { alive = false; clearTimeout(tm); };
   }, [q, open]);
 
-  const close = () => { setOpen(false); setAdding(false); setNf({ first_name: '', last_name: '', phone: '' }); };
+  const close = () => { setOpen(false); setAdding(false); setArchived(null); setNf({ first_name: '', last_name: '', phone: '' }); };
 
   const startAdd = () => {
     // prefill the name from what was typed (first token → first name)
     const typed = q.trim();
     const parts = typed.split(/\s+/);
     setNf({ first_name: parts[0] || '', last_name: parts.slice(1).join(' ') || '', phone: '' });
+    setArchived(null);
     setAdding(true);
   };
 
@@ -57,6 +61,24 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
       });
       onChange(created); // { id, full_name, ... }
       fireToast({ msg: t('Cliente creata', 'Client created'), icon: 'check' });
+      setQ(''); close();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.data?.archived_client_id) {
+        setArchived({ id: err.data.archived_client_id, name: err.data.archived_client_name || '' });
+      }
+      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const reactivate = async () => {
+    if (creating || !archived) return;
+    setCreating(true);
+    try {
+      const saved = await api.put(`/api/clients/${archived.id}`, { is_active: true });
+      onChange(saved);
+      fireToast({ msg: t(`Scheda di ${saved.full_name} riattivata`, `${saved.full_name}'s profile reactivated`), icon: 'check' });
       setQ(''); close();
     } catch (err) {
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
@@ -99,6 +121,16 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
                 {nf.phone.trim() && !phoneOk && (
                   <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>
                     {t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')}
+                  </div>
+                )}
+                {archived && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
+                      {t(`Il numero è di una scheda archiviata${archived.name ? `: ${archived.name}` : ''}. Riattivala: storico e punti restano i suoi.`, `This number belongs to an archived profile${archived.name ? `: ${archived.name}` : ''}. Reactivate it: history and points stay with it.`)}
+                    </span>
+                    <button className="dk-btn dk-btn--clay" style={{ height: 30, fontSize: 12, flexShrink: 0 }} disabled={creating} onClick={reactivate}>
+                      <Icon name="refresh" size={13} color="#fff" />{t('Riattiva e seleziona', 'Reactivate & select')}
+                    </button>
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 2 }}>

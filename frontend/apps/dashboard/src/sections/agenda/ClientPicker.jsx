@@ -10,7 +10,7 @@
 // anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
 // chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, PhoneInput, Toggle } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { initialsOf } from './lib.js';
 import { GenderPicker } from '../../ui/index.js';
@@ -46,6 +46,9 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [err, setErr] = useState('');
   const [saving, setSaving] = useState(false);
+  // Scheda archiviata con lo stesso numero (409 della creazione, 06-02): si
+  // riattiva quella, con storico e punti, invece di un vicolo cieco.
+  const [archived, setArchived] = useState(null);   // { id, name }
   const inputRef = useRef(null);
   const firstRef = useRef(null);
   const blurTimer = useRef(null);
@@ -65,14 +68,14 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     return () => { alive = false; clearTimeout(tm); };
   }, [q, open, value]);
 
-  const pick = (c) => { onChange(c); setQ(''); setOpen(false); setCreating(false); setErr(''); };
+  const pick = (c) => { onChange(c); setQ(''); setOpen(false); setCreating(false); setErr(''); setArchived(null); };
 
   const startCreate = () => {
     const raw = q.trim();
     const d = { ...EMPTY_DRAFT };
     if (looksLikePhone(raw)) d.phone = raw;
     else { const [first, ...rest] = raw.split(/\s+/).filter(Boolean); d.first_name = (first || '').slice(0, MAX.first_name); d.last_name = rest.join(' ').slice(0, MAX.last_name); }
-    setDraft(d); setErr(''); setCreating(true); setFull(false); setOpen(false);
+    setDraft(d); setErr(''); setArchived(null); setCreating(true); setFull(false); setOpen(false);
     requestAnimationFrame(() => (d.first_name ? null : firstRef.current)?.focus?.());
   };
   const setD = (patch) => setDraft((d) => ({ ...d, ...patch }));
@@ -82,7 +85,10 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     const first = draft.first_name.trim(), last = draft.last_name.trim(), phone = draft.phone.trim();
     if (!first) { setErr(t('Il nome è obbligatorio', 'First name is required')); return; }
     if (!phone) { setErr(t('Il telefono è obbligatorio', 'Phone is required')); return; }
-    setSaving(true); setErr('');
+    // Stesso controllo della scheda anagrafica: un numero che nessuno può
+    // ricevere nasceva qui e non riceveva mai conferme né codici.
+    if (!isPlausiblePhone(phone)) { setErr(t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')); return; }
+    setSaving(true); setErr(''); setArchived(null);
     try {
       // stessi campi della scheda anagrafica: ciò che non viene compilato resta vuoto
       const c = await api.post('/api/clients/', {
@@ -99,6 +105,21 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
         catch { /* ignora */ }
       }
       fireToast({ msg: t(`Cliente creato: ${c.full_name}`, `Client created: ${c.full_name}`), icon: 'check' });
+      pick(c);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
+        setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
+      }
+      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+    } finally { setSaving(false); }
+  };
+
+  const reactivate = async () => {
+    if (saving || !archived) return;
+    setSaving(true); setErr('');
+    try {
+      const c = await api.put(`/api/clients/${archived.id}`, { is_active: true });
+      fireToast({ msg: t(`Scheda di ${c.full_name} riattivata`, `${c.full_name}'s profile reactivated`), icon: 'check' });
       pick(c);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
@@ -238,6 +259,17 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
           </div>
         )}
 
+        {archived && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+            <Icon name="alert" size={15} color="var(--warn)" />
+            <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
+              {t(`Il numero è di una scheda archiviata${archived.name ? `: ${archived.name}` : ''}. Riattivala: storico e punti restano i suoi.`, `This number belongs to an archived profile${archived.name ? `: ${archived.name}` : ''}. Reactivate it: history and points stay with it.`)}
+            </span>
+            <button type="button" className="dk-btn dk-btn--clay" style={{ height: 30, fontSize: 12, flexShrink: 0 }} disabled={saving} onClick={reactivate}>
+              <Icon name="refresh" size={13} color="#fff" />{t('Riattiva e seleziona', 'Reactivate & select')}
+            </button>
+          </div>
+        )}
         {err && <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}><Icon name="alert" size={14} color="var(--danger)" />{err}</div>}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setFull((v) => !v)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', padding: 0 }}>

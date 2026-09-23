@@ -2,7 +2,7 @@
 // modal/drawer/toast plumbing, live feed. Section agents CONSUME this via useDash().
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, API_URL, setSalonTz, staffAuth, useT, useToastHost } from '@youty/shared';
-import { createSeen } from './liveSeen.js';
+import { createBatcher, createSeen } from './liveSeen.js';
 
 const DashCtx = createContext(null);
 export const useDash = () => useContext(DashCtx);
@@ -16,24 +16,21 @@ export function useLive(match, fn) {
   const subscribe = live?.subscribe;
   const fnRef = useRef(fn);
   fnRef.current = fn;
-  // Il timer vive in un ref, non in una variabile dell'effetto: dipendendo
-  // dall'oggetto `live` (che cambia a ogni consegna) l'effetto si rimontava a
-  // ogni evento e il timer ripartiva da zero, così il debounce non univa mai
-  // due eventi vicini — tre appuntamenti salvati altrove facevano tre
-  // ricaricamenti. `live.subscribe` invece è stabile.
-  const timer = useRef(null);
+  // L'effetto dipende da `live.subscribe`, che è stabile, e non dall'oggetto
+  // `live` (che cambia a ogni consegna): così si rimontava a ogni evento e il
+  // timer ripartiva da zero, il debounce non univa mai due eventi vicini — tre
+  // appuntamenti salvati altrove facevano tre ricaricamenti.
+  // Il debounce accumula tutte le consegne della finestra (createBatcher): con
+  // solo l'ultima, l'evento di una cliente seguito entro 250 ms da quello di
+  // un'altra si perdeva, e la scheda della prima non si ricaricava.
   useEffect(() => {
     if (!subscribe) return undefined;
     const re = match instanceof RegExp ? match : new RegExp('^(' + [].concat(match).join('|').replace(/\./g, '\\.') + ')');
-    const off = subscribe(({ events }) => {
-      const hit = events.filter((e) => re.test(e.type));
-      if (!hit.length) return;
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => { try { fnRef.current?.(hit); } catch { /* ignore */ } }, 250);
-    });
+    const batcher = createBatcher(250, (hit) => { try { fnRef.current?.(hit); } catch { /* ignore */ } });
+    const off = subscribe(({ events }) => batcher.push(events.filter((e) => re.test(e.type))));
     // Anche il timer va fermato allo smontaggio: cambiando sezione entro 250 ms
     // dall'ultimo evento la callback partiva su un componente già smontato.
-    return () => { off(); clearTimeout(timer.current); };
+    return () => { off(); batcher.cancel(); };
   }, [subscribe, String(match)]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
