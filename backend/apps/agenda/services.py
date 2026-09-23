@@ -1060,17 +1060,14 @@ def _validate_segments(
     *,
     exclude_appointment_id: int | None = None,
     ignore_client_id: int | None = None,
-    allow_soak: bool = True,
 ) -> None:
     """Valida una sequenza già assegnata: segments = [(active_min, soak_min, operator)].
 
     Usata per lo spostamento (durate = snapshot attivo/posa degli item). Essendo
     un'azione MANUALE dello staff, ogni finestra attiva è validata con
     allow_soak=True: può sovrapporsi alla posa altrui, mai al lavoro attivo/pausa.
-    `allow_soak=False` è per i gesti della cliente dall'app, che nella posa di
-    un'altra non entrano mai (la ricerca non la propone). Solleva 409 se un
-    segmento non è dentro turno o collide con un intervallo bloccante. La
-    catena avanza di attivo + posa.
+    Solleva 409 se un segmento non è dentro turno o collide con un intervallo
+    bloccante. La catena avanza di attivo + posa.
 
     In chiusura si verifica anche che la catena, posa compresa, stia dentro gli
     orari del centro — la fascia in cui comincia, o il turno se il salone non ha
@@ -1096,7 +1093,7 @@ def _validate_segments(
             windows_cache[operator.id] = shift_windows(operator, day)
         if not _is_free(
             windows_cache[operator.id], busy.get(operator.id, ()), cursor, end,
-            allow_soak=allow_soak,
+            allow_soak=True,
         ):
             raise HttpError(409, "Orario non più disponibile")
         cursor = end + (soak_min or 0)
