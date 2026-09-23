@@ -13,7 +13,7 @@ from datetime import date as date_cls
 from datetime import datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Count, DateField, Min, Q, Sum
+from django.db.models import Count, DateField, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
 from django.utils import timezone
 from ninja.errors import HttpError
@@ -31,6 +31,12 @@ GRANULARITIES = {"day", "week", "month"}
 # molto più del confronto anno su anno che il titolare guarda davvero.
 MAX_RANGE_DAYS = 732
 
+# Date accettate come periodo. Fuori da qui l'anno 1 andava in overflow nella
+# conversione in UTC e il 9999 in `date(anno + 1, …)`: la richiesta finiva in un
+# 500 invece di dire che la data non ha senso.
+MIN_DATE = date_cls(1900, 1, 1)
+MAX_DATE = date_cls(2999, 12, 31)
+
 ZERO = Decimal("0.00")
 
 # Stati "prenotati" ai fini dell'occupazione e stati terminali usati dai KPI.
@@ -45,6 +51,13 @@ _CANCELLED = "cancelled"
 # ---------------------------------------------------------------------------
 # Periodi
 # ---------------------------------------------------------------------------
+
+
+def _check_date(d: date_cls | None) -> None:
+    if d is not None and not MIN_DATE <= d <= MAX_DATE:
+        raise HttpError(
+            400, f"Data fuori scala: usa una data fra il {MIN_DATE.year} e il {MAX_DATE.year}"
+        )
 
 
 def _add_months(d: date_cls, months: int) -> date_cls:
@@ -62,6 +75,7 @@ def period_range(period: str, date: date_cls | None = None) -> tuple[datetime, d
     """
     if period not in PERIODS:
         raise HttpError(400, "Periodo non valido: usa month, quarter o year")
+    _check_date(date)
     anchor = date or timezone.localdate()
     if period == "month":
         start_date = anchor.replace(day=1)
@@ -81,6 +95,8 @@ def period_range(period: str, date: date_cls | None = None) -> tuple[datetime, d
 
 def custom_range(date_from: date_cls, date_to: date_cls) -> tuple[datetime, datetime]:
     """Intervallo esplicito [start, end) da due date INCLUSE (end = date_to + 1 giorno)."""
+    _check_date(date_from)
+    _check_date(date_to)
     if date_from > date_to:
         raise HttpError(400, "Intervallo non valido: la data iniziale è successiva a quella finale")
     # Tetto all'ampiezza: il selettore di date non ha un anno minimo, e un
@@ -226,10 +242,18 @@ def occupancy_by_weekday(salon, period: str, date: date_cls | None = None, date_
     result = []
     for weekday in range(7):
         weekday_days = [d for d in days if d.weekday() == weekday]
+        capacity = sum(shift_by_day.get(d, 0) for d in weekday_days)
         result.append(
             {
                 "weekday": weekday,
-                "occupancy_pct": _occupancy_for_days(booked_by_day, shift_by_day, weekday_days),
+                # Giorno senza capacità (chiuso, nessun turno): nessun dato, non
+                # uno 0 % indistinguibile da «aperto e vuoto» — il grafico lo
+                # coloriva di rosso e lo proponeva come il giorno più scarico.
+                "occupancy_pct": (
+                    _occupancy_for_days(booked_by_day, shift_by_day, weekday_days)
+                    if capacity
+                    else None
+                ),
             }
         )
     return result
@@ -317,45 +341,68 @@ def revenue_by_category(salon, period: str, date: date_cls | None = None, date_f
 # ---------------------------------------------------------------------------
 
 
-def _new_client_ids(salon, start: datetime, end: datetime) -> set:
-    """Clienti acquisite nel periodo [start, end).
+# Un «cliente dal» che precede di più di tanto la prima visita registrata è la
+# data di una cliente storica (scheda importata con la sua data, o scritta a
+# mano): la sua prima visita in youty non è la prima al salone. Una data vicina
+# alla prima visita è invece l'iscrizione (app, form, reception), che precede di
+# qualche giorno la prima prenotazione.
+HISTORIC_SINCE_DAYS = 90
 
-    `Client.since` è la data di acquisizione dichiarata, ma resta vuota su tutte
-    le schede storiche (e finché ogni via di creazione non la valorizza): a
-    contare solo quella, "Nuovi clienti" era strutturalmente 0 e il grafico
-    "Nuovi vs di ritorno" mostrava sempre 0% / 100%. Per le schede senza `since`
-    l'acquisizione si ricava dal primo contatto reale con il salone: la prima
-    visita in agenda o il primo scontrino.
+
+def _new_client_ids(salon, start: datetime, end: datetime) -> set:
+    """Clienti acquisite nel periodo [start, end): la PRIMA visita (non annullata
+    né no-show) o il primo acquisto della cliente cade nel periodo.
+
+    Prima bastava `Client.since` nel periodo, senza guardare l'attività: l'import
+    CSV e il primo sync Yourang lo impostano al giorno dell'operazione, quindi
+    nel mese dell'avvio l'intera rubrica risultava «nuova» e la cliente storica
+    tornata quel giorno non era «di ritorno». Ora conta il primo contatto reale;
+    `since` può solo dire che una cliente è più vecchia (vedi
+    HISTORIC_SINCE_DAYS), mai renderla nuova da sola.
     """
-    ids = set(
-        Client.objects.filter(
-            salon=salon, since__gte=start.date(), since__lt=end.date()
-        ).values_list("id", flat=True)
-    )
+    visits = Appointment.objects.filter(status__in=_OCCUPIED_STATUSES)
+    # Le vendite-caparra no: sono l'anticipo di una visita, che conta da sé.
+    sales = Sale.objects.filter(deposit_appointment__isnull=True, client__isnull=False)
     # Chi è stata acquisita nel periodo ha per forza una visita o uno scontrino
     # NEL periodo: si parte da quelle e si guarda indietro. Così il conto non
     # scorre l'anagrafica intera a ogni apertura della dashboard.
     seen_in_period = set(
-        Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end).values_list(
+        visits.filter(salon=salon, start__gte=start, start__lt=end).values_list(
             "client_id", flat=True
         )
     )
     seen_in_period.update(
-        cid
-        for cid in Sale.objects.filter(
-            salon=salon, created_at__gte=start, created_at__lt=end
-        ).values_list("client_id", flat=True)
-        if cid
+        sales.filter(salon=salon, created_at__gte=start, created_at__lt=end).values_list(
+            "client_id", flat=True
+        )
     )
-    legacy = (
-        Client.objects.filter(salon=salon, since__isnull=True, id__in=seen_in_period)
-        .annotate(first_visit=Min("appointments__start"), first_sale=Min("sales__created_at"))
-        .values_list("id", "first_visit", "first_sale")
+    if not seen_in_period:
+        return set()
+    rows = (
+        Client.objects.filter(salon=salon, id__in=seen_in_period)
+        .annotate(
+            # Sottoquery e non Min() sulle due relazioni: il doppio JOIN
+            # moltiplicava visite per scontrini di ogni cliente.
+            first_visit=Subquery(
+                visits.filter(client=OuterRef("pk")).order_by("start").values("start")[:1]
+            ),
+            first_sale=Subquery(
+                sales.filter(client=OuterRef("pk")).order_by("created_at").values("created_at")[:1]
+            ),
+        )
+        .values_list("id", "since", "first_visit", "first_sale")
     )
-    for client_id, first_visit, first_sale in legacy:
+    ids = set()
+    for client_id, since, first_visit, first_sale in rows:
         seen = [d for d in (first_visit, first_sale) if d is not None]
-        if seen and start <= min(seen) < end:
-            ids.add(client_id)
+        if not seen:
+            continue
+        first = min(seen)
+        if not start <= first < end:
+            continue
+        if since and since < timezone.localdate(first) - timedelta(days=HISTORIC_SINCE_DAYS):
+            continue
+        ids.add(client_id)
     return ids
 
 
@@ -417,13 +464,20 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
 
     # --- appuntamenti ----------------------------------------------------
     appts_qs = Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end)
-    total_appointments = appts_qs.count()
     closed_qs = appts_qs.filter(status=_CLOSED)
     appointments_count = closed_qs.count()
-    noshow_count = appts_qs.filter(status=_NO_SHOW).count()
-    cancel_count = appts_qs.filter(status=_CANCELLED).count()
-    noshow_rate = _safe_div(noshow_count, total_appointments)
-    cancel_rate = _safe_div(cancel_count, total_appointments)
+    # Per il periodo in corso il riferimento è adesso, per quelli passati la fine.
+    reference = min(end, timezone.now())
+    # No-show e annullamenti sugli appuntamenti già passati: un confermato di
+    # domani non può ancora essere un no-show, e contandolo al denominatore il
+    # periodo in corso risultava sempre migliore del precedente (5 no-show su
+    # 10 visite passate davano 25 % con dieci prenotazioni future).
+    elapsed_qs = appts_qs.filter(start__lt=reference)
+    elapsed_appointments = elapsed_qs.count()
+    noshow_count = elapsed_qs.filter(status=_NO_SHOW).count()
+    cancel_count = elapsed_qs.filter(status=_CANCELLED).count()
+    noshow_rate = _safe_div(noshow_count, elapsed_appointments)
+    cancel_rate = _safe_div(cancel_count, elapsed_appointments)
 
     booked_by_day = _daily_booked_minutes(salon, start, end, _OCCUPIED_STATUSES)
     shift_by_day = _daily_shift_minutes(
@@ -441,16 +495,23 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     # Il riaggancio si misura dal PERIODO, non da oggi: con "oggi" un mese
     # passato veniva confrontato con la rubrica di adesso e la freccia di
     # variazione mostrava sempre un miglioramento inventato a parità di
-    # comportamento. Per il periodo in corso il riferimento è adesso, così una
-    # visita già chiusa stamattina non conta come appuntamento futuro.
-    reference = min(end, timezone.now())
+    # comportamento. Conta chi al riferimento (adesso, o la fine di un periodo
+    # passato) aveva già in agenda una visita successiva: la visita chiusa di
+    # stamattina non è futura, ma quella del 10/9 di chi era passata ad agosto
+    # sì, anche se nel frattempo è stata fatta e chiusa — escludere le chiuse
+    # azzerava il riaggancio di ogni periodo passato. Le prenotazioni fatte dopo
+    # il riferimento non contano, come non possono contare per il periodo in
+    # corso.
     future_client_ids: set = set()
     if closed_client_ids:
         future_client_ids = set(
             Appointment.objects.filter(
-                salon=salon, client_id__in=closed_client_ids, start__gte=reference
+                salon=salon,
+                client_id__in=closed_client_ids,
+                start__gte=reference,
+                created_at__lt=reference,
             )
-            .exclude(status__in=[_CANCELLED, _NO_SHOW, _CLOSED])
+            .exclude(status__in=[_CANCELLED, _NO_SHOW])
             .values_list("client_id", flat=True)
         )
     rebooking_rate = _safe_div(len(future_client_ids), clients_1plus)
