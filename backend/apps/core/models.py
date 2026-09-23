@@ -94,7 +94,11 @@ class SalonSettings(TimeStampedModel):
     # (0 = subito). In quei secondi l'evento resta trattenuto: se l'appuntamento
     # viene corretto — o l'azione annullata con «torna indietro» — alla cliente
     # arriva un messaggio solo, quello giusto. Vedi core.services.emit_event.
-    automation_delay_seconds = models.PositiveSmallIntegerField(default=30)
+    # `db_default` anche nel database: durante un deploy (o dopo un deploy
+    # fallito, quando Coolify tiene in piedi il container vecchio sul database
+    # già migrato) il codice di prima crea le impostazioni senza questa colonna,
+    # e senza un default lato database ogni INSERT falliva sul NOT NULL.
+    automation_delay_seconds = models.PositiveSmallIntegerField(default=30, db_default=30)
     # Motivazioni di annullamento / no-show personalizzate dal titolare
     # (lista di stringhe; vuota = quelle predefinite della dashboard).
     cancel_reasons = models.JSONField(default=list, blank=True)
@@ -171,13 +175,21 @@ class OutboxEvent(models.Model):
         # verrà mai consegnato. Resta a database perché quando il titolare
         # chiede «perché non è partito il messaggio?» la risposta si vede qui.
         SUPERSEDED = "superseded"
+        # Non più consegnabile: il momento di cui parlava è passato (un OTP di
+        # ieri, la conferma di una visita già iniziata, una campagna di mesi fa)
+        # prima che la consegna riuscisse. Vedi flush_outbox.expire_stale.
+        EXPIRED = "expired"
 
     salon = models.ForeignKey(Salon, on_delete=models.CASCADE, related_name="outbox_events")
     event_type = models.CharField(max_length=60)  # es. appointment.created, client.otp
     payload = models.JSONField(default=dict, blank=True)
     # Oggetto a cui l'evento si riferisce (es. "appointment:42"): due eventi con
-    # la stessa chiave ancora trattenuti si FONDONO invece di partire entrambi.
-    coalesce_key = models.CharField(max_length=80, blank=True, default="")
+    # la stessa chiave ancora trattenuti si FONDONO invece di partire entrambi,
+    # e il worker li consegna nell'ordine in cui sono nati.
+    # `db_default` perché il codice di prima del deploy crea eventi senza
+    # questa colonna: senza default lato database ogni OTP, conferma o
+    # spostamento rispondeva 500 finché girava il container vecchio.
+    coalesce_key = models.CharField(max_length=80, blank=True, default="", db_default="")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     attempts = models.PositiveSmallIntegerField(default=0)
     last_error = models.TextField(blank=True)
@@ -188,6 +200,12 @@ class OutboxEvent(models.Model):
     # e otto i tentativi in quaranta secondi di disservizio e marcava come persi
     # messaggi che sarebbero arrivati benissimo un minuto dopo.
     next_attempt_at = models.DateTimeField(null=True, blank=True)
+    # Da quando l'evento è consegnabile: la fine della trattenuta (un messaggio
+    # programmato, il ritardo di sicurezza dell'agenda) o la creazione. Serve a
+    # misurare quanto è vecchio un messaggio: `next_attempt_at` viene riscritto
+    # a ogni ritentativo, e `created_at` di una campagna programmata per sabato
+    # è di giorni prima — la si sarebbe data per scaduta al primo intoppo.
+    due_at = models.DateTimeField(null=True, blank=True)
     # Istante in cui un worker ha preso in carico l'evento: serve a recuperare
     # quelli rimasti appesi perché il processo è morto durante l'invio.
     claimed_at = models.DateTimeField(null=True, blank=True)

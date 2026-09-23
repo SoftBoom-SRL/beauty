@@ -574,7 +574,7 @@ class ClientOverlapTests(AgendaTestBase):
 
 class CancelAppointmentTests(AgendaTestBase):
     def _make(self, start, deposit_status=Appointment.DepositStatus.PAID):
-        return Appointment.objects.create(
+        appointment = Appointment.objects.create(
             salon=self.salon,
             client=self.client_obj,
             operator=self.op1,
@@ -582,6 +582,13 @@ class CancelAppointmentTests(AgendaTestBase):
             deposit_status=deposit_status,
             deposit_amount=Decimal("15.00"),
         )
+        # Un appuntamento vero ha i suoi servizi: senza, annullandolo non si
+        # libera niente da annunciare alla lista d'attesa (caccia 22/09, 02-13).
+        AppointmentService.objects.create(
+            appointment=appointment, service=self.svc60, operator=self.op1,
+            duration_min=60, price=Decimal("50.00"),
+        )
+        return appointment
 
     def test_salon_cancelling_at_the_last_minute_does_not_punish_the_client(self):
         # Il test di prima pretendeva caparra trattenuta e `cancelled_late` da un
