@@ -5,7 +5,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
-import { initialsOf, relMeta, toClientIn, waHref, formatBirthday, daysToBirthday, genderLabel, genderGlyph, dateLabel } from './helpers.js';
+import { initialsOf, relMeta, waHref, formatBirthday, daysToBirthday, dateLabel } from './helpers.js';
+import { genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
 import StoricoTab from './tabs/StoricoTab.jsx';
 import TechSheetTab from './tabs/TechSheetTab.jsx';
 import NotesTab from './tabs/NotesTab.jsx';
@@ -39,9 +40,15 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       .catch((err) => { if (!dead) { setFailed(true); toastErr(err); } });
     return () => { dead = true; };
   }, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // la scheda cambia altrove (altra postazione, altra scheda) → ricarico in silenzio
-  useLive(/^client\.(updated|deleted)/, (events) => {
-    if (events.some((e) => e.payload?.client_id === clientId)) api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+  // la scheda cambia altrove → ricarico in silenzio. Non solo `client.updated`
+  // della dashboard: anche il consenso revocato dall'app (client.consent_updated),
+  // la carta salvata, un import, e le vendite di questa cliente — senza, visite
+  // e «Valore totale» restavano quelli dell'apertura dopo un incasso a un'altra
+  // cassa (14-20) e la reception rimandava i consensi vecchi (14-05).
+  useLive(/^(client|sale)\./, (events) => {
+    if (events.some((e) => e.payload?.client_id === clientId || e.type === 'client.imported')) {
+      api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+    }
   });
 
   /* waiting-list badge (needs agenda read scope; fail silently) */
@@ -54,13 +61,14 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     return () => { dead = true; };
   }, [clientId, hasScope]);
 
-  /* PUT helper — always sends the FULL ClientIn (partial bodies would reset
-   * unspecified fields to schema defaults). Response is a ClientOut: merge it
-   * over the detail to keep visits/total_spent/last_visit.
+  /* PUT helper — manda SOLO il campo che il pulsante cambia (C15, vedi
+   * helpers.js): il resto della copia letta all'apertura può essere vecchio
+   * (consensi revocati dall'app, lingua, promemoria) e non va rimandato. La
+   * risposta è un ClientOut: si fonde sul dettaglio per tenere
+   * visits/total_spent/last_visit.
    *
-   * Corpo completo + due clic ravvicinati = l'uno cancella l'altro: «VIP» e
-   * poi «Colore» partivano entrambi dalla stessa lista di etichette e la
-   * seconda PUT riscriveva la prima. Due difese:
+   * Due clic ravvicinati non devono annullarsi: «VIP» e poi «Colore» partivano
+   * dalla stessa lista di etichette e la seconda PUT riscriveva la prima.
    *  - le chiamate si mettono in coda, una alla volta;
    *  - `patch` può essere una funzione (prev) => patch, valutata al momento
    *    dell'invio sull'ultimo stato noto (cRef), non su quello del render in
@@ -73,7 +81,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     const run = queue.current.then(async () => {
       const prev = cRef.current;
       if (!prev) return false;
-      const body = toClientIn(prev, typeof patch === 'function' ? patch(prev) : patch);
+      const body = typeof patch === 'function' ? patch(prev) : patch;
       try {
         const res = await api.put(`/api/clients/${clientId}`, body);
         cRef.current = { ...prev, ...res };   // la prossima in coda parte da qui

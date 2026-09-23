@@ -7,7 +7,8 @@ import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
-import { initialsOf, relRange, daysToBirthday, genderGlyph, genderLabel } from './helpers.js';
+import { initialsOf, relRange, daysToBirthday } from './helpers.js';
+import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
 
 const PAGE = 50;
 

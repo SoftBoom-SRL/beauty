@@ -28,37 +28,66 @@ export function initialsOf(name) {
     .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 }
 
-/* Costruisce il corpo ClientIn da un ClientOut/ClientDetailOut + patch.
+/* Il PUT della scheda porta SOLO i campi cambiati (contratto C15).
  *
- * Si mandano tutti i campi che lo schema accetta: il PUT applica solo quelli
- * presenti nel corpo, ma un corpo parziale lascerebbe fuori i campi che il
- * modulo mostra e l'operatrice crede di aver confermato.
+ * Prima ogni salvataggio — un'etichetta, la lingua, «Rimuovi caparra» —
+ * rimandava tutta la copia letta all'apertura della scheda, consensi compresi:
+ * se nel frattempo la cliente aveva revocato il marketing dall'app, un clic
+ * della reception glielo ridava e cancellava la data della revoca (14-05); lo
+ * stesso per lingua, email e promemoria cambiati dall'app (06-10). Il server
+ * applica solo i campi presenti nel corpo: quello che l'operatrice non ha
+ * toccato non si manda.
  *
- * Gli identificativi Stripe NON sono più fra questi e non vanno rimessi: lo
- * schema li ha tolti apposta perché il server li scrive da sé quando la carta
- * viene registrata davvero, e accettarli dal client permetteva di copiare la
- * carta della cliente A sulla scheda B e addebitarle un no-show. Continuare a
- * mandarli non serviva a niente: venivano ignorati. */
-export function toClientIn(c, patch = {}) {
-  return {
-    first_name: c.first_name,
-    last_name: c.last_name || '',
-    phone: c.phone,
-    email: c.email || '',
-    wa: !!c.wa,
-    lang: c.lang || 'it',
-    category_ids: (c.categories || []).map((x) => x.id),
-    reliability: c.reliability ?? 100,
-    origin: c.origin || '',
-    gender: c.gender || '',
-    birthday: c.birthday || null,   // 'YYYY-MM-DD' | '--MM-DD' | null (l'API accetta entrambi)
-    since: c.since || null,
-    consents: { ...(c.consents || {}) },
-    whatsapp_reminders: !!c.whatsapp_reminders,
-    deposit_always: !!c.deposit_always,
-    is_active: c.is_active !== false,
-    ...patch,
-  };
+ * Gli identificativi Stripe non si mandano mai: li scrive il server quando la
+ * carta viene registrata davvero (accettarli dal client permetteva di copiare
+ * la carta della cliente A sulla scheda B). */
+
+/* Campi del modulo «Modifica cliente», letti dalla scheda come il modulo li
+ * mostra (stesso «vuoto»), così un campo non toccato risulta uguale. */
+const EDITABLE = {
+  first_name: (c) => c.first_name || '',
+  last_name: (c) => c.last_name || '',
+  phone: (c) => c.phone || '',
+  wa: (c) => !!c.wa,
+  email: (c) => c.email || '',
+  lang: (c) => c.lang || 'it',
+  category_ids: (c) => (c.categories || []).map((x) => x.id),
+  gender: (c) => c.gender || '',
+  birthday: (c) => c.birthday || null,   // 'YYYY-MM-DD' | '--MM-DD' | null
+  origin: (c) => c.origin || '',
+  since: (c) => c.since || null,
+  deposit_always: (c) => !!c.deposit_always,
+  whatsapp_reminders: (c) => !!c.whatsapp_reminders,
+};
+
+const sameIds = (a, b) => a.length === b.length && [...a].sort().join(',') === [...b].sort().join(',');
+
+/** Scheda letta all'apertura + valori del modulo → solo le chiavi cambiate.
+ *  Le chiavi sconosciute del modulo si ignorano (non sono campi della scheda). */
+export function clientChanges(orig, next) {
+  const out = {};
+  for (const [k, v] of Object.entries(next)) {
+    const read = EDITABLE[k];
+    if (!read) continue;
+    const before = read(orig || {});
+    const same = Array.isArray(before) ? sameIds(before, v || []) : before === v;
+    if (!same) out[k] = v;
+  }
+  return out;
+}
+
+/* ---- Consensi: le date le scrive il server (C15) ----
+ * Quando un flag cambia il server segna `<flag>_at` (dato) o
+ * `<flag>_revoked_at` (revocato). Qui si mostra solo quello che c'è davvero:
+ * la scheda prometteva di conservare «la data di raccolta» che nessuno
+ * scriveva (14-14). */
+const isStamp = (v) => typeof v === 'string' && v !== '' && !Number.isNaN(Date.parse(v));
+
+/** → { kind: 'given' | 'revoked', at: ISO } oppure null se la data non c'è. */
+export function consentStamp(consents, key) {
+  const cs = consents || {};
+  if (cs[key]) return isStamp(cs[`${key}_at`]) ? { kind: 'given', at: cs[`${key}_at`] } : null;
+  return isStamp(cs[`${key}_revoked_at`]) ? { kind: 'revoked', at: cs[`${key}_revoked_at`] } : null;
 }
 
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
@@ -110,8 +139,9 @@ export function sheetVal(sheet, key) {
   return v || '';
 }
 
-/* ---- Genere: definizione condivisa in ui/GenderPicker.jsx ---- */
-export { GENDERS, genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
+/* ---- Genere: definizione condivisa in ui/GenderPicker.jsx ----
+ * Si importa da lì, non da qui: ri-esportarla tirava un .jsx dentro questo
+ * modulo di funzioni pure, che così non si poteva provare con `npm test`. */
 
 /* ---- Compleanno: 'YYYY-MM-DD' (anno noto) oppure '--MM-DD' (solo giorno e mese) ----
  * Alcune clienti non vogliono dire l'età ma dicono volentieri quando festeggiano:

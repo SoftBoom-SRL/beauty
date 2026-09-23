@@ -1,15 +1,15 @@
 // NewClientModal — scheda anagrafica: creazione (POST /api/clients/) E modifica
-// (PUT /api/clients/{id}, payload completo) nello stesso form. Aperto dal
-// registro modali ('newclient') con `client` per la modifica. Include genere,
-// compleanno con anno facoltativo, origine, "cliente dal", caparra sempre.
-// Alla creazione: nota iniziale + consensi; in modifica i consensi restano
-// nella scheda Consensi (hanno data di raccolta).
+// (PUT /api/clients/{id} con i soli campi cambiati, C15) nello stesso form.
+// Aperto dal registro modali ('newclient') con `client` per la modifica.
+// Include genere, compleanno con anno facoltativo, origine, "cliente dal",
+// caparra sempre. Alla creazione: nota iniziale + consensi; in modifica i
+// consensi restano nella scheda Consensi (il server ne registra la data).
 import React, { useState } from 'react';
 import { api, ApiError, Icon, PhoneInput, Toggle } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { BirthdayInput, Field, GenderPicker } from '../components.jsx';
-import { inputCss, toClientIn } from '../helpers.js';
+import { inputCss, clientChanges } from '../helpers.js';
 
 const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
 
@@ -64,7 +64,16 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       };
       let saved;
       if (isEdit) {
-        saved = await api.put(`/api/clients/${client.id}`, toClientIn(client, common));
+        // Solo ciò che l'operatrice ha cambiato rispetto alla scheda aperta:
+        // lingua, email o promemoria cambiati nel frattempo dall'app non
+        // tornano indietro per un nome corretto qui (06-10, C15).
+        const changes = clientChanges(client, common);
+        if (!Object.keys(changes).length) {
+          fireToast({ msg: t('Nessuna modifica da salvare', 'No changes to save'), icon: 'check' });
+          onClose();
+          return;
+        }
+        saved = await api.put(`/api/clients/${client.id}`, changes);
         fireToast({ msg: t(`Scheda di ${saved.full_name} aggiornata`, `${saved.full_name}'s profile updated`), icon: 'check' });
       } else {
         saved = await api.post('/api/clients/', {
@@ -191,7 +200,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       )}
       {isEdit && (
         <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 14 }}>
-          {t('Consensi e promemoria si gestiscono nella scheda “Consensi”, che ne conserva la data di raccolta.', 'Consents and reminders live in the “Consents” tab, which keeps their collection date.')}
+          {t('Consensi e promemoria si gestiscono nella scheda “Consensi”: lì c’è anche la data in cui ogni consenso è stato dato o revocato, quando è registrata.', 'Consents and reminders live in the “Consents” tab, which also shows when each consent was given or revoked, when that date is on file.')}
         </div>
       )}
     </DkModal>
