@@ -125,7 +125,8 @@ class KpisMinimalDatasetTests(TestCase):
     def test_occupancy_by_weekday_without_data(self):
         result = occupancy_by_weekday(self.salon, "month")
         self.assertEqual(len(result), 7)
-        self.assertTrue(all(row["occupancy_pct"] == 0 for row in result))
+        # senza turni nessun giorno ha capacità: null, non 0 % (contratto C10)
+        self.assertTrue(all(row["occupancy_pct"] is None for row in result))
 
     def test_kpis_with_minimal_dataset(self):
         category = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
@@ -233,9 +234,25 @@ class NewClientsTests(TestCase):
         self.assertEqual(result["returning_clients"], 1)
 
     def test_the_declared_since_still_wins(self):
-        self._client("Dora", since=self.today)
-        self._client("Elsa", since=self.today.replace(year=self.today.year - 3, day=1))
-        self.assertEqual(kpis(self.salon, "month", self.today)["new_clients"], 1)
+        # Il «cliente dal» di una cliente storica vince sulla sua prima visita in
+        # youty; una scheda senza visite né acquisti non è una cliente acquisita,
+        # qualunque data porti (l'import la timbrava a oggi: 08-05).
+        from apps.staff.models import Operator
+
+        operator = Operator.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci")
+        visit = timezone.make_aware(
+            timezone.datetime.combine(self.today, timezone.datetime.min.time())
+        ).replace(hour=10)
+        dora = self._client("Dora", since=self.today)
+        elsa = self._client("Elsa", since=self.today.replace(year=self.today.year - 3, day=1))
+        self._client("Fede", since=self.today)  # in rubrica da oggi, mai venuta
+        for client in (dora, elsa):
+            Appointment.objects.create(
+                salon=self.salon, client=client, operator=operator, start=visit, status="closed"
+            )
+        result = kpis(self.salon, "month", self.today)
+        self.assertEqual(result["new_clients"], 1)
+        self.assertEqual(result["returning_clients"], 1)
 
 
 class RebookingRateTests(TestCase):

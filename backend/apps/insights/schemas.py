@@ -45,7 +45,8 @@ class CategoryRevenueOut(Schema):
 
 class WeekdayOccupancyOut(Schema):
     weekday: int
-    occupancy_pct: float
+    # None = giorno senza capacità nel periodo (chiuso, nessun turno).
+    occupancy_pct: float | None
 
 
 class AskIn(Schema):

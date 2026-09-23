@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
@@ -215,7 +216,11 @@ def update_settings(request, data: SettingsIn):
             payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
     for name, value in payload.items():
         setattr(s, name, value)
-    s.save()
+    # Solo le colonne del payload: `s` è la copia letta a inizio richiesta, e un
+    # save() completo riscriveva anche quelle che altri hanno cambiato nel
+    # frattempo — il callback di Stripe Connect che salva `stripe_account_id`
+    # veniva annullato e il salone risultava scollegato.
+    s.save(update_fields=[*payload, "updated_at"])
     if default_lang is not None:
         ctx.salon.default_lang = default_lang
         ctx.salon.save(update_fields=["default_lang"])
@@ -244,7 +249,11 @@ def upload_logo(request, logo: UploadedFile = File(...)):
     # e il vecchio file resterebbe su disco (e scaricabile) per sempre.
     if s.logo:
         s.logo.delete(save=False)
-    s.logo.save(stored_name, logo)
+    # save=False e poi solo `logo`: il save() completo di FieldFile.save
+    # riscriveva l'intera riga letta a inizio richiesta (stripe_account_id
+    # compreso) sopra le scritture concorrenti.
+    s.logo.save(stored_name, logo, save=False)
+    s.save(update_fields=["logo", "updated_at"])
     log_activity(ctx.salon, "settings.updated", "Logo aggiornato", actor=ctx.user)
     return _settings_out(s)
 
@@ -256,7 +265,7 @@ def delete_logo(request):
     s = _settings(ctx.salon)
     if s.logo:
         s.logo.delete(save=False)
-    s.save()
+    s.save(update_fields=["logo", "updated_at"])
     log_activity(ctx.salon, "settings.updated", "Logo rimosso", actor=ctx.user)
     return _settings_out(s)
 
@@ -319,6 +328,28 @@ def delete_location(request, location_id: int):
 
 # ---- Regole deposito -------------------------------------------------------
 
+MAX_RULE_AMOUNT = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
+
+
+def _deposit_rule_fields(data: DepositRuleIn) -> dict:
+    """Campi della regola, validati.
+
+    Lo schema accettava qualunque importo: convertendo una regola da «Importo
+    fisso» 150 € a «% del totale» la dashboard salvava un acconto del 150 %, e
+    `compute_deposit` chiedeva come caparra l'intero prezzo del servizio.
+    """
+    fields = data.dict()
+    if fields["amount_type"] not in DepositRule.AmountType.values:
+        raise HttpError(400, "Tipo di acconto non valido: usa pct o fixed")
+    amount = fields["amount"]
+    if amount < 0:
+        raise HttpError(400, "L'acconto non può essere negativo")
+    if fields["amount_type"] == DepositRule.AmountType.PERCENT and amount > 100:
+        raise HttpError(400, "Un acconto in percentuale va da 0 a 100")
+    if amount > MAX_RULE_AMOUNT:
+        raise HttpError(400, "Importo dell'acconto fuori scala")
+    return fields
+
 
 @router.get("/deposit-rules", auth=staff_auth, response=list[DepositRuleOut])
 def list_deposit_rules(request):
@@ -330,7 +361,7 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **data.dict())
+    rule = DepositRule.objects.create(salon=ctx.salon, **_deposit_rule_fields(data))
     log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
@@ -340,7 +371,7 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in data.dict().items():
+    for name, value in _deposit_rule_fields(data).items():
         setattr(rule, name, value)
     rule.save()
     return rule
@@ -355,6 +386,17 @@ def delete_deposit_rule(request, rule_id: int):
 
 
 # ---- Registro attività -----------------------------------------------------
+
+
+def _activity_date(raw: str, label: str):
+    try:
+        parsed = parse_date(raw)
+    except ValueError:
+        # «2026-02-30» è ben scritta ma non esiste: parse_date solleva, ed era un 500.
+        parsed = None
+    if parsed is None:
+        raise HttpError(400, f"{label} non valida: usa il formato YYYY-MM-DD")
+    return parsed
 
 
 @router.get("/activity", auth=staff_auth, response=list[ActivityLogOut])
@@ -373,17 +415,17 @@ def list_activity(
         qs = qs.filter(type__startswith=type)
     if q:
         qs = qs.filter(summary__icontains=q)
-    if date_from and (d := parse_date(date_from)):
-        qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
-        qs = qs.filter(created_at__date__lte=d)
+    if date_from:
+        qs = qs.filter(created_at__date__gte=_activity_date(date_from, "Data iniziale"))
+    if date_to:
+        qs = qs.filter(created_at__date__lte=_activity_date(date_to, "Data finale"))
     return qs
 
 
 # I prefissi di evento del feed live e i permessi richiesti sono definiti UNA
 # volta in core.views (stream SSE) e riusati qui dal polling di riserva: due
 # elenchi separati avevano perso `settings.` e `client_category.` solo lato HTTP.
-from .views import allowed_prefixes  # noqa: E402
+from .views import LIVE_FEED_SAFETY_SECONDS, allowed_prefixes  # noqa: E402
 
 LIVE_FEED_LIMIT = 50
 
@@ -395,7 +437,10 @@ def activity_feed(request, after: int | None = None):
     Senza `after` restituisce solo il cursore corrente: il client parte da lì
     e non riceve lo storico (un salone nuovo parte da 0, che è un cursore
     valido). Con `after=<id>` restituisce, in ordine cronologico, gli eventi
-    con id maggiore (max LIVE_FEED_LIMIT) e il nuovo cursore. Ogni membro riceve
+    con id maggiore (max LIVE_FEED_LIMIT) e il nuovo cursore, più quelli con id
+    minore comparsi da poco (finestra di sicurezza, vedi
+    core.views.LIVE_FEED_SAFETY_SECONDS): un evento può quindi arrivare due
+    volte, e la dashboard lo scarta per id (contratto C20). Ogni membro riceve
     solo gli eventi delle aree su cui ha il permesso: il feed non deve essere
     una scorciatoia per leggere in tempo reale incassi, magazzino o impostazioni
     a chi il permesso d'area li nega (lo stream SSE applica lo stesso filtro).
@@ -415,6 +460,17 @@ def activity_feed(request, after: int | None = None):
         events = list(
             qs.filter(id__gt=after).filter(prefix_q).order_by("id")[:LIVE_FEED_LIMIT]
         )
+        # Un id sotto il cursore che si vede solo ora è una transazione che ha
+        # committato dopo una successiva: senza rileggerli il cursore l'aveva già
+        # scavalcato e l'evento non arrivava più a nessuno. Il cursore stesso è
+        # un evento che il client ha già.
+        horizon = timezone.now() - timedelta(seconds=LIVE_FEED_SAFETY_SECONDS)
+        late = list(
+            qs.filter(id__lt=after, created_at__gte=horizon)
+            .filter(prefix_q)
+            .order_by("id")[:LIVE_FEED_LIMIT]
+        )
+        events = late + events
     # Il cursore avanza sempre fino all'ultimo id visto (anche se filtrato via),
     # così un evento amministrativo non viene richiesto all'infinito.
     scanned = qs.filter(id__gt=after).order_by("id").values_list("id", flat=True)[:LIVE_FEED_LIMIT]
@@ -479,14 +535,16 @@ def activity_stream_ticket(request):
     from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
     ctx = request.auth
-    # I permessi viaggiano nel biglietto: lo stream non ha altro modo di sapere
-    # chi sta ascoltando e consegnava tutto a chiunque fosse autenticato.
+    # Il biglietto dice chi sta ascoltando (lo stream non ha altro modo di
+    # saperlo): utente e versione della password, con cui lo stream rilegge la
+    # membership e i permessi all'apertura.
     return {
         "ticket": issue_stream_ticket(
             ctx.salon.id,
             ctx.user.id if ctx.user else None,
             is_owner=ctx.is_owner,
             scopes=ctx.scopes,
+            token_version=getattr(ctx.user, "token_version", 0) or 0,
         ),
         "expires_in": STREAM_TICKET_TTL,
     }
