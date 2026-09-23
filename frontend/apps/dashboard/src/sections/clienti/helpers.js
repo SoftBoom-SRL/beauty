@@ -24,6 +24,23 @@ export function relRange(key) {
   return {};
 }
 
+/** Segnalazioni `client.reactivation_requested` ancora da gestire, una per
+ *  scheda, dalla più recente. Gli eventi del feed arrivano dal più recente:
+ *  una riattivazione successiva (`client.updated` con `is_active` fra i
+ *  `fields`) chiude le segnalazioni precedenti della stessa scheda. */
+export function reactivationRequests(events, dismissed = new Set()) {
+  const handled = new Set(), out = [];
+  for (const e of events || []) {
+    const id = e.payload?.client_id;
+    if (!id) continue;
+    if (e.type === 'client.updated' && (e.payload.fields || []).includes('is_active')) { handled.add(id); continue; }
+    if (e.type !== 'client.reactivation_requested' || handled.has(id) || dismissed.has(e.id)) continue;
+    handled.add(id);
+    out.push(e);
+  }
+  return out;
+}
+
 export function initialsOf(name) {
   return String(name || '')
     .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '?';

@@ -7,15 +7,15 @@ import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
-import { initialsOf, relRange, daysToBirthday } from './helpers.js';
+import { initialsOf, relRange, daysToBirthday, reactivationRequests } from './helpers.js';
 import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
 
 const PAGE = 50;
 
 export default function ClientiSection() {
-  const { t, search, setSearch, selClient, setSelClient, clientCategories, openModal, modal, fireToast } = useDash();
+  const { t, search, setSearch, selClient, setSelClient, clientCategories, openModal, modal, fireToast, live } = useDash();
 
-  const [seg, setSeg] = useState('all');          // 'all' | '__active' | category id (number)
+  const [seg, setSeg] = useState('all');          // 'all' | '__active' | '__archived' | category id (number)
   const [relFilt, setRelFilt] = useState('all');  // 'all' | 'good' | 'watch' | 'risk'
   const [items, setItems] = useState(null);       // null = loading skeleton
   const [count, setCount] = useState(0);
@@ -35,9 +35,19 @@ export default function ClientiSection() {
   const listParams = useMemo(() => ({
     q: q.trim() || undefined,
     category_id: typeof seg === 'number' ? seg : undefined,
-    is_active: true, // the API default includes soft-deleted clients
+    // the API default includes soft-deleted clients. «Archiviate» le mostra
+    // da sole: prima una scheda archiviata non si ritrovava più, né per
+    // riattivarla né per sapere perché il suo numero risultava già usato (06-02)
+    is_active: seg !== '__archived',
     ...relRange(relFilt),
   }), [q, seg, relFilt]);
+
+  /* Clienti archiviate che hanno provato a rientrare (app o modulo contatti):
+   * il server lo segnala una volta al giorno. Si offre di aprirne la scheda,
+   * dove c'è «Riattiva». Sparisce quando la scheda viene riattivata (evento
+   * `client.updated` con `is_active`) o se la si nasconde. */
+  const [dismissed, setDismissed] = useState(() => new Set());
+  const requests = useMemo(() => reactivationRequests(live?.events, dismissed), [live?.events, dismissed]);
 
   /* ---- client list (server-side filters, {items,count} pagination) ----
    * `reqSeq` è il biglietto della richiesta in corso: ogni fetch (prima pagina
@@ -98,6 +108,7 @@ export default function ClientiSection() {
     ['all', t('Tutti', 'All')],
     ['__active', t('Attivi', 'Active')],
     ...clientCategories.map((cc) => [cc.id, cc.name]),
+    ['__archived', t('Archiviati', 'Archived')],
   ];
   const activeLabel = (segOpts.find((s) => s[0] === seg) || segOpts[0])[1];
   const catCards = [
@@ -153,6 +164,19 @@ export default function ClientiSection() {
               </div>
             </div>
           </div>
+
+          {requests.length > 0 && (
+            <div style={{ padding: '0 12px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {requests.slice(0, 3).map((e) => (
+                <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'var(--warn-tint)', fontSize: 12.5, color: 'var(--ink-2)' }}>
+                  <Icon name="user" size={14} color="var(--warn)" />
+                  <span style={{ flex: 1, minWidth: 0 }}>{e.summary}</span>
+                  <button type="button" onClick={() => setSelClient(e.payload.client_id)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'transparent', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>{t('Apri scheda', 'Open profile')}</button>
+                  <button type="button" onClick={() => setDismissed((s) => new Set(s).add(e.id))} aria-label={t('Nascondi', 'Dismiss')} title={t('Nascondi', 'Dismiss')} style={{ display: 'grid', placeItems: 'center', background: 'transparent', border: 'none', cursor: 'pointer', padding: 2 }}><Icon name="x" size={12} color="var(--muted)" /></button>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '0 12px 16px' }}>
             {items == null && [...Array(7)].map((_, i) => <div key={i} className="skel" style={{ height: 74, borderRadius: 12, marginBottom: 6 }} />)}

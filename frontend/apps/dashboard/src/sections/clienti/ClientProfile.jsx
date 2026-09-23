@@ -16,7 +16,7 @@ import ConsensiTab from './tabs/ConsensiTab.jsx';
 const catIdsOf = (cl) => (cl?.categories || []).map((x) => x.id);
 
 export default function ClientProfile({ clientId, onChanged, onDeleted }) {
-  const { t, lang, fireToast, hasScope, clientCategories, openModal } = useDash();
+  const { t, lang, fireToast, hasScope, clientCategories, openModal, live } = useDash();
   const canWrite = hasScope('clients');
 
   const [c, setC] = useState(null);
@@ -151,6 +151,12 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
     c.origin || null,
   ].filter(Boolean).join(' · ');
   const openEdit = () => openModal('newclient', { client: c, onSaved: (u) => { setC((prev) => ({ ...prev, ...u })); onChanged && onChanged(); } });
+  // Scheda archiviata: prima non c'era modo di riattivarla, benché la conferma
+  // dell'archiviazione lo promettesse (06-02). PUT {is_active: true} da solo.
+  const archived = c.is_active === false;
+  const reactivate = () => updateClient({ is_active: true }, { msg: t(`Scheda di ${c.full_name} riattivata`, `${c.full_name}'s profile reactivated`), icon: 'check' });
+  // la cliente archiviata che ha provato a rientrare (app o modulo contatti)
+  const asked = archived ? (live?.events || []).find((e) => e.type === 'client.reactivation_requested' && e.payload?.client_id === c.id) : null;
 
   const tabs = [
     ['storico', t('Storico', 'History')],
@@ -200,13 +206,26 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
           {canWrite && (
             <button className="dk-btn dk-btn--ghost" onClick={openEdit} title={t('Modifica dati anagrafici', 'Edit personal details')}><Icon name="edit" size={16} />{t('Modifica', 'Edit')}</button>
           )}
-          {canWrite && (
+          {canWrite && !archived && (
             <button className="dk-iconbtn" title={t('Archivia cliente', 'Archive client')} onClick={() => setConfirmDel(true)} style={{ borderColor: 'color-mix(in srgb, var(--danger) 35%, var(--hair))' }}>
               <Icon name="x" size={16} color="var(--danger)" />
             </button>
           )}
         </div>
       </div>
+
+      {archived && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--paper-2)', border: '1px solid var(--hair)', borderRadius: 12, margin: '-6px 0 18px' }}>
+          <Icon name="alert" size={18} color="var(--muted)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--ink-2)' }}>{t('Scheda archiviata', 'Archived profile')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1 }}>
+              {asked ? asked.summary : t('Non compare nelle liste e non si può prenotare; lo storico resta.', 'Hidden from lists and cannot be booked; history is kept.')}
+            </div>
+          </div>
+          {canWrite && <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5, flexShrink: 0 }} onClick={reactivate}><Icon name="refresh" size={14} color="#fff" />{t('Riattiva', 'Reactivate')}</button>}
+        </div>
+      )}
 
       {/* labels — client categories from the catalog, editable via PUT category_ids */}
       <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', position: 'relative', margin: '-6px 0 20px' }}>
