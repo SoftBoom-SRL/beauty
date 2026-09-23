@@ -145,6 +145,8 @@ class ClientMeOut(Schema):
     email: str
     lang: str
     whatsapp_reminders: bool
+    # Lo si cambia con POST /api/marketing/client/marketing-consent {accepted}.
+    marketing_consent: bool = False
 
 
 class ClientMeIn(Schema):
