@@ -135,11 +135,13 @@ def plan_salon(rows):
     # forma E.164 non è già di un'altra scheda (vincolo unico su salone e
     # numero) e se è stabile: rinormalizzata dà sé stessa, così la chiave che
     # Client.save ricalcolerà domani dal numero nuovo è quella scritta oggi.
+    # Un numero con delle parole («333 1234567 (mamma)») resta com'è: la
+    # forma E.164 perderebbe l'annotazione.
     stuck = {cid for cid, *_ in conflicts}
     phones = {phone: cid for cid, phone, _ in rows}
     phone_moves = []
     for cid, phone, _ in rows:
-        if cid in stuck:
+        if cid in stuck or re.search(r"[^\d\s+()./-]", phone or ""):
             continue
         canonical = _normalize(phone)
         if not canonical or canonical == phone or _normalize(canonical) != canonical:
@@ -174,9 +176,11 @@ def recompute(apps, schema_editor):
         all_conflicts.extend((salon_id, *c) for c in conflicts)
     if not (keys or numbers or all_conflicts):
         return
+    left = len(all_conflicts)
+    left_text = "1 scheda lasciata com'era" if left == 1 else f"{left} schede lasciate com'erano"
     out.write(
         f"\n  clients.0008: {keys} chiavi telefono ricalcolate, {numbers} numeri riscritti "
-        f"in forma E.164, {len(all_conflicts)} schede lasciate com'erano (doppioni).\n"
+        f"in forma E.164, {left_text} (doppioni).\n"
     )
     for salon_id, cid, kept, wanted, holder in all_conflicts:
         out.write(

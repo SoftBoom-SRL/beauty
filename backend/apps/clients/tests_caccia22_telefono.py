@@ -193,6 +193,15 @@ class PhoneKeyMigrationTests(TestCase):
                 # Il numero di B rinormalizzato non è stabile: resta com'era.
                 self.assertEqual(b.phone, "+4000721234567")
 
+    def test_a_number_with_words_keeps_its_text(self):
+        mamma = _as_before(
+            self.card("Carla", "+390000000007"), phone="333 1234567 (mamma)", phone_key="3331234567"
+        )
+        _recompute()
+        mamma.refresh_from_db()
+        self.assertEqual(mamma.phone, "333 1234567 (mamma)")
+        self.assertEqual(mamma.phone_key, "393331234567")
+
     def test_nothing_to_do_prints_nothing(self):
         self.card("Sofia", "+393331234567")
         self.assertEqual(_recompute(), "")
