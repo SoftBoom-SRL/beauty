@@ -778,14 +778,16 @@ class AppointmentEditApiTests(AgendaTestBase):
                     "id": item.id,
                     "service_id": self.svc60.id,
                     "operator_id": self.op1.id,
-                    "duration_min": 0,  # non valido: resta la durata della visita (60)
+                    "duration_min": 0,  # non valido: rifiutato, resta la durata della visita (60)
                 }
             ]
         }
         with self._windows(self.mapping):
             resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
-        self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.json()["items"][0]["duration_min"], 60)
+        # La durata ha un minimo e un tetto (1–720) come posa e listino: prima lo
+        # 0 passava in silenzio, e senza tetto un refuso forzato bloccava i giorni.
+        self.assertEqual(resp.status_code, 422, resp.content)
+        self.assertEqual(appointment.items.get().duration_min, 60)
 
     # (b) aggiunta di un servizio (voce senza id) accodata come blocco successivo
     def test_put_add_item_appends_block(self):
@@ -865,10 +867,17 @@ class AppointmentEditApiTests(AgendaTestBase):
         appointment = self._make(
             [{"service_id": self.svc30.id, "operator_id": self.op1.id}], start_hour=10
         )
-        # incastro forzato sulla stessa operatrice alle 10:30
+        # incastro forzato sulla stessa operatrice alle 10:30, di un'ALTRA cliente:
+        # accanto alla stessa cliente la modifica non è un conflitto (è la stessa
+        # seduta) e passa senza forzare.
+        from apps.clients.models import Client
+
+        other = Client.objects.create(
+            salon=self.salon, first_name="Vicina", last_name="Di posto", phone="+390000000077"
+        )
         with self._windows(self.mapping):
             neighbour = create_appointment(
-                self.salon, self.client_obj,
+                self.salon, other,
                 [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
                 _aware(self.day, 10, 30), via="dashboard", force=True,
             )
@@ -1061,7 +1070,8 @@ class ClientBookingApiTests(AgendaTestBase):
             {"items": [{"service_id": self.svc60.id}], "start": _aware(self.day, 10).isoformat()},
         )
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json()["location_id"], default.id)
+        # La risposta è la scheda della cliente (senza la sede): si guarda la visita.
+        self.assertEqual(Appointment.objects.get(pk=res.json()["id"]).location_id, default.id)
 
     def test_move_availability_uses_original_operator_and_excludes_itself(self):
         # op2 diventa idonea: senza vincolo di operatrice la disponibilità la
@@ -1679,7 +1689,10 @@ class RangeAndGiftTests(AgendaTestBase):
             res = self.client.get("/api/agenda/day", {"date": self.day.isoformat()}, **auth)
         self.assertEqual(res.status_code, 200, res.content)
         out = next(a for row in res.json() for a in row["appointments"] if a["id"] == appointment.id)
-        self.assertEqual([g["code"] for g in out["gifts"]], [card.code])
+        self.assertEqual([g["gift_card_id"] for g in out["gifts"]], [card.id])
+        # ruolo con la sola agenda: del codice (denaro al portatore) solo le ultime cifre
+        self.assertNotEqual(out["gifts"][0]["code"], card.code)
+        self.assertTrue(out["gifts"][0]["code"].endswith(card.code[-4:]))
         self.assertEqual(out["gifts"][0]["service_id"], self.svc60.id)
         detail = self.client.get(f"/api/agenda/appointments/{appointment.id}", **auth).json()
         self.assertEqual(len(detail["gifts"]), 1)
