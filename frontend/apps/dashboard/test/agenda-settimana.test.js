@@ -1,0 +1,202 @@
+// Vista settimana (WeekView.jsx vero, montato con test/grid-harness.mjs).
+// Reperti della caccia ai bug del 22/09/2026: 12-10 (ricarico senza guardia),
+// 12-14 / 12-15 / 12-18 (secondo dito, rotella, Esc durante il trascinamento),
+// 12-21 (sotto-colonne di tutte le sedi), 13-08 (clic su un blocco con la
+// prenotazione aperta).
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { isoAtMin } from '@youty/shared';
+import { weekDayOps } from '../src/sections/agenda/lib.js';
+import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
+
+const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx');
+
+const PXM = 1.35;
+const W1 = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
+const W2 = ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'];
+const OPS = [
+  { id: 1, first_name: 'Anna', last_name: 'Neri', location_id: 1 },
+  { id: 2, first_name: 'Giulia', last_name: 'Verdi', location_id: null },   // senza sede: vale per tutte
+  { id: 3, first_name: 'Bea', last_name: 'Blu', location_id: 2 },           // lavora nell'altra sede
+];
+const sara = (date) => ({
+  id: 42, start: `${date}T15:00:00+02:00`, client_name: 'Sara Bianchi', client_phone: '', operator_id: 1,
+  status: 'confirmed', duration_min: 30, total_price: '30.00', deposit_status: 'none', note: '', gifts: [],
+  items: [{ service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' }],
+});
+const weekPayload = (days) => days.map((date, i) => ({
+  date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [sara(date)] : [],
+}));
+
+/* api finta: ogni GET resta in sospeso finché il test non la risolve. */
+function fakeApi() {
+  const gets = [];
+  const posts = [];
+  globalThis.__api = {
+    get: (url, opts) => new Promise((resolve, reject) => { gets.push({ url, opts, resolve, reject }); }),
+    post: (url, body) => { posts.push({ url, body }); return Promise.resolve({}); },
+    put: () => Promise.resolve({}), patch: () => Promise.resolve({}), del: () => Promise.resolve({}),
+  };
+  return { gets, posts, weekGets: () => gets.filter((g) => g.url === '/api/agenda/week') };
+}
+
+/* Geometria: colonna delle ore 46 px, poi sette giorni da 120 px, ognuno con
+ * le sotto-colonne delle operatrici della sede (60 px l'una se sono due). */
+function setup(extra = {}) {
+  const win = installDom();
+  const api = fakeApi();
+  let liveFn = null;
+  globalThis.__dash = {
+    t: (it) => it, lang: 'it', showRevenue: false, fireToast: spy(), openModal: spy(), hasScope: () => true,
+    settings: { slot_interval_min: 15 }, locationId: 1, modal: null,
+    live: { subscribe: (fn) => { liveFn = fn; return () => {}; } },
+  };
+  const cb = { onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy() };
+  const scrollEl = {
+    scrollTop: 0, clientHeight: 800,
+    getBoundingClientRect: () => rect(0, 100, 1000, 800),
+    querySelector: () => null,
+    querySelectorAll: (sel) => (sel === '[data-daycol]' ? dayEls() : []),
+    setPointerCapture() {}, addEventListener() {}, removeEventListener() {},
+  };
+  let m = null;
+  const dayEls = () => {
+    const subOps = [...new Set(findAll(m.tree, (el) => el.props?.['data-subcol'] === '').map((el) => el.props['data-op']))];
+    return [0, 1, 2, 3, 4, 5, 6].map((i) => {
+      const left = 46 + i * 120, w = 120 / Math.max(1, subOps.length);
+      return {
+        dataset: { daycol: String(i) },
+        getBoundingClientRect: () => rect(left, 160 - scrollEl.scrollTop, 120, 12 * 60 * PXM),
+        querySelectorAll: () => subOps.map((op, k) => ({ dataset: { op: String(op) }, getBoundingClientRect: () => rect(left + k * w, 160 - scrollEl.scrollTop, w, 12 * 60 * PXM) })),
+      };
+    });
+  };
+  const props = {
+    weekStart: W1[0], operators: OPS, colorOf: () => '#C9B8F2', itemColor: null, nowMin: null,
+    pickMode: false, ghost: null, ghostDate: W1[0], zoom: 1, onZoom: null, ...cb, ...extra,
+  };
+  m = mount(WeekView, props, { attach: (tree) => { if (tree?.props?.ref) tree.props.ref.current = scrollEl; } });
+  const block = () => find(m.tree, (el) => typeof el.type === 'function' && el.props.a?.id === 42 && !el.props.moving);
+  const root = () => m.tree;
+  return { m, cb, win, api, scrollEl, block, root, live: (events) => liveFn?.({ events }) };
+}
+async function loadWeek(g, days, idx = -1) {
+  const req = idx < 0 ? g.api.weekGets().at(-1) : g.api.weekGets()[idx];
+  req.resolve(weekPayload(days));
+  await tick();
+  g.m.render();
+}
+
+test('sotto-colonne solo per le operatrici della sede attiva', () => {
+  const ops = weekDayOps(OPS, 1, [], 'Non più in team');
+  assert.deepEqual(ops.map((o) => o.id), [1, 2]);
+  // un appuntamento dell'altra sede resta visibile, col nome vero
+  const withBea = weekDayOps(OPS, 1, [{ operator_id: 3 }, { operator_id: 99 }], 'Non più in team');
+  assert.deepEqual(withBea.map((o) => [o.id, o.first_name]), [[1, 'Anna'], [2, 'Giulia'], [3, 'Bea'], [99, 'Non più in team']]);
+  // senza sede scelta: tutte
+  assert.deepEqual(weekDayOps(OPS, null, [], '').map((o) => o.id), [1, 2, 3]);
+});
+
+test('la griglia disegna le sotto-colonne della sede attiva', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const ops = new Set(findAll(g.root(), (el) => el.props?.['data-subcol'] === '').map((el) => el.props['data-op']));
+  assert.deepEqual([...ops].sort(), [1, 2]);
+});
+
+test('«Salva» dal pannello dopo aver sfogliato la settimana ricarica quella a video', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  // clic sul blocco di Sara: si apre il dettaglio
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerUp(ptr(430, 400));
+  const detail = g.api.gets.find((x) => x.url === '/api/agenda/appointments/42');
+  detail.resolve(sara(W1[3]));
+  await tick();
+  const onMutate = g.cb.onOpenAppt.calls[0]?.[1] ?? globalThis.__dash.openModal.calls[0]?.[1]?.onMutate;
+  assert.equal(typeof onMutate, 'function', 'il pannello riceve un onMutate');
+  // dal pannello si sfoglia la settimana dopo: la vista la segue
+  g.m.render({ ...g.m.props, weekStart: W2[0], ghostDate: W2[0] });
+  await loadWeek(g, W2);
+  onMutate();   // «Salva» nel pannello
+  const last = g.api.weekGets().at(-1);
+  assert.equal(last.opts.params.start, W2[0], 'si ricarica la settimana a video, non quella dell\'apertura');
+});
+
+test('una risposta della settimana vecchia non sovrascrive quella a video', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.live([{ type: 'appointment.moved' }]);           // ricarico live della 28/09–04/10, in volo
+  const stale = g.api.weekGets().length - 1;
+  g.m.render({ ...g.m.props, weekStart: W2[0] });    // si passa alla settimana dopo
+  await loadWeek(g, W2);
+  await loadWeek(g, W1, stale);                      // arriva tardi la risposta vecchia
+  const header = findAll(g.root(), (el) => el.type === 'span' && el.props?.className === 't-num').map((el) => el.props.children);
+  assert.deepEqual(header, [5, 6, 7, 8, 9, 10, 11], 'restano i giorni della settimana a video');
+});
+
+test('la caparra pagata, l\'incasso e i turni cambiati altrove ricaricano la settimana', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const before = g.api.weekGets().length;
+  g.live([{ type: 'deposit.paid' }]);
+  g.live([{ type: 'operator.absence_created' }]);
+  g.live([{ type: 'sale.created' }]);
+  assert.equal(g.api.weekGets().length, before + 3);
+});
+
+test('in settimana un secondo dito non sposta né rilascia il trascinamento', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400, { id: 1 }));
+  g.root().props.onPointerMove(ptr(430, 481, { id: 1 }));   // +60': 16:00
+  g.m.render();
+  const two = ptr(800, 700, { id: 2, primary: false });
+  g.root().props.onPointerMove(two);
+  g.root().props.onPointerUp(two);
+  g.win.fire('pointerup', two);
+  assert.equal(g.api.posts.length, 0, 'il sollevamento del secondo dito non rilascia');
+  g.root().props.onPointerUp(ptr(430, 481, { id: 1 }));
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].url, '/api/agenda/appointments/42/move');
+  assert.equal(g.api.posts[0].body.start, isoAtMin(W1[3], 16 * 60));
+  assert.equal(g.api.posts[0].body.operator_id, undefined, 'stessa operatrice');
+});
+
+test('in settimana la rotella durante il trascinamento sposta l\'orario', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400));
+  g.scrollEl.scrollTop = 81;              // +60 minuti sotto un puntatore fermo
+  g.root().props.onScroll?.();
+  g.m.render();
+  g.root().props.onPointerUp(ptr(430, 400));
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].body.start, isoAtMin(W1[3], 16 * 60));
+});
+
+test('in settimana Esc annulla il trascinamento senza chiudere il pannello', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));
+  g.m.render();
+  const esc = { key: 'Escape', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  g.win.fire('keydown', esc);
+  assert.equal(esc.defaultPrevented, true);
+  g.root().props.onPointerUp(ptr(430, 481));
+  assert.equal(g.api.posts.length, 0);
+});
+
+test('con la prenotazione aperta il clic su un blocco non apre il dettaglio', async () => {
+  const g = setup({ pickMode: true });
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerUp(ptr(430, 400));
+  await tick();
+  assert.equal(globalThis.__dash.openModal.calls.length, 0, 'nessun modale al posto della prenotazione');
+  assert.equal(g.api.gets.filter((x) => x.url.startsWith('/api/agenda/appointments/')).length, 0);
+  // la sezione (index.jsx) riceve il blocco e decide: con la prenotazione aperta avvisa e basta
+  assert.equal(g.cb.onOpenAppt.calls.length, 1);
+});

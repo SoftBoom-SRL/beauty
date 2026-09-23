@@ -526,12 +526,17 @@ export default function AgendaSection() {
       fireToast({ msg: verdict.label + (verdict.detail ? ' · ' + verdict.detail : ''), icon: 'alert' });
       return;
     }
+    /* «Orario passato» lo dice il badge, ma non è un motivo per forzare: allo
+     * staff il server il passato lo concede, e forzando subito l'appuntamento
+     * restava marcato «forzato» senza bisogno. Si prova normalmente; se poi lo
+     * slot non è libero davvero, il 409 fa forzare come sempre. */
+    const force = verdict.code !== 'past';
     if (intent.kind === 'split') {
       // Senza questo ramo lo stacco su uno slot non valido non faceva NULLA: il
       // blocco tornava al suo posto e non succedeva niente.
-      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, { force: true });
+      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, { force });
     } else if (intent.kind === 'appt') {
-      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force: true, fromOp: intent.fromOp });
+      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force, fromOp: intent.fromOp });
     } else if (intent.kind === 'pause') {
       movePause(intent.pause, intent.startMin, intent.opId);
     }

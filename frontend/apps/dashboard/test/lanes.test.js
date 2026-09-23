@@ -106,10 +106,20 @@ test('la spina copre tutta la visita e solo le visite multi-servizio', () => {
   assert.equal(spine[0].count, 2);
 });
 
-test('nessuna spina se della visita in questa colonna c’è un solo servizio', () => {
-  // L’altro servizio lo fa un’altra operatrice: in questa colonna non c’è nulla da legare.
+test('la spina c’è anche con un solo servizio della visita in questa colonna', () => {
+  // L’altro servizio lo fa un’altra operatrice (colore con Anna, piega con
+  // Giulia). Senza spina non c’era nessun punto da cui prendere la visita
+  // intera: il corpo del blocco stacca il suo servizio, e per spostarla di
+  // un’ora la si spezzava in due appuntamenti (caccia del 22/09, 12-06).
   const placed = laneLayout([blk(1, 600, 60, { items: 2, itemId: 11 })]);
-  assert.deepEqual(visitSpines(placed), []);
+  const spine = visitSpines(placed);
+  assert.equal(spine.length, 1);
+  assert.equal(spine[0].count, 1, 'un servizio in questa colonna');
+  assert.equal(spine[0].total, 2, 'due nella visita');
+  assert.equal(spine[0].startMin, 600);
+  assert.equal(spine[0].endMin, 660);
+  // un appuntamento di un servizio solo resta senza spina
+  assert.deepEqual(visitSpines(laneLayout([blk(2, 700, 30)])), []);
 });
 
 test('serviceBands divide la visita in proporzione alle durate', () => {

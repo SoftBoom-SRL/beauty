@@ -14,7 +14,7 @@ import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
   DK_START, DK_END, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE,
+  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue,
 } from './lib.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
@@ -42,6 +42,11 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const drag = useRef(null);                // active drag { id, obj, ns, nop, dayIdx, moved, ... }
   const justDragged = useRef(false);        // suppress the click that follows a drop
   const onUpRef = useRef(null);             // ultimo onUp (chiusura fresca) per il fallback su window
+  // evento di un puntatore diverso da quello che ha cominciato il trascinamento
+  const otherPointer = (e) => {
+    const d = drag.current;
+    return !!(d && e && e.pointerId != null && d.pointerId != null && e.pointerId !== d.pointerId);
+  };
   /* Apre la nuova prenotazione una volta sola: il doppio clic manda due click
    * più un dblclick, e senza questa guardia il drawer si rimontava tre volte. */
   const lastOpen = useRef({ at: 0, key: '' });
@@ -127,19 +132,23 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // Esc annulla il drag; pointerup/pointercancel su window:
   // se la capture non è supportata o il rilascio avviene fuori dall'area, il drag
   // non resta mai "appeso".
+  // Esc con `preventDefault` (contratto di ui/layers.js), e in cattura: annulla
+  // il trascinamento e basta, senza chiudere anche il pannello aperto sotto.
+  // Gli eventi di un altro dito non chiudono il trascinamento (vedi otherPointer).
   useEffect(() => {
     const cancel = () => { drag.current = null; document.body.classList.remove('dk-dragging'); force((x) => x + 1); };
     const onKey = (e) => {
-      if (e.key !== 'Escape') return;
-      if (drag.current) cancel();
+      if (e.key !== 'Escape' || !drag.current) return;
+      e.preventDefault();
+      cancel();
     };
-    const onWinUp = () => { if (drag.current) onUpRef.current?.(); };
-    const onWinCancel = () => { if (drag.current) cancel(); };
-    window.addEventListener('keydown', onKey);
+    const onWinUp = (e) => { if (drag.current && !otherPointer(e)) onUpRef.current?.(e); };
+    const onWinCancel = (e) => { if (drag.current && !otherPointer(e)) cancel(); };
+    window.addEventListener('keydown', onKey, true);
     window.addEventListener('pointerup', onWinUp);
     window.addEventListener('pointercancel', onWinCancel);
     return () => {
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pointerup', onWinUp);
       window.removeEventListener('pointercancel', onWinCancel);
     };
@@ -171,22 +180,16 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (pendingSrc && pending.dayIdx === i) {
       list.push({ ...pendingSrc, operator_id: pending.nop, startMin: pending.ns, endMin: pending.ns + (pendingSrc.duration_min || 0) });
     }
-    // TUTTE le operatrici, ogni giorno, anche dove non hanno niente in agenda:
-    // le sotto-colonne sono il posto dove si clicca per prenotare, e disegnarle
-    // solo dove c'era già lavoro lasciava i giorni liberi — quelli su cui si
-    // prenota di più — senza nulla da cliccare e senza modo di dire a chi.
+    // TUTTE le operatrici della sede attiva, ogni giorno, anche dove non hanno
+    // niente in agenda: le sotto-colonne sono il posto dove si clicca per
+    // prenotare, e disegnarle solo dove c'era già lavoro lasciava i giorni
+    // liberi — quelli su cui si prenota di più — senza nulla da cliccare e
+    // senza modo di dire a chi.
     // In coda restano le operatrici non più in elenco (disattivate) che hanno
     // ancora appuntamenti: altrimenti il giorno li CONTA ma non li mostra da
-    // nessuna parte, e la cliente si presenta a un orario che in agenda non esiste.
-    const known = new Set(operators.map((o) => o.id));
-    const orphans = [];
-    list.forEach((a) => {
-      if (a.operator_id && !known.has(a.operator_id)) {
-        known.add(a.operator_id);
-        orphans.push({ id: a.operator_id, first_name: t('Non più in team', 'No longer on the team'), last_name: '', inactive: true });
-      }
-    });
-    return { ...d, list, dayOps: operators.concat(orphans) };
+    // nessuna parte, e la cliente si presenta a un orario che in agenda non
+    // esiste. Vedi weekDayOps.
+    return { ...d, list, dayOps: weekDayOps(operators, locationId, list, t('Non più in team', 'No longer on the team')) };
   });
   const dayWidth = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
 
@@ -211,10 +214,13 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   function onBlockDown(e, appt, dayIdx) {
     if (e.button !== undefined && e.button !== 0) return;   // solo tasto sinistro
+    // un secondo dito sul tablet non ruba il trascinamento in corso
+    if (e.isPrimary === false) return;
     e.preventDefault();                                     // niente selezione testo (il pointerup arriva comunque)
     drag.current = {
       id: appt.id, obj: appt, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
+      startScroll: scrollRef.current?.scrollTop || 0,
       orig: appt.startMin, origOp: appt.operator_id, origDayIdx: dayIdx,
       ns: appt.startMin, nop: appt.operator_id, dayIdx, hoverOp: null, moved: false,
     };
@@ -245,10 +251,20 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   function onMove(e) {
     const d = drag.current;
-    if (!d || !canWrite) return;
+    if (!d || !canWrite || otherPointer(e)) return;
     d.cx = e.clientX; d.cy = e.clientY;
-    const dy = e.clientY - d.startY, dx = e.clientX - d.startX;
-    const { dayIdx, opId } = targetFromX(e.clientX);
+    track(d);
+  }
+  // La rotella durante il trascinamento sposta l'orario sotto il puntatore:
+  // i minuti tengono conto anche dello scorrimento (come in vista giorno).
+  function onDragScroll() {
+    const d = drag.current;
+    if (d && canWrite) track(d);
+  }
+  function track(d) {
+    const dy = d.cy - d.startY + ((scrollRef.current?.scrollTop || 0) - (d.startScroll || 0));
+    const dx = d.cx - d.startX;
+    const { dayIdx, opId } = targetFromX(d.cx);
     const rawMin = d.orig + dy / pxm;
     let ns = Math.round(rawMin / step) * step;
     const snap = bestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d);
@@ -274,9 +290,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     force((x) => x + 1);
     return d;
   }
-  function onCancel() { endDrag(); }
+  function onCancel(e) { if (!otherPointer(e)) endDrag(); }
 
-  function onUp() {
+  function onUp(e) {
+    if (otherPointer(e)) return;   // si solleva un altro dito: il trascinamento continua
     const d = endDrag();
     if (!d) return;
     if (!d.moved) { openDetail(d.obj); return; }   // click semplice → dettaglio; il drag no
@@ -435,6 +452,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onCancel}
+      onScroll={onDragScroll}
     >
       {/* sticky header: day + per-operator sub-columns */}
       <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', borderBottom: '1px solid var(--hair)', width: 'max-content', minWidth: '100%' }}>
@@ -442,7 +460,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
         {dayData.map((d, i) => {
           const isToday = d.date === today;
           const isTargetDay = dragging && dg.dayIdx === i;
-          const rev = d.list.reduce((s, a) => s + Number(a.total_price || 0), 0);
+          const rev = apptRevenue(d.list);   // il no-show non entra, come nel mese
           const dayW = dayWidth(d);
           const num = parseISO(d.date).getDate();
           const statuses = Object.entries(d.by_status || {});

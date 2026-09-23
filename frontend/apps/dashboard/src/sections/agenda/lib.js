@@ -442,6 +442,41 @@ export function gridMarks(step) {
   return out;
 }
 
+/** Sotto-colonne di un giorno in vista settimana.
+ *
+ *  Le operatrici della sede attiva — chi non ha sede vale per tutte, la stessa
+ *  regola della vista giorno — e in coda chi ha comunque appuntamenti quel
+ *  giorno: di un'altra sede (col suo nome) o non più in team (`orphanName`).
+ *  Prima c'erano le sotto-colonne delle operatrici di TUTTE le sedi: in
+ *  settimana si prenotava a nome di chi lavora altrove.
+ *  `appointments` = gli appuntamenti del giorno (payload /agenda/week). */
+export function weekDayOps(operators, locationId, appointments, orphanName) {
+  const all = operators || [];
+  const base = all.filter((o) => !locationId || o.location_id == null || o.location_id === locationId);
+  const known = new Set(base.map((o) => o.id));
+  const extra = [];
+  for (const a of appointments || []) {
+    const id = a.operator_id;
+    if (!id || known.has(id)) continue;
+    known.add(id);
+    extra.push(all.find((o) => o.id === id) || { id, first_name: orphanName, last_name: '', inactive: true });
+  }
+  return base.concat(extra);
+}
+
+/** Incasso atteso nelle testate di giorno e settimana, con la regola del mese
+ *  (agenda_range): il no-show non entra. Le testate lo contavano, e lo stesso
+ *  giorno valeva un incasso in vista giorno e un altro nel mese. Si somma in
+ *  centesimi: i prezzi arrivano come stringhe decimali ("45.10"). */
+export function apptRevenue(list) {
+  let cents = 0;
+  for (const a of list || []) {
+    if (a.status === 'no_show' || a.status === 'cancelled') continue;
+    cents += Math.round(Number(a.total_price || 0) * 100);
+  }
+  return cents / 100;
+}
+
 /** Segmenti della striscia colorata di un blocco settimanale: uno per operatrice,
  *  in proporzione alla durata (attiva + posa), fondendo i consecutivi della stessa
  *  operatrice. Senza `items` (payload vecchio) → un solo segmento dell'operatrice. */
