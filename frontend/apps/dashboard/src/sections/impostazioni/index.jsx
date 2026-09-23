@@ -85,7 +85,7 @@ export default function ImpostazioniSection() {
     const onMsg = (e) => {
       if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
       if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
-      else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed'), icon: 'info' });
+      else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed') + (e.data.error ? ': ' + e.data.error : ''), icon: 'info' });
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
