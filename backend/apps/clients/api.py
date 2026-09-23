@@ -70,11 +70,114 @@ def list_categories(request):
     return request.auth.salon.client_categories.all()
 
 
+DUPLICATE_LABEL = "Esiste già un'etichetta con questo nome"
+
+
+def _label_payload(ctx, data: CategoryIn, *, exclude_id: Optional[int] = None) -> dict:
+    """CategoryIn ripulito, con il nome unico nel salone senza badare alle maiuscole.
+
+    Un nome già usato (o il doppio clic su «Salva») arrivava al vincolo del
+    database e usciva come 500 (06-12). E «VIP» accanto a «vip» sono due
+    etichette che le condizioni non distinguono: `contains` confronta i nomi
+    senza maiuscole.
+    """
+    payload = data.dict()
+    payload["name"] = payload["name"].strip()
+    if not payload["name"]:
+        raise HttpError(400, "Il nome dell'etichetta è obbligatorio")
+    same = ClientCategory.objects.filter(salon=ctx.salon, name__iexact=payload["name"])
+    if exclude_id is not None:
+        same = same.exclude(id=exclude_id)
+    if same.exists():
+        raise HttpError(400, DUPLICATE_LABEL)
+    return payload
+
+
+def _cites_label(rule, name: str) -> bool:
+    return (
+        isinstance(rule, dict)
+        and rule.get("field") == "categories"
+        and isinstance(rule.get("value"), str)
+        and rule["value"].strip().casefold() == name.strip().casefold()
+    )
+
+
+def _label_rules(conditions) -> list:
+    if not isinstance(conditions, dict) or not isinstance(conditions.get("rules"), list):
+        return []
+    return conditions["rules"]
+
+
+def _rules_citing_label(salon, name: str) -> tuple[list, list]:
+    """Regole caparra e automazioni del salone le cui condizioni citano l'etichetta.
+
+    Le condizioni salvano il NOME dell'etichetta (è quello che confronta
+    `client_facts`, ed è quello che le automazioni mandano a Yourang).
+    """
+    from apps.core.models import DepositRule  # lazy: come le altre letture cross-app
+
+    rules = [
+        r for r in DepositRule.objects.filter(salon=salon)
+        if any(_cites_label(rule, name) for rule in _label_rules(r.conditions))
+    ]
+    try:
+        from apps.automations.models import Automation  # lazy
+    except ImportError:
+        return rules, []
+    automations = [
+        a for a in Automation.objects.filter(salon=salon)
+        if any(_cites_label(rule, name) for rule in _label_rules(a.conditions))
+    ]
+    return rules, automations
+
+
+def _renamed(conditions: dict, old: str, new: str) -> dict:
+    return {
+        **conditions,
+        "rules": [
+            {**rule, "value": new} if _cites_label(rule, old) else rule
+            for rule in _label_rules(conditions)
+        ],
+    }
+
+
+def _rename_label_in_conditions(salon, old: str, new: str) -> tuple[int, int]:
+    """Riscrive il nome dell'etichetta nelle condizioni che la citano.
+
+    Rinominare «Da seguire» in «Da seguire!» spegneva in silenzio la regola
+    «SE etichetta = Da seguire → caparra 20 €»: alle clienti a rischio non si
+    chiedeva più la caparra, e i filtri delle automazioni smettevano di
+    scattare (06-06, 01-13, 15-07). Le automazioni aggiornate si rimandano a
+    Yourang, che le esegue con le condizioni che ha ricevuto.
+    """
+    rules, automations = _rules_citing_label(salon, old)
+    for rule in rules:
+        rule.conditions = _renamed(rule.conditions, old, new)
+        rule.save(update_fields=["conditions", "updated_at"])
+    if automations:
+        try:
+            from apps.automations.api import _definition  # lazy: la definizione è la loro
+        except ImportError:
+            _definition = None
+        for automation in automations:
+            automation.conditions = _renamed(automation.conditions, old, new)
+            automation.save(update_fields=["conditions", "updated_at"])
+            if _definition is not None:
+                emit_event(salon, "automation.updated", _definition(automation))
+    return len(rules), len(automations)
+
+
 @router.post("/categories", auth=staff_auth, response=CategoryOut)
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
-    category = ClientCategory.objects.create(salon=ctx.salon, **data.dict())
+    payload = _label_payload(ctx, data)
+    try:
+        with transaction.atomic():
+            category = ClientCategory.objects.create(salon=ctx.salon, **payload)
+    except IntegrityError:
+        # Due «Salva» nello stesso istante: il controllo sopra non è atomico.
+        raise HttpError(400, DUPLICATE_LABEL)
     log_activity(
         ctx.salon,
         "client_category.created",
@@ -90,16 +193,33 @@ def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     category = salon_get(ClientCategory, ctx, category_id)
-    for name, value in data.dict().items():
-        setattr(category, name, value)
-    category.save()
-    log_activity(
-        ctx.salon,
-        "client_category.updated",
-        f"Etichetta aggiornata: {category.name}",
-        actor=ctx.user,
-        payload={"category_id": category.id},
-    )
+    old_name = category.name
+    payload = _label_payload(ctx, data, exclude_id=category.id)
+    with transaction.atomic():
+        for name, value in payload.items():
+            setattr(category, name, value)
+        try:
+            with transaction.atomic():
+                category.save()
+        except IntegrityError:
+            raise HttpError(400, DUPLICATE_LABEL)
+        rules = automations = 0
+        if category.name != old_name:
+            rules, automations = _rename_label_in_conditions(ctx.salon, old_name, category.name)
+        summary = (
+            f"Etichetta rinominata: {old_name} → {category.name}"
+            if category.name != old_name
+            else f"Etichetta aggiornata: {category.name}"
+        )
+        if rules or automations:
+            summary += f" (condizioni aggiornate: {rules} regole caparra, {automations} automazioni)"
+        log_activity(
+            ctx.salon,
+            "client_category.updated",
+            summary,
+            actor=ctx.user,
+            payload={"category_id": category.id},
+        )
     return category
 
 
@@ -109,6 +229,21 @@ def delete_category(request, category_id: int):
     require_scope(ctx, "clients")
     category = salon_get(ClientCategory, ctx, category_id)
     name = category.name
+    # Eliminata l'etichetta, la regola che la cita non scatta più per nessuna,
+    # senza che niente lo dica — lo stesso silenzio del rinomina. Togliere la
+    # condizione al posto del titolare sarebbe peggio: in una regola «E» il
+    # resto varrebbe per tutte le clienti. Prima si sistemano le regole.
+    rules, automations = _rules_citing_label(ctx.salon, name)
+    if rules or automations:
+        used_by = [f"regola caparra «{r.name}»" for r in rules] + [
+            f"automazione «{a.name}»" for a in automations
+        ]
+        more = f" e altre {len(used_by) - 3}" if len(used_by) > 3 else ""
+        raise HttpError(
+            400,
+            f"L'etichetta «{name}» è usata da {', '.join(used_by[:3])}{more}: "
+            "togli la condizione da lì, poi eliminala.",
+        )
     category.delete()
     log_activity(
         ctx.salon,
