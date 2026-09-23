@@ -526,23 +526,22 @@ def deposit_retained(appointment) -> Decimal:
     né detratto né restituito, e la cliente lo perdeva (02-21, 05-14). Il
     checkout ne restituisce la parte che non ha detratto.
     """
-    from apps.agenda.services import REFUND_IN_FLIGHT, _refunds_done_cents, _to_cents  # lazy
+    from apps.agenda.services import _refund_sums, _refunds_committed_cents, _to_cents  # lazy
 
     if appointment.deposit_status not in ("paid", "refunding"):
         return Decimal("0.00")
     refunds = appointment.deposit_refunds or {}
-    in_flight = sum(
-        int(row.get("amount_cents") or 0)
-        for row in refunds.values()
-        if (row.get("status") or "") in REFUND_IN_FLIGHT
-    )
+    _done, in_flight, _gone, _floor = _refund_sums(refunds)
     # `deposit_refunded_amount` è la copia di quanto già restituito che la
     # dashboard mostra: di solito coincide con i rimborsi riusciti, ma se è più
     # alto (scritto a mano dall'admin, senza la riga del rimborso) vale lui.
     # Contare solo le righe avrebbe detratto al conto, o restituito di nuovo,
     # soldi che la cliente ha già riavuto.
-    done = max(_refunds_done_cents(refunds), _to_cents(appointment.deposit_refunded_amount))
-    left = _to_cents(appointment.deposit_amount) - done - in_flight
+    committed = max(
+        _refunds_committed_cents(refunds),
+        _to_cents(appointment.deposit_refunded_amount) + in_flight,
+    )
+    left = _to_cents(appointment.deposit_amount) - committed
     return (Decimal(max(left, 0)) / 100).quantize(TWO_PLACES)
 
 
@@ -557,7 +556,7 @@ def sync_deposit_refunds(appointment) -> None:
     sulla carta; quelli confermati a mano con il metodo con cui la caparra era
     stata incassata.
     """
-    from apps.agenda.services import REFUND_DONE, REFUND_FLOOR_KEY  # lazy
+    from apps.agenda.services import REFUND_DONE, REFUND_FLOOR_KEY, _refunds_done_cents  # lazy
 
     deposit_sale = Sale.objects.filter(deposit_appointment=appointment).first()
     if deposit_sale is None:
@@ -575,9 +574,12 @@ def sync_deposit_refunds(appointment) -> None:
             continue
         explained += cents
         wanted[f"{appointment.id}:{key}"] = (cents, manual_method if row.get("manual") else Payment.Method.CARD)
-    floor = int((refunds.get(REFUND_FLOOR_KEY) or {}).get("amount_cents") or 0)
-    if floor > explained:
-        wanted[f"{appointment.id}:{REFUND_FLOOR_KEY}"] = (floor - explained, Payment.Method.CARD)
+    # La parte del pavimento non spiegata dalle righe riuscite, al netto dei
+    # rimborsi ancora in volo o falliti (vedi agenda.services._refunds_done_cents):
+    # un rimborso in corso non esce dalla cassa prima di essere avvenuto.
+    unexplained = _refunds_done_cents(refunds) - explained
+    if unexplained > 0:
+        wanted[f"{appointment.id}:{REFUND_FLOOR_KEY}"] = (unexplained, Payment.Method.CARD)
 
     existing = {
         row.key: row

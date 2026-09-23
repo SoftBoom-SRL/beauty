@@ -2673,6 +2673,8 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
 # Stati Stripe di un rimborso: solo «succeeded» è denaro tornato alla cliente.
 REFUND_DONE = "succeeded"
 REFUND_IN_FLIGHT = ("pending", "requires_action")
+# Rimborsi che non restituiranno niente: il denaro resta (o torna) al salone.
+REFUND_GONE = ("failed", "canceled")
 # Voce di `deposit_refunds` con il totale restituito dichiarato da
 # `charge.refunded`, che non porta l'id del singolo rimborso: vale come
 # soglia minima. Prima non si salvava, e l'evento successivo la dimenticava.
@@ -2688,20 +2690,47 @@ def _to_cents(amount) -> int:
     return int((Decimal(str(amount or 0)) * 100).quantize(Decimal("1")))
 
 
-def _refunds_done_cents(refunds: dict) -> int:
-    """Centesimi dei soli rimborsi RIUSCITI fra quelli registrati.
+def _refund_sums(refunds: dict) -> tuple[int, int, int, int]:
+    """Centesimi dei rimborsi registrati: (riusciti, in volo, falliti, pavimento)."""
+    done = in_flight = gone = 0
+    for key, row in (refunds or {}).items():
+        if key == REFUND_FLOOR_KEY:
+            continue
+        cents = int(row.get("amount_cents") or 0)
+        status = row.get("status") or ""
+        if status == REFUND_DONE:
+            done += cents
+        elif status in REFUND_IN_FLIGHT:
+            in_flight += cents
+        elif status in REFUND_GONE:
+            gone += cents
+    floor = int(((refunds or {}).get(REFUND_FLOOR_KEY) or {}).get("amount_cents") or 0)
+    return done, in_flight, gone, floor
 
-    Mai meno del totale dichiarato da `charge.refunded` (`REFUND_FLOOR_KEY`):
-    un rimborso fatto dalla dashboard Stripe può arrivare solo da lì.
+
+def _refunds_done_cents(refunds: dict) -> int:
+    """Centesimi davvero tornati alla cliente.
+
+    Dei rimborsi con id contano i riusciti. Il totale dichiarato da
+    `charge.refunded` (`REFUND_FLOOR_KEY`) copre anche quelli fatti dalla
+    dashboard Stripe, che arrivano solo da lì; ma non si sa se Stripe ci conti
+    anche i rimborsi ancora in volo, e resta il massimo visto anche dopo un
+    rimborso fallito. Al pavimento si tolgono quindi quelli in volo e quelli
+    falliti che hanno un id: contati come riusciti nel pavimento e poi di
+    nuovo come in volo, un rimborso di dieci euro ancora in corso faceva
+    detrarre alla cassa dieci euro invece di venti; e un rimborso fallito dopo
+    il pavimento lasciava la caparra «rimborsata» con i soldi al salone.
+    Con una riga per ogni rimborso (Stripe manda sempre refund.created e
+    refund.updated) il conto torna in tutti e due i casi.
     """
-    refunds = refunds or {}
-    by_id = sum(
-        int(row.get("amount_cents") or 0)
-        for key, row in refunds.items()
-        if key != REFUND_FLOOR_KEY and (row.get("status") or "") == REFUND_DONE
-    )
-    floor = int((refunds.get(REFUND_FLOOR_KEY) or {}).get("amount_cents") or 0)
-    return max(by_id, floor)
+    done, in_flight, gone, floor = _refund_sums(refunds)
+    return max(done, floor - in_flight - gone)
+
+
+def _refunds_committed_cents(refunds: dict) -> int:
+    """Centesimi restituiti o in via di restituzione (vedi `_refunds_done_cents`)."""
+    done, in_flight, gone, floor = _refund_sums(refunds)
+    return max(done + in_flight, floor - gone)
 
 
 def _sync_refund_moves(appointment: Appointment) -> None:

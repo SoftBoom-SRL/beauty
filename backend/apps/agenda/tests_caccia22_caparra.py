@@ -117,27 +117,71 @@ class RefundEventsOrderTests(AgendaTestBase):
         from .services import record_deposit_refund
 
         appointment = self._paid()
-        # rimborso di 10 dalla dashboard Stripe: arriva solo `charge.refunded`
+        # rimborso di 10 dalla dashboard Stripe: prima arriva `charge.refunded`…
         record_deposit_refund(appointment, floor_cents=1000)
-        # poi un altro evento, di un rimborso diverso ancora in corso
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
+        # …poi il suo `refund.created`, che non lo conta una seconda volta
+        record_deposit_refund(appointment, refund_id="re_dash", cents=1000, status="succeeded")
+        # e un rimborso diverso che fallisce non tocca i 10 già restituiti
         record_deposit_refund(appointment, refund_id="re_2", cents=500, status="failed")
         appointment.refresh_from_db()
         self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
         self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
 
-    def test_a_failure_after_charge_refunded_keeps_state_and_amount_together(self):
+    def test_a_failure_after_charge_refunded_puts_the_money_back(self):
+        """Il pavimento resta il massimo visto: un rimborso poi fallito non lo abbassa
+        da solo. Prima la caparra restava «rimborsata» con i soldi ancora al salone."""
         from .services import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, floor_cents=3000)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
         record_deposit_refund(appointment, refund_id="re_1", cents=3000, status="failed")
         appointment.refresh_from_db()
-        # prima: «rimborsata» con 0 € rimborsati
-        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDED)
-        self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
+        # stato e importo insieme: niente restituito, la caparra torna detraibile
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.PAID)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("0.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("30.00"))
         self.assertTrue(
             ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_update").exists()
         )
+
+    def test_a_pending_refund_counted_in_charge_refunded_is_not_subtracted_twice(self):
+        """Se Stripe conta nel totale del `charge.refunded` anche il rimborso in corso,
+        la cassa detraeva 10 invece di 20 e il rimborso risultava già fatto."""
+        from apps.sales.models import DepositRefund
+        from apps.sales.services import deposit_retained
+
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="pending")
+        record_deposit_refund(appointment, floor_cents=1000)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDING)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("0.00"))
+        self.assertEqual(deposit_retained(appointment), Decimal("20.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
+        self.assertFalse(DepositRefund.objects.filter(appointment=appointment).exists())
+        # riuscito: dieci restituiti, una volta sola
+        record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="succeeded")
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.PAID)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
+
+    def test_a_whole_refund_still_pending_is_not_yet_refunded(self):
+        from .services import record_deposit_refund
+
+        appointment = self._paid()
+        record_deposit_refund(appointment, refund_id="re_all", cents=3000, status="pending")
+        record_deposit_refund(appointment, floor_cents=3000)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REFUNDING)
+        self.assertEqual(appointment.deposit_refunded_amount, Decimal("0.00"))
+        self.assertEqual(appointment.deposit_credit, Decimal("0.00"))
 
     def test_a_partial_pending_refund_never_costs_the_client_the_rest(self):
         from apps.accounts.models import Membership, Role, User
