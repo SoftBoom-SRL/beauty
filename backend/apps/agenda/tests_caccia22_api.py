@@ -175,7 +175,10 @@ class DepositForPastStartTests(Caccia22Base):
     def _create(self, start):
         with patch("apps.sales.stripe_service.payments_enabled", return_value=True), \
                 patch("apps.sales.stripe_service.create_deposit_checkout",
-                      return_value=("https://pay.example/x", "cs_1")):
+                      # forma della sessione dopo 05-10/05-12 (fix22/ag-caparra):
+                      # anche scadenza e account, non più la coppia (url, id)
+                      return_value={"url": "https://pay.example/x", "id": "cs_1",
+                                    "expires_at": None, "account": ""}):
             return self.post(
                 "/api/agenda/appointments",
                 {"client_id": self.anna.id, "items": [{"service_id": self.cut30.id, "operator_id": self.giulia.id}],
