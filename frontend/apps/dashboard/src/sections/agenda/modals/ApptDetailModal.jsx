@@ -603,7 +603,14 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   }
   /* Le azioni che portano altrove partono dalla versione salvata: «Incassa»
    * con la «Piega» aggiunta e non salvata faceva il conto senza (13-05). */
-  const saveFirst = async () => !dirty || !itemsEditable || saveChanges();
+  const saveFirst = async () => {
+    if (!dirty || !itemsEditable) return true;
+    if (!editItems.length) {
+      fireToast({ msg: t('La visita è senza servizi: aggiungine uno o annulla le modifiche', 'The visit has no services: add one or discard the changes'), icon: 'alert' });
+      return false;
+    }
+    return saveChanges();
+  };
 
   const openClient = () => { setSelClient(appt.client.id); setTab('clienti'); onClose(); };
 
