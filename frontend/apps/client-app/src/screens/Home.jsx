@@ -83,7 +83,7 @@ export default function Home() {
 
 function HomeLogged() {
   const { t, lang, brand, client, setView, fireToast } = useApp();
-  const { data, error } = useClientAppointments();
+  const { data, error, reload } = useClientAppointments();
   React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const next = data?.upcoming?.[0] || null;
@@ -132,7 +132,7 @@ function HomeLogged() {
                 {next.operator?.name && <Meta icon="user" text={next.operator.name} />}
               </div>
               {/* caparra da versare: l'orario resta bloccato solo fino alla scadenza */}
-              <DepositDue appt={next} t={t} lang={lang} fireToast={fireToast} />
+              <DepositDue appt={next} t={t} lang={lang} fireToast={fireToast} onStale={reload} />
               {/* primary card action — Sposta */}
               <button className="press" onClick={() => setView('sposta', { appt: next })}
                 style={{ width: '100%', minHeight: 50, marginTop: 18, borderRadius: 'var(--r-pill)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'transparent', border: '1.5px solid var(--brand)', color: 'var(--brand-ink)', fontWeight: 700, fontSize: 15 }}>

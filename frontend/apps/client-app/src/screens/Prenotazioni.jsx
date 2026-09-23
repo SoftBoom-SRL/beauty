@@ -18,7 +18,7 @@ function StatusChip({ status, t }) {
   );
 }
 
-function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast }) {
+function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast, onStale }) {
   const dm = depositMeta(appt.deposit_status, t);
   const depAmt = Number(appt.deposit_amount || 0);
   return (
@@ -46,7 +46,7 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast }
           {dm.label}{depAmt > 0 ? ' · ' + fmtEur(depAmt, lang) : ''}
         </div>
       )}
-      {actions && <DepositDue appt={appt} t={t} lang={lang} fireToast={fireToast} compact />}
+      {actions && <DepositDue appt={appt} t={t} lang={lang} fireToast={fireToast} compact onStale={onStale} />}
       {actions && (
         <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)' }}>
           <button className="press" onClick={onSposta}
@@ -65,7 +65,7 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast }
 
 export default function Prenotazioni() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const { data, error } = useClientAppointments();
+  const { data, error, reload } = useClientAppointments();
   React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loading = !data && !error;
@@ -85,7 +85,7 @@ export default function Prenotazioni() {
         ) : upcoming.length ? (
           <div className="stagger">
             {upcoming.map((appt) => (
-              <ApptRow key={appt.id} appt={appt} t={t} lang={lang} fireToast={fireToast} actions
+              <ApptRow key={appt.id} appt={appt} t={t} lang={lang} fireToast={fireToast} actions onStale={reload}
                 onSposta={() => setView('sposta', { appt })}
                 onAnnulla={() => setView('annulla', { appt })} />
             ))}
