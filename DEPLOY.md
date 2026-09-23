@@ -354,6 +354,9 @@ suo segreto (`STRIPE_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET`, vedi §3)
 Eventi da selezionare su entrambi: `checkout.session.completed`,
 `payment_intent.succeeded`, `setup_intent.succeeded`, `charge.refunded`,
 `charge.refund.updated`, `refund.created`, `refund.updated`, `refund.failed`.
+Gli eventi `refund.*` non sono facoltativi: portano ogni rimborso con il suo
+stato, e senza di loro una caparra con un rimborso ancora in corso (o fallito)
+può risultare detraibile per l'importo sbagliato al checkout.
 
 **Yourang** — abilita sia il "login con Yourang" dalla pagina di login (che
 provisiona/collega il salone e conia la sessione staff) sia il "collega" dalle

@@ -1,5 +1,9 @@
 # Caccia ai bug — beauty, 22 settembre 2026
 
+> **Stato al 23/09/2026:** tutti i reperti sono stati corretti sul ramo `claude/exciting-bohr-5ch9g7`.
+> Per ogni ID il commit che lo corregge, le verifiche da fare in produzione e i punti aperti sono in
+> [STATO-CORREZIONI.md](STATO-CORREZIONI.md). Il testo qui sotto è il rapporto del 22, com'era.
+
 Diciotto revisori in parallelo su `main` = 754ed6b (in produzione): quindici per area e tre trasversali
 (funzioni nuove, contratto fra frontend e backend, concorrenza). Tutti in sola lettura. **La revisione è
 stata interrotta a metà per esaurimento dei crediti**: ogni revisore ha scritto ciò che aveva già trovato,
