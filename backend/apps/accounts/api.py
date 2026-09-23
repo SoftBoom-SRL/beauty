@@ -6,7 +6,7 @@ import logging
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -368,6 +368,11 @@ def _require_can_touch_role(ctx, role) -> None:
     _require_grantable(ctx, role.scopes or [])
 
 
+def _can_grant(ctx, role) -> bool:
+    """Vero se chi chiama potrebbe assegnare `role` (stessa regola di `_require_grantable`)."""
+    return ctx.is_owner or all(s in ctx.scopes for s in (role.scopes or []))
+
+
 @router.get("/members", auth=staff_auth, response=list[MemberOut])
 def list_members(request):
     ctx = request.auth
@@ -393,6 +398,13 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         # Il titolare lo tocca solo il titolare.
         if membership.is_owner:
             raise HttpError(403, "Solo il titolare può modificare il proprio ruolo")
+        # Come in `remove_member`: chi ha il solo `team` non toglie i permessi a
+        # una collega più potente di lui. Controllando soltanto il ruolo NUOVO,
+        # «Nessun ruolo» o un ruolo più stretto passavano sulla Manager, che
+        # perdeva cassa, magazzino e listino — mentre rimuoverla dal team era
+        # già vietato (10-05, 15-02).
+        if membership.role is not None:
+            _require_can_touch_role(ctx, membership.role)
     if role is not None:
         _require_grantable(ctx, role.scopes or [])
     membership.role = role
@@ -467,6 +479,12 @@ def update_role(request, role_id: int, data: RoleIn):
     _validate_scopes(data.scopes)
     role = salon_get(Role, ctx, role_id)
     _require_can_touch_role(ctx, role)
+    # La dashboard li presenta come «permessi non modificabili» a tutti, il
+    # titolare compreso, ma l'API li riscriveva: con una chiamata diretta chi
+    # aveva team+agenda+clienti toglieva l'agenda al ruolo «Operatrice» e a
+    # tutte le operatrici insieme (15-10). Come per l'eliminazione, qui no.
+    if role.is_system:
+        raise HttpError(400, "I ruoli di sistema non sono modificabili")
     _require_grantable(ctx, data.scopes)
     if Role.objects.filter(salon=ctx.salon, name=data.name).exclude(id=role.id).exists():
         raise HttpError(400, "Esiste già un ruolo con questo nome")
@@ -500,11 +518,45 @@ def delete_role(request, role_id: int):
 # ---- Staff: inviti ---------------------------------------------------------------
 
 
+def _invitation_out(invitation, *, with_token: bool) -> dict:
+    return {
+        "id": invitation.id,
+        "email": invitation.email,
+        "role": _role_out(invitation.role),
+        "token": invitation.token if with_token else None,
+        "status": invitation.status,
+        "expires_at": invitation.expires_at,
+        "created_at": invitation.created_at,
+    }
+
+
 @router.get("/invitations", auth=staff_auth, response=list[InvitationOut])
 def list_invitations(request):
+    """Inviti del salone; il codice solo a chi potrebbe concedere quel ruolo.
+
+    Il codice di un invito vale un account: chi lo presenta a
+    `accept_invitation` crea l'utente con la password che sceglie e riceve il
+    ruolo dell'invito. Consegnato a chiunque avesse `team`, il front-desk
+    copiava il codice dell'invito «Manager» destinato alla nuova assunta e
+    diventava Manager lui (10-01). A chi può assegnare quel ruolo invece non
+    toglie nulla vederlo: un invito per sé potrebbe crearlo comunque. Oggi
+    l'invio automatico non c'è ancora e il codice si condivide a mano da qui,
+    per questo non sparisce del tutto dalla lista.
+    """
     ctx = request.auth
     require_scope(ctx, "team")
-    return Invitation.objects.filter(salon=ctx.salon).select_related("role")
+    now = timezone.now()
+    return [
+        _invitation_out(
+            invitation,
+            with_token=(
+                invitation.status == Invitation.Status.PENDING
+                and invitation.expires_at > now
+                and _can_grant(ctx, invitation.role)
+            ),
+        )
+        for invitation in Invitation.objects.filter(salon=ctx.salon).select_related("role")
+    ]
 
 
 @router.post("/invitations", auth=staff_auth, response=InvitationOut)
@@ -537,7 +589,8 @@ def create_invitation(request, data: InvitationIn):
         actor=ctx.user,
         payload={"invitation_id": invitation.id, "role_id": role.id},
     )
-    return invitation
+    # Chi l'ha appena creato ha superato `_require_grantable`: il codice è suo.
+    return _invitation_out(invitation, with_token=True)
 
 
 @router.post("/invitations/accept", response=StaffAuthOut)
@@ -567,12 +620,27 @@ def accept_invitation(request, data: InvitationAcceptIn):
         raise HttpError(400, " ".join(exc.messages))
 
     with transaction.atomic():
-        user = User.objects.create_user(
-            email=invitation.email,
-            password=data.password,
-            first_name=data.first_name,
-            last_name=data.last_name,
+        # Un invito vale una volta sola: lo stato si ricontrolla sulla riga
+        # bloccata e riletta. Letto a inizio richiesta, due accettazioni
+        # simultanee dello stesso codice passavano entrambe e la seconda
+        # moriva sull'email già presa con un 500.
+        locked = (
+            Invitation.objects.select_for_update()
+            .filter(pk=invitation.pk, status=Invitation.Status.PENDING)
+            .first()
         )
+        if locked is None:
+            raise HttpError(400, "Invito non più valido")
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    email=invitation.email,
+                    password=data.password,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                )
+        except IntegrityError:
+            raise HttpError(400, "Esiste già un utente con questa email")
         membership = Membership.objects.create(
             user=user, salon=invitation.salon, role=invitation.role
         )
