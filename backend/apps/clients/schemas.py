@@ -309,6 +309,12 @@ class HookLeadIn(Schema):
     email: str = Field("", max_length=254)
     marketing: bool = False
     privacy: bool = False
+    # Lingua dell'app da cui arriva il modulo ('it' | 'en'), per il contatto
+    # NUOVO: prima nasceva sempre in italiano e la cliente inglese riceveva
+    # conferme e promemoria in una lingua che non legge (06-20, C13). Testo
+    # libero e non Literal: un valore inatteso da un bundle vecchio vale «it»,
+    # non un 422 che perde il contatto.
+    lang: str = Field("", max_length=5)
     # Honeypot a CHECKBOX, nascosta via CSS: deve arrivare False.
     # Non un campo di testo: l'autofill di Chrome riempiva il vecchio `website`
     # (token che riconosce) e scartava utenti veri in silenzio. Le checkbox

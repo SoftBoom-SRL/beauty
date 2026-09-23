@@ -1150,12 +1150,14 @@ def public_hook(request, data: HookLeadIn):
     if client is None:
         try:
             with transaction.atomic():
+                lang = (data.lang or "").strip().lower()
                 client = Client.objects.create(
                     salon=salon,
                     first_name=first_name,
                     last_name=data.last_name.strip(),
                     phone=phone,
                     email=data.email.strip(),
+                    lang=lang if lang in Client.Lang.values else Client.Lang.IT,
                     origin="hook",
                     since=timezone.localdate(),
                     consents={
@@ -1182,37 +1184,71 @@ def public_hook(request, data: HookLeadIn):
             _mark_as_hook_lead(salon, client)
             return {"ok": True}
 
+    if not client.is_active:
+        # Scheda archiviata dallo staff: il modulo la riattivava da solo, con un
+        # consenso marketing «fresco» dato da chiunque conoscesse nome e numero
+        # — anche la cliente tolta di proposito, o chi ha chiesto di non
+        # essere più contattata (10-15). Non si tocca: il salone riceve la
+        # segnalazione e decide, come quando la stessa persona prova a entrare
+        # dall'app (accounts). Il numero può essere passato a un'altra persona.
+        _notify_archived_client(salon, client)
+        return {"ok": True}
+
     # Cliente già in rubrica: si aggiornano i consensi (è il senso del form) e
     # si riempiono solo i campi vuoti. Sovrascrivere nome o email con quanto
     # digitato da uno sconosciuto rovinerebbe una scheda reale, e l'etichetta
     # "Da form" non va messa a chi è già cliente.
+    stored = client.consents or {}
+    marketing_before = bool(stored.get("marketing"))
     client.consents = {
-        **(client.consents or {}),
+        **stored,
         "privacy": True,
         "privacy_at": now,
-        "marketing": bool(data.marketing) or bool((client.consents or {}).get("marketing")),
-        "marketing_at": now if data.marketing else (client.consents or {}).get("marketing_at", ""),
+        "marketing": bool(data.marketing) or marketing_before,
+        "marketing_at": now if data.marketing else stored.get("marketing_at", ""),
     }
+    if data.marketing:
+        client.consents.pop("marketing_revoked_at", None)
+    fields = ["consents"]
     if not client.email and data.email.strip():
         client.email = data.email.strip()
+        fields.append("email")
     if not client.last_name and data.last_name.strip():
         client.last_name = data.last_name.strip()
-    fields = ["consents", "email", "last_name"]
-    revived = not client.is_active
-    if revived:
-        # Una scheda disattivata che ricompila il modulo è un contatto nuovo a
-        # tutti gli effetti. Lasciandola spenta il consenso veniva registrato
-        # ma la persona restava fuori da ogni lista e da ogni audience: il
-        # salone raccoglieva un contatto e non lo vedeva mai.
-        client.is_active = True
-        fields.append("is_active")
+        fields.append("last_name")
     client.save(update_fields=fields)
-    if revived:
-        _mark_as_hook_lead(salon, client)
-    else:
-        log_activity(salon, "client.updated", f"Consensi aggiornati dal form: {client.full_name}")
+    if bool(client.consents["marketing"]) != marketing_before:
+        # Consenso ridato dopo una revoca: Yourang deve togliere il blocco.
+        _marketing_hook("marketing_consent_changed", client, accepted=True)
+    # Con il suo id la scheda aperta in dashboard si ricarica: senza, la
+    # reception continuava a vedere i consensi di prima (06-10).
+    log_activity(
+        salon,
+        "client.updated",
+        f"Consensi aggiornati dal form: {client.full_name}",
+        payload={"client_id": client.id, "fields": fields},
+    )
 
     return {"ok": True}
+
+
+# Una segnalazione al giorno per scheda archiviata. La chiave è la stessa
+# delle segnalazioni dell'accesso dall'app (accounts, «archived-notice:<id>»):
+# app e modulo nello stesso giorno sono un avviso solo.
+ARCHIVED_NOTICE_WINDOW_SECONDS = 24 * 3600
+
+
+def _notify_archived_client(salon, client: Client) -> None:
+    """Segnala al salone (feed, scope clienti) la scheda archiviata che si è fatta viva."""
+    if not ratelimit.hit(f"archived-notice:{client.id}", 1, ARCHIVED_NOTICE_WINDOW_SECONDS):
+        return
+    log_activity(
+        salon,
+        "client.reactivation_requested",
+        f"{client.full_name}: scheda archiviata, ha compilato il modulo contatti. "
+        "Riattivala se vuoi che entri.",
+        payload={"client_id": client.id, "source": "hook"},
+    )
 
 
 def _mark_as_hook_lead(salon, client: Client) -> None:

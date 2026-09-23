@@ -643,20 +643,22 @@ class PublicHookTests(TestCase):
             self.assertEqual(self._post().status_code, 200)
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
 
-    def test_a_disabled_card_comes_back_as_a_new_lead(self):
-        """Una cliente cancellata che ricompila il modulo: prima il consenso
-        veniva registrato ma la scheda restava spenta, quindi fuori da ogni
-        lista e da ogni audience. Contatto raccolto e mai visto da nessuno."""
+    def test_a_disabled_card_is_signalled_not_revived(self):
+        """Una cliente archiviata che ricompila il modulo: il contatto non deve
+        restare invisibile, ma nemmeno tornare attivo da solo con un consenso
+        marketing dato da chiunque conosca nome e numero (10-15). La scheda
+        resta com'è e il salone riceve la segnalazione con la scheda da aprire."""
         disabled = Client.objects.create(
             salon=self.salon, first_name="Sofia", phone="+393331234567", is_active=False
         )
         self.assertEqual(self._post().status_code, 200)
         disabled.refresh_from_db()
-        self.assertTrue(disabled.is_active)
-        self.assertTrue(disabled.consents["privacy"])
-        self.assertTrue(disabled.categories.filter(name="Da form").exists())
+        self.assertFalse(disabled.is_active)
+        self.assertFalse(disabled.consents.get("marketing"))
+        self.assertFalse(disabled.categories.filter(name="Da form").exists())
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
-        self.assertTrue(ActivityLog.objects.filter(type="client.created").exists())
+        notice = ActivityLog.objects.get(type="client.reactivation_requested")
+        self.assertEqual(notice.payload["client_id"], disabled.id)
 
     def test_a_lead_from_the_form_is_a_client_from_today(self):
         self.assertEqual(self._post().status_code, 200)
