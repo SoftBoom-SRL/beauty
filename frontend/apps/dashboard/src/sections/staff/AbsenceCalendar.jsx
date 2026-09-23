@@ -12,7 +12,9 @@ const fmtDM = (iso) => iso.split('-').slice(1).reverse().join('/'); // "2026-07-
 
 export default function AbsenceCalendar({ operatorId, absences, onChanged, canEdit }) {
   const { t, lang, fireToast } = useDash();
-  const [cursor, setCursor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  // Il mese di partenza è quello del SALONE: a cavallo della mezzanotte del
+  // primo del mese una postazione su un altro fuso apriva il mese sbagliato.
+  const [cursor, setCursor] = useState(() => { const [ty, tm] = todayStr().split('-').map(Number); return new Date(ty, tm - 1, 1); });
   // edit = { id?, type, date_from, date_to, note } | null
   const [edit, setEdit] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -67,29 +69,38 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
       const body = { date_from: edit.date_from, date_to: edit.date_to, type: edit.type, note: edit.note || '' };
       if (edit.id) await api.put(`/api/staff/${operatorId}/absences/${edit.id}`, body);
       else await api.post(`/api/staff/${operatorId}/absences`, body);
-      await onChanged();
-      setEdit(null);
-      fireToast({ msg: edit.id ? t('Assenza aggiornata', 'Time off updated') : t('Assenza aggiunta', 'Time off added'), icon: 'check' });
     } catch (err) {
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    } finally {
       setSaving(false);
+      return;
     }
+    /* Scritta riuscita: il pannello si chiude qui. Stava nello stesso try della
+     * ricarica, e se cadeva quella («Errore di rete») il pannello restava su
+     * «Aggiungi»: al secondo clic nascevano due assenze identiche (15-19). */
+    setEdit(null);
+    setSaving(false);
+    fireToast({ msg: edit.id ? t('Assenza aggiornata', 'Time off updated') : t('Assenza aggiunta', 'Time off added'), icon: 'check' });
+    reloadAfterWrite();
   };
+
+  const reloadAfterWrite = () => Promise.resolve(onChanged()).catch(() => {
+    fireToast({ msg: t('Salvato, ma il calendario non si è aggiornato: riapri la scheda', 'Saved, but the calendar did not refresh: reopen the profile'), icon: 'info' });
+  });
 
   const remove = async () => {
     if (saving || !edit?.id) return;
     setSaving(true);
     try {
       await api.del(`/api/staff/${operatorId}/absences/${edit.id}`);
-      await onChanged();
-      setEdit(null);
-      fireToast({ msg: t('Assenza eliminata', 'Time off deleted'), icon: 'x' });
     } catch (err) {
       fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    } finally {
       setSaving(false);
+      return;
     }
+    setEdit(null);
+    setSaving(false);
+    fireToast({ msg: t('Assenza eliminata', 'Time off deleted'), icon: 'x' });
+    reloadAfterWrite();
   };
 
   const typeChips = (

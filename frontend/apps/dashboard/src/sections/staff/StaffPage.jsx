@@ -3,12 +3,14 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, NumInput, salonTzOpts } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
-import { useDash } from '../../ctx.jsx';
+import { rebaseDraft } from '../../ui/rebase.js';
+import { useDash, useLive } from '../../ctx.jsx';
 import {
-  GD_PALETTE, eur, inputCss, monthShort, opName, svcLabel,
+  GD_PALETTE, HIDDEN, eur, inputCss, monthShort, opName, svcLabel,
   weeksFromShifts, shiftsFromWeeks,
+  formFromDetail, changedOperatorFields, sameOperatorField, sameWeeks, perfStats,
 } from './lib.js';
 import ShiftPattern from './ShiftPattern.jsx';
 import AbsenceCalendar from './AbsenceCalendar.jsx';
@@ -17,7 +19,8 @@ export default function StaffPage({ id, onBack }) {
   const { t, lang, services, serviceCategories, locations, reload, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
   const canTeam = hasScope('team');
   const canPricing = hasScope('pricing'); // creare servizi dal profilo operatrice
-  const rev = (v) => (showRevenue ? eur(v, lang) : '•••');
+  // null = importo non mandato dal server a chi non ha il permesso (C6)
+  const rev = (v) => (showRevenue && v != null ? eur(v, lang) : HIDDEN);
 
   /* ---- state ---- */
   const [detail, setDetail] = useState(null);       // OperatorDetailOut
@@ -28,8 +31,7 @@ export default function StaffPage({ id, onBack }) {
   const [clients, setClients] = useState(null);     // [ServedClientOut]
   const [clientQ, setClientQ] = useState('');
   const [staffTab, setStaffTab] = useState('anagrafica');
-  const [saving, setSaving] = useState(false);
-  const [savingShifts, setSavingShifts] = useState(false);
+  const [saving, setSaving] = useState(null);       // null | 'all' | 'shifts'
 
   const toastErr = useCallback((err) => {
     fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
@@ -37,14 +39,13 @@ export default function StaffPage({ id, onBack }) {
 
   const applyDetail = useCallback((d) => {
     setDetail(d);
-    setForm({
-      first_name: d.first_name, last_name: d.last_name, color: d.color,
-      role_title: d.role_title, hourly_cost: String(Number(d.hourly_cost)),
-      active: d.active, service_ids: d.service_ids || [],
-      location_id: d.location_id ?? null, user_id: d.user_id ?? null, order: d.order,
-    });
+    setForm(formFromDetail(d));
     setWeeks(weeksFromShifts(d.shifts, d.cycle_weeks));
   }, []);
+
+  // ultimi valori per il ricarico dal feed live (la callback vive più a lungo del render)
+  const live = useRef({});
+  live.current = { detail, form, weeks };
 
   /* ---- load: detail + performance + absences ---- */
   useEffect(() => {
@@ -78,63 +79,104 @@ export default function StaffPage({ id, onBack }) {
     [id],
   );
 
-  /* ---- saves ----
-   * La PUT operatrice è a corpo completo, quindi il payload va costruito dalla
-   * sorgente giusta: `form` quando si salva l'Anagrafica, `detail` (i valori
-   * del server) quando si sincronizza solo la lunghezza del ciclo turni —
-   * altrimenti «Salva turni» persisteva anche le modifiche all'anagrafica che
-   * l'utente aveva lasciato a metà (costo orario azzerato, spunta «attiva»
-   * tolta) e l'operatrice spariva dall'agenda. */
-  const buildPayload = (cycleWeeks, src = form) => ({
-    first_name: String(src.first_name || '').trim(),
-    last_name: String(src.last_name || '').trim(),
-    color: src.color,
-    role_title: String(src.role_title || '').trim(),
-    location_id: src.location_id ?? null,
-    user_id: src.user_id ?? null,
-    service_ids: src.service_ids || [],
-    hourly_cost: (Number(src.hourly_cost) || 0).toFixed(2),
-    cycle_weeks: cycleWeeks,
-    active: src.active,
-    order: src.order,
-  });
+  /* ---- cosa c'è da salvare ----
+   * Anagrafica e turni stanno in due linguette ma la scheda è una: il «Salva»
+   * dell'intestazione restava visibile in «Turni e ferie» ed eseguiva solo
+   * l'anagrafica, quindi «Modifiche salvate» e si usciva con i turni vecchi
+   * (sabato pomeriggio non prenotabile, 15-03). Ora salva tutto ciò che è
+   * cambiato, e le linguette con modifiche in sospeso hanno un pallino. */
+  const basicsChanges = form && detail ? changedOperatorFields(form, detail) : {};
+  const basicsDirty = Object.keys(basicsChanges).length > 0;
+  const shiftsDirty = !!detail && !sameWeeks(weeks, weeksFromShifts(detail.shifts, detail.cycle_weeks));
 
-  const saveBasics = async () => {
-    if (saving || !form) return;
-    if (!form.first_name.trim() || !form.last_name.trim()) {
+  /* ---- saves ----
+   * La PUT operatrice porta solo i campi cambiati (C19): «Salva turni» manda
+   * la sola lunghezza del ciclo, l'Anagrafica solo ciò che si è toccato, e ciò
+   * che un'altra postazione ha cambiato nel frattempo non torna indietro. */
+  const pendingRefresh = useRef(false);
+  const savingRef = useRef(false);   // sincrono: lo stato `saving` arriva solo al render dopo
+  const saveParts = async ({ basics, shifts }) => {
+    if (saving || !form || !detail) return;
+    const changes = basics ? changedOperatorFields(form, detail) : {};
+    const doBasics = Object.keys(changes).length > 0;
+    const doShifts = shifts && shiftsDirty;
+    if (!doBasics && !doShifts) return;
+    if (doBasics && (!String(form.first_name).trim() || !String(form.last_name).trim())) {
       fireToast({ msg: t('Nome e cognome sono obbligatori', 'First and last name are required'), icon: 'alert' });
       return;
     }
-    setSaving(true);
-    try {
-      const updated = await api.put(`/api/staff/${id}`, buildPayload(detail.cycle_weeks));
-      setDetail((d) => ({ ...d, ...updated }));
-      await reload.operators().catch(() => {});
-      fireToast({ msg: t('Modifiche salvate', 'Changes saved'), icon: 'check' });
-    } catch (err) { toastErr(err); } finally { setSaving(false); }
-  };
-
-  const saveShifts = async () => {
-    if (savingShifts || !detail) return;
-    let rows;
-    try { rows = shiftsFromWeeks(weeks, t); } catch (err) {
-      fireToast({ msg: err.message, icon: 'alert' });
-      return;
+    let rows = null;
+    if (doShifts) {
+      try { rows = shiftsFromWeeks(weeks, t); } catch (err) {
+        fireToast({ msg: err.message, icon: 'alert' });
+        return;
+      }
     }
-    setSavingShifts(true);
+    setSaving(basics ? 'all' : 'shifts');
+    savingRef.current = true;
     try {
-      // cycle length lives on the operator: sync it before the full-replace
-      if (weeks.length !== detail.cycle_weeks) {
-        const updated = await api.put(`/api/staff/${id}`, buildPayload(weeks.length, detail));
+      // la lunghezza del ciclo vive sull'operatrice: va scritta prima dei turni
+      const cycleChanged = doShifts && weeks.length !== detail.cycle_weeks;
+      if (doBasics || cycleChanged) {
+        const body = { ...changes, ...(cycleChanged ? { cycle_weeks: weeks.length } : {}) };
+        const updated = await api.put(`/api/staff/${id}`, body);
         setDetail((d) => ({ ...d, ...updated }));
       }
-      const saved = await api.put(`/api/staff/${id}/shifts`, { shifts: rows });
-      setDetail((d) => ({ ...d, cycle_weeks: weeks.length, shifts: saved }));
-      setWeeks(weeksFromShifts(saved, weeks.length));
-      await reload.operators().catch(() => {});
-      fireToast({ msg: t('Turni salvati', 'Shifts saved'), icon: 'check' });
-    } catch (err) { toastErr(err); } finally { setSavingShifts(false); }
+      if (doShifts) {
+        const saved = await api.put(`/api/staff/${id}/shifts`, { shifts: rows });
+        setDetail((d) => ({ ...d, cycle_weeks: weeks.length, shifts: saved }));
+        setWeeks(weeksFromShifts(saved, weeks.length));
+      }
+      reload.operators().catch(() => {});
+      fireToast({
+        msg: doBasics && doShifts ? t('Anagrafica e turni salvati', 'Profile and shifts saved')
+          : doShifts ? t('Turni salvati', 'Shifts saved')
+            : t('Modifiche salvate', 'Changes saved'),
+        icon: 'check',
+      });
+    } catch (err) { toastErr(err); } finally {
+      savingRef.current = false;
+      setSaving(null);
+      // un aggiornamento arrivato durante il salvataggio si applica adesso
+      if (pendingRefresh.current) { pendingRefresh.current = false; refreshDetail(); }
+    }
   };
+  const saveAll = () => saveParts({ basics: true, shifts: true });
+  const saveShifts = () => saveParts({ basics: false, shifts: true });
+
+  /* ---- la scheda segue le modifiche fatte altrove ----
+   * Senza, il colore cambiato dall'agenda o l'abilitazione data dal listino
+   * restavano invisibili fino a riaprire la scheda. I campi che qui non si sono
+   * toccati prendono il valore nuovo; quelli in modifica restano, con un avviso
+   * se nel frattempo sono cambiati anche altrove. */
+  const refreshDetail = async () => {
+    if (savingRef.current) { pendingRefresh.current = true; return; }
+    let fresh;
+    try { fresh = await api.get(`/api/staff/${id}`); } catch { return; }
+    const { detail: old, form: curForm, weeks: curWeeks } = live.current;
+    if (!old || !curForm) return;
+    const merged = rebaseDraft(curForm, formFromDetail(old), formFromDetail(fresh), sameOperatorField);
+    const oldWeeks = weeksFromShifts(old.shifts, old.cycle_weeks);
+    const newWeeks = weeksFromShifts(fresh.shifts, fresh.cycle_weeks);
+    const weeksUntouched = sameWeeks(curWeeks, oldWeeks);
+    setDetail(fresh);
+    setForm(merged.draft);
+    if (weeksUntouched) setWeeks(newWeeks);
+    const weeksConflict = !weeksUntouched && !sameWeeks(newWeeks, oldWeeks) && !sameWeeks(newWeeks, curWeeks);
+    if (merged.conflicts.length || weeksConflict) {
+      fireToast({
+        msg: t('Scheda modificata da un’altra postazione: le tue modifiche non salvate restano, controllale prima di salvare.',
+          'Profile changed from another workstation: your unsaved edits are kept, check them before saving.'),
+        icon: 'info',
+      });
+    }
+  };
+  useLive(/^operator\./, (events) => {
+    const mine = events.filter((e) => e.payload?.operator_id == null || e.payload.operator_id === id);
+    if (!mine.length) return;
+    refreshDetail();
+    if (mine.some((e) => /^operator\.absence_/.test(e.type))) reloadAbsences().catch(() => {});
+  });
 
   const toggleSvc = (sid) => {
     if (!canTeam) return;
@@ -184,8 +226,10 @@ export default function StaffPage({ id, onBack }) {
           <Icon name="clock" size={13} color="var(--muted-2)" />{t('Timbrature e commissioni: fase 2', 'Time clock & commissions: phase 2')}
         </span>
         {canTeam && (
-          <button className="dk-btn dk-btn--clay" onClick={saveBasics} disabled={saving} style={{ opacity: saving ? 0.6 : 1 }}>
-            <Icon name="check" size={17} color="#fff" />{saving ? t('Salvataggio…', 'Saving…') : t('Salva', 'Save')}
+          <button className="dk-btn dk-btn--clay" onClick={saveAll} disabled={!!saving || (!basicsDirty && !shiftsDirty)}
+            title={basicsDirty || shiftsDirty ? undefined : t('Nessuna modifica da salvare', 'Nothing to save')}
+            style={{ opacity: saving || (!basicsDirty && !shiftsDirty) ? 0.6 : 1 }}>
+            <Icon name="check" size={17} color="#fff" />{saving === 'all' ? t('Salvataggio…', 'Saving…') : t('Salva', 'Save')}
           </button>
         )}
       </div>
@@ -197,9 +241,15 @@ export default function StaffPage({ id, onBack }) {
           ['turni', t('Turni e ferie', 'Shifts & time off')],
           ['performance', t('Performance', 'Performance')],
           ['clienti', t('Clienti serviti', 'Clients served')],
-        ].map(([k, l]) => (
-          <button key={k} onClick={() => setStaffTab(k)} style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: staffTab === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (staffTab === k ? 'var(--clay)' : 'transparent'), marginBottom: -1 }}>{l}</button>
-        ))}
+        ].map(([k, l]) => {
+          const pending = (k === 'anagrafica' && basicsDirty) || (k === 'turni' && shiftsDirty);
+          return (
+            <button key={k} onClick={() => setStaffTab(k)} style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: staffTab === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (staffTab === k ? 'var(--clay)' : 'transparent'), marginBottom: -1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {l}
+              {pending && <span title={t('Modifiche non salvate', 'Unsaved changes')} style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--clay)' }} />}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── ANAGRAFICA ── */}
@@ -242,7 +292,7 @@ export default function StaffPage({ id, onBack }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <label style={{ display: 'block' }}>
                   <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Costo orario €', 'Hourly cost €')}</div>
-                  <NumInput min={0} value={form.hourly_cost} disabled={!canTeam} onChange={(hourly_cost) => setForm((f) => ({ ...f, hourly_cost }))} style={inputCss} />
+                  <NumInput min={0} value={form.hourly_cost ?? ''} placeholder={form.hourly_cost == null ? HIDDEN : '0'} disabled={!canTeam || form.hourly_cost == null} onChange={(hourly_cost) => setForm((f) => ({ ...f, hourly_cost }))} style={inputCss} />
                 </label>
                 <div>
                   <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Iniziali', 'Initials')}</div>
@@ -295,7 +345,20 @@ export default function StaffPage({ id, onBack }) {
               canTeam={canTeam} canPricing={canPricing}
               onCreated={async (svc) => {
                 await reload.services().catch(() => {});
-                setForm((f) => ({ ...f, service_ids: [...new Set([...f.service_ids, svc.id])] }));
+                /* «Crea e abilita» deve abilitare davvero: prima il servizio
+                 * finiva solo nel modulo non salvato e il toast diceva
+                 * «creato e abilitato» anche a chi poi usciva senza salvare.
+                 * Si scrive subito il solo elenco dei servizi (PUT parziale),
+                 * partendo da quello del server. */
+                if (!canTeam) return 'created';
+                const addTo = (ids) => [...new Set([...(ids || []), svc.id])];
+                setForm((f) => ({ ...f, service_ids: addTo(f.service_ids) }));
+                try {
+                  const updated = await api.put(`/api/staff/${id}`, { service_ids: addTo(live.current.detail?.service_ids) });
+                  setDetail((d) => ({ ...d, ...updated }));
+                  reload.operators().catch(() => {});
+                  return 'enabled';
+                } catch { return 'pending'; }
               }}
               t={t} lang={lang} fireToast={fireToast}
             />
@@ -314,7 +377,7 @@ export default function StaffPage({ id, onBack }) {
                  'Shifts and availability feed automatic appointment planning. Set the recurring pattern and plan exceptions well ahead: the calendar offers slots only when the stylist is actually in.')}
             </span>
           </div>
-          <ShiftPattern weeks={weeks} setWeeks={setWeeks} onSave={saveShifts} saving={savingShifts} canEdit={canTeam} t={t} />
+          <ShiftPattern weeks={weeks} setWeeks={setWeeks} onSave={saveShifts} saving={!!saving} canEdit={canTeam} t={t} />
           <div>
             <div className="t-meta" style={{ marginBottom: 12 }}>{t('Calendario disponibilità · assenze', 'Availability calendar · time off')}</div>
             {absences == null
@@ -341,20 +404,15 @@ export default function StaffPage({ id, onBack }) {
 
 /* ================= Performance (hand-rolled bar chart, port of prototype) ================= */
 function PerformancePanel({ perf, clients, color, hourlyCost, rev, t, lang }) {
-  const values = perf.map((p) => Number(p.revenue));
-  const max = Math.max(...values, 1);
-  const last = values[values.length - 1] || 0;
-  const prev = values[values.length - 2] || 0;
-  const delta = prev > 0 ? Math.round(((last - prev) / prev) * 100) : 0;
-  const avg = Math.round(values.reduce((a, b) => a + b, 0) / (values.length || 1));
+  const { hidden, max, last, delta, avg } = perfStats(perf);
   const chartH = 150;
   const salesThisMonth = perf[perf.length - 1] ? perf[perf.length - 1].sales_count : 0;
 
   const metrics = [
-    { label: t('Incasso mese', 'Month revenue'), value: rev(last) },
+    { label: t('Incasso mese', 'Month revenue'), value: rev(hidden ? null : last) },
     { label: t('Vendite (mese)', 'Sales (month)'), value: salesThisMonth },
     { label: t('Clienti serviti', 'Clients served'), value: clients ? clients.length : '—' },
-    { label: t('Costo orario', 'Hourly cost'), value: eur(hourlyCost, lang) },
+    { label: t('Costo orario', 'Hourly cost'), value: hourlyCost == null ? HIDDEN : eur(hourlyCost, lang) },
   ];
 
   return (
@@ -373,6 +431,17 @@ function PerformancePanel({ perf, clients, color, hourlyCost, rev, t, lang }) {
         </div>
       </div>
 
+      {hidden ? (
+        /* Il fatturato mese per mese di un'operatrice è un dato di cassa: senza
+         * il permesso vendite il server non lo manda (C6). Un grafico a zero
+         * sarebbe un dato falso, non un dato nascosto. */
+        <div className="dk-card" style={{ padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon name="lock" size={16} color="var(--muted)" />
+          <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>
+            {t('Gli incassi per operatrice sono visibili solo al titolare e a chi ha il permesso «Vendite».', 'Per-stylist revenue is visible only to the owner and to whoever holds the “Sales” permission.')}
+          </span>
+        </div>
+      ) : (
       <div className="dk-card" style={{ padding: '18px 20px 14px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 18 }}>
           <div>
@@ -409,6 +478,7 @@ function PerformancePanel({ perf, clients, color, hourlyCost, rev, t, lang }) {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -418,7 +488,9 @@ function ServedClients({ clients, q, setQ, onOpen, rev, t, lang }) {
   const fmtVisit = (iso) => {
     if (!iso) return '—';
     const d = new Date(iso);
-    return d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short', year: 'numeric' });
+    // Il giorno del salone: una visita delle 20:00 a Roma, vista da un
+    // portatile su un altro fuso, compariva col giorno dopo (09-11, 15-22).
+    return d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts({ day: 'numeric', month: 'short', year: 'numeric' }));
   };
   return (
     <div style={{ maxWidth: 760 }}>
@@ -463,8 +535,10 @@ function ServedClients({ clients, q, setQ, onOpen, rev, t, lang }) {
                     <span className="t-sm" style={{ color: 'var(--muted)' }}>{c.phone}</span>
                   </span>
                 </span>
-                <span className="t-num" style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{c.visits}</span>
-                <span className="t-sm" style={{ textAlign: 'right', color: 'var(--ink-2)' }}>{fmtVisit(c.last_visit)}</span>
+                {/* visite, ultima visita e spesa sono dati di cassa: senza il
+                    permesso vendite arrivano null con cash_hidden (C6) */}
+                <span className="t-num" style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{c.visits == null ? HIDDEN : c.visits}</span>
+                <span className="t-sm" style={{ textAlign: 'right', color: 'var(--ink-2)' }}>{c.cash_hidden ? HIDDEN : fmtVisit(c.last_visit)}</span>
                 <span className="t-num" style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{rev(c.total_spent)}</span>
               </button>
             );
@@ -514,8 +588,12 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
         duration_min: Math.max(5, parseInt(draft.duration_min, 10) || 45),
         price: Number(draft.price || 0).toFixed(2), active: true, order: 0,
       });
-      await onCreated(svc);
-      fireToast({ msg: t(`Servizio creato e abilitato: ${name}`, `Service created and enabled: ${name}`), icon: 'check' });
+      const outcome = await onCreated(svc);
+      fireToast(outcome === 'enabled'
+        ? { msg: t(`Servizio creato e abilitato: ${name}`, `Service created and enabled: ${name}`), icon: 'check' }
+        : outcome === 'pending'
+          ? { msg: t(`Servizio creato: premi «Salva» per abilitarlo a questa operatrice`, `Service created: press “Save” to enable it for this stylist`), icon: 'info' }
+          : { msg: t(`Servizio creato: ${name}. Per abilitarlo all’operatrice serve il permesso “team”.`, `Service created: ${name}. Enabling it for the stylist requires the “team” permission.`), icon: 'check' });
       setCreating(false); setQ('');
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
@@ -550,7 +628,7 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
         <div style={{ border: '1.5px solid var(--clay)', borderRadius: 12, padding: 12, margin: '10px 0 12px', background: 'var(--surface)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center' }}><Icon name="scissors" size={15} color="var(--clay-ink)" /></div>
-            <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{t('Nuovo servizio', 'New service')} <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 500 }}>· {t('verrà subito abilitato per questa operatrice', 'it will be enabled for this stylist right away')}</span></div>
+            <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{t('Nuovo servizio', 'New service')} {canTeam && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 500 }}>· {t('verrà subito abilitato per questa operatrice', 'it will be enabled for this stylist right away')}</span>}</div>
             <button type="button" className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} onClick={() => setCreating(false)} aria-label={t('Annulla', 'Cancel')}><Icon name="x" size={14} /></button>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.4fr 0.8fr 0.8fr', gap: 8, marginBottom: 8 }}>
@@ -572,7 +650,7 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <span className="t-sm" style={{ color: 'var(--muted-2)', flex: 1 }}>{t('Nome inglese, posa e costi si completano in Servizi.', 'English name, soak and costs can be completed in Services.')}</span>
             <button type="button" className="dk-btn dk-btn--clay" style={{ height: 36, fontSize: 13 }} onClick={create} disabled={saving}>
-              <Icon name="check" size={15} color="#fff" />{saving ? t('Creazione…', 'Creating…') : t('Crea e abilita', 'Create & enable')}
+              <Icon name="check" size={15} color="#fff" />{saving ? t('Creazione…', 'Creating…') : canTeam ? t('Crea e abilita', 'Create & enable') : t('Crea servizio', 'Create service')}
             </button>
           </div>
         </div>
