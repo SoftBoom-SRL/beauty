@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { earnFields, earnMetricsFor, STAMP_METRICS } from '../src/sections/fedelta/meta.js';
+import { earnFields, earnMetricsFor, effectiveStatus, isMaskedCode, STAMP_METRICS } from '../src/sections/fedelta/meta.js';
 
 test('tessera a timbri: mai «per euro», rapporto 1 (C18)', () => {
   // il modello vuoto della dashboard nasce per_euro: scegliendo «A timbri» partiva così,
@@ -25,4 +25,21 @@ test('programmi a punti: metrica e rapporto restano quelli scelti', () => {
   assert.deepEqual(earnFields('points', 'per_visit', '1.5'), { earn_metric: 'per_visit', earn_ratio: '1.50' });
   assert.deepEqual(earnFields('tiers', undefined, undefined), { earn_metric: 'per_euro', earn_ratio: '1.00' });
   assert.ok(earnMetricsFor('points').some((m) => m.k === 'per_euro'));
+});
+
+test('carta o coupon oltre la scadenza si mostra «scaduto» (07-07, C21)', () => {
+  const now = Date.parse('2026-09-23T10:00:00+02:00');
+  // «Piega» regalata scaduta la settimana scorsa: a database resta «active»
+  assert.equal(effectiveStatus({ status: 'active', expires_at: '2026-09-16T23:59:00+02:00' }, now), 'expired');
+  assert.equal(effectiveStatus({ status: 'active', expires_at: '2026-09-30T23:59:00+02:00' }, now), 'active');
+  assert.equal(effectiveStatus({ status: 'active', expires_at: null }, now), 'active');
+  // gli altri stati restano quelli del server (già calcolato lì: C21)
+  assert.equal(effectiveStatus({ status: 'redeemed', expires_at: '2026-09-16T23:59:00+02:00' }, now), 'redeemed');
+  assert.equal(effectiveStatus({ status: 'expired', expires_at: null }, now), 'expired');
+});
+
+test('codici mascherati per chi non ha marketing né cassa (C21)', () => {
+  assert.equal(isMaskedCode('••••1234'), true);
+  assert.equal(isMaskedCode('GC-7Q2K-1234'), false);
+  assert.equal(isMaskedCode(null), false);
 });

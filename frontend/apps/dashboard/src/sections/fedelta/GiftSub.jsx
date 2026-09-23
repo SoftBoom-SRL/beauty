@@ -9,7 +9,7 @@ import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
 import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
-import { GC_STATUS_META, GC_PAYMENT_META } from './meta.js';
+import { GC_STATUS_META, GC_PAYMENT_META, effectiveStatus, isMaskedCode } from './meta.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
 // basta: un salone che ne ha vendute di più ne vedeva una parte senza che
@@ -30,6 +30,13 @@ function dateLabel(iso, lang) {
 export default function GiftSub() {
   const { t, lang, hasScope, fireToast, services } = useDash();
   const canWrite = hasScope('marketing');
+  // Incassare una carta è della cassa: «Segna pagata» e «Pagata ora» li usa
+  // chi ha `sales`, come chiede il server. Prima servivano i permessi
+  // marketing, che il Front desk non ha: la carta comprata dall'app restava
+  // «da pagare» e al banco si vendeva una seconda carta (07-04). Una carta che
+  // nasce da pagare resta invece del marketing.
+  const canCash = hasScope('sales');
+  const canCreate = canWrite || canCash;
 
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
@@ -135,7 +142,7 @@ export default function GiftSub() {
                 {unpaidExact === null ? t('da pagare', 'unpaid') : `${unpaidExact} ${t('da pagare', 'unpaid')}`}
               </button>
             )}
-            {canWrite && <button className="dk-btn dk-btn--clay" onClick={() => setEdit({})} style={{ whiteSpace: 'nowrap' }}><Icon name="plus" size={17} color="#fff" />{t('Nuova gift card', 'New gift card')}</button>}
+            {canCreate && <button className="dk-btn dk-btn--clay" onClick={() => setEdit({})} style={{ whiteSpace: 'nowrap' }}><Icon name="plus" size={17} color="#fff" />{t('Nuova gift card', 'New gift card')}</button>}
           </div>
         </div>
       )}
@@ -159,20 +166,31 @@ export default function GiftSub() {
       ) : items.length ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 16 }}>
           {items.map((g) => {
-            const st = GC_STATUS_META[g.status] || GC_STATUS_META.active;
+            // scaduta si legge scaduta anche se la risposta dice ancora «attiva» (07-07)
+            const status = effectiveStatus(g);
+            const st = GC_STATUS_META[status] || GC_STATUS_META.active;
+            // codice mascherato (chi non ha marketing né cassa, C21): niente QR da usare
+            const masked = isMaskedCode(g.code);
             const due = g.payment_status === 'unpaid';
             const value = Number(g.initial_value);
             const balance = Number(g.balance);
             const used = value - balance;
             const methodLabel = PAY_METHOD_LABELS[g.paid_method] ? PAY_METHOD_LABELS[g.paid_method][lang] : g.paid_method;
             return (
-              <div key={g.id} className="dk-card" style={{ padding: 18, opacity: g.status === 'redeemed' || g.status === 'expired' ? 0.72 : 1, borderLeft: '3px solid ' + (due ? 'var(--warn)' : g.status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
+              <div key={g.id} className="dk-card" style={{ padding: 18, opacity: status === 'redeemed' || status === 'expired' ? 0.72 : 1, borderLeft: '3px solid ' + (due ? 'var(--warn)' : status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
                 <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                  <div style={{ flexShrink: 0, padding: 7, border: '1px solid var(--hair)', borderRadius: 10, background: '#fff' }}><QrMini code={g.code} /></div>
+                  {masked ? (
+                    <div title={t('Codice visibile a chi ha i permessi marketing o vendite', 'Code visible with the marketing or sales permission')}
+                      style={{ flexShrink: 0, width: 54, height: 54, padding: 7, border: '1px solid var(--hair)', borderRadius: 10, background: 'var(--surface-2)', display: 'grid', placeItems: 'center', boxSizing: 'content-box' }}>
+                      <Icon name="lock" size={20} color="var(--muted-2)" />
+                    </div>
+                  ) : (
+                    <div style={{ flexShrink: 0, padding: 7, border: '1px solid var(--hair)', borderRadius: 10, background: '#fff' }}><QrMini code={g.code} /></div>
+                  )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{eur0(value, lang)}</span>
-                      {used > 0 && g.status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{eur0(balance, lang)}</strong></span>}
+                      {used > 0 && status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{eur0(balance, lang)}</strong></span>}
                     </div>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
                     {g.gift_service_name && (
@@ -221,7 +239,7 @@ export default function GiftSub() {
                     <Icon name="calendar" size={13} color="var(--muted-2)" />
                     {g.expires_at ? t('Scade: ', 'Expires: ') + dateLabel(g.expires_at, lang) : t('Nessuna scadenza', 'No expiry')}
                   </span>
-                  {due && canWrite && (
+                  {due && canCash && status === 'active' && (
                     <button className="dk-btn dk-btn--ghost" style={{ marginLeft: 'auto', height: 32, fontSize: 12.5 }} onClick={() => setMarkingId(markingId === g.id ? null : g.id)}>
                       <Icon name="check" size={14} />{t('Segna pagata', 'Mark paid')}
                     </button>
@@ -244,13 +262,14 @@ export default function GiftSub() {
         </div>
       ) : (
         <EmptyState icon="gift" title={t('Nessuna gift card', 'No gift cards')} sub={t('Vendi la prima gift card.', 'Sell your first gift card.')}
-          action={canWrite ? t('Nuova gift card', 'New gift card') : null} onAction={() => setEdit({})} />
+          action={canCreate ? t('Nuova gift card', 'New gift card') : null} onAction={() => setEdit({})} />
       )}
 
       <Pager count={total} limit={LIMIT} offset={offset} setOffset={setOffset} t={t} />
 
       {edit && (
-        <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} services={services} />
+        <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} services={services}
+          canCash={canCash} canPayLater={canWrite} />
       )}
     </React.Fragment>
   );

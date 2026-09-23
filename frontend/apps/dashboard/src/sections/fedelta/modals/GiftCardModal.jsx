@@ -18,7 +18,7 @@ function monthsFromNowIso(months) {
  * (value, buyer_client_id?, recipient_client_id?, recipient_name, paid+paid_method,
  * delivery_date?, expires_at?). The code is generated server-side (prototype showed a locally
  * generated code — dropped). Expiry presets map to a concrete expires_at datetime. */
-export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [] }) {
+export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [], canCash = true, canPayLater = true }) {
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState('amount'); // amount | service (trattamento)
   const [value, setValue] = useState(50);
@@ -34,13 +34,16 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [recipient, setRecipient] = useState(null);  // {id, full_name} | null
   const [recipientName, setRecipientName] = useState('');
   const [byName, setByName] = useState(false);   // destinataria come testo libero, senza scheda cliente
-  const [paid, setPaid] = useState(true);
+  // «Pagata ora» è un incasso (vendita e pagamento): lo registra chi ha
+  // `sales`; una carta «Da pagare» la crea chi ha `marketing` (07-04).
+  const [paid, setPaid] = useState(canCash);
   const [paidMethod, setPaidMethod] = useState('card');
   const [scheduled, setScheduled] = useState(false);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
-  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient);
+  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient)
+    && (paid ? canCash : canPayLater);
 
   const save = async () => {
     if (!canSave || saving) return;
@@ -170,8 +173,10 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamento', 'Payment')}</div>
       <div style={{ display: 'flex', gap: 8, marginBottom: paid ? 10 : 16 }}>
-        <button style={segBtn(paid)} onClick={() => setPaid(true)}>{t('Pagata ora', 'Paid now')}</button>
-        <button style={segBtn(!paid)} onClick={() => setPaid(false)}>{t('Da pagare', 'Payment due')}</button>
+        <button style={{ ...segBtn(paid), opacity: canCash ? 1 : 0.5, cursor: canCash ? 'pointer' : 'not-allowed' }} disabled={!canCash} onClick={() => setPaid(true)}
+          title={canCash ? undefined : t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required to take payment')}>{t('Pagata ora', 'Paid now')}</button>
+        <button style={{ ...segBtn(!paid), opacity: canPayLater ? 1 : 0.5, cursor: canPayLater ? 'pointer' : 'not-allowed' }} disabled={!canPayLater} onClick={() => setPaid(false)}
+          title={canPayLater ? undefined : t('Serve il permesso "marketing" per una carta da pagare dopo', 'The "marketing" permission is required for a card paid later')}>{t('Da pagare', 'Payment due')}</button>
       </div>
       {paid && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>

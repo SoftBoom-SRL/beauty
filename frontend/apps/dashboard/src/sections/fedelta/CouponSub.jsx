@@ -4,7 +4,7 @@ import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
 import CouponEditModal from './modals/CouponEditModal.jsx';
-import { COUPON_ORIGIN_META, COUPON_STATUS_META } from './meta.js';
+import { COUPON_ORIGIN_META, COUPON_STATUS_META, effectiveStatus } from './meta.js';
 
 const LIMIT = 24;
 
@@ -73,6 +73,8 @@ export default function CouponSub() {
   const openNew = () => setEdit(blank());
   const openExisting = (c) => setEdit({
     ...c,
+    // scaduto = non più modificabile né «utilizzabile», come per il server
+    status: effectiveStatus(c),
     client: c.client_id ? { id: c.client_id, full_name: c.client_name } : null,
     // normalise the API's ISO datetime to a YYYY-MM-DD string for the modal's date input
     expires_at: c.expires_at ? toDateStr(parseISO(c.expires_at)) : null,
@@ -116,10 +118,12 @@ export default function CouponSub() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
           {items.map((c) => {
             const om = COUPON_ORIGIN_META[c.origin] || COUPON_ORIGIN_META.manual;
-            const sm = COUPON_STATUS_META[c.status] || COUPON_STATUS_META.active;
+            // scaduto si legge scaduto anche se la risposta dice ancora «attivo» (07-07)
+            const status = effectiveStatus(c);
+            const sm = COUPON_STATUS_META[status] || COUPON_STATUS_META.active;
             return (
               <div key={c.id} className="dk-card dk-hovercard" onClick={() => openExisting(c)}
-                style={{ padding: 18, opacity: c.status === 'active' ? 1 : 0.72, borderLeft: '3px solid ' + (c.status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
+                style={{ padding: 18, opacity: status === 'active' ? 1 : 0.72, borderLeft: '3px solid ' + (status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
                   <div style={{ width: 42, height: 42, borderRadius: 12, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
                     <Icon name="coupon" size={21} color="var(--clay-ink)" />

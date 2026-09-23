@@ -70,6 +70,16 @@ export function earnFields(type, metric, ratio) {
  * codici da usare (QR, pagamento). */
 export const isMaskedCode = (code) => typeof code === 'string' && code.includes('•');
 
+/** Stato di un coupon o di una gift card come va mostrato: «attivo» ma oltre
+ *  la scadenza è «scaduto». EXPIRED a database lo scrive solo un tentativo di
+ *  riscatto, così le viste staff mostravano attive carte scadute da mesi
+ *  (07-07). Il server ora lo calcola già (C21): qui resta la stessa regola,
+ *  per le risposte che non la portano. */
+export function effectiveStatus(item, now = Date.now()) {
+  if (item?.status === 'active' && item.expires_at && Date.parse(item.expires_at) < now) return 'expired';
+  return item?.status;
+}
+
 export const REWARD_TYPES = [
   { k: 'coupon_amount', it: 'Buono €', en: '€ coupon', suffix: '€' },
   { k: 'discount_pct', it: 'Sconto %', en: '% discount', suffix: '%' },
