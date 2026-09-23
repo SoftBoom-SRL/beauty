@@ -53,7 +53,8 @@ Build di produzione verdi per entrambe le app. E2E backend 14/14 (`backend/scrip
 # backend (porta 8000, db.sqlite3 con seed; opzionale: seed_demo --reset per appuntamenti "oggi")
 cd backend && .venv/bin/python manage.py runserver
 
-# dashboard staff → http://localhost:5173 (login sole@theparlour.it / theparlour)
+# dashboard staff → http://localhost:5173 (login sole@theparlour.it con la password
+# stampata da seed_demo, o quella scelta con: manage.py seed_demo --reset --password <scelta>)
 cd frontend && npm run dev:dashboard
 
 # app cliente → http://localhost:5174 (registrazione + OTP: codice nel log server o in core_outboxevent)

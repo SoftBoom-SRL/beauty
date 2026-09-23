@@ -183,8 +183,17 @@ Opzionali, da aggiungere quando servono:
 ```
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_CONNECT_WEBHOOK_SECRET=whsec_...
 STRIPE_CONNECT_CLIENT_ID=ca_...
 ```
+
+Con Connect i webhook arrivano da **due** endpoint Stripe (vedi §8), ognuno col
+suo segreto di firma: `STRIPE_WEBHOOK_SECRET` per quello dell'account della
+piattaforma, `STRIPE_CONNECT_WEBHOOK_SECRET` per quello degli account collegati.
+Con uno solo dei due, gli eventi dell'altra famiglia vengono rifiutati come
+«Firma webhook non valida»: la cliente paga e la caparra resta «richiesta» fino
+al rilascio dello slot. In alternativa, o durante la rotazione di un segreto,
+`STRIPE_WEBHOOK_SECRETS=whsec_a,whsec_b` elenca tutti quelli validi.
 
 `STRIPE_CONNECT_CLIENT_ID` è il client_id della piattaforma
 (dashboard.stripe.com → *Connect* → *Impostazioni*): serve a far collegare al
@@ -318,22 +327,33 @@ una cliente che apre due saloni diversi non si porta dietro il token sbagliato.
 
 Il database parte vuoto: il primo salone lo crei da `/admin/` (Saloni → Aggiungi),
 poi Sede, Impostazioni e la Membership che collega il tuo utente al salone.
+`/admin/` è dell'utente creato da `entrypoint.sh` (o da `createsuperuser`).
 
-Per popolare invece un salone demo completo (The Parlour, 9 operatrici, 14 servizi,
-10 clienti, appuntamenti di oggi — login `sole@theparlour.it` / `theparlour`), dal
-terminale del container `beauty-api`:
+**Il salone demo non va mai creato in produzione.** `seed_demo` crea The Parlour
+con un titolare che entra nella dashboard, e con `DEBUG=0` si rifiuta di partire.
+Su un ambiente di prova (mai il server di produzione):
 
 ```bash
-python manage.py seed_demo
+python manage.py seed_demo --allow-production            # stampa una volta la password
+python manage.py seed_demo --allow-production --reset --password <scelta>   # la ricrea, password scelta
 ```
 
-È scoped allo slug `the-parlour` e non tocca gli altri saloni: puoi tenerlo accanto
-ai dati reali e rimuoverlo dopo. `--reset` lo ricrea da zero.
+La password del titolare demo (`sole@theparlour.it`) è casuale e viene stampata
+una volta sola; il titolare demo non entra in `/admin/`. Il seed tocca solo il
+salone che ha creato lui (slug `the-parlour`): se lo slug o l'email sono di un
+salone vero si ferma senza modificare niente.
 
 ## 8. Integrazioni
 
 **Stripe** — endpoint webhook: `https://beautyapi.yourang.ai/api/sales/stripe/webhook`.
 Senza `STRIPE_SECRET_KEY` gli endpoint di pagamento rispondono 503, il resto funziona.
+Con Stripe Connect si registrano **due** endpoint sullo stesso URL (dashboard
+Stripe → *Sviluppatori → Webhook*): uno per gli eventi dell'account, uno per gli
+eventi degli account collegati («Events on Connected accounts»). Ciascuno ha il
+suo segreto (`STRIPE_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET`, vedi §3).
+Eventi da selezionare su entrambi: `checkout.session.completed`,
+`payment_intent.succeeded`, `setup_intent.succeeded`, `charge.refunded`,
+`charge.refund.updated`, `refund.created`, `refund.updated`, `refund.failed`.
 
 **Yourang** — abilita sia il "login con Yourang" dalla pagina di login (che
 provisiona/collega il salone e conia la sessione staff) sia il "collega" dalle
@@ -421,7 +441,11 @@ sulla chiave vuota.
 
 Bonifica: si tiene la scheda con lo storico, si spostano su quella le eventuali
 visite dell'altra e si cancella la scheda svuotata (le visite sono in `PROTECT`:
-finché ne ha, la cancellazione viene rifiutata). Poi si aggiorna.
+finché ne ha, la cancellazione viene rifiutata). Attenzione a cosa porta via la
+cancellazione: note, schede tecniche, punti fedeltà e posti in lista d'attesa se
+ne vanno con la scheda; vendite, gift card e coupon restano ma perdono il
+collegamento alla cliente. Quello che serve va spostato prima sulla scheda che
+resta. Poi si aggiorna.
 
 **Se lo salti**: `migrate` si interrompe su quella migrazione, il container
 nuovo non arriva mai a gunicorn, Coolify tiene in piedi la versione precedente —
@@ -461,6 +485,55 @@ Togli `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`,
 più (§3). Controlla invece che `SECRET_KEY` sia lunga almeno 32 caratteri e che
 `ALLOWED_HOSTS` non contenga `*`, altrimenti il primo avvio con il codice nuovo
 si ferma prima di gunicorn: è il comportamento voluto descritto nel §3.
+
+### 9.4 Aggiornamento di fine settembre 2026 (correzioni del 22/09)
+
+Prima del push su `main`:
+
+1. **Account demo in produzione.** Se sul database di produzione esiste
+   `sole@theparlour.it` (creato da un vecchio `seed_demo`, superuser con una
+   password pubblicata nella documentazione), disattivalo da `/admin/` o
+   togligli *staff* e *superuser* e cambiagli la password; poi controlla chi è
+   entrato in `/admin/`. D'ora in poi `seed_demo` in produzione non parte.
+2. **Telefoni.** `clients.0008_caccia22_clienti_phone_key` è una migrazione di
+   dati: ricalcola le chiavi telefono con le regole nuove (prefissi
+   internazionali, zero dopo il prefisso, «+39 39…» doppio) e riscrive in forma
+   internazionale i numeri che riconosce, tranne quelli con parole. Lancia
+   `check_phone_duplicates` come nel §9.1 **prima** (exit 1 = doppioni da
+   bonificare) e di nuovo **dopo** il deploy: i gruppi che emergono con le
+   regole nuove restano con la chiave vecchia e vanno bonificati a mano.
+3. **Tessere a timbri.** `marketing.0004` è irreversibile: i programmi «a
+   timbri» con metrica «per euro» passano a «per visita» con rapporto 1, e i
+   saldi già oltre la soglia scendono a soglia − 1 (i premi già emessi restano).
+   Per sapere se ti riguarda: `LoyaltyProgram.objects.filter(type="stamps",
+   earn_metric="per_euro")` dalla shell.
+4. **Codifica del database**: la ricerca clienti senza accenti richiede un
+   database UTF8 (`SHOW server_encoding;` deve rispondere `UTF8`).
+
+Le migrazioni di questo aggiornamento sono tutte additive o di dati:
+`core.0010` e `core.0011` (colonne nuove), `agenda.0011` (tre colonne nullable),
+`sales.0004` (tabella dei rimborsi caparra), `sales.0005` (ripartisce i buoni
+sulle righe delle vendite già registrate), `marketing.0004` (vedi sopra),
+`marketing.0005` (accoda l'annullamento degli invii programmati già consegnati a
+Yourang che non corrispondono più a una campagna), `clients.0008` (vedi sopra),
+`integrations.0005` (tabella) e `integrations.0006` (collega i segnaposto
+Yourang alle operatrici). Dopo `migrate` il ritorno alla versione precedente
+non è sicuro: si va avanti, non indietro.
+
+Dopo il deploy:
+
+- `flush_outbox` diventa un **worker** (`--loop --interval 5`), non più un job
+  al minuto, e va tenuto acceso anche senza `YOURANG_API_URL` (fa le scadenze e
+  le pulizie): vedi *Job schedulati*. Al primo giro con l'URL configurato
+  l'arretrato di messaggi ormai inutili passa a `expired` (in admin → Outbox).
+- Programma `sync_yourang` ogni ora (vedi *Job schedulati*).
+- Stripe: due endpoint webhook e i loro segreti (§3, §8).
+- I dispositivi con un refresh token emesso prima del 18/09 rifanno l'accesso
+  una volta (401 al rinnovo): è atteso.
+- Incassare una gift card ora richiede il permesso *vendite*: controlla i ruoli
+  che avevano solo *marketing*.
+- Un popup «Collega Yourang» aperto prima del deploy e chiuso dopo risponde
+  400: basta riprovare.
 
 ## Deploy automatico
 
@@ -514,13 +587,14 @@ Con queste quattro `python manage.py check --deploy` non segnala più nulla.
 
 ## Job schedulati (Coolify → *Scheduled Tasks* sulla risorsa `beauty-api`)
 
-Due comandi vanno programmati. Senza di loro il gestionale continua a funzionare
-ma due funzioni restano ferme, e il sintomo non punta alla causa.
+Tre comandi vanno programmati. Senza di loro il gestionale continua a funzionare
+ma alcune funzioni restano ferme, e il sintomo non punta alla causa.
 
 | Comando | Cadenza | Cosa succede se manca |
 | --- | --- | --- |
-| `python manage.py flush_outbox` | ogni minuto | Nessun messaggio parte: gli OTP dell'app cliente «non arrivano» e la cliente non riesce a entrare. Con `--loop --interval 5` resta invece in esecuzione come worker. **Il job non basta da solo**: senza `YOURANG_API_URL` in ambiente il comando gira, non consegna niente e si limita a elencare i pendenti. Stesso sintomo, causa diversa — controlla sempre tutte e due. |
+| `python manage.py flush_outbox --loop --interval 5` | sempre acceso (worker) | Nessun messaggio parte: gli OTP dell'app cliente «non arrivano» e la cliente non riesce a entrare. **Va tenuto acceso come worker, non lanciato ogni minuto**: i messaggi sull'appuntamento restano trattenuti qualche secondo per fondere le correzioni ravvicinate, e un job al minuto li lascia fermi fino a un minuto — abbastanza perché ne partano due al posto di uno. Gira anche senza `YOURANG_API_URL` (fa scadenze e pulizie), ma allora non consegna niente e si limita a elencare i pendenti: stesso sintomo, causa diversa — controlla sempre tutte e due. |
 | `python manage.py process_deposit_holds` | ogni 5 minuti | Le caparre scadute non liberano mai lo slot. In dashboard sembra funzionare, perché ogni apertura dell'agenda esegue il controllo sul salone visualizzato — ma solo su quello, e solo finché qualcuno guarda. |
+| `python manage.py sync_yourang` | ogni ora | Clienti e servizi smettono di riallinearsi con Yourang quando un webhook va perso; anche la prima sincronizzazione interrotta da un riavvio si completa solo da qui. |
 
 Lo stato della consegna messaggi è visibile al titolare in
 *Impostazioni → Notifiche*, che legge `GET /api/core/outbox/status`: dice se

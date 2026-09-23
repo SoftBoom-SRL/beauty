@@ -206,7 +206,8 @@ session, client, fireToast, view, setView(view, params?), viewParams`.
 
 ## 10. Reference data (seed)
 
-Salon `the-parlour`, owner login `sole@theparlour.it` / `theparlour`. 9 operators, 14 services,
+Salon `the-parlour`, owner login `sole@theparlour.it` with the password printed by `seed_demo`
+(random; choose one with `seed_demo --reset --password <pick>`). 9 operators, 14 services,
 10 clients, 8 appointments today. Client OTP codes: read from backend console log (DEBUG) or the
 `core.OutboxEvent` row with `event_type="client.otp"`. Don't start/stop the Django server yourself.
 

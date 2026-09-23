@@ -37,18 +37,30 @@ il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.ser
 - **Registro attività**: ogni mutazione rilevante chiama
   `core.services.log_activity(salon, type, summary, actor=ctx.user, payload={...})`.
 - **Outbox Yourang**: `core.services.emit_event(salon, event_type, payload)`.
-  Eventi standard: `client.created`, `client.otp`, `appointment.created`, `appointment.moved`,
-  `appointment.cancelled`, `appointment.no_show`, `appointment.checked_in`, `slot.freed`,
-  `visit.completed`, `loyalty.reward`, `communication.send`, `supplier.order`,
+  Eventi standard: `client.created`, `client.otp`, `client.marketing_consent`,
+  `appointment.created`, `appointment.moved`, `appointment.updated`,
+  `appointment.cancelled`, `appointment.no_show`, `appointment.checked_in`,
+  `appointment.released_unpaid`, `slot.freed`, `deposit.payment_link`,
+  `deposit.reminder`, `deposit.paid`, `deposit.paid_after_release`,
+  `visit.completed`, `loyalty.reward`, `communication.send`,
+  `communication.cancel`, `supplier.order`, `team.invitation`, `waitlist.deleted`,
   `automation.updated`, `automation.triggered`. Payload: id + dati utili a Yourang
   (nome cliente, telefono, lingua, orari ISO).
+- **Ordine per oggetto**: gli eventi con la stessa `coalesce_key` partono
+  nell'ordine in cui sono nati; uno aspetta che quelli più vecchi con la stessa
+  chiave siano consegnati, falliti, sostituiti o scaduti (`flush_outbox`).
+  Chiavi: `appointment:<id>` (anche caparra e `visit.completed`, che si
+  ordinano dopo i messaggi trattenuti dell'appuntamento ma NON si fondono con
+  loro), `slot:<id>`, `automation:<id>`, `communication:<id>`.
 - **Ritardo di sicurezza**: gli eventi dell'agenda passano da
   `agenda.services.emit_appointment_event`, che li TRATTIENE per
   `SalonSettings.automation_delay_seconds` (30 di serie, 0 = subito) con una
   `coalesce_key` per oggetto. Due eventi trattenuti sullo stesso appuntamento si
   fondono in uno solo: prenotare e correggere l'orario un istante dopo manda un
   messaggio, non due, e quello che «torna indietro» annulla non parte affatto.
-  Gli eventi immediati (OTP, link di pagamento) NON si ritardano.
+  Gli eventi immediati (OTP, link di pagamento) NON si ritardano; il link della
+  caparra, che ha la chiave dell'appuntamento, parte però dopo la conferma
+  ancora trattenuta.
 - **Condizioni E/O** (deposito, automazioni): JSON `{"op":"and|or","rules":[{"field","cmp","value"}]}`,
   valutate con `common.conditions.evaluate(conditions, facts)`;
   facts standard da `apps.clients.services.client_facts(client)`.
@@ -457,9 +469,17 @@ per fornitore; receive con discrepanza → partial.
 - CRUD `/communications`; POST `/communications/{id}/send` → risolve audience in
   client ids (labels → clienti con quelle categorie; consents.marketing True) →
   emit `communication.send` {title, body, cta, client_ids, langs per cliente} →
-  status sent, sent_at. Scheduled: status scheduled con scheduled_at
-  (l'invio effettivo alla data è demandato a Yourang: l'evento viene emesso subito
-  con scheduled_at nel payload).
+  status sent, sent_at. Scheduled: status scheduled con scheduled_at; l'evento
+  resta TRATTENUTO in outbox fino a scheduled_at e arriva a Yourang ALLA data
+  (scheduled_at ≈ adesso): Yourang lo invia subito. Modificare, riprogrammare o
+  eliminare una programmata ferma l'evento ancora in coda; per quello che Yourang
+  può avere già ricevuto si emette `communication.cancel`
+  {communication_id, outbox_event_ids} (idempotente: gli id sono quelli degli
+  eventi `communication.send` consegnati, cioè la loro Idempotency-Key
+  «outbox-<id>»).
+- Consenso marketing cambiato (scheda cliente o app): `client.marketing_consent`
+  {client_id, phone, lang, marketing}; con marketing=false Yourang toglie la
+  cliente anche dagli invii che ha già in mano.
 
 **Endpoint cliente**
 - GET `/client/wallet` → {gift_cards (recipient o buyer, attive, con balance),
@@ -527,6 +547,23 @@ helper `period_range(period, date)` → (start, end).
 **Tests**: period_range; kpis su dataset minimo (1 vendita, 1 appuntamento) senza eccezioni.
 
 ---
+
+## 13a. apps/integrations — Yourang via proxy
+
+Il portale non è un client OAuth: lo è il proxy (vedi DEPLOY.md §8).
+- GET `/yourang/oauth/start` (staff, titolare) e GET `/yourang/oauth/login/start`
+  (pubblico) → `{authorize_url, nonce}`. Il `nonce` resta nel sessionStorage della
+  finestra che avvia il flusso.
+- POST `/yourang/oauth/exchange` `{code, mode, state, nonce}`: `state` (firmato
+  all'avvio, torna nel return_to) e `nonce` legano il codice alla finestra e alla
+  sessione che l'hanno chiesto. Senza, o non validi → 400; salone già collegato a
+  un'altra organizzazione (o organizzazione già di un altro salone) → 409
+  «scollegalo prima». `connect` → `{mode, status}` (la prima sync gira in
+  background); `login` → `{mode, session}`.
+- GET `/yourang/status` → `{connected, status, connected_at, last_sync_at,
+  yourang_org_id, last_error}`; `last_error` "" se l'ultima sync è andata bene.
+- Webhook in ingresso: gli annullamenti arrivati DA Yourang non vengono rimandati
+  a Yourang come `appointment.cancelled`.
 
 ## 13. Note per l'integratore (non per gli agenti)
 

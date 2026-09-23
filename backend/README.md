@@ -17,12 +17,17 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 cp .env.example .env
 python manage.py migrate
-python manage.py seed_demo        # salone The Parlour + dati demo
+python manage.py seed_demo        # salone The Parlour + dati demo (stampa la password del titolare)
+python manage.py createsuperuser  # l'utente per /admin/
 python manage.py runserver
 ```
 
 - API docs: http://localhost:8000/api/docs
-- Admin: http://localhost:8000/admin/ (creato da seed_demo: vedi output del comando)
+- Admin: http://localhost:8000/admin/ con l'utente di `createsuperuser`. Il titolare
+  demo (`sole@theparlour.it`) entra nella dashboard, non in /admin/.
+- La password del titolare demo è casuale e il seed la stampa una volta sola;
+  per sceglierla: `python manage.py seed_demo --reset --password <scelta>`.
+  Con `DEBUG=0` il seed si rifiuta di partire (vedi DEPLOY.md §7).
 
 ## Struttura
 

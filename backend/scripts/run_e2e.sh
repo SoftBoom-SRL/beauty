@@ -44,8 +44,11 @@ if [ $? -ne 0 ]; then
   exit 2
 fi
 
-echo "[run_e2e] seed_demo --reset..."
-"$PY" "$BACKEND_DIR/manage.py" seed_demo --reset >>"$SERVER_LOG" 2>&1
+echo "[run_e2e] seed_demo --reset --password theparlour..."
+# Il seed non ha più una password fissa (ne sceglie una a caso): quella dello
+# smoke test (e2e_smoke.OWNER_PASSWORD) si passa qui, e vale solo per questo
+# DB usa e getta.
+"$PY" "$BACKEND_DIR/manage.py" seed_demo --reset --password theparlour >>"$SERVER_LOG" 2>&1
 if [ $? -ne 0 ]; then
   echo "[run_e2e] seed fallito — vedi $SERVER_LOG" >&2
   tail -20 "$SERVER_LOG" >&2
