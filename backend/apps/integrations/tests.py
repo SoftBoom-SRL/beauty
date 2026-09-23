@@ -1,8 +1,5 @@
 """Self-check dell'integrazione Yourang: firma webhook, normalizzazione telefono,
-idempotenza import evento.
-
-Niente più round-trip di cifratura: dal passaggio al proxy il portale non
-custodisce token, quindi non c'è nulla da cifrare.
+round-trip cifratura, idempotenza import evento.
 
     python manage.py test apps.integrations
 """
@@ -11,50 +8,47 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 from django.test import Client as HttpClient
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
-from .api import _verify_webhook
+from . import crypto
 from .sync import cancel_event, import_event, normalize_phone
 
-WEBHOOK_SECRET = "s3cret"
+# 32-byte hex key (openssl rand -hex 32) — stesso formato di food/real_estate.
+TEST_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
 
-@override_settings(YOURANG_PROXY_WEBHOOK_SECRET=WEBHOOK_SECRET)
 class SignatureTests(SimpleTestCase):
-    """La firma è quella che il PROXY appone ri-emettendo: stesso schema della
-    piattaforma (HMAC su "{timestamp}.{body}"), segreto diverso."""
+    secret = "s3cret"
 
     def _sign(self, body: bytes, ts: str) -> str:
         signed = f"{ts}.".encode() + body
-        return "sha256=" + hmac.new(WEBHOOK_SECRET.encode(), signed, hashlib.sha256).hexdigest()
+        return "sha256=" + hmac.new(self.secret.encode(), signed, hashlib.sha256).hexdigest()
 
     def test_valid_signature(self):
         body, ts = b'{"a":1}', str(int(time.time()))
-        self.assertTrue(_verify_webhook(body, self._sign(body, ts), ts))
+        self.assertTrue(crypto.verify_signature(body, self._sign(body, ts), ts, self.secret))
 
     def test_wrong_signature_rejected(self):
         body, ts = b'{"a":1}', str(int(time.time()))
-        self.assertFalse(_verify_webhook(body, "sha256=deadbeef", ts))
+        self.assertFalse(crypto.verify_signature(body, "sha256=deadbeef", ts, self.secret))
 
     def test_stale_timestamp_rejected(self):
         body = b'{"a":1}'
         ts = str(int(time.time()) - 10_000)
-        self.assertFalse(_verify_webhook(body, self._sign(body, ts), ts))
-
-    @override_settings(YOURANG_PROXY_WEBHOOK_SECRET="")
-    def test_unconfigured_secret_fails_closed(self):
-        """La rotta è pubblica: senza segreto si rifiuta, non si accetta."""
-        body, ts = b'{"a":1}', str(int(time.time()))
-        self.assertFalse(_verify_webhook(body, self._sign(body, ts), ts))
+        self.assertFalse(crypto.verify_signature(body, self._sign(body, ts), ts, self.secret))
 
     def test_non_ascii_signature_is_rejected_not_crashed(self):
         # hmac.compare_digest alza TypeError sulle stringhe non-ASCII: una firma
         # con un byte ≥ 0x80 deve valere "non valida", non un 500 su rotta pubblica.
         body, ts = b'{"a":1}', str(int(time.time()))
-        self.assertFalse(_verify_webhook(body, "sha256=dëadbeef", ts))
+        self.assertFalse(
+            crypto.verify_signature(body, "sha256=dëadbeef", ts, self.secret)
+        )
 
 
 class PhoneTests(SimpleTestCase):
@@ -95,6 +89,16 @@ class PhoneTests(SimpleTestCase):
 
     def test_garbage_returns_none(self):
         self.assertIsNone(normalize_phone("n/a"))
+
+
+@override_settings(ENCRYPTION_KEY=TEST_KEY)
+class CryptoRoundTripTests(SimpleTestCase):
+    def test_round_trip(self):
+        self.assertEqual(crypto.decrypt(crypto.encrypt("token-abc")), "token-abc")
+
+    def test_empty(self):
+        self.assertEqual(crypto.encrypt(""), "")
+        self.assertEqual(crypto.decrypt(""), "")
 
 
 class ContactPushTests(TestCase):
@@ -267,13 +271,16 @@ class LoginIdentityTests(TestCase):
         """Senza organizzazione il connect rifiuta: il login faceva passare, e
         ogni accesso provisionava un salone nuovo e vuoto."""
         from apps.core.models import Salon
-        from apps.integrations.login import login_with_link_code
+        from apps.integrations.login import login_with_yourang
 
         before = Salon.objects.count()
         identity = {"email": "nuovo@x.it", "email_verified": True, "name": "Nuovo"}
-        with patch("apps.integrations.client.redeem_link_code", return_value=identity):
+        with patch("apps.integrations.login.yc.exchange_code",
+                   return_value={"access_token": "tok", "id_token": "idt"}), \
+             patch("apps.integrations.login.yc.org_id_from_access_token", return_value=""), \
+             patch("apps.integrations.login.yc.claims_from_token", return_value=identity):
             with self.assertRaises(ValueError):
-                login_with_link_code("code-1")
+                login_with_yourang("code-1", "verifier-1")
         self.assertEqual(Salon.objects.count(), before)
 
 
@@ -455,13 +462,15 @@ class ImportEventIdempotencyTests(TestCase):
         self.assertEqual(appt.total_duration_min, 120)
 
 
+WEBHOOK_SECRET = "s3cret"
+
+
 def _sign_webhook(body: bytes, ts: str, secret: str = WEBHOOK_SECRET) -> str:
     return "sha256=" + hmac.new(
         secret.encode(), f"{ts}.".encode() + body, hashlib.sha256
     ).hexdigest()
 
 
-@override_settings(YOURANG_PROXY_WEBHOOK_SECRET=WEBHOOK_SECRET)
 class WebhookRouteTests(TestCase):
     """La rotta, non solo la firma: è pubblica e ci passa tutto ciò che il
     proxy consegna, compreso un payload storto."""
@@ -477,6 +486,8 @@ class WebhookRouteTests(TestCase):
         self.http = HttpClient()
         self.salon = Salon.objects.create(name="Salone Hook", slug="salone-hook")
         self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-hook")
+        self.conn.webhook_secret_enc = crypto.encrypt(WEBHOOK_SECRET)
+        self.conn.save(update_fields=["webhook_secret_enc"])
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Ada", phone="+393331110000"
         )
@@ -609,22 +620,24 @@ class CancelEventGuardTests(TestCase):
         self.assertEqual(appt.status, Appointment.Status.CONFIRMED)
 
 
-@override_settings(
-    YOURANG_PROXY_URL="https://connect.example",
-    YOURANG_PROXY_SLUG="beauty",
-    YOURANG_PROXY_API_KEY="k-123",
-)
+@override_settings(YOURANG_ISSUER_URL="https://api.example")
 class ClientRequestTests(TestCase):
     """_request è mockato in tutti gli altri test: qui gira per davvero (con
-    httpx finto) perché URL, header di organizzazione e chiave non sono mai
-    stati verificati da nessuno."""
+    httpx finto) perché URL e header di autorizzazione non sono mai stati
+    verificati da nessuno."""
 
     def setUp(self):
         from apps.core.models import Salon
         from apps.integrations.models import YourangConnection
 
         self.salon = Salon.objects.create(name="Salone HTTP", slug="salone-http")
-        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-http")
+        self.conn = YourangConnection.objects.create(
+            salon=self.salon,
+            yourang_org_id="org-http",
+            access_token_enc=crypto.encrypt("tok-abc"),
+            refresh_token_enc=crypto.encrypt("ref-abc"),
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
 
     def _response(self, data):
         resp = Mock()
@@ -640,10 +653,14 @@ class ClientRequestTests(TestCase):
 
         method, url = req.call_args.args
         self.assertEqual(method, "GET")
-        self.assertEqual(url, "https://connect.example/v/beauty/api/contacts?limit=50&offset=100")
+        self.assertEqual(
+            url, "https://api.example/api/external/v1/contacts?limit=50&offset=100"
+        )
         headers = req.call_args.kwargs["headers"]
-        self.assertEqual(headers["Authorization"], "Bearer k-123")
-        self.assertEqual(headers["X-Yourang-Org"], "org-http")
+        self.assertEqual(headers["Authorization"], "Bearer tok-abc")
+        # Il flusso diretto parla per UN salone col token di quel salone: nessun
+        # selettore di organizzazione da mandare (era un header del proxy).
+        self.assertNotIn("X-Yourang-Org", headers)
         self.assertEqual(out, [{"id": "c-1"}])
 
     def test_remote_ids_are_percent_encoded(self):
@@ -656,7 +673,7 @@ class ClientRequestTests(TestCase):
             YourangClient(self.conn).get_event("1/../../contacts")
         self.assertEqual(
             req.call_args.args[1],
-            "https://connect.example/v/beauty/api/events/1%2F..%2F..%2Fcontacts",
+            "https://api.example/api/external/v1/events/1%2F..%2F..%2Fcontacts",
         )
 
         with patch("apps.integrations.client.httpx.request",
@@ -664,10 +681,12 @@ class ClientRequestTests(TestCase):
             YourangClient(self.conn).upsert_catalogue_item("a/../b", {"name": "x"})
         self.assertEqual(
             req.call_args.args[1],
-            "https://connect.example/v/beauty/api/catalogues/items/a%2F..%2Fb",
+            "https://api.example/api/external/v1/catalogues/items/a%2F..%2Fb",
         )
 
-    def test_connection_without_org_never_calls_the_proxy(self):
+    def test_connection_without_tokens_never_calls_the_api(self):
+        """Senza refresh token non c'è modo di autenticarsi: deve alzare prima
+        di uscire in rete, non mandare una richiesta senza credenziali."""
         from apps.core.models import Salon
         from apps.integrations.client import YourangClient
         from apps.integrations.models import YourangConnection
