@@ -763,6 +763,7 @@ def _refund_overpaid_deposit(appointment, intent_id: str, cents: int, account: s
         amount_cents=cents,
         account=account or "",
     )
+    refund = stripe_service.as_dict(refund) if refund is not None else None
     excess = (Decimal(int(cents)) / 100).quantize(Decimal("0.01"))
     if refund is not None:
         # Registrato come ogni rimborso: la quota detraibile al checkout torna
@@ -822,6 +823,7 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
         idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
         account=account or "",
     )
+    refund = stripe_service.as_dict(refund) if refund is not None else None
     status = (refund or {}).get("status") or ""
     if refund is None:
         outcome = "da rimborsare a mano su Stripe"
@@ -860,6 +862,7 @@ def _refund_duplicate_deposit(appointment, intent_id: str, obj: dict, account: s
         idempotency_key=f"duplicate-deposit-{appointment.salon_id}-{appointment.id}-{intent_id}",
         account=account or "",
     )
+    refund = stripe_service.as_dict(refund) if refund is not None else None
     log_activity(
         appointment.salon,
         "deposit.duplicate_payment",
