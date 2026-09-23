@@ -100,7 +100,10 @@ export default function StaffPage({ id, onBack }) {
     const changes = basics ? changedOperatorFields(form, detail) : {};
     const doBasics = Object.keys(changes).length > 0;
     const doShifts = shifts && shiftsDirty;
-    if (!doBasics && !doShifts) return;
+    if (!doBasics && !doShifts) {
+      fireToast({ msg: t('Nessuna modifica da salvare', 'Nothing to save'), icon: 'info' });
+      return;
+    }
     if (doBasics && (!String(form.first_name).trim() || !String(form.last_name).trim())) {
       fireToast({ msg: t('Nome e cognome sono obbligatori', 'First and last name are required'), icon: 'alert' });
       return;
