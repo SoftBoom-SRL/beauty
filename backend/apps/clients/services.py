@@ -118,7 +118,7 @@ from django.db import DataError, IntegrityError, transaction
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from common.phone import canonical_phone, phone_key as _phone_key
+from common.phone import canonical_phone, normalize_phone, phone_key as _phone_key
 
 
 # ---- Compleanno: con o senza anno ----------------------------------------------
@@ -379,6 +379,11 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                         skipped += 1
                         del warnings[warnings_before:]
                         continue
+                    if normalize_phone(phone) is None:
+                        # «348 221 0094 / 06 1234567», «3,93482E+11» di Excel: la
+                        # scheda nasce col testo com'è, ma OTP e promemoria non
+                        # partiranno finché qualcuno non lo corregge (14-15).
+                        warnings.append({"row": index, "reason": "Telefono non riconosciuto: salvato com'è, da correggere"})
                     client = Client.objects.create(
                         salon=salon,
                         first_name=first_name,

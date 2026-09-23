@@ -185,3 +185,15 @@ class ImportApiTests(_Base):
         self.assertEqual(body["created"], 1)
         self.assertEqual(body["warnings"][0]["row"], 0)
         self.assertEqual(body["errors"], [{"row": 1, "reason": body["errors"][0]["reason"], "client_id": archived.id}])
+
+
+class ImplausiblePhoneTests(_Base):
+    def test_an_unrecognised_number_is_imported_with_a_warning(self):
+        """14-15: «348 221 0094 / 06 1234567» (19 cifre) entrava senza un avviso."""
+        result = import_rows(self.salon, [
+            {"first_name": "Bea", "phone": "348 221 0094 / 06 1234567"},
+            {"first_name": "Carla", "phone": "348 221 0094"},
+        ])
+        self.assertEqual(result["created"], 2)
+        self.assertEqual([w["row"] for w in result["warnings"]], [0])
+        self.assertIn("Telefono non riconosciuto", result["warnings"][0]["reason"])

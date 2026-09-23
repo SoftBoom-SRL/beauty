@@ -788,7 +788,7 @@ class ImportFlexibleTests(ClientsTestCase):
         self.assertEqual(result["created"], 2)
         self.assertEqual(result["skipped"], 1)
         self.assertEqual([e["row"] for e in result["errors"]], [0])
-        self.assertEqual([w["row"] for w in result["warnings"]], [1])
+        self.assertTrue(any(w["row"] == 1 and "compleanno" in w["reason"] for w in result["warnings"]))
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-media-"))
