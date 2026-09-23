@@ -1,18 +1,11 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, toDateStr, fmtEur, NumInput } from '@youty/shared';
+import { api, ApiError, Icon, todayStr, fmtEur, NumInput } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
+import { expiryInMonthsIso } from '../dates.js';
 
 const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
-
-/** now + n calendar months, end of day, as ISO string (for expires_at). */
-function monthsFromNowIso(months) {
-  const d = new Date();
-  d.setMonth(d.getMonth() + months);
-  d.setHours(23, 59, 0, 0);
-  return d.toISOString();
-}
 
 /** Sell a new gift card → POST /api/marketing/gift-cards
  * (value, buyer_client_id?, recipient_client_id?, recipient_name, paid+paid_method,
@@ -58,7 +51,8 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         paid,
         paid_method: paid ? paidMethod : '',
         delivery_date: scheduled && deliveryDate ? deliveryDate : null,
-        expires_at: expiryMonths ? monthsFromNowIso(expiryMonths) : null,
+        // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
+        expires_at: expiryMonths ? expiryInMonthsIso(expiryMonths) : null,
       };
       await api.post('/api/marketing/gift-cards', payload);
       onSaved();
@@ -192,7 +186,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         <button style={segBtn(scheduled)} onClick={() => setScheduled(true)}>{t('Programmata', 'Scheduled')}</button>
       </div>
       {scheduled && (
-        <input type="date" min={toDateStr(new Date())} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
+        <input type="date" min={todayStr()} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
       )}
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Scadenza', 'Expiry')}</div>

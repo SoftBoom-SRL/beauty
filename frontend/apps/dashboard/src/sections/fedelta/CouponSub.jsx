@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, parseISO, toDateStr, Icon, EmptyState } from '@youty/shared';
+import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
 import CouponEditModal from './modals/CouponEditModal.jsx';
 import { COUPON_ORIGIN_META, COUPON_STATUS_META, effectiveStatus } from './meta.js';
+import { salonDay, shortDate } from './dates.js';
 
 const LIMIT = 24;
 
@@ -76,8 +77,9 @@ export default function CouponSub() {
     // scaduto = non più modificabile né «utilizzabile», come per il server
     status: effectiveStatus(c),
     client: c.client_id ? { id: c.client_id, full_name: c.client_name } : null,
-    // normalise the API's ISO datetime to a YYYY-MM-DD string for the modal's date input
-    expires_at: c.expires_at ? toDateStr(parseISO(c.expires_at)) : null,
+    // normalise the API's ISO datetime to a YYYY-MM-DD string for the modal's date input —
+    // il giorno del SALONE: col fuso del dispositivo la scadenza slittava a ogni salvataggio
+    expires_at: salonDay(c.expires_at),
   });
 
   const handleSaved = (msg) => {
@@ -139,7 +141,7 @@ export default function CouponSub() {
                 </div>
                 <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <Icon name="calendar" size={13} color="var(--muted-2)" />
-                  {c.expires_at ? t('Scade il ', 'Expires ') + parseISO(c.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT') : t('Nessuna scadenza', 'No expiry')}
+                  {c.expires_at ? t('Scade il ', 'Expires ') + shortDate(c.expires_at, lang) : t('Nessuna scadenza', 'No expiry')}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: om.color, background: om.bg, padding: '3px 9px', borderRadius: 99 }}>

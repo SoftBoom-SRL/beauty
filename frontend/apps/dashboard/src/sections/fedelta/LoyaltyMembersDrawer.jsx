@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, Avatar, EmptyState, parseISO } from '@youty/shared';
+import { api, ApiError, Icon, Avatar, EmptyState } from '@youty/shared';
 import Pager from './Pager.jsx';
 import { LOYALTY_TYPES } from './meta.js';
+import { shortDate } from './dates.js';
 
 const LIMIT = 25;
 
@@ -60,7 +61,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.client_name}</div>
                       <div className="t-sm" style={{ color: 'var(--muted)' }}>
-                        {t('Iscritta il', 'Joined')} {parseISO(a.joined_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT')}
+                        {t('Iscritta il', 'Joined')} {shortDate(a.joined_at, lang)}
                       </div>
                       <div style={{ height: 5, borderRadius: 99, background: 'var(--paper-2)', overflow: 'hidden', marginTop: 7 }}>
                         <div style={{ height: '100%', width: pct + '%', background: program.color || 'var(--clay)', borderRadius: 99 }} />

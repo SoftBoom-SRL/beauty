@@ -4,6 +4,7 @@ import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, numCss, segBtn } from '../formStyles.js';
 import { COUPON_ORIGIN_META, COUPON_STATUS_META } from '../meta.js';
+import { endOfSalonDayIso } from '../dates.js';
 
 /** Create/edit a manual coupon. `client_id` optional (client search), `kind` percent|amount,
  * `value`, `expires_at` optional. The prototype's `gift` kind and services-restriction have no
@@ -25,7 +26,8 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
     client_id: draft.client ? draft.client.id : null,
     kind: draft.kind,
     value: draft.kind === 'amount' ? Number(draft.value || 0).toFixed(2) : Math.round(Number(draft.value || 0)),
-    expires_at: draft.expires_at ? new Date(draft.expires_at + 'T23:59:00').toISOString() : null,
+    // le 23:59 del salone, non del dispositivo che salva
+    expires_at: draft.expires_at ? endOfSalonDayIso(draft.expires_at) : null,
   });
 
   const save = async () => {

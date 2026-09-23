@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, parseISO, Icon, EmptyState } from '@youty/shared';
+import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
 
 /** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un KPI o un
  *  saldo a zero è «€0», non un omaggio. */
@@ -10,6 +10,7 @@ import QrMini from './QrMini.jsx';
 import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, GC_PAYMENT_META, effectiveStatus, isMaskedCode } from './meta.js';
+import { shortDate } from './dates.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
 // basta: un salone che ne ha vendute di più ne vedeva una parte senza che
@@ -22,10 +23,8 @@ const PAY_METHOD_LABELS = {
   other: { it: 'Altro', en: 'Other' },
 };
 
-function dateLabel(iso, lang) {
-  if (!iso) return '';
-  return parseISO(iso).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT');
-}
+// pagamento e scadenza sono istanti (giorno del salone), la consegna è una data
+const dateLabel = shortDate;
 
 export default function GiftSub() {
   const { t, lang, hasScope, fireToast, services } = useDash();
