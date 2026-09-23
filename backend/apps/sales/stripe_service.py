@@ -30,6 +30,28 @@ def _client():
     return stripe
 
 
+def as_dict(obj) -> dict:
+    """Risposta Stripe come dict semplice (anche gli oggetti annidati).
+
+    Da stripe-python 12 `StripeObject` non è più un dict: con la 15 installata
+    ogni `.get()` su Event, Session, Refund o OAuthToken sollevava
+    AttributeError. Il webhook rispondeva 500 e la caparra pagata restava
+    «richiesta» fino al rilascio dello slot, «Invia link» e «Collega Stripe»
+    fallivano DOPO che Stripe aveva già creato la sessione o consumato il code,
+    l'annullamento esplodeva a rimborso già eseguito. I test passavano perché i
+    mock restituivano dict: per questo ogni risposta passa da qui subito dopo la
+    chiamata, e un dict (mock o versioni vecchie della libreria) va bene uguale.
+    """
+    if isinstance(obj, dict):
+        return obj
+    to_dict = getattr(obj, "to_dict", None)
+    if callable(to_dict):
+        data = to_dict()
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
 # ---- Account del salone (Stripe Connect) -------------------------------------
 
 
@@ -109,7 +131,7 @@ def connect_exchange(salon, code: str, state: str) -> str:
         raise HttpError(400, "Richiesta di collegamento non valida per questo salone")
     stripe = _client()
     try:
-        response = stripe.OAuth.token(grant_type="authorization_code", code=code)
+        response = as_dict(stripe.OAuth.token(grant_type="authorization_code", code=code))
     except stripe.StripeError as exc:
         raise HttpError(400, f"Collegamento Stripe non riuscito: {getattr(exc, 'user_message', None) or exc}")
     account_id = response.get("stripe_user_id") or ""
@@ -164,19 +186,21 @@ def ensure_customer(client) -> str:
     if client.stripe_customer_id and client.stripe_account_id == account:
         return client.stripe_customer_id
 
-    customer = stripe.Customer.create(
-        name=f"{client.first_name} {client.last_name}".strip(),
-        phone=client.phone or None,
-        email=client.email or None,
-        metadata={"client_id": client.id, "salon_id": client.salon_id},
-        **_account_opts(client.salon),
+    customer = as_dict(
+        stripe.Customer.create(
+            name=f"{client.first_name} {client.last_name}".strip(),
+            phone=client.phone or None,
+            email=client.email or None,
+            metadata={"client_id": client.id, "salon_id": client.salon_id},
+            **_account_opts(client.salon),
+        )
     )
     if client.stripe_customer_id:
         logger.info(
             "Cliente %s ricreato su un altro account Stripe (%s → %s): carta salvata rimossa",
             client.id, client.stripe_account_id or "piattaforma", account or "piattaforma",
         )
-    client.stripe_customer_id = customer["id"]
+    client.stripe_customer_id = customer.get("id") or ""
     client.stripe_account_id = account
     client.stripe_payment_method_id = ""
     client.save(
@@ -189,11 +213,13 @@ def create_setup_intent(client):
     """SetupIntent off-session per salvare la carta del cliente dalla web app."""
     stripe = _client()
     customer_id = ensure_customer(client)
-    return stripe.SetupIntent.create(
-        customer=customer_id,
-        usage="off_session",
-        metadata={"client_id": client.id},
-        **_account_opts(client.salon),
+    return as_dict(
+        stripe.SetupIntent.create(
+            customer=customer_id,
+            usage="off_session",
+            metadata={"client_id": client.id},
+            **_account_opts(client.salon),
+        )
     )
 
 
@@ -204,18 +230,20 @@ def create_deposit_intent(appointment):
     if amount <= 0:
         raise HttpError(400, "Nessun acconto richiesto per questo appuntamento")
     customer_id = ensure_customer(appointment.client)
-    return stripe.PaymentIntent.create(
-        amount=_to_cents(amount),
-        currency=_currency(appointment.salon),
-        customer=customer_id,
-        metadata={
-            "appointment_id": appointment.id,
-            "kind": "deposit",
-            "salon_id": appointment.salon_id,
-            "acct": account_token(appointment.salon),
-        },
-        idempotency_key=f"deposit-{appointment.salon_id}-{appointment.id}",
-        **_account_opts(appointment.salon),
+    return as_dict(
+        stripe.PaymentIntent.create(
+            amount=_to_cents(amount),
+            currency=_currency(appointment.salon),
+            customer=customer_id,
+            metadata={
+                "appointment_id": appointment.id,
+                "kind": "deposit",
+                "salon_id": appointment.salon_id,
+                "acct": account_token(appointment.salon),
+            },
+            idempotency_key=f"deposit-{appointment.salon_id}-{appointment.id}",
+            **_account_opts(appointment.salon),
+        )
     )
 
 
@@ -275,14 +303,16 @@ def create_deposit_checkout(appointment) -> str:
         if 30 * 60 + 60 <= seconds <= 24 * 3600 - 60:
             params["expires_at"] = int(due.timestamp())
     try:
-        session = stripe.checkout.Session.create(
-            **params,
-            idempotency_key=f"deposit-checkout-{appointment.salon_id}-{appointment.id}-{int(appointment.updated_at.timestamp())}",
-            **_account_opts(appointment.salon),
+        session = as_dict(
+            stripe.checkout.Session.create(
+                **params,
+                idempotency_key=f"deposit-checkout-{appointment.salon_id}-{appointment.id}-{int(appointment.updated_at.timestamp())}",
+                **_account_opts(appointment.salon),
+            )
         )
     except stripe.StripeError as exc:
         raise HttpError(400, f"Link di pagamento non creato: {getattr(exc, 'user_message', None) or exc}")
-    return session["url"], session.get("id") or ""
+    return session.get("url") or "", session.get("id") or ""
 
 
 def expire_deposit_checkout(appointment) -> None:
@@ -403,32 +433,34 @@ def charge_full_amount(appointment):
     if amount <= 0:
         raise HttpError(400, "Nessun importo da addebitare: la caparra trattenuta copre già il servizio")
     try:
-        intent = stripe.PaymentIntent.create(
-            amount=_to_cents(amount),
-            currency=_currency(appointment.salon),
-            customer=customer_id,
-            payment_method=client.stripe_payment_method_id,
-            off_session=True,
-            confirm=True,
-            metadata={
-                "appointment_id": appointment.id,
-                "kind": "no_show",
-                "salon_id": appointment.salon_id,
-                "acct": account_token(appointment.salon),
-            },
-            # La carta fa parte della chiave: un addebito rifiutato bruciava la
-            # chiave per 24 h e il ritentativo con un'altra carta si riprendeva
-            # lo stesso errore invece di partire. Un doppio clic con la STESSA
-            # carta continua a valere per un addebito solo.
-            idempotency_key=(
-                f"no-show-{appointment.salon_id}-{appointment.id}"
-                f"-{client.stripe_payment_method_id}"
-            ),
-            **_account_opts(appointment.salon),
+        intent = as_dict(
+            stripe.PaymentIntent.create(
+                amount=_to_cents(amount),
+                currency=_currency(appointment.salon),
+                customer=customer_id,
+                payment_method=client.stripe_payment_method_id,
+                off_session=True,
+                confirm=True,
+                metadata={
+                    "appointment_id": appointment.id,
+                    "kind": "no_show",
+                    "salon_id": appointment.salon_id,
+                    "acct": account_token(appointment.salon),
+                },
+                # La carta fa parte della chiave: un addebito rifiutato bruciava la
+                # chiave per 24 h e il ritentativo con un'altra carta si riprendeva
+                # lo stesso errore invece di partire. Un doppio clic con la STESSA
+                # carta continua a valere per un addebito solo.
+                idempotency_key=(
+                    f"no-show-{appointment.salon_id}-{appointment.id}"
+                    f"-{client.stripe_payment_method_id}"
+                ),
+                **_account_opts(appointment.salon),
+            )
         )
     except stripe.StripeError as exc:
         raise HttpError(400, f"Addebito non riuscito: {getattr(exc, 'user_message', None) or exc}")
-    appointment.no_show_payment_intent_id = intent["id"]
+    appointment.no_show_payment_intent_id = intent.get("id") or ""
     appointment.save(update_fields=["no_show_payment_intent_id", "updated_at"])
     return intent, amount
 
@@ -449,10 +481,12 @@ def refund_deposit(appointment):
         return None
     stripe = _client()
     try:
-        return stripe.Refund.create(
-            payment_intent=intent_id,
-            idempotency_key=f"deposit-refund-{appointment.salon_id}-{appointment.id}",
-            **_account_opts(appointment.salon),
+        return as_dict(
+            stripe.Refund.create(
+                payment_intent=intent_id,
+                idempotency_key=f"deposit-refund-{appointment.salon_id}-{appointment.id}",
+                **_account_opts(appointment.salon),
+            )
         )
     except stripe.StripeError as exc:
         logger.warning("Rimborso caparra non riuscito (appuntamento %s): %s", appointment.id, exc)
@@ -474,24 +508,54 @@ def refund_payment_intent(salon, intent_id: str, *, idempotency_key: str, amount
     if amount_cents and int(amount_cents) > 0:
         params["amount"] = int(amount_cents)
     try:
-        return stripe.Refund.create(**params, **_account_opts(salon))
+        return as_dict(stripe.Refund.create(**params, **_account_opts(salon)))
     except stripe.StripeError as exc:
         logger.warning("Rimborso %s non riuscito: %s", intent_id, exc)
         return None
 
 
-def verify_webhook(payload: bytes, sig_header: str) -> dict:
-    """Evento webhook con firma verificata.
+def webhook_secrets() -> list[str]:
+    """Segreti di firma accettati dal webhook, nell'ordine e senza doppioni.
 
-    Senza STRIPE_WEBHOOK_SECRET il webhook viene RIFIUTATO: accettare eventi non
-    firmati permetterebbe a chiunque di segnare una caparra come pagata con una
-    POST anonima.
+    L'endpoint della piattaforma e quello Connect hanno segreti diversi (vedi
+    settings): con uno solo, le caparre dei saloni collegati — eventi Connect —
+    venivano rifiutate tutte, oppure lo erano quelle della piattaforma.
     """
-    if not settings.STRIPE_WEBHOOK_SECRET:
+    extra = getattr(settings, "STRIPE_WEBHOOK_SECRETS", None) or []
+    if isinstance(extra, str):
+        extra = extra.split(",")
+    candidates = [
+        getattr(settings, "STRIPE_WEBHOOK_SECRET", ""),
+        getattr(settings, "STRIPE_CONNECT_WEBHOOK_SECRET", ""),
+        *extra,
+    ]
+    secrets: list[str] = []
+    for secret in candidates:
+        secret = (secret or "").strip()
+        if secret and secret not in secrets:
+            secrets.append(secret)
+    return secrets
+
+
+def verify_webhook(payload: bytes, sig_header: str) -> dict:
+    """Evento webhook con firma verificata, come dict (vedi `as_dict`).
+
+    Senza nessun segreto il webhook viene RIFIUTATO: accettare eventi non
+    firmati permetterebbe a chiunque di segnare una caparra come pagata con una
+    POST anonima. La firma è valida se torna con UNO dei segreti configurati.
+    """
+    secrets = webhook_secrets()
+    if not secrets:
         raise HttpError(503, "Webhook Stripe non configurato (STRIPE_WEBHOOK_SECRET mancante)")
     import stripe  # lazy
 
-    try:
-        return stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_WEBHOOK_SECRET)
-    except (ValueError, stripe.SignatureVerificationError):
-        raise HttpError(400, "Firma webhook non valida")
+    for secret in secrets:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, secret)
+        except stripe.SignatureVerificationError:
+            continue  # firmato con un altro dei segreti, forse
+        except ValueError:
+            # Firma giusta ma corpo illeggibile: nessun altro segreto lo rende valido.
+            raise HttpError(400, "Firma webhook non valida")
+        return as_dict(event)
+    raise HttpError(400, "Firma webhook non valida")

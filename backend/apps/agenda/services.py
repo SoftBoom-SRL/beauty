@@ -1656,13 +1656,16 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
     lo stato resta «da rimborsare» e il registro attività lo segnala: il
     rimborso va fatto a mano e poi confermato con `mark_deposit_refunded`.
     """
-    from apps.sales.stripe_service import refund_deposit  # lazy
+    from apps.sales.stripe_service import as_dict, refund_deposit  # lazy
 
     if appointment.deposit_status != Appointment.DepositStatus.REFUND_DUE:
         return appointment
     client_name = appointment.client.full_name
     refund = refund_deposit(appointment)
     if refund is not None:
+        # Il Refund di stripe-python non è un dict: `.get()` esplodeva DOPO che
+        # Stripe aveva già restituito i soldi, e la caparra restava «da rimborsare».
+        refund = as_dict(refund)
         # Lo stato lo decide Stripe, non il fatto che la chiamata sia passata:
         # un rimborso «pending» non è denaro già tornato alla cliente.
         record_deposit_refund(

@@ -456,6 +456,7 @@ def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
     if refund is not None:
         from apps.agenda.services import record_deposit_refund  # lazy
 
+        refund = stripe_service.as_dict(refund)
         # Lo stato lo decide Stripe: un rimborso «pending» non è ancora denaro
         # tornato indietro. Registrandolo qui la quota detraibile si aggiorna.
         record_deposit_refund(
