@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { depositDueMs, depositExpired } from '../src/screens/visitLib.js';
+import { apptMinutes, depositDueMs, depositExpired, svcMinutes } from '../src/screens/visitLib.js';
 
 // 16-05: la Home lasciata aperta mostrava «Paga ora» anche dopo la scadenza
 // della caparra; il pagamento arrivava dopo il rilascio dell'orario e finiva
@@ -21,4 +21,23 @@ test('caparra: senza scadenza o già pagata non scade', () => {
   assert.equal(depositExpired({ deposit_status: 'required', deposit_due_at: null }, now), false);
   assert.equal(depositExpired({ deposit_status: 'paid', deposit_due_at: '2026-09-23T10:30:00+02:00' }, now), false);
   assert.equal(depositDueMs(null), null);
+});
+
+// 09-07 (contratto C4): colore 60' + 40' di posa si leggeva «1h» nel listino
+// e nel riepilogo, mentre l'agenda tiene la cliente 1h 40'.
+test('durata del listino = lavoro + posa', () => {
+  assert.equal(svcMinutes({ duration_min: 60, soak_min: 40 }), 100);
+  assert.equal(svcMinutes({ duration_min: 45 }), 45);            // backend senza soak_min
+  assert.equal(svcMinutes({ duration_min: 30, soak_min: 0 }), 30);
+});
+
+test('durata di un appuntamento = dall\'inizio alla fine, posa compresa', () => {
+  const appt = {
+    start: '2026-09-24T10:00:00+02:00',
+    end: '2026-09-24T11:40:00+02:00',
+    services: [{ service_id: 3, duration_min: 60 }],
+  };
+  assert.equal(apptMinutes(appt), 100);
+  // senza la fine: la somma dei servizi (con la posa, se c'è)
+  assert.equal(apptMinutes({ services: [{ duration_min: 60, soak_min: 40 }, { duration_min: 30 }] }), 130);
 });

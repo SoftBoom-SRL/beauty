@@ -3,7 +3,7 @@
 import React from 'react';
 import { ApiError, Icon, api, fmtEur, parseISO, timeLabel, minutesOfDay, toDateStr, todayStr, addDays, salonTzOpts } from '@youty/shared';
 import { headFont } from '../theme.js';
-import { depositDueMs, depositExpired } from './visitLib.js';
+import { apptMinutes, depositDueMs, depositExpired } from './visitLib.js';
 
 /* ============================== UI bits ============================== */
 
@@ -324,11 +324,9 @@ export function fmtApptDate(iso, lang) {
 
 export function apptTime(iso) { return timeLabel(minutesOfDay(iso)); }
 
-/** Duration of a client-list appointment (sum of services, fallback start→end). */
+/** Durata di un appuntamento dell'elenco: lavoro + posa (vedi apptMinutes). */
 export function apptDur(appt) {
-  const s = (appt.services || []).reduce((sum, x) => sum + (x.duration_min || 0), 0);
-  if (s) return s;
-  try { return Math.max(0, (parseISO(appt.end) - parseISO(appt.start)) / 60000); } catch { return 0; }
+  return apptMinutes(appt);
 }
 
 export function apptServiceNames(appt) {

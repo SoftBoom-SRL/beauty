@@ -12,6 +12,7 @@ import {
   nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
 import { giftServiceCards } from './walletLib.js';
+import { svcMinutes } from './visitLib.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 
@@ -85,7 +86,8 @@ export default function Prenota() {
   );
   const svcs = serviceIds.map((id) => allSvcs.find((s) => s.id === id)).filter(Boolean);
   const s = svcs[0];
-  const dur = svcs.reduce((sum, sv) => sum + (sv.duration_min || 0), 0);
+  // Lavoro + posa: è il tempo che la cliente passa in salone (C4, 09-07).
+  const dur = svcs.reduce((sum, sv) => sum + svcMinutes(sv), 0);
   const price = svcs.reduce((sum, sv) => sum + Number(sv.price || 0), 0);
   const toggleSvc = (id) => setServiceIds((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const items = serviceIds.map((id) => ({ service_id: id, operator_id: operatorId }));
@@ -439,7 +441,7 @@ export default function Prenota() {
                           </div>
                         )}
                         <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(sv.duration_min, lang)}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(svcMinutes(sv), lang)}</span>
                           {giftFor(sv.id) && (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
                               <Icon name="gift" size={12} color="var(--brand-ink)" />
