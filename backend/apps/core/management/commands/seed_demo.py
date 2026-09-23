@@ -1,16 +1,29 @@
 """Seed demo: The Parlour (Firenze) con i dati del prototipo (data.jsx).
 
-    python manage.py seed_demo [--reset]
+    python manage.py seed_demo [--reset] [--password PASSWORD] [--allow-production]
 
-Crea: salone+sede, titolare (sole@theparlour.it / theparlour), ruoli default,
-etichette clienti, 9 operatrici con turni, 14 servizi, 10 clienti, appuntamenti
-di oggi, fornitori/prodotti, regola deposito, programma fedeltà, automazione.
+Crea: salone+sede, titolare sole@theparlour.it, ruoli default, etichette
+clienti, 9 operatrici con turni, 14 servizi, 10 clienti, appuntamenti di oggi,
+fornitori/prodotti, regola deposito, programma fedeltà, automazione.
+
+Il titolare demo è un utente NORMALE (niente is_staff/is_superuser: /admin/ non
+gli si apre) con una password casuale stampata una volta sola, o quella passata
+con --password. Le versioni precedenti lo creavano superuser con la password
+«theparlour», scritta nel README e in DEPLOY.md, mentre la pagina di login di
+produzione ne mostrava l'email: chiunque entrava in /admin/ e leggeva o
+modificava i dati di TUTTI i saloni.
+
+Con DEBUG spento (cioè in produzione) il comando si rifiuta di partire, salvo
+--allow-production. `--reset` cancella solo il salone creato dal seed stesso
+(Salon.is_demo), mai un salone trovato per slug.
 """
 
 import datetime as dt
+import secrets
 from decimal import Decimal
 
-from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
@@ -33,6 +46,14 @@ from apps.sales.models import Sale
 from apps.staff.models import Operator, WeeklyShift
 
 
+DEMO_SLUG = "the-parlour"
+DEMO_OWNER_EMAIL = "sole@theparlour.it"
+# La password che le versioni precedenti del seed davano al titolare demo, ed è
+# pubblica (README, DEPLOY.md, INTEGRATION_NOTES.md). Un account che la ha ancora
+# viene messo in sicurezza al prossimo seed: password nuova e niente /admin/.
+LEGACY_PUBLIC_PASSWORD = "theparlour"
+
+
 def _teardown(salon):
     """Elimina il salone e tutti i suoi dati.
 
@@ -41,7 +62,12 @@ def _teardown(salon):
     salone si bloccherebbe. Qui cancelliamo gli "hub" nell'ordine di dipendenza
     corretto — i figli CASCADE spariscono con loro — poi il salone porta via il
     resto (sedi, ruoli, membership, impostazioni, log, outbox, automazioni…).
+
+    Solo per il salone del seed: è l'unico controllo fra `--reset` e la
+    cancellazione di un salone vero con tutte le sue clienti.
     """
+    if not salon.is_demo:
+        raise CommandError(f"Il salone «{salon.name}» non è stato creato dal seed: non lo cancello.")
     with transaction.atomic():
         Sale.objects.filter(salon=salon).delete()          # → SaleLine, Payment
         Appointment.objects.filter(salon=salon).delete()   # → AppointmentService
@@ -139,27 +165,52 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Elimina il salone demo e lo ricrea")
+        parser.add_argument(
+            "--password", default="",
+            help="Password del titolare demo (default: una casuale, stampata una volta sola)",
+        )
+        parser.add_argument(
+            "--allow-production", action="store_true",
+            help="Esegui anche con DEBUG spento (ambienti di prova: mai sul server di produzione)",
+        )
 
     def handle(self, *args, **options):
-        existing = Salon.objects.filter(slug="the-parlour").first()
+        # DEPLOY.md faceva lanciare il seed nel container di produzione «accanto
+        # ai dati reali»: con DEBUG spento serve una scelta esplicita.
+        if not settings.DEBUG and not options["allow_production"]:
+            raise CommandError(
+                "seed_demo crea un salone dimostrativo con un account di accesso: con DEBUG "
+                "spento (produzione) non parte. Su un ambiente di prova usa --allow-production."
+            )
+
+        existing = Salon.objects.filter(slug=DEMO_SLUG).first()
+        if existing and not existing.is_demo:
+            raise CommandError(
+                f"Lo slug «{DEMO_SLUG}» è già del salone «{existing.name}», che non è stato "
+                "creato da questo seed: non lo tocco (--reset cancella solo la demo del seed)."
+            )
+        owner = User.objects.filter(email__iexact=DEMO_OWNER_EMAIL).first()
+        if owner is not None:
+            # L'account demo non deve diventare la porta d'ingresso di un salone
+            # vero: se lavora già altrove, il seed non gli cambia la password.
+            real = owner.memberships.select_related("salon").exclude(salon__is_demo=True).first()
+            if real is not None:
+                raise CommandError(
+                    f"L'utente {owner.email} fa parte del salone «{real.salon.name}», che non è "
+                    "una demo: il seed non lo modifica."
+                )
         if existing:
             if not options["reset"]:
                 self.stdout.write(self.style.WARNING("Salone demo già presente. Usa --reset per ricrearlo."))
                 return
             _teardown(existing)
 
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        salon = Salon.objects.create(name="The Parlour", slug=DEMO_SLUG, is_demo=True)
         location = Location.objects.create(salon=salon, name="Firenze", address="Via dei Servi 12, Firenze", is_default=True)
         SalonSettings.objects.create(salon=salon)
         ensure_default_roles(salon)
 
-        owner, created = User.objects.get_or_create(
-            email="sole@theparlour.it",
-            defaults={"first_name": "Sole", "last_name": "Caputo", "is_staff": True, "is_superuser": True},
-        )
-        if created:
-            owner.set_password("theparlour")
-            owner.save()
+        owner, password = self._demo_owner(owner, options["password"])
         Membership.objects.get_or_create(user=owner, salon=salon, defaults={"is_owner": True})
 
         # Etichette clienti
@@ -265,11 +316,55 @@ class Command(BaseCommand):
             offset_direction="before", offset_value=24, offset_unit="hours",
         )
 
+        if password:
+            access = f"  Dashboard: {owner.email} · password: {password} (mostrata solo ora)\n"
+        else:
+            access = f"  Dashboard: {owner.email} · password invariata (--password per sceglierne una)\n"
         self.stdout.write(self.style.SUCCESS(
-            "Seed completato: The Parlour (the-parlour)\n"
-            "  Dashboard/admin: sole@theparlour.it · password: theparlour\n"
-            f"  {Operator.objects.filter(salon=salon).count()} operatrici · "
+            f"Seed completato: The Parlour ({DEMO_SLUG})\n"
+            + access
+            + f"  {Operator.objects.filter(salon=salon).count()} operatrici · "
             f"{Service.objects.filter(salon=salon).count()} servizi · "
             f"{Client.objects.filter(salon=salon).count()} clienti · "
             f"{Appointment.objects.filter(salon=salon).count()} appuntamenti oggi"
         ))
+        if not owner.is_active:
+            self.stdout.write(self.style.WARNING(
+                f"  L'account {owner.email} è disattivato: per entrare va riattivato da /admin/."
+            ))
+
+    def _demo_owner(self, owner, given_password: str):
+        """Titolare demo: (utente, password da mostrare; "" se resta quella di prima).
+
+        Un utente qualunque: /admin/ resta a chi è stato creato apposta con
+        `createsuperuser`, non all'account di cui il seed stampa le credenziali.
+        """
+        if owner is None:
+            password = given_password or secrets.token_urlsafe(12)
+            owner = User.objects.create_user(
+                email=DEMO_OWNER_EMAIL, password=password, first_name="Sole", last_name="Caputo",
+            )
+            return owner, password
+        # Account nato da un seed precedente: superuser con la password pubblica.
+        # Resta il titolare della demo, ma smette di aprire /admin/ a chiunque.
+        legacy = owner.check_password(LEGACY_PUBLIC_PASSWORD)
+        password = given_password or (secrets.token_urlsafe(12) if legacy else "")
+        demoted = legacy and (owner.is_staff or owner.is_superuser)
+        fields = []
+        if password:
+            owner.set_password(password)  # incrementa token_version: sessioni chiuse
+            fields += ["password", "token_version"]
+        if demoted:
+            owner.is_staff = owner.is_superuser = False
+            fields += ["is_staff", "is_superuser"]
+        if fields:
+            owner.save(update_fields=fields)
+        done = (["password sostituita"] if legacy and password != LEGACY_PUBLIC_PASSWORD else []) + (
+            ["non entra più in /admin/"] if demoted else []
+        )
+        if done:
+            self.stdout.write(self.style.WARNING(
+                f"  {owner.email} aveva ancora la password pubblica dei seed precedenti: "
+                + ", ".join(done) + "."
+            ))
+        return owner, password

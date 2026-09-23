@@ -19,6 +19,11 @@ class Salon(TimeStampedModel):
     slug = models.SlugField(unique=True)
     default_lang = models.CharField(max_length=2, choices=Lang.choices, default=Lang.IT)
     currency = models.CharField(max_length=3, default="EUR")
+    # Salone creato da `seed_demo`: è l'unico che `seed_demo --reset` può
+    # cancellare. Prima il reset cercava il salone per slug e basta, e un salone
+    # vero chiamato «The Parlour» (slug `the-parlour`, come quelli nati da
+    # «Accedi con Yourang») spariva con tutte le sue clienti.
+    is_demo = models.BooleanField(default=False, editable=False)
 
     def __str__(self):
         return self.name

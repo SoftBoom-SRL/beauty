@@ -6,8 +6,10 @@ from .models import ActivityLog, DepositRule, Location, OutboxEvent, Salon, Salo
 
 @admin.register(Salon)
 class SalonAdmin(ModelAdmin):
-    list_display = ("name", "slug", "default_lang")
+    list_display = ("name", "slug", "default_lang", "is_demo")
     prepopulated_fields = {"slug": ("name",)}
+    # Lo scrive solo seed_demo: è il permesso di cancellare il salone con --reset.
+    readonly_fields = ("is_demo",)
 
 
 @admin.register(Location)

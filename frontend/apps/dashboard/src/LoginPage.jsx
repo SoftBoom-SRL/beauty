@@ -1,6 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { staffAuth, useT, Icon, ApiError } from '@youty/shared';
 
+// Il salone dimostrativo di `seed_demo` esiste solo in sviluppo: in produzione la
+// pagina di accesso regalava a chiunque l'email dell'account demo, e la guida
+// ne riportava anche la password (allora da superuser, cioè /admin/ di tutti i
+// saloni). Vite sostituisce il valore in fase di build: in produzione è false.
+const SHOW_DEMO_HINT = import.meta.env.DEV;
+
 export default function LoginPage() {
   const { t } = useT();
   const [email, setEmail] = useState('');
@@ -84,7 +90,7 @@ export default function LoginPage() {
             <div className="dk-field">
               <label htmlFor="login-email">{t('Email', 'Email')}</label>
               <input id="login-email" className="dk-input" type="email" autoComplete="username" required
-                placeholder="sole@theparlour.it"
+                placeholder={SHOW_DEMO_HINT ? 'sole@theparlour.it' : t('nome@salone.it', 'name@salon.com')}
                 value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="dk-field">
@@ -113,9 +119,11 @@ export default function LoginPage() {
               : <img src="/yourang-logo.png" alt="yourang.ai" style={{ height: 24, objectFit: 'contain' }} />}
           </button>
         </div>
-        <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', marginTop: 14 }}>
-          {t('Demo: sole@theparlour.it', 'Demo: sole@theparlour.it')}
-        </div>
+        {SHOW_DEMO_HINT && (
+          <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', marginTop: 14 }}>
+            {t('Demo: sole@theparlour.it', 'Demo: sole@theparlour.it')}
+          </div>
+        )}
       </div>
     </div>
   );
