@@ -12,9 +12,13 @@ import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
 import useProductCatalog from '../useProductCatalog.js';
 import {
-  couponDiscount, emptyPayments, findCoupon, inputCss, lineAmount, methodLabel, money, opName,
-  paymentsError, resolvePayments, round2, svcLabel,
+  centsToApi, centsToEur, emptyPayments, findCoupon, giftPrefillRows, inputCss, lineAmount, lineCents,
+  methodLabel, money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
 } from '../lib.js';
+
+/** Caparra detraibile: la quota ancora in cassa (`deposit_credit`, al netto dei
+ *  rimborsi già fatti), in centesimi. */
+const depositCentsOf = (appt) => toCents(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
 
 export default function SellModal({ appointment, onDone, onClose }) {
   const { t, lang, services, operators, opColors, fireToast, hasScope } = useDash();
@@ -79,19 +83,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
     // deposit_credit, non deposit_amount: dopo un rimborso parziale la quota
     // ancora in cassa è più bassa, e detrarre l'intera caparra regalerebbe alla
     // cliente soldi che il salone le ha già restituito.
-    const paidDeposit = Number(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
-    let remaining = round2(
-      (appt.items || []).reduce((sum, it) => sum + Number(it.price || 0), 0) - paidDeposit
-    );
-    const rows = [];
-    gifts.forEach((g) => {
-      const item = (appt.items || []).find((it) => it.service_id === g.service_id);
-      const amt = round2(Math.min(Number(g.balance || 0), Number(item?.price || 0), Math.max(0, remaining)));
-      if (amt > 0) { rows.push({ method: 'gift_card', amt, code: g.code }); remaining = round2(remaining - amt); }
-    });
-    if (!rows.length) return;
+    // Ogni carta copre solo le righe del suo servizio (giftPrefillRows, 07-12).
+    const rows = giftPrefillRows(appt.items || [], gifts, depositCentsOf(appt));
+    if (!rows) return;
     giftPrefilled.current = true;
-    if (remaining > 0) rows.push({ method: 'cash', amt: remaining, code: '' });
     setPay({ split: true, method: 'cash', giftCode: '', rows });
   }, [appt, gifts]);
 
@@ -127,7 +122,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
     setPick(null); setPickQ('');
   };
   const addGiftCard = () => {
-    const v = round2(giftForm?.amt);
+    const v = centsToEur(toCents(giftForm?.amt));
     if (!(v > 0)) return;
     setLines((ls) => [...ls, {
       key: 'gl' + Date.now(), operator_id: giftForm.opId, line_type: 'gift_card',
@@ -137,28 +132,32 @@ export default function SellModal({ appointment, onDone, onClose }) {
     setGiftForm(null);
   };
 
-  /* ---- totals & deposit rule ---- */
-  const opSubtotal = (opId) => round2(linesOf(opId).reduce((s, l) => s + lineAmount(l), 0));
-  const gross = round2(blockIds.reduce((s, oid) => s + opSubtotal(oid), 0));
+  /* ---- totals & deposit rule ----
+   * In centesimi con gli arrotondamenti del server (money.js), sulle stesse
+   * righe che partono nel payload: il pagamento deve coincidere al centesimo
+   * con il totale che il server ricalcola. */
+  const opSubtotal = (opId) => centsToEur(linesOf(opId).reduce((s, l) => s + lineCents(l), 0));
   // Le gift card vendute non si scontano: emetterne una da 100 incassandone 80
   // significa regalare la differenza. È la regola del server, ripetuta qui solo
   // per far vedere lo sconto giusto prima dell'incasso.
-  const giftCardTotal = round2(lines.filter((l) => l.line_type === 'gift_card').reduce((s, l) => s + lineAmount(l), 0));
-  const couponBase = round2(gross - giftCardTotal);
-  const discount = couponDiscount(coupon, couponBase);
-  const deposit = round2(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
   // Il buono si applica PRIMA della caparra: l'anticipo si detrae da ciò che la
   // cliente deve davvero (stesso ordine di finalize_sale).
-  const due = round2(gross - discount - deposit);
-  const dueOk = due >= 0;
-  const payErr = paymentsError(pay, due, t);
+  const totals = saleTotals(blockIds.flatMap((oid) => linesOf(oid)), coupon, depositCentsOf(appt));
+  const gross = centsToEur(totals.grossCents);
+  const couponBaseCents = totals.couponBaseCents;
+  const discount = centsToEur(totals.discountCents);
+  const deposit = centsToEur(totals.depositCents);
+  const dueCents = totals.dueCents;
+  const due = centsToEur(dueCents);
+  const dueOk = dueCents >= 0;
+  const payErr = paymentsError(pay, dueCents, t);
 
   const applyCoupon = async () => {
     if (couponBusy) return;
     setCouponBusy(true);
     setCouponErr(null);
     try {
-      if (!(couponBase > 0)) {
+      if (!(couponBaseCents > 0)) {
         setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
         return;
       }
@@ -180,15 +179,15 @@ export default function SellModal({ appointment, onDone, onClose }) {
         blocks: blockIds.map((opId) => ({
           operator_id: opId,
           lines: linesOf(opId).map((l) => (l.line_type === 'gift_card'
-            ? { line_type: 'gift_card', value: Number(l.value).toFixed(2), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
+            ? { line_type: 'gift_card', value: centsToApi(toCents(l.value)), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
             : {
               line_type: l.line_type,
               ...(l.line_type === 'service' ? { service_id: l.service_id } : { product_id: l.product_id }),
-              qty: l.qty, unit_price: Number(l.unit_price).toFixed(2),
+              qty: l.qty, unit_price: centsToApi(toCents(l.unit_price)),
               discount_pct: l.is_gift ? 0 : (l.discount_pct || 0), is_gift: !!l.is_gift,
             })),
         })),
-        payments: resolvePayments(pay, due),
+        payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
       };
       const res = await api.post(`/api/sales/checkout/${appt.id}`, body);
@@ -290,7 +289,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
       </div>
       <input value={giftForm.name} onChange={(e) => setGiftForm((g) => ({ ...g, name: e.target.value }))}
         placeholder={t('Destinatario (facolt.)', 'Recipient (optional)')} style={{ ...inputCss, flex: 1, minWidth: 120 }} />
-      <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5, padding: '0 11px' }} disabled={!(round2(giftForm.amt) > 0)} onClick={addGiftCard}>
+      <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5, padding: '0 11px' }} disabled={!(toCents(giftForm.amt) > 0)} onClick={addGiftCard}>
         <Icon name="plus" size={13} />{t('Aggiungi', 'Add')}
       </button>
       <button className="dk-iconbtn" style={{ width: 30, height: 30 }} onClick={() => setGiftForm(null)}><Icon name="x" size={14} /></button>
@@ -431,7 +430,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
               </div>
             )}
           </div>
-          <PaymentsPanel value={pay} onChange={setPay} due={Math.max(0, due)} t={t} lang={lang} compact />
+          <PaymentsPanel value={pay} onChange={setPay} dueCents={Math.max(0, dueCents)} t={t} lang={lang} compact />
 
           {/* totals — per operator + deposit + grand */}
           <div style={{ borderRadius: 12, padding: '14px 16px', border: '1px solid var(--hair)', background: 'var(--surface)', marginTop: 16 }}>

@@ -1,37 +1,40 @@
 // PaymentsPanel — single or split payment editor, shared by the POS cart and the SellModal.
 // Controlled: `value` is the payments model from lib.js (emptyPayments()), `onChange` updates it.
-// Split rows must add up to `due` (the API 422s otherwise) — shows a live match indicator.
+// Split rows must add up to `dueCents` (the API 422s otherwise) — shows a live match indicator.
+// Tutto in centesimi interi (money.js): le somme in virgola mobile dicevano
+// «La somma non corrisponde» su importi giusti, o viceversa.
 import React from 'react';
 import { Icon } from '@youty/shared';
-import { money, payMethods, round2, sanitizeAmtInput, toNum } from './lib.js';
+import { centsToEur, divHalfUp, paymentsMatch, toCents } from './money.js';
+import { money, payMethods, sanitizeAmtInput } from './lib.js';
 
-export default function PaymentsPanel({ value: v, onChange, due, t, lang, compact = false }) {
+export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false }) {
   const methods = payMethods(t);
   const set = (patch) => onChange({ ...v, ...patch });
   const setRow = (i, patch) => set({ rows: v.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const removeRow = (i) => set({ rows: v.rows.filter((_, j) => j !== i) });
 
-  const rowsSum = round2(v.rows.reduce((s, r) => s + toNum(r.amt), 0));
-  const ok = Math.abs(rowsSum - due) <= 0.011;
+  const rowsSum = v.rows.reduce((s, r) => s + toCents(r.amt), 0);
+  const ok = paymentsMatch(rowsSum, dueCents);
 
   const toggleSplit = () => {
     if (!v.split) {
-      const half = round2(due / 2);
+      const half = divHalfUp(dueCents, 2);
       set({
         split: true,
         rows: [
-          { method: v.method === 'gift_card' ? 'cash' : v.method, amt: half, code: '' },
-          { method: 'card', amt: round2(due - half), code: '' },
+          { method: v.method === 'gift_card' ? 'cash' : v.method, amt: centsToEur(half), code: '' },
+          { method: 'card', amt: centsToEur(dueCents - half), code: '' },
         ],
       });
     } else {
       set({ split: false, rows: [] });
     }
   };
-  const addRow = () => set({ rows: [...v.rows, { method: 'cash', amt: Math.max(0, round2(due - rowsSum)), code: '' }] });
+  const addRow = () => set({ rows: [...v.rows, { method: 'cash', amt: centsToEur(Math.max(0, dueCents - rowsSum)), code: '' }] });
   const balanceRow = (i) => {
-    const others = v.rows.reduce((s, r, j) => (j === i ? s : s + toNum(r.amt)), 0);
-    setRow(i, { amt: Math.max(0, round2(due - others)) });
+    const others = v.rows.reduce((s, r, j) => (j === i ? s : s + toCents(r.amt)), 0);
+    setRow(i, { amt: centsToEur(Math.max(0, dueCents - others)) });
   };
 
   const methodBtn = (active, k, label, onPick, small) => (
@@ -103,7 +106,7 @@ export default function PaymentsPanel({ value: v, onChange, due, t, lang, compac
               <Icon name={ok ? 'check' : 'alert'} size={14} color={ok ? 'var(--ok)' : 'var(--warn)'} />
               {ok ? t('Importi corrispondenti', 'Amounts match') : t('La somma non corrisponde', 'Sum does not match')}
             </span>
-            <span className="t-num" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)' }}>{money(rowsSum, lang)} / {money(due, lang)}</span>
+            <span className="t-num" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)' }}>{money(centsToEur(rowsSum), lang)} / {money(centsToEur(dueCents), lang)}</span>
           </div>
         </div>
       )}

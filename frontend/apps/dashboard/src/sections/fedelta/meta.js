@@ -38,6 +38,11 @@ export const EARN_METRICS = [
   { k: 'per_service', it: 'Servizio', en: 'Service' },
 ];
 
+/* Codici di coupon e gift card: chi non ha i permessi marketing o vendite li
+ * riceve mascherati («••••1234», contratto C21). Non vanno offerti come
+ * codici da usare (QR, pagamento). */
+export const isMaskedCode = (code) => typeof code === 'string' && code.includes('•');
+
 export const REWARD_TYPES = [
   { k: 'coupon_amount', it: 'Buono €', en: '€ coupon', suffix: '€' },
   { k: 'discount_pct', it: 'Sconto %', en: '% discount', suffix: '%' },
