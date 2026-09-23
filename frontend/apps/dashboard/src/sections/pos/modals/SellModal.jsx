@@ -90,7 +90,25 @@ export default function SellModal({ appointment, onDone, onClose }) {
     setPay({ split: true, method: 'cash', giftCode: '', rows });
   }, [appt, gifts]);
 
+  /* Buono applicato e conto che cambia sotto di lui: con tutte le righe in
+   * omaggio, o rimasta solo una gift card, non c'è più niente da scontare e il
+   * server rifiuta il buono al Conferma (422). Si toglie subito dicendo
+   * perché; il codice resta nel campo per riapplicarlo (14-12). */
+  const couponRoomCents = saleTotals(lines, null).couponBaseCents;
+  useEffect(() => {
+    if (coupon && !(couponRoomCents > 0)) {
+      setCoupon(null);
+      setCouponErr(t('Buono tolto: nel conto non resta niente da scontare (le gift card non si scontano)', 'Voucher removed: nothing left to discount (gift cards cannot be discounted)'));
+    }
+  }, [coupon, couponRoomCents]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!appt) return null;
+
+  // Mentre il conto si registra la finestra non si chiude (Esc, X, clic fuori):
+  // chiuderla perdeva il riepilogo dell'incasso appena fatto, o lasciava la
+  // cassiera a chiedersi se era passato (14-10). La pila di layers.js fa già
+  // chiudere prima la conferma che sta sopra.
+  const closeUnlessSaving = () => { if (!saving) onClose?.(); };
 
   /* ---- helpers ---- */
   const opOf = (opId) => operators.find((o) => o.id === opId) || null;
@@ -149,8 +167,19 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const deposit = centsToEur(totals.depositCents);
   const dueCents = totals.dueCents;
   const due = centsToEur(dueCents);
-  const dueOk = dueCents >= 0;
+  // Caparra più alta del conto (servizi tolti dopo la prenotazione, un buono,
+  // un omaggio): prima il dovuto negativo spegneva «Incassa» con «rimuovi
+  // qualche omaggio», e il conto non si chiudeva senza togliere lo sconto che
+  // spettava alla cliente (14-02, 05-15, 17-03). Il server detrae la caparra
+  // solo fino al totale e restituisce l'eccedenza (contratto C17): si incassa
+  // senza pagamenti e si dice quanto torna alla cliente.
+  const deductedCents = Math.min(totals.depositCents, totals.totalCents);
+  const excessCents = totals.excessCents;
   const payErr = paymentsError(pay, dueCents, t);
+  const excessNote = t(
+    `Caparra eccedente da restituire: ${money(centsToEur(excessCents), 'it')}. Se è stata pagata online torna sulla carta della cliente, altrimenti va restituita in cassa.`,
+    `Excess deposit to return: ${money(centsToEur(excessCents), 'en')}. If it was paid online it goes back to the client's card, otherwise return it at the desk.`,
+  );
 
   const applyCoupon = async () => {
     if (couponBusy) return;
@@ -171,7 +200,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
   /* ---- submit ---- */
   const submit = async () => {
-    if (saving || !dueOk) return;
+    if (saving) return;
     if (payErr) { fireToast({ msg: payErr, icon: 'alert' }); return; }
     setSaving(true);
     try {
@@ -206,6 +235,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
   /* ---- completion state: sale summary + per-operator breakdown ---- */
   if (result) {
     const { sale, breakdown } = result;
+    // Quello che il server non ha detratto della caparra torna alla cliente.
+    const returnedCents = Math.max(0, totals.depositCents - toCents(sale.deposit_deducted));
     return (
       <DkModal open onClose={onClose} title={t('Check-out completato', 'Check-out complete')} sub={appt.client?.full_name} width={520}
         foot={<button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>}>
@@ -217,6 +248,11 @@ export default function SellModal({ appointment, onDone, onClose }) {
           {Number(sale.deposit_deducted) > 0 && (
             <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 700, marginTop: 4 }}>
               {t('Caparra detratta', 'Deposit deducted')} −{money(sale.deposit_deducted, lang)}
+            </div>
+          )}
+          {returnedCents > 0 && (
+            <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 700, marginTop: 4 }}>
+              {t('Caparra eccedente da restituire', 'Excess deposit to return')}: {money(centsToEur(returnedCents), lang)}
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
@@ -300,13 +336,13 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
   return (
     <>
-    <DkModal open onClose={onClose} width={900}
+    <DkModal open onClose={closeUnlessSaving} width={900}
       title={t('Check-out · incasso e vendita', 'Check-out · payment & sale')}
       sub={(appt.client?.full_name || '') + ' · ' + t('ogni operatrice registra la sua vendita, poi un unico pagamento', 'each stylist records her sale, then one payment')}
       foot={(
         <>
-          <button className="dk-btn dk-btn--ghost" onClick={onClose} disabled={saving}>{t('Annulla', 'Cancel')}</button>
-          <button className="dk-btn dk-btn--clay" disabled={saving || !canSell || !dueOk || !!payErr} onClick={() => setConfirmOpen(true)}
+          <button className="dk-btn dk-btn--ghost" onClick={closeUnlessSaving} disabled={saving}>{t('Annulla', 'Cancel')}</button>
+          <button className="dk-btn dk-btn--clay" disabled={saving || !canSell || !!payErr} onClick={() => setConfirmOpen(true)}
             title={!canSell ? t('Permesso "vendite" mancante', 'Missing "sales" permission') : (payErr || undefined)}>
             <Icon name="check" size={17} color="#fff" />
             {saving ? t('Registrazione…', 'Recording…') : <>{t('Incassa', 'Take payment')} {money(Math.max(0, due), lang)}</>}
@@ -430,7 +466,16 @@ export default function SellModal({ appointment, onDone, onClose }) {
               </div>
             )}
           </div>
-          <PaymentsPanel value={pay} onChange={setPay} dueCents={Math.max(0, dueCents)} t={t} lang={lang} compact />
+          {dueCents > 0 ? (
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact />
+          ) : (
+            <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--ok-tint)', color: 'var(--ok)', fontWeight: 600 }}>
+              <Icon name="check" size={15} color="var(--ok)" stroke={2.4} />
+              {totals.depositCents > 0
+                ? t('Niente da incassare: la caparra copre il conto.', 'Nothing to collect: the deposit covers the bill.')
+                : t('Niente da incassare.', 'Nothing to collect.')}
+            </div>
+          )}
 
           {/* totals — per operator + deposit + grand */}
           <div style={{ borderRadius: 12, padding: '14px 16px', border: '1px solid var(--hair)', background: 'var(--surface)', marginTop: 16 }}>
@@ -459,7 +504,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
                 <span className="t-sm" style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <Icon name="wallet" size={14} color="var(--ok)" />{t('Caparra detratta', 'Deposit deducted')}
                 </span>
-                <span className="t-num" style={{ fontWeight: 700, fontSize: 13 }}>−{money(deposit, lang)}</span>
+                <span className="t-num" style={{ fontWeight: 700, fontSize: 13 }}>−{money(centsToEur(deductedCents), lang)}</span>
               </div>
             )}
             <div style={{ height: 1, background: 'var(--hair)', margin: '7px 0' }} />
@@ -467,10 +512,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
               <span style={{ fontWeight: 700 }}>{deposit > 0 ? t('Saldo da incassare', 'Balance due') : t('Totale da incassare', 'Total due')}</span>
               <span className="t-num" style={{ fontSize: 24, fontWeight: 800 }}>{money(Math.max(0, due), lang)}</span>
             </div>
-            {!dueOk && (
-              <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginTop: 8 }}>
-                {t('Il totale è inferiore alla caparra versata: rimuovi qualche omaggio per procedere.', 'The total is below the paid deposit: remove some comps to proceed.')}
-              </div>
+            {excessCents > 0 && (
+              <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginTop: 8 }}>{excessNote}</div>
             )}
           </div>
         </div>
@@ -494,6 +537,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
       <div className="t-sm" style={{ color: 'var(--muted)' }}>
         {money(Math.max(0, due), lang)}{appt.client?.full_name ? ' · ' + appt.client.full_name : ''}
       </div>
+      {excessCents > 0 && (
+        <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginTop: 8 }}>{excessNote}</div>
+      )}
     </DkModal>
     </>
   );
