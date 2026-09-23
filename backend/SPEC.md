@@ -474,9 +474,10 @@ per fornitore; receive con discrepanza → partial.
   (scheduled_at ≈ adesso): Yourang lo invia subito. Modificare, riprogrammare o
   eliminare una programmata ferma l'evento ancora in coda; per quello che Yourang
   può avere già ricevuto si emette `communication.cancel`
-  {communication_id, outbox_event_ids} (idempotente: gli id sono quelli degli
-  eventi `communication.send` consegnati, cioè la loro Idempotency-Key
-  «outbox-<id>»).
+  {communication_id, outbox_event_ids, scheduled_at} (idempotente: gli id sono
+  quelli degli eventi `communication.send` consegnati, cioè la loro
+  Idempotency-Key «outbox-<id>»; `scheduled_at` è la data dell'invio più lontano
+  che annulla, e tiene valido l'annullamento fino a lì).
 - Consenso marketing cambiato (scheda cliente o app): `client.marketing_consent`
   {client_id, phone, lang, marketing}; con marketing=false Yourang toglie la
   cliente anche dagli invii che ha già in mano.

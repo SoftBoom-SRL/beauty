@@ -62,7 +62,8 @@ def forwards(apps, schema_editor):
             current = [event.pk for event, when in events if when == comm.scheduled_at]
             keep = current[-1] if current else None
         cancel_ids = []
-        for event, _when_at in events:
+        latest = None
+        for event, when_at in events:
             if event.pk == keep:
                 continue
             if event.status == "pending":
@@ -71,11 +72,18 @@ def forwards(apps, schema_editor):
                 )
             if event.status in ("sent", "sending", "failed") or event.attempts > 0:
                 cancel_ids.append(event.pk)
+                latest = when_at if latest is None or when_at > latest else latest
         if cancel_ids:
+            # Con la data dell'invio più lontano l'annullamento resta valido fino
+            # a lì (flush_outbox.expiry_of), non solo dodici ore dalla nascita.
             OutboxEvent.objects.create(
                 salon_id=salon_id,
                 event_type="communication.cancel",
-                payload={"communication_id": comm_id, "outbox_event_ids": cancel_ids},
+                payload={
+                    "communication_id": comm_id,
+                    "outbox_event_ids": cancel_ids,
+                    "scheduled_at": latest.isoformat(),
+                },
             )
 
 

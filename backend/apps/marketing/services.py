@@ -564,12 +564,34 @@ def cancel_pending_send(comm: Communication) -> int:
         and _scheduled_ahead((e.payload or {}).get("scheduled_at"), now)
     ]
     if reached:
-        emit_event(
-            comm.salon,
-            CANCEL_EVENT,
-            {"communication_id": comm.id, "outbox_event_ids": reached},
-        )
+        payload = {"communication_id": comm.id, "outbox_event_ids": reached}
+        # L'annullamento vale fino alla data dell'invio che ferma: con le dodici
+        # ore contate dalla nascita (flush_outbox.expiry_of) scadeva prima di
+        # una campagna fra qualche giorno, se la consegna restava ferma (Yourang
+        # giù, worker spento), e alla data partiva la campagna eliminata.
+        latest = _latest_scheduled([e for e in sends if e.pk in reached])
+        if latest is not None:
+            payload["scheduled_at"] = latest.isoformat()
+        emit_event(comm.salon, CANCEL_EVENT, payload)
     return len(stopped | set(reached))
+
+
+def _latest_scheduled(events):
+    """La data programmata più avanti fra questi invii (None se nessuna leggibile)."""
+    latest = None
+    for event in events:
+        value = (event.payload or {}).get("scheduled_at")
+        if not value:
+            continue
+        try:
+            when = datetime.fromisoformat(str(value))
+        except ValueError:
+            continue
+        if timezone.is_naive(when):
+            when = timezone.make_aware(when)
+        if latest is None or when > latest:
+            latest = when
+    return latest
 
 
 def settle_due_communications(salon, now=None) -> int:

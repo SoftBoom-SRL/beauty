@@ -125,13 +125,32 @@ class AlreadyDeliveredTests(_Base):
         self.assertEqual(self._edit().status_code, 200)
         cancels = self._cancels()
         self.assertEqual(len(cancels), 1)
-        self.assertEqual(cancels[0].payload,
-                         {"communication_id": self.comm.id, "outbox_event_ids": [delivered.id]})
+        self.assertEqual(cancels[0].payload, {
+            "communication_id": self.comm.id, "outbox_event_ids": [delivered.id],
+            "scheduled_at": delivered.payload["scheduled_at"],
+        })
         # Riprogrammata e rimodificata: l'invio vecchio non si annulla due volte.
         self._schedule()
         self.assertEqual(self._edit(body="Terza versione").status_code, 200)
         self.assertEqual(len(self._cancels()), 1)
         self.assertEqual(self._live_sends().exclude(pk=delivered.pk).count(), 0)
+
+    def test_the_cancel_lives_until_the_campaign_date(self):
+        """Revisione finale: con dodici ore dalla nascita l'annullamento di una
+        campagna fra cinque giorni scadeva se la consegna restava ferma, e alla
+        data Yourang mandava la campagna eliminata."""
+        from apps.core.management.commands.flush_outbox import expire_stale
+
+        when = self._schedule(timezone.now() + timedelta(days=5))
+        self._deliver(self._sends().get())
+        self.assertEqual(self.client.delete(self._url(), **self.auth).status_code, 200)
+        cancel = self._cancels()[0]
+        expire_stale(timezone.now() + timedelta(hours=13))
+        cancel.refresh_from_db()
+        self.assertEqual(cancel.status, OutboxEvent.Status.PENDING)
+        expire_stale(when + timedelta(hours=13))
+        cancel.refresh_from_db()
+        self.assertEqual(cancel.status, OutboxEvent.Status.EXPIRED)
 
     def test_deleting_after_delivery_tells_yourang(self):
         self._schedule()
@@ -331,6 +350,9 @@ class LegacyDeliveriesMigrationTests(_Base):
             draft.id: [edited.id, retrying.id],
             live.id: [old_copy.id],
         })
+        # ognuno vale fino all'invio più lontano che annulla
+        dates = {c.payload["communication_id"]: c.payload["scheduled_at"] for c in self._cancels()}
+        self.assertEqual(dates, {999_999: soon.isoformat(), draft.id: later.isoformat(), live.id: soon.isoformat()})
         retrying.refresh_from_db()
         self.assertEqual(retrying.status, OutboxEvent.Status.SUPERSEDED)
         for event in (current, immediate, past):
