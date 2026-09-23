@@ -90,8 +90,10 @@ class PhoneTests(SimpleTestCase):
         self.assertEqual(normalize_phone("0049 030 12345678"), normalize_phone("+49 30 12345678"))
 
     def test_unknown_country_code_left_untouched(self):
-        # CC fuori tabella: intatto è meglio che accorciato a caso.
-        self.assertEqual(normalize_phone("+675 0123456"), "+6750123456")
+        # CC fuori tabella: intatto è meglio che accorciato a caso. La tabella
+        # ora è l'elenco ITU completo (06-04) e +675 (Papua Nuova Guinea) ne fa
+        # parte: il caso resta con un prefisso che l'ITU non ha assegnato.
+        self.assertEqual(normalize_phone("+289 0123456"), "+2890123456")
 
     def test_garbage_returns_none(self):
         self.assertIsNone(normalize_phone("n/a"))
