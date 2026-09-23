@@ -1,5 +1,6 @@
 // insight/index.jsx — ANALISI DATI section, ported from desktop-insight.jsx
-// (DkInsight) and wired to the real /api/insights/* endpoints (owner-only).
+// (DkInsight) and wired to the real /api/insights/* endpoints (titolare o
+// permesso «Analisi dati», contratto C11).
 //
 // Adaptations vs the prototype (see final report):
 // - "custom" period dropped — the API only supports month|quarter|year.
@@ -19,13 +20,17 @@ import AnalystDrawer from './AnalystDrawer.jsx';
 const GRANULARITY = { month: 'day', quarter: 'week', year: 'month' };
 
 export default function InsightSection() {
-  const { t, lang, session, clientCategories, fireToast, setDrawer } = useDash();
+  const { t, lang, hasScope, clientCategories, fireToast, setDrawer } = useDash();
 
-  if (!session?.is_owner) return <OwnerLock t={t} />;
+  /* Il permesso «Analisi dati» si assegnava dall'editor dei ruoli ma la sezione
+   * restava del solo titolare: la Manager a cui era stato dato trovava
+   * «Funzione riservata al titolare». Ora vale come sul server (C11); hasScope
+   * include già il titolare. */
+  if (!hasScope('insights')) return <OwnerLock t={t} />;
   return <InsightOwner t={t} lang={lang} clientCategories={clientCategories} fireToast={fireToast} setDrawer={setDrawer} />;
 }
 
-/* ---------------- non-owner lock state ---------------- */
+/* ---------------- lock state (senza il permesso «Analisi dati») ---------------- */
 function OwnerLock({ t }) {
   return (
     <div className="dk-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
@@ -33,9 +38,9 @@ function OwnerLock({ t }) {
         <div style={{ width: 64, height: 64, borderRadius: 20, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 18px' }}>
           <Icon name="lock" size={28} color="var(--clay-ink)" />
         </div>
-        <div className="t-title" style={{ marginBottom: 8 }}>{t('Funzione riservata al titolare', 'Owner-only feature')}</div>
+        <div className="t-title" style={{ marginBottom: 8 }}>{t('Serve il permesso «Analisi dati»', 'The “Insights” permission is required')}</div>
         <div className="t-body" style={{ color: 'var(--muted)' }}>
-          {t('L’analisi dati del salone è visibile solo al titolare. Chiedi al titolare se ti serve un report.', 'Salon analytics are visible to the owner only. Ask the owner if you need a report.')}
+          {t('L’analisi dati del salone è visibile al titolare e a chi ha il permesso «Analisi dati». Chiedi al titolare se ti serve.', 'Salon analytics are visible to the owner and to whoever holds the “Insights” permission. Ask the owner if you need it.')}
         </div>
       </div>
     </div>
