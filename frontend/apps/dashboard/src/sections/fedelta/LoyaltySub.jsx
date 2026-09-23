@@ -49,7 +49,8 @@ export default function LoyaltySub() {
   };
 
   const openMembers = (p) => setDrawer(
-    <LoyaltyMembersDrawer program={p} onClose={() => setDrawer(null)} t={t} lang={lang} fireToast={fireToast} />
+    <LoyaltyMembersDrawer program={p} onClose={() => setDrawer(null)} t={t} lang={lang} fireToast={fireToast}
+      canWrite={canWrite} onEnrolled={reload} />
   );
 
   const serviceName = (id) => {
