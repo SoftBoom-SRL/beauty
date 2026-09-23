@@ -2,7 +2,7 @@
 // prenotazione, riepilogo di cassa). Qui c'è solo logica, senza React: così la
 // si prova con `node --test` (vedi apps/dashboard/test/modali-*.test.js) e le
 // regole che replicano il server stanno in un posto solo.
-import { salonTzOpts } from '@youty/shared';
+import { isoAtMin, minutesOfDay, salonTzOpts } from '@youty/shared';
 
 /** Scadenza della caparra, letta sull'orologio del SALONE («24/09, 18:00»).
  *  Il toLocaleString senza fuso scriveva l'ora del dispositivo: da un portatile
@@ -172,6 +172,59 @@ export async function copyText(text, env = globalThis) {
 /** Chi non ha marketing né cassa riceve i codici mascherati («••••1234»,
  *  contratto C21): non vanno mostrati come se fossero il codice da usare. */
 export const usableCode = (code) => (code && !String(code).includes('•') ? String(code) : '');
+
+/** Gift card «a trattamento» che coprono un servizio di QUESTA cliente, con la
+ *  stessa regola di gift_index sul server (agenda/api.py) — quella che poi usa
+ *  la cassa: pagata, attiva, non scaduta, saldo > 0, legata a un servizio; e
+ *  destinataria la cliente, oppure comprata da lei senza destinataria (né
+ *  scheda collegata né nome scritto a mano). Il drawer contava anche le carte
+ *  scadute, a saldo zero o regalate a «Giulia» senza scheda: il servizio
+ *  compariva barrato «Regalo» e in cassa il regalo non c'era (13-09, 17-09,
+ *  07-07). Con status=active il server esclude già le scadute (C21): il
+ *  controllo resta qui per un server che non lo fa ancora. */
+export function usableGiftCards(cards, clientId, now = Date.now()) {
+  if (clientId == null) return [];
+  return (cards || []).filter((g) => g
+    && g.gift_service_id != null
+    && g.payment_status === 'paid'
+    && g.status === 'active'
+    && Number(g.balance) > 0
+    && (!g.expires_at || Date.parse(g.expires_at) >= now)
+    && (g.recipient_client_id === clientId
+      || (g.recipient_client_id == null && !g.recipient_name && g.buyer_client_id === clientId)));
+}
+
+/* ---- orario scelto nel drawer «Nuova prenotazione» -------------------------- */
+
+/** L'orario scelto dopo un elenco nuovo di orari liberi (servizi cambiati,
+ *  operatrici, evento live, ricarico dopo un 409). `src` dice da dove viene:
+ *  - 'req'     l'orario cliccato in agenda: si tiene anche se non è libero
+ *              (lo si è indicato apposta), e allora va forzato — ma se era
+ *              libero e un ricarico (`refreshed`: stessa richiesta, agenda
+ *              cambiata altrove) lo trova occupato, non si scrive sopra l'altra
+ *              cliente senza che nessuno l'abbia deciso (13-11);
+ *  - 'slot'    uno degli orari liberi: se non lo è più si toglie;
+ *  - 'manual'  scritto a mano: resta, forzato solo se non è fra i liberi;
+ *  - 'dropped' una scelta tolta così: si aspetta che chi prenota ne faccia
+ *              un'altra, senza ricadere sull'orario cliccato forzato.
+ *  Prima ogni ricarico riportava all'orario cliccato in agenda, forzato, anche
+ *  chi aveva scelto un'alternativa o scritto un orario (13-18).
+ *  Ritorna { start, src, force, dropped } — `dropped` = l'orario appena tolto. */
+export function nextSelection({ prev, src, prevForced = false, slots, reqStartMin, date, refreshed = false }) {
+  const list = slots || [];
+  const free = (iso) => list.some((x) => x.start === iso);
+  const drop = (iso) => ({ start: null, src: 'dropped', force: false, dropped: iso });
+  if (src === 'dropped') return { start: null, src: 'dropped', force: false, dropped: null };
+  if (prev && src === 'manual') return { start: prev, src, force: !free(prev), dropped: null };
+  if (prev && src === 'slot') return free(prev) ? { start: prev, src, force: false, dropped: null } : drop(prev);
+  if (reqStartMin != null && date) {
+    const exact = list.find((x) => minutesOfDay(x.start) === reqStartMin);
+    if (exact) return { start: exact.start, src: 'req', force: false, dropped: null };
+    if (refreshed && prev && src === 'req' && !prevForced) return drop(prev);
+    return { start: isoAtMin(date, reqStartMin), src: 'req', force: true, dropped: null };
+  }
+  return { start: null, src: null, force: false, dropped: null };
+}
 
 /* ---- «Riprogramma» ----------------------------------------------------------- */
 

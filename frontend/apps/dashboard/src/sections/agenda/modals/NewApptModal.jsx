@@ -7,11 +7,12 @@
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
-import { useDash } from '../../../ctx.jsx';
+import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { toastErr, fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
+import { copyText, nextSelection, usableCode, usableGiftCards } from './rules.js';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -38,13 +39,14 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
 
   /* ---- regali: gift card «a trattamento» attive e pagate della cliente ----
    * Compaiono accanto ai servizi coperti, così chi prenota vede subito che il
-   * trattamento è già pagato da qualcuno (e il checkout lo userà). */
+   * trattamento è già pagato da qualcuno (e il checkout lo userà): per questo
+   * la regola è quella del server (usableGiftCards = gift_index). */
   const [gifts, setGifts] = useState([]);
   useEffect(() => {
     if (!client?.id) { setGifts([]); return undefined; }
     let alive = true;
     api.get('/api/marketing/gift-cards', { params: { client_id: client.id, status: 'active', payment_status: 'paid' } })
-      .then((r) => { if (alive) setGifts((r.items || []).filter((g) => g.gift_service_id && (g.recipient_client_id === client.id || (!g.recipient_client_id && g.buyer_client_id === client.id)))); })
+      .then((r) => { if (alive) setGifts(usableGiftCards(r.items, client.id)); })
       .catch(() => { if (alive) setGifts([]); });
     return () => { alive = false; };
   }, [client?.id]);
@@ -52,8 +54,10 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
 
   /* ---- orario manuale: lo staff può andare oltre le regole ----
    * Se l'orario digitato non è fra gli slot liberi (fuori turno, centro chiuso,
-   * sovrapposizione) la prenotazione viene creata con force=true e resta
-   * marcata «forzata»: straordinario o "ci incastriamo" sono decisioni del salone. */
+   * sovrapposizione) e il server lo rifiuta (409), la prenotazione viene
+   * creata con force=true e resta marcata «forzata»: straordinario o "ci
+   * incastriamo" sono decisioni del salone. `forceCreate` = l'orario scelto NON
+   * è fra i liberi, quindi forzarlo è stato deciso. */
   const [manualTime, setManualTime] = useState('');
   const [forceCreate, setForceCreate] = useState(false);
 
@@ -86,7 +90,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     setReq({ operatorId: agendaPick.operatorId || null, startMin });
     setItems((l) => l.map((it) => (isEligible(it.service_id, agendaPick.operatorId) ? { ...it, operator_id: agendaPick.operatorId } : it)));
     setShowAll(false);
-    setSelStart(null);
+    choose(null, null, false);
   }, [agendaPick?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => setAgendaPick(null), [setAgendaPick]);
 
@@ -105,44 +109,65 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
+  /* ---- le altre postazioni ----
+   * Giornata e orari liberi si ricaricano quando l'agenda cambia altrove:
+   * tenendo selezionate le 10:00 di Anna per due minuti al telefono, uno slot
+   * preso intanto da un'altra postazione restava «libero» (13-11). */
+  const [liveTick, setLiveTick] = useState(0);
+  useLive(['appointment.', 'pause.', 'operator.', 'settings.', 'service.'], () => setLiveTick((n) => n + 1));
+
   /* ---- giornata (per spiegare perché uno slot non è disponibile) ---- */
   const [dayRows, setDayRows] = useState(null);
   useEffect(() => {
     let alive = true;
     api.get('/api/agenda/day', { params: { date, location_id: locationId } }).then((rows) => { if (alive) setDayRows(rows); }).catch(() => {});
     return () => { alive = false; };
-  }, [date, locationId]);
+  }, [date, locationId, liveTick]);
 
   /* ---- disponibilità ---- */
   const [slots, setSlots] = useState([]);         // null = caricamento
   const [selStart, setSelStart] = useState(null); // ISO dello slot scelto
   const [showAll, setShowAll] = useState(!(pf.start));
+  /* Orario scelto e da dove viene (vedi nextSelection): 'req' cliccato in
+   * agenda, 'slot' fra i liberi, 'manual' scritto a mano, 'dropped' tolto
+   * perché non era più libero. */
+  const selRef = useRef({ start: null, src: null, force: false });
+  const choose = (start, src, force) => {
+    selRef.current = { start, src, force: !!force };
+    setSelStart(start);
+    setForceCreate(!!force);
+  };
   const itemsKey = JSON.stringify(items.map((i) => [i.service_id, i.operator_id]));
+  const availKey = JSON.stringify([date, itemsKey, locationId]);
+  const lastAvailKey = useRef(null);
+  const quietDrop = useRef(false);   // il ricarico dopo un 409 lo ha già spiegato l'avviso
   useEffect(() => {
-    if (!items.length || !date) { setSlots([]); setSelStart(null); return; }
+    if (!items.length || !date) { lastAvailKey.current = null; setSlots([]); choose(null, null, false); return undefined; }
     let alive = true;
-    setSlots(null);
+    // Stesso elenco ricaricato (evento live, 409): niente scheletro, gli orari
+    // restano a video finché arrivano quelli nuovi.
+    const refreshed = lastAvailKey.current === availKey;
+    if (!refreshed) setSlots(null);
+    lastAvailKey.current = availKey;
     api.get('/api/agenda/availability', { params: { date, location_id: locationId, items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
       .then((res) => {
         if (!alive) return;
         setSlots(res);
-        setSelStart((prev) => {
-          if (prev && res.some((s) => s.start === prev)) return prev;
-          if (req?.startMin != null) {
-            const exact = res.find((s) => minutesOfDay(s.start) === req.startMin);
-            if (exact) { setForceCreate(false); return exact.start; }
-            // Fuori turno o sopra un'altra cliente: si prende lo stesso. Prima
-            // restava tutto vuoto e bisognava scovare «Inserisci comunque» per
-            // riscrivere l'ora che si era appena cliccata in agenda.
-            setForceCreate(true);
-            return isoAtMin(date, req.startMin);
-          }
-          return null;
-        });
+        // L'orario cliccato in agenda si prende anche fuori turno o sopra
+        // un'altra cliente (forzato); quello scelto fra le alternative o scritto
+        // a mano resta com'è — prima tornava all'orario cliccato (13-18).
+        const cur = selRef.current;
+        const next = nextSelection({ prev: cur.start, src: cur.src, prevForced: cur.force, slots: res, reqStartMin: req?.startMin, date, refreshed });
+        choose(next.start, next.src, next.force);
+        if (next.dropped && !quietDrop.current) {
+          const hh = timeLabel(minutesOfDay(next.dropped));
+          fireToast({ msg: t(`Le ${hh} non sono più libere per questa prenotazione: scegli un altro orario`, `${hh} is no longer free for this booking: pick another time`), icon: 'alert' });
+        }
+        quietDrop.current = false;
       })
       .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
     return () => { alive = false; };
-  }, [date, itemsKey, req?.startMin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [availKey, req?.startMin, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isToday = date === todayStr();
   const nowMin = nowMinutes();
@@ -203,9 +228,17 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     if (diff === 1) return t('Domani', 'Tomorrow') + ' · ' + base;
     return base;
   })();
-  const shiftDate = (n) => { const d = parseISO(date); d.setDate(d.getDate() + n); const iso = toDateStr(d); if (iso >= todayStr()) { setDate(iso); setSelStart(null); } };
+  const shiftDate = (n) => { const d = parseISO(date); d.setDate(d.getDate() + n); const iso = toDateStr(d); if (iso >= todayStr()) { setDate(iso); choose(null, null, false); } };
 
-  async function create(force) {
+  /* «Copia link caparra» dall'avviso: si conferma solo a copia riuscita, e
+   * l'avviso nuovo parte dopo che quello cliccato si è chiuso (13-25). */
+  const copyLink = (link) => {
+    copyText(link).then((ok) => fireToast(ok
+      ? { msg: t('Link copiato', 'Link copied'), icon: 'check' }
+      : { msg: t('Copia non riuscita: il link è nel dettaglio dell’appuntamento («Copia link»)', 'Copy failed: the link is in the appointment detail (“Copy link”)'), icon: 'alert' }));
+  };
+
+  async function create() {
     if (!canWrite) { fireToast({ msg: t('Non hai i permessi per creare prenotazioni', 'You lack permission to create bookings'), icon: 'lock' }); return; }
     if (missing.length) {
       fireToast({ msg: t('Manca: ', 'Missing: ') + missing.map((m) => m.label).join(' · '), icon: 'alert' });
@@ -214,14 +247,38 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     }
     if (saving) return;
     setSaving(true);
-   
-    const forced = forceCreate || force === true;
+    // Forzare è deciso solo per un orario che non era fra i liberi (scritto a
+    // mano, cliccato in agenda sopra un altro impegno o fuori turno).
+    const deliberate = forceCreate;
+    const when = timeLabel(minutesOfDay(selStart));
+    const body = {
+      client_id: client.id,
+      items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
+      start: selStart, note, flexible, location_id: locationId,
+    };
     try {
-      const res = await api.post('/api/agenda/appointments', {
-        client_id: client.id,
-        items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
-        start: selStart, note, flexible, location_id: locationId, force: forced,
-      });
+      let res;
+      try {
+        // Sempre prima senza forzare (13-12): un orario a mano libero ma fuori
+        // griglia restava segnato «forzato», e con «Prima disponibile» il
+        // server forzato prendeva la prima operatrice in elenco anche occupata.
+        res = await api.post('/api/agenda/appointments', { ...body, force: false });
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409)) throw err;
+        if (!deliberate) {
+          // L'orario era libero: nel frattempo lo ha preso un'altra
+          // prenotazione. Si ricaricano giornata e orari e si lascia scegliere,
+          // invece di scrivere sopra l'altra cliente senza che nessuno l'abbia
+          // deciso (13-11).
+          if (alive.current) { quietDrop.current = true; setLiveTick((n) => n + 1); }
+          fireToast({ msg: t(`Le ${when} sono appena state occupate: scegli un altro orario, o scrivilo in «Orario a mano» per inserirla comunque`, `${when} was just taken: pick another time, or type it under “Type a time” to book it anyway`), icon: 'alert' });
+          return;
+        }
+        // Chi prenota al banco ha già deciso: si scrive comunque, invece di
+        // aprire un riquadro «crea comunque» che costava un giro in più nel
+        // momento peggiore della giornata.
+        res = await api.post('/api/agenda/appointments', { ...body, force: true });
+      }
       // La prenotazione è fatta: il drawer si chiude e basta. Prima restava una
       // schermata di riepilogo con «Chiudi», un clic in più su un'azione già
       // conclusa e visibile in agenda.
@@ -232,19 +289,11 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         icon: 'check',
         // unica cosa che si perdeva chiudendo subito: il link della caparra
         undo: link ? t('Copia link caparra', 'Copy deposit link') : undefined,
-        undoFn: link ? () => { navigator.clipboard?.writeText(link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); } : undefined,
+        undoFn: link ? () => copyLink(link) : undefined,
       });
       onCreated?.(res);
       if (alive.current) onClose?.();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !forced) {
-        // Lo slot non è (più) libero: chi prenota al banco ha già deciso, quindi
-        // si scrive comunque invece di aprire un riquadro «crea comunque» che
-        // costava un giro in più nel momento peggiore della giornata.
-        setSaving(false);
-        await create(true);
-        return;
-      }
       toastErr(err, t, fireToast);
     } finally { if (alive.current) setSaving(false); }
   }
@@ -255,12 +304,11 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     const minutes = hmToMin(manualTime);
     const iso = isoAtMin(date, minutes);
     const exact = (slots || []).find((s) => minutesOfDay(s.start) === minutes);
-    setSelStart(exact ? exact.start : iso);
-    setForceCreate(!exact);
+    choose(exact ? exact.start : iso, 'manual', !exact);
     setShowAll(false);
    
   };
-  const pickSlot = (start) => { setSelStart(start); setForceCreate(false); setShowAll(false); };
+  const pickSlot = (start) => { choose(start, 'slot', false); setShowAll(false); };
   const inputCss = { border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13.5, padding: '9px 11px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' };
 
   /* ---- chrome del drawer ---- */
@@ -345,7 +393,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
           <label style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', cursor: 'pointer' }}>
             <span className="t-meta" style={{ fontSize: 9.5 }}>{t('Data', 'Date')}</span>
             <span style={{ fontWeight: 700, fontSize: 14, textTransform: 'capitalize', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dateLabel}</span>
-            <input type="date" value={date} min={todayStr()} onChange={(e) => { if (e.target.value) { setDate(e.target.value); setSelStart(null); } }} style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }} />
+            <input type="date" value={date} min={todayStr()} onChange={(e) => { if (e.target.value) { setDate(e.target.value); choose(null, null, false); } }} style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }} />
           </label>
           <button type="button" className="dk-iconbtn" style={{ width: 30, height: 30, borderRadius: 8 }} onClick={() => shiftDate(1)} aria-label={t('Giorno successivo', 'Next day')}><Icon name="chevR" size={15} /></button>
           {req && (req.startMin != null || reqOp) && (
@@ -417,7 +465,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
                         </div>
                       </div>
                       {giftFor(s.id) && (
-                        <span title={t(`Gift card ${giftFor(s.id).code}`, `Gift card ${giftFor(s.id).code}`)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--clay) 40%, transparent)', padding: '2px 8px', borderRadius: 99, flexShrink: 0 }}>
+                        <span title={[t('Gift card', 'Gift card'), usableCode(giftFor(s.id).code)].filter(Boolean).join(' ')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--clay) 40%, transparent)', padding: '2px 8px', borderRadius: 99, flexShrink: 0 }}>
                           <Icon name="gift" size={11} color="var(--clay-ink)" />{t('Regalo', 'Gift')}{giftFor(s.id).buyer_name ? ' · ' + firstName(giftFor(s.id).buyer_name) : ''}
                         </span>
                       )}
@@ -476,7 +524,9 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                     <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--warn)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="alert" size={16} color="#fff" stroke={2.6} /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14 }}><span className="tabnum">{timeLabel(req.startMin)}</span> · {t('non libero, si prenota lo stesso', 'not free, booking anyway')}</div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}><span className="tabnum">{timeLabel(req.startMin)}</span> · {selStart && minutesOfDay(selStart) === req.startMin
+                        ? t('non libero, si prenota lo stesso', 'not free, booking anyway')
+                        : t('non libero: scegli un altro orario', 'not free: pick another time')}</div>
                       <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600 }}>{reqStatus.label}</div>
                       {reqStatus.detail && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{reqStatus.detail}</div>}
                     </div>
