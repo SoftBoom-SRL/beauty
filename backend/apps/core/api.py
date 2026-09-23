@@ -374,6 +374,12 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     for name, value in _deposit_rule_fields(data).items():
         setattr(rule, name, value)
     rule.save()
+    # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
+    # le altre postazioni del titolare.
+    log_activity(
+        ctx.salon, "deposit_rule.updated", f"Regola deposito modificata: {rule.name}",
+        actor=ctx.user, payload={"rule_id": rule.id},
+    )
     return rule
 
 
@@ -381,7 +387,13 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
 def delete_deposit_rule(request, rule_id: int):
     ctx = request.auth
     require_owner(ctx)
-    salon_get(DepositRule, ctx, rule_id).delete()
+    rule = salon_get(DepositRule, ctx, rule_id)
+    name, rule_id_value = rule.name, rule.id
+    rule.delete()
+    log_activity(
+        ctx.salon, "deposit_rule.deleted", f"Regola deposito eliminata: {name}",
+        actor=ctx.user, payload={"rule_id": rule_id_value},
+    )
     return OkOut()
 
 

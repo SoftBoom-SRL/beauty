@@ -98,7 +98,9 @@ LIVE_FEED_SCOPES = {
     # rimborsata e continuava a mostrare «caparra richiesta» col conto alla rovescia.
     "deposit.": ("agenda", "sales"),
     "client.": ("clients",),
-    "client_category.": ("clients",),
+    # Le etichette compaiono anche nelle condizioni delle automazioni: chi ha
+    # solo marketing restava con i nomi vecchi dopo un rinomina (15-07).
+    "client_category.": ("clients", "marketing"),
     "sale.": ("sales",),
     # Listino: l'agenda prenota da lì, quindi serve anche a chi ha solo agenda.
     "service.": ("agenda", "pricing"),
@@ -115,6 +117,9 @@ LIVE_FEED_SCOPES = {
     "loyalty.": ("marketing",),
     "communication.": ("marketing",),
     "automation.": ("marketing",),
+    # Regole caparra: le legge e le scrive solo il titolare. Senza prefisso le
+    # sue modifiche non arrivavano nemmeno alle altre sue postazioni.
+    "deposit_rule.": (),
     # Orari, intervallo fasce e regole del salone li legge già chiunque da
     # /api/core/salon: senza questo prefisso un cambio di orari fatto dal
     # titolare non raggiungeva più le altre postazioni fino al ricaricamento

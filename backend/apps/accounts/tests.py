@@ -876,6 +876,19 @@ class StreamPermissionTests(TestCase):
         tutti = allowed_prefixes(False, set(SCOPES))
         self.assertNotIn("qualcosa.", tutti)
 
+    def test_a_renamed_label_reaches_marketing_too(self):
+        """15-07: le etichette stanno anche nelle condizioni delle automazioni."""
+        from apps.core.views import allowed_prefixes
+
+        self.assertIn("client_category.", allowed_prefixes(False, {"marketing"}))
+
+    def test_deposit_rules_reach_only_the_owner(self):
+        """Le regole caparra le legge e le scrive solo il titolare."""
+        from apps.core.views import LIVE_FEED_PREFIXES, allowed_prefixes
+
+        self.assertIn("deposit_rule.", LIVE_FEED_PREFIXES)
+        self.assertNotIn("deposit_rule.", allowed_prefixes(False, set(SCOPES)))
+
     def test_salon_settings_reach_every_member(self):
         """Orari e regole del salone li legge gia chiunque da /api/core/salon.
 

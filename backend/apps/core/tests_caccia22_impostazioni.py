@@ -136,6 +136,26 @@ class DepositRuleAmountTests(TestCase):
         rule = DepositRule.objects.get(pk=rule_id)
         self.assertEqual((rule.amount_type, rule.amount), ("fixed", Decimal("150.00")))
 
+    def test_editing_and_deleting_a_rule_reach_the_other_workstations(self):
+        """Modifica ed eliminazione finiscono nel registro, e quindi nel feed live."""
+        from apps.core.models import ActivityLog
+
+        rule_id = self._post(amount_type="fixed", amount="20").json()["id"]
+        resp = self.client.put(
+            f"/api/core/deposit-rules/{rule_id}",
+            data=json.dumps({"name": "Colore", "amount_type": "fixed", "amount": "25"}),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(self.client.delete(f"/api/core/deposit-rules/{rule_id}", **self.auth).status_code, 200)
+        logs = ActivityLog.objects.filter(salon=self.salon, type__startswith="deposit_rule.").order_by("id")
+        self.assertEqual(
+            [log.type for log in logs], ["deposit_rule.created", "deposit_rule.updated", "deposit_rule.deleted"]
+        )
+        self.assertEqual(logs[2].payload["rule_id"], rule_id)
+        feed = self.client.get("/api/core/activity/feed", {"after": logs[0].id - 1}, **self.auth).json()
+        self.assertEqual([e["type"] for e in feed["events"]][-2:], ["deposit_rule.updated", "deposit_rule.deleted"])
+
 
 class ActivityLogDatesTests(TestCase):
     """08-16: una data ben scritta ma inesistente era un 500."""
