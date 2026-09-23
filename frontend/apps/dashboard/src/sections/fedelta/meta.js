@@ -38,6 +38,33 @@ export const EARN_METRICS = [
   { k: 'per_service', it: 'Servizio', en: 'Service' },
 ];
 
+/* Tessera «A timbri»: un timbro per visita o per servizio, mai per euro.
+ * Il modello vuoto della dashboard nasce `per_euro` (giusto per i punti) e per
+ * i timbri il selettore era nascosto: la metrica restava nel payload e il
+ * server dava un timbro per ogni euro — una piega da 45 € emetteva quattro
+ * premi «10 timbri = piega omaggio» a ogni scontrino (07-01, 14-01). Ora il
+ * server rifiuta timbri + per_euro (contratto C18); qui i timbri partono da
+ * «per visita» e mostrano il selettore visita/servizio. */
+export const STAMP_METRICS = ['per_visit', 'per_service'];
+
+/** Metriche offerte per un tipo di programma. */
+export const earnMetricsFor = (type) => (type === 'stamps'
+  ? EARN_METRICS.filter((m) => STAMP_METRICS.includes(m.k))
+  : EARN_METRICS);
+
+/** Metrica e rapporto da mostrare e da spedire: per i timbri una metrica non
+ *  ammessa (il `per_euro` del modello vuoto o di un programma vecchio) diventa
+ *  «per visita», e il rapporto è 1 — «un timbro per visita/servizio», come
+ *  dice la scheda (un rapporto rimasto dai punti, 0,5 per esempio, non dava
+ *  nessun timbro). Il tipo si può cambiare avanti e indietro: la bozza tiene
+ *  la metrica scelta, la correzione vale solo per quello che parte. */
+export function earnFields(type, metric, ratio) {
+  if (type === 'stamps') {
+    return { earn_metric: STAMP_METRICS.includes(metric) ? metric : 'per_visit', earn_ratio: '1.00' };
+  }
+  return { earn_metric: metric || 'per_euro', earn_ratio: Number(ratio || 1).toFixed(2) };
+}
+
 /* Codici di coupon e gift card: chi non ha i permessi marketing o vendite li
  * riceve mascherati («••••1234», contratto C21). Non vanno offerti come
  * codici da usare (QR, pagamento). */
