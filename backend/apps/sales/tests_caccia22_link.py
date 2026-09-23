@@ -337,6 +337,55 @@ class AmountChangeTests(StripeTestBase):
         self.assertEqual(event.payload["reason"], "amount_changed")
         self.assertEqual(event.payload["amount"], "20.00")
 
+    def test_undoing_the_reduction_brings_back_a_link_for_the_restored_amount(self):
+        """Revisione finale: «Indietro» rimetteva la caparra a 70 € con il link da 20."""
+        from apps.agenda import undo
+        from apps.agenda.models import UndoEntry
+        from apps.agenda.services import edit_appointment
+
+        appointment, extra = self._two_services(
+            deposit_amount=Decimal("70.00"),
+            deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
+            deposit_checkout_session_id="cs_old",
+            deposit_link_expires_at=timezone.now() + dt.timedelta(hours=3),
+            deposit_stripe_account="",
+        )
+        piega = appointment.items.get(service=extra)
+        self.fake([
+            ("POST", "/v1/checkout/sessions/cs_old/expire", {"id": "cs_old", "object": "checkout.session"}),
+            ("POST", "/v1/checkout/sessions", _session("cs_new")),
+        ])
+        with patch("apps.staff.services.shift_windows", return_value=[(0, 24 * 60)]):
+            with self.captureOnCommitCallbacks(execute=True):
+                edit_appointment(
+                    appointment,
+                    items=[{"id": piega.id, "service_id": extra.id, "operator_id": self.operator.id}],
+                    force=True, actor=self.user,
+                )
+        appointment.refresh_from_db()
+        self.assertEqual((appointment.deposit_amount, appointment.deposit_checkout_session_id),
+                         (Decimal("20.00"), "cs_new"))
+        http = self.fake([
+            ("POST", "/v1/checkout/sessions/cs_new/expire", {"id": "cs_new", "object": "checkout.session"}),
+            ("POST", "/v1/checkout/sessions", _session("cs_back")),
+        ])
+        entry = UndoEntry.objects.filter(salon=self.salon, kind=UndoEntry.Kind.EDIT).latest("id")
+        with patch("apps.staff.services.shift_windows", return_value=[(0, 24 * 60)]):
+            with self.captureOnCommitCallbacks(execute=True):
+                undo.perform(entry, actor=self.user)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_amount, Decimal("70.00"))
+        # la cliente riceve un link da 70, e quello da 20 si chiude su Stripe
+        self.assertEqual(appointment.deposit_checkout_session_id, "cs_back")
+        created = [c for c in http.calls if c["url"].endswith("/v1/checkout/sessions")]
+        self.assertEqual(created[0]["data"]["line_items[0][price_data][unit_amount]"], "7000")
+        self.assertEqual(len(http.calls_to("/v1/checkout/sessions/cs_new/expire")), 1)
+        # il messaggio col link da 20 ancora in coda non parte più
+        alive = OutboxEvent.objects.filter(event_type="deposit.payment_link").exclude(
+            status=OutboxEvent.Status.SUPERSEDED
+        )
+        self.assertEqual([e.payload["amount"] for e in alive], ["70.00"])
+
     def test_paying_the_old_amount_gives_the_excess_back(self):
         # link da 30 partito, caparra scesa a 20: la cliente paga 30
         self.fake([("POST", "/v1/refunds", _refund("re_over", 1000, "pi_old"))])

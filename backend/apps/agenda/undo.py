@@ -467,6 +467,55 @@ def _reissue_deposit_links(appointments) -> None:
         transaction.on_commit(send)
 
 
+def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
+    """Dopo aver annullato un gesto che aveva cambiato la caparra ancora da pagare.
+
+    Modificare o staccare servizi riduce anche la caparra richiesta e rifà il
+    link con il nuovo importo (services.shrink_deposit_to_total). «Indietro»
+    rimetteva l'importo di prima ma lasciava il link nuovo: la cliente pagava
+    20 € su una caparra tornata a 70, il webhook lo registrava come importo
+    sbagliato, la caparra restava «richiesta» e alla scadenza il posto si
+    liberava da solo. Qui il link (e il messaggio non ancora partito) si rifà
+    con l'importo ripristinato, a transazione chiusa; la sessione di prima si
+    chiude su Stripe.
+    """
+    from apps.sales.stripe_service import ensure_deposit_link, payments_enabled  # lazy
+
+    from . import services  # lazy: services importa questo modulo
+
+    amount_after = {snap["id"]: snap.get("deposit_amount") for snap in after_snapshots}
+    for appointment in appointments:
+        if (
+            appointment.deposit_status != Appointment.DepositStatus.REQUIRED
+            or appointment.id not in amount_after
+            or amount_after[appointment.id] == _money(appointment.deposit_amount)
+            or not (appointment.deposit_payment_link or appointment.deposit_checkout_session_id)
+            or not payments_enabled(appointment.salon)
+        ):
+            continue
+        # il link con l'importo del gesto annullato, se non è ancora partito, non parte
+        services._withdraw_deposit_messages(appointment)
+
+        def send(appointment_id=appointment.id):
+            fresh = (
+                Appointment.objects.select_related("salon", "salon__settings", "client")
+                .filter(pk=appointment_id)
+                .first()
+            )
+            if fresh is None:
+                return
+            try:
+                ensure_deposit_link(fresh, resend=True, reason="amount_changed")
+            except Exception:  # noqa: BLE001 — l'undo è fatto: il link si rimanda dalla scheda
+                logger.warning(
+                    "Link caparra non rifatto dopo l'undo (appuntamento %s)",
+                    appointment_id,
+                    exc_info=True,
+                )
+
+        transaction.on_commit(send)
+
+
 def perform(entry: UndoEntry, *, actor=None) -> dict:
     """Annulla il gesto. Ritorna {"label", "appointment_ids", "date"}.
 
@@ -550,6 +599,8 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             _restore_pause({**snap, "salon_id": salon.id})
         if entry.kind == UndoEntry.Kind.CANCEL:
             _reissue_deposit_links(touched)
+        else:
+            _renew_links_for_restored_amount(touched, entry.after.get("appointments", []))
 
         # 4. I messaggi: spariscono se erano ancora trattenuti e per la
         #    cliente non cambia niente, si rettificano se ciò che sa è diverso
