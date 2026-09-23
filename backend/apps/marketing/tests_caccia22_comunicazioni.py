@@ -248,10 +248,23 @@ class RevocationAfterSchedulingTests(_Base):
             "marketing": False,
         }])
 
-    def test_a_send_that_may_have_arrived_is_left_to_the_opt_out_event(self):
+    def test_a_send_waiting_for_a_retry_goes_without_her_too(self):
+        """Il ritentativo ha la stessa Idempotency-Key: se il primo tentativo
+        era arrivato Yourang lo scarta, se no parte senza di lei. E ha una data
+        di creazione più vecchia dell'evento di revoca: il worker lo
+        consegnerebbe per primo."""
         self._schedule()
         event = self._sends().get()
-        OutboxEvent.objects.filter(pk=event.pk).update(attempts=1)
+        OutboxEvent.objects.filter(pk=event.pk).update(attempts=1, last_error="timeout")
+        self._consent(self.marta, False)
+        event.refresh_from_db()
+        self.assertEqual(event.payload["client_ids"], [self.sofia.id])
+        self.assertEqual([p["marketing"] for p in self._consent_events()], [False])
+
+    def test_a_send_already_delivered_is_left_to_the_opt_out_event(self):
+        self._schedule()
+        event = self._sends().get()
+        self._deliver(event)
         self._consent(self.marta, False)
         event.refresh_from_db()
         self.assertIn(self.marta.id, event.payload["client_ids"])

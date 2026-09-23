@@ -593,8 +593,11 @@ def drop_from_pending_sends(client) -> int:
 
     I destinatari si fissano quando si preme «Programma»: la cliente che
     revocava il consenso il martedì riceveva comunque il sabato la promozione
-    programmata il lunedì (GDPR art. 7.3). Si riscrivono solo gli eventi mai
-    tentati; uno già tentato può essere arrivato, e per quello c'è
+    programmata il lunedì (GDPR art. 7.3). Si riscrivono tutti gli invii
+    ancora in coda, anche quelli in attesa di un ritentativo: se il primo
+    tentativo era arrivato, Yourang scarta il ritentativo per la sua
+    Idempotency-Key e togliere un destinatario non cambia niente; se non era
+    arrivato, parte senza di lei. Quello che Yourang ha già in mano lo copre
     CONSENT_EVENT. Ritorna quanti invii sono stati toccati.
     """
     OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
@@ -606,7 +609,6 @@ def drop_from_pending_sends(client) -> int:
             salon_id=client.salon_id,
             event_type=SEND_EVENT,
             status=OutboxEvent.Status.PENDING,
-            attempts=0,
         )
         for event in events:
             payload = dict(event.payload or {})
