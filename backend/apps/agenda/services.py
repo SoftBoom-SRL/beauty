@@ -2175,8 +2175,12 @@ def process_deposit_holds(salon, *, now=None) -> dict:
             appointment.deposit_due_at = due
         if appointment.deposit_due_at <= now:
             with transaction.atomic():
+                # Prima il salone, poi la sola riga dell'appuntamento: il join
+                # FOR UPDATE bloccava anche cliente e salone DOPO l'appuntamento,
+                # l'ordine opposto a quello di chi modifica l'agenda (18-08).
+                lock_salon(salon)
                 locked = (
-                    Appointment.objects.select_for_update()
+                    Appointment.objects.select_for_update(of=("self",))
                     .filter(
                         pk=appointment.pk,
                         status=Appointment.Status.CONFIRMED,

@@ -163,7 +163,16 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
     salon_get(Appointment, ctx, appointment_id)  # 404 fuori dal salone
     payload = data.dict()
 
+    from apps.agenda.services import lock_salon  # lazy
+
     with transaction.atomic():
+        # Prima il salone, poi la riga: lo stesso ordine delle mutazioni
+        # d'agenda. Senza il lock del salone un annullamento (o un check-in, o
+        # un «torna indietro») rileggeva l'appuntamento prima del commit della
+        # cassa e poi lo riscriveva: visita «annullata» con la sua vendita, e
+        # caparra già detratta rimborsata (05-20). Nell'ordine inverso, su
+        # PostgreSQL, cassa e agenda potevano aspettarsi a vicenda (18-08).
+        lock_salon(ctx.salon)
         # Rilettura sotto lock DENTRO la transazione della vendita: fra l'inizio
         # della richiesta e adesso la cliente può aver pagato il link della
         # caparra. Prima si decideva (e si salvava) sulla copia vecchia, e il
@@ -637,8 +646,12 @@ def _apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str 
     cassa senza che nulla lo segnalasse. Qui si fanno solo scritture locali:
     rimborsi ed eventi li fa il chiamante, a lock rilasciato.
     """
+    from apps.agenda.services import lock_salon  # lazy
+
     Appointment = django_apps.get_model("agenda", "Appointment")
     with transaction.atomic():
+        # Prima il salone, come ogni scrittura in agenda (18-08, vedi checkout).
+        lock_salon(appointment.salon)
         # La riga viene bloccata qui: una seconda consegna dello stesso evento
         # aspetta, e quando entra rilegge lo stato già aggiornato.
         if Appointment.objects.select_for_update().filter(pk=appointment.pk).first() is None:
@@ -985,9 +998,17 @@ def stripe_webhook(request):
                 client.stripe_payment_method_id = payment_method
                 # La carta vale solo sull'account su cui è stata salvata.
                 client.stripe_account_id = account
-                client.save(
-                    update_fields=["stripe_payment_method_id", "stripe_account_id"]
-                )
+                fields = ["stripe_payment_method_id", "stripe_account_id"]
+                # …e solo col Customer a cui è agganciata: se due richieste ne
+                # avevano creati due, sulla scheda poteva restare quello
+                # sbagliato e l'addebito no-show veniva rifiutato (18-11).
+                customer = obj.get("customer") or ""
+                if isinstance(customer, dict):
+                    customer = customer.get("id") or ""
+                if customer:
+                    client.stripe_customer_id = customer
+                    fields.append("stripe_customer_id")
+                client.save(update_fields=fields)
                 log_activity(
                     client.salon,
                     "client.card_saved",

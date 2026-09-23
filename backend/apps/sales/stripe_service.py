@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core import signing
+from django.db import transaction
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -206,26 +207,38 @@ def ensure_customer(client) -> str:
     if client.stripe_customer_id and client.stripe_account_id == account:
         return client.stripe_customer_id
 
-    customer = as_dict(
-        stripe.Customer.create(
-            name=f"{client.first_name} {client.last_name}".strip(),
-            phone=client.phone or None,
-            email=client.email or None,
-            metadata={"client_id": client.id, "salon_id": client.salon_id},
-            **_account_opts(client.salon),
+    # Lock della riga cliente e rilettura prima di creare: con un doppio tocco
+    # su «salva carta» (o carta salvata e addebito no-show insieme) le due
+    # richieste creavano due Customer, la carta si agganciava a uno e sulla
+    # scheda restava l'altro — e l'addebito no-show veniva rifiutato (18-11).
+    # La seconda richiesta aspetta qui e trova il codice già scritto.
+    with transaction.atomic():
+        current = type(client).objects.select_for_update().filter(pk=client.pk).first()
+        if current is not None and current.stripe_customer_id and current.stripe_account_id == account:
+            client.stripe_customer_id = current.stripe_customer_id
+            client.stripe_account_id = current.stripe_account_id
+            client.stripe_payment_method_id = current.stripe_payment_method_id
+            return client.stripe_customer_id
+        customer = as_dict(
+            stripe.Customer.create(
+                name=f"{client.first_name} {client.last_name}".strip(),
+                phone=client.phone or None,
+                email=client.email or None,
+                metadata={"client_id": client.id, "salon_id": client.salon_id},
+                **_account_opts(client.salon),
+            )
         )
-    )
-    if client.stripe_customer_id:
-        logger.info(
-            "Cliente %s ricreato su un altro account Stripe (%s → %s): carta salvata rimossa",
-            client.id, client.stripe_account_id or "piattaforma", account or "piattaforma",
+        if client.stripe_customer_id:
+            logger.info(
+                "Cliente %s ricreato su un altro account Stripe (%s → %s): carta salvata rimossa",
+                client.id, client.stripe_account_id or "piattaforma", account or "piattaforma",
+            )
+        client.stripe_customer_id = customer.get("id") or ""
+        client.stripe_account_id = account
+        client.stripe_payment_method_id = ""
+        client.save(
+            update_fields=["stripe_customer_id", "stripe_account_id", "stripe_payment_method_id"]
         )
-    client.stripe_customer_id = customer.get("id") or ""
-    client.stripe_account_id = account
-    client.stripe_payment_method_id = ""
-    client.save(
-        update_fields=["stripe_customer_id", "stripe_account_id", "stripe_payment_method_id"]
-    )
     return client.stripe_customer_id
 
 
