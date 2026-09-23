@@ -93,9 +93,11 @@ class Caccia22Base(TestCase):
     def staff_auth(self, scopes=("agenda",), *, email="desk@caccia22.it", owner=False):
         from apps.accounts.models import Membership, Role, User
 
-        user = User.objects.create_user(email=email, password="x" * 12)
-        role = Role.objects.create(salon=self.salon, name=f"Ruolo {email}", scopes=list(scopes))
-        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
+        user = User.objects.filter(email=email).first()
+        if user is None:  # chiamabile più volte nello stesso test
+            user = User.objects.create_user(email=email, password="x" * 12)
+            role = Role.objects.create(salon=self.salon, name=f"Ruolo {email}", scopes=list(scopes))
+            Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
         return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
 
     def client_auth(self, client=None):
