@@ -8,6 +8,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
+import { useEscLayer } from '../../../ui/layers.js';
+import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { toastErr, fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 
@@ -88,12 +90,20 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   }, [agendaPick?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => setAgendaPick(null), [setAgendaPick]);
 
-  /* ---- Esc chiude ---- */
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose?.(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  /* ---- Esc chiude, se il drawer è in primo piano ----
+   * Dalla pila unica di layers.js, come ogni altro pannello: l'ascoltatore
+   * proprio su window scattava anche con la tendina della ricerca cliente
+   * aperta, e chiudeva tutto il drawer (13-10). */
+  useEscLayer(true, () => onClose?.());
+
+  /* Area di lavoro ristretta finché il drawer è aperto, e sopra i pannelli
+   * aperti prima (13-19): in modalità scelta orario copriva le ultime colonne. */
+  const zIndex = usePanelSlot(500);
+
+  /* Una risposta che arriva quando al posto del drawer c'è già un altro
+   * pannello non deve chiudere quello (onClose è globale, 13-20). */
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   /* ---- giornata (per spiegare perché uno slot non è disponibile) ---- */
   const [dayRows, setDayRows] = useState(null);
@@ -225,7 +235,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         undoFn: link ? () => { navigator.clipboard?.writeText(link); fireToast({ msg: t('Link copiato', 'Link copied'), icon: 'check' }); } : undefined,
       });
       onCreated?.(res);
-      onClose?.();
+      if (alive.current) onClose?.();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !forced) {
         // Lo slot non è (più) libero: chi prenota al banco ha già deciso, quindi
@@ -236,7 +246,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         return;
       }
       toastErr(err, t, fireToast);
-    } finally { setSaving(false); }
+    } finally { if (alive.current) setSaving(false); }
   }
 
   /* orario digitato a mano → selezionato; se non è fra gli slot liberi serve forzare */
@@ -255,7 +265,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
 
   /* ---- chrome del drawer ---- */
   const shell = ({ title, sub, foot, children }) => (
-    <div role="dialog" aria-label={title} style={{ position: 'fixed', top: 'var(--top-h)', right: 0, bottom: 0, width: 500, maxWidth: '94vw', zIndex: 120, background: 'var(--surface)', borderLeft: '1px solid var(--hair)', boxShadow: 'var(--sh-pop)', display: 'flex', flexDirection: 'column', animation: 'dkSlideR 280ms var(--ease-emph)' }}>
+    <div role="dialog" aria-label={title} style={{ position: 'fixed', top: 'var(--top-h)', right: 0, bottom: 0, width: 500, maxWidth: '94vw', zIndex, background: 'var(--surface)', borderLeft: '1px solid var(--hair)', boxShadow: 'var(--sh-pop)', display: 'flex', flexDirection: 'column', animation: 'dkSlideR 280ms var(--ease-emph)' }}>
       <div className="dk-modalhead" style={{ padding: '18px 22px 12px' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="t-title" style={{ fontSize: 20, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>

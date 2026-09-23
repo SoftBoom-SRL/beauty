@@ -111,7 +111,21 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       e.preventDefault();
       if (results && hi < n) pick(results[hi]);
       else if (canCreate) startCreate();
-    } else if (e.key === 'Escape') { setOpen(false); }
+    } else if (e.key === 'Escape') {
+      // Esc qui chiude la tendina e basta: senza preventDefault arrivava anche
+      // al drawer (layers.js), che si chiudeva con le righe già compilate.
+      e.preventDefault();
+      setOpen(false);
+    }
+  };
+  /* Esc nel mini-form «Nuovo cliente» lo annulla, come la X, senza chiudere il
+   * drawer sotto. Una tendina interna che usa Esc per sé (il prefisso del
+   * telefono) lo ha già consumato: allora non si tocca niente. */
+  const cancelCreate = () => { setCreating(false); setFull(false); setOpen(true); setTimeout(() => inputRef.current?.focus(), 30); };
+  const onCreateKey = (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    e.preventDefault();
+    cancelCreate();
   };
 
   const inputCss = { border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13.5, padding: '9px 11px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box', width: '100%' };
@@ -137,11 +151,11 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   if (creating) {
     const Label = ({ children }) => <div className="t-meta" style={{ fontSize: 9.5, marginBottom: 5 }}>{children}</div>;
     return (
-      <div style={{ border: '1.5px solid var(--clay)', borderRadius: 12, padding: 12, background: 'var(--surface)' }}>
+      <div onKeyDown={onCreateKey} style={{ border: '1.5px solid var(--clay)', borderRadius: 12, padding: 12, background: 'var(--surface)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center' }}><Icon name="user" size={15} color="var(--clay-ink)" /></div>
           <div style={{ flex: 1, fontWeight: 700, fontSize: 13.5 }}>{t('Nuovo cliente', 'New client')}</div>
-          <button type="button" onClick={() => { setCreating(false); setFull(false); setOpen(true); setTimeout(() => inputRef.current?.focus(), 30); }} className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} aria-label={t('Annulla', 'Cancel')}><Icon name="x" size={14} /></button>
+          <button type="button" onClick={cancelCreate} className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} aria-label={t('Annulla', 'Cancel')} title="Esc"><Icon name="x" size={14} /></button>
         </div>
 
         {/* essenziale: nome, cognome, telefono, genere */}

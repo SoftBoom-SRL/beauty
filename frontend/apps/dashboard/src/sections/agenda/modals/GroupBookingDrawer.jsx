@@ -5,6 +5,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
+import { useEscLayer } from '../../../ui/layers.js';
+import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { initialsOf, toastErr, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 
@@ -32,16 +34,14 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   /* Esc chiude, come ogni altro drawer della dashboard (vedi DkDrawer). Questo
    * pannello si disegna da sé e la scorciatoia mancava: l'unica via d'uscita
    * era il pulsante. Durante la creazione non si chiude, per non lasciare a metà
-   * una serie di prenotazioni. */
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || batchRunning) return;
-      e.preventDefault();
-      onClose?.();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, batchRunning]);
+   * una serie di prenotazioni. Passa dalla pila di layers.js: con l'ascoltatore
+   * proprio su window, Esc per chiudere la tendina della ricerca cliente
+   * chiudeva il drawer con le righe già compilate (13-10). */
+  useEscLayer(true, () => { if (!batchRunning) onClose?.(); });
+
+  /* Area di lavoro ristretta e drawer sopra i pannelli aperti prima: col
+   * dettaglio di un appuntamento aperto si apriva nascosto dietro (13-19). */
+  const zIndex = usePanelSlot(520);
 
   const patchRow = (key, partial) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...(typeof partial === 'function' ? partial(r) : partial) } : r)));
@@ -97,7 +97,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
         position: 'fixed', top: 'var(--top-h)', right: 0, bottom: 0,
         width: 520, maxWidth: '94vw', background: 'var(--surface)',
         borderLeft: '1px solid var(--hair)', boxShadow: 'var(--sh-pop)',
-        zIndex: 120, display: 'flex', flexDirection: 'column',
+        zIndex, display: 'flex', flexDirection: 'column',
         animation: 'dkSlideR 280ms var(--ease-emph)',
       }}
     >
@@ -106,7 +106,8 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
           <div className="t-title" style={{ fontSize: 19 }}>{t('Prenotazione di gruppo', 'Group booking')}</div>
           <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{t('Prenota più clienti in una sola sessione', 'Book several clients in one session')}</div>
         </div>
-        <button className="dk-iconbtn" style={{ flexShrink: 0 }} onClick={onClose} aria-label={t('Chiudi', 'Close')}><Icon name="x" size={18} /></button>
+        {/* come «Annulla» e Esc: a creazione in corso non si esce (13-20) */}
+        <button className="dk-iconbtn" style={{ flexShrink: 0 }} onClick={onClose} disabled={batchRunning} aria-label={t('Chiudi', 'Close')} title="Esc"><Icon name="x" size={18} /></button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px 20px' }}>{body}</div>
       {footer && (
