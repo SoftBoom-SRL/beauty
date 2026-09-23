@@ -43,8 +43,9 @@ UNDO_STACK_LIMIT = 20
 # cassa. Tornare indietro qui vorrebbe dire smontare una vendita.
 _FROZEN_STATUSES = (Appointment.Status.CLOSED,)
 
-# Messaggio da mandare alla cliente quando l'annullamento arriva TARDI, cioè
-# quando quello del gesto originale era già partito (vedi services.revert_held_events).
+# Messaggio da mandare alla cliente quando l'annullamento arriva TARDI e non
+# c'è nessun messaggio consegnato a cui confrontare lo stato ripristinato
+# (appuntamento importato, storico già cancellato): vedi services.revert_held_events.
 _FALLBACK_EVENT = {
     UndoEntry.Kind.MOVE: "appointment.moved",
     UndoEntry.Kind.EDIT: "appointment.updated",
@@ -336,12 +337,18 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             if appointment is None:
                 continue
             days.append(appointment.start)
-            # Prima si toglie l'annuncio alla lista d'attesa (quello slot non si
-            # è liberato: non è mai stato occupato), poi si passa dall'emissione
-            # normale, che sa da sola se c'è qualcosa da dire alla cliente: se la
-            # conferma è ancora ferma in coda sparisce tutto e nessuno riceve
-            # niente, se invece era già partita parte l'annullamento.
-            services.suppress_slot_events(salon, appointment.id)
+            freed = services._appointment_spans(appointment)
+            # Il link della caparra partito con la prenotazione: se non è ancora
+            # uscito non esce più, se è uscito la sessione si chiude su Stripe
+            # a transazione chiusa. Restava pagabile, e il pagamento finiva su
+            # un appuntamento che non esisteva più.
+            services._withdraw_deposit_messages(appointment)
+            services._close_deposit_link_after_commit(appointment)
+            knowledge = services._slot_knowledge(appointment, freed)
+            # Poi si passa dall'emissione normale, che sa da sola se c'è
+            # qualcosa da dire alla cliente: se la conferma è ancora ferma in
+            # coda sparisce tutto e nessuno riceve niente, se invece era già
+            # partita (o la cliente ha in mano il link) parte l'annullamento.
             services.emit_appointment_event(
                 appointment,
                 "appointment.cancelled",
@@ -351,23 +358,38 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
                     "late": False,
                 },
             )
+            # E la lista d'attesa sente dello slot solo se qualcuno lo sapeva
+            # occupato: con la conferma già partita, lo slot si è liberato.
+            services._sync_freed_slots(appointment, freed, {}, knowledge)
             _delete_appointment(appointment, entry.label)
         Pause.objects.filter(id__in=entry.created.get("pauses", [])).delete()
 
         # 3. Quello che aveva cambiato torna com'era.
+        previous_spans: dict[int, dict] = {}
         for snap in entry.before.get("appointments", []):
+            live = _live_appointment(snap)
+            previous_spans[live.id] = (
+                {}
+                if live.status in Appointment.INACTIVE_STATUSES
+                else services._appointment_spans(live)
+            )
             appointment = _restore_appointment(snap)
             touched.append(appointment)
             days.append(appointment.start)
         for snap in entry.before.get("pauses", []):
             _restore_pause({**snap, "salon_id": salon.id})
 
-        # 4. I messaggi: spariscono se erano ancora trattenuti, si rettificano
-        #    se erano già partiti.
+        # 4. I messaggi: spariscono se erano ancora trattenuti e per la
+        #    cliente non cambia niente, si rettificano se ciò che sa è diverso
+        #    dallo stato ripristinato (services.revert_held_events).
         fallback = _FALLBACK_EVENT.get(entry.kind, "appointment.updated")
         for appointment in touched:
             appointment.refresh_from_db()
-            services.revert_held_events(appointment, fallback_event=fallback)
+            services.revert_held_events(
+                appointment,
+                fallback_event=fallback,
+                previous_spans=previous_spans.get(appointment.id, {}),
+            )
 
         entry.undone_at = timezone.now()
         entry.save(update_fields=["undone_at"])

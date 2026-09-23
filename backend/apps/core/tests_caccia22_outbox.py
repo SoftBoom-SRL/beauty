@@ -308,3 +308,26 @@ class HousekeepingWithoutDeliveryUrlTests(TestCase):
         self.assertEqual(otp.status, OutboxEvent.Status.EXPIRED)
         self.assertFalse(RateLimitCounter.objects.exists())
         self.assertFalse(UndoEntry.objects.exists())
+
+
+class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
+    """L'ultimo messaggio consegnato su un appuntamento ancora da venire resta:
+    è ciò che la cliente sa, e l'agenda lo confronta prima di rettificare."""
+
+    def test_only_the_last_message_about_an_upcoming_visit_is_kept(self):
+        from .management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
+
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        future = (timezone.now() + dt.timedelta(days=20)).isoformat()
+        past = (timezone.now() - dt.timedelta(days=1)).isoformat()
+        first = emit_event(salon, "appointment.created", {"start": future}, coalesce_key="appointment:1")
+        last = emit_event(salon, "appointment.moved", {"start": future}, coalesce_key="appointment:1")
+        visit_over = emit_event(salon, "appointment.created", {"start": past}, coalesce_key="appointment:2")
+        otp = emit_event(salon, "client.otp", {"code": "1"})
+        OutboxEvent.objects.update(
+            status=OutboxEvent.Status.SENT,
+            sent_at=timezone.now() - dt.timedelta(days=PURGE_AFTER_DAYS + 10),
+        )
+        self.assertEqual(purge_delivered(), 3)
+        self.assertEqual(list(OutboxEvent.objects.values_list("id", flat=True)), [last.id])
+        self.assertFalse(OutboxEvent.objects.filter(id__in=[first.id, visit_over.id, otp.id]).exists())

@@ -55,6 +55,9 @@ BACKOFF_BASE_SECONDS = 30
 BACKOFF_MAX_SECONDS = 3600
 # Un evento preso in carico e mai concluso torna libero dopo questo tempo.
 STALE_CLAIM_SECONDS = 300
+# Con --loop le pulizie (vedi Command._housekeeping) girano al massimo ogni
+# tanto, non a ogni giro di pochi secondi.
+HOUSEKEEPING_EVERY_SECONDS = 300
 
 
 def _due(now):
@@ -89,16 +92,41 @@ def purge_delivered(days: int = PURGE_AFTER_DAYS, now=None) -> int:
     annullati con «torna indietro» — e gli `expired` — scaduti prima di
     partire — hanno gli stessi dati dentro e seguono la stessa sorte, contati
     dalla data di creazione visto che non sono mai stati consegnati.
+
+    L'ultimo messaggio consegnato su ciascun oggetto (`coalesce_key`) resta
+    invece finché racconta qualcosa che deve ancora succedere (`expiry_of`): è
+    ciò che la cliente sa del suo appuntamento, e l'agenda lo confronta con lo
+    stato attuale per decidere se c'è da mandarle una rettifica. Cancellato
+    dopo trenta giorni, una prenotazione fatta due mesi prima restava senza
+    storia proprio quando la si spostava.
     """
     now = now or timezone.now()
     cutoff = now - timezone.timedelta(days=days)
-    deleted, _ = OutboxEvent.objects.filter(
-        Q(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
-        | Q(
-            status__in=(OutboxEvent.Status.SUPERSEDED, OutboxEvent.Status.EXPIRED),
-            created_at__lt=cutoff,
+    old_sent = OutboxEvent.objects.filter(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
+    newer_sent = OutboxEvent.objects.filter(
+        salon_id=OuterRef("salon_id"),
+        coalesce_key=OuterRef("coalesce_key"),
+        status=OutboxEvent.Status.SENT,
+        id__gt=OuterRef("id"),
+    )
+    keep = [
+        event.id
+        for event in old_sent.exclude(coalesce_key="")
+        .filter(~Exists(newer_sent))
+        .only("id", "event_type", "payload", "created_at", "due_at")
+        if (deadline := expiry_of(event)) is not None and deadline >= now
+    ]
+    deleted, _ = (
+        OutboxEvent.objects.filter(
+            Q(status=OutboxEvent.Status.SENT, sent_at__lt=cutoff)
+            | Q(
+                status__in=(OutboxEvent.Status.SUPERSEDED, OutboxEvent.Status.EXPIRED),
+                created_at__lt=cutoff,
+            )
         )
-    ).delete()
+        .exclude(id__in=keep)
+        .delete()
+    )
     return deleted
 
 
@@ -411,6 +439,7 @@ class Command(BaseCommand):
             for event in pending[:20]:
                 self.stdout.write(f"  [{event.created_at:%d/%m %H:%M}] {event.event_type}")
             return
+        last_housekeeping = None
         while True:
             try:
                 sent, failed = flush_pending(options["limit"])
@@ -422,7 +451,12 @@ class Command(BaseCommand):
             if sent or failed:
                 self.stdout.write(f"consegnati {sent}, falliti {failed}")
             # la scadenza l'ha già fatta flush_pending, prima di consegnare
-            self._housekeeping(options, expire=False)
+            if (
+                last_housekeeping is None
+                or time.monotonic() - last_housekeeping >= HOUSEKEEPING_EVERY_SECONDS
+            ):
+                self._housekeeping(options, expire=False)
+                last_housekeeping = time.monotonic()
             if not options["loop"]:
                 break
             time.sleep(max(1.0, options["interval"]))

@@ -9,6 +9,7 @@ Convenzioni interne:
   -> list[tuple[int, int]] (minuti), già al netto di pause pranzo e assenze.
 """
 
+import copy
 import datetime as dt
 import logging
 from collections import defaultdict
@@ -16,11 +17,12 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from ninja.errors import HttpError
 
-from apps.core.models import DepositRule
+from apps.core.models import DepositRule, OutboxEvent
 from apps.core.services import (
     automation_delay_seconds,
     emit_event,
@@ -848,7 +850,20 @@ def _lock_row(appointment: Appointment) -> None:
 
 
 def _event_payload(appointment: Appointment) -> dict:
-    """Payload standard per Yourang: id + dati utili (nome, telefono, lingua, orari ISO)."""
+    """Payload standard per Yourang: id + dati utili (nome, telefono, lingua, orari ISO).
+
+    Di ogni servizio anche posa e operatrice: a Yourang dicono chi fa cosa, e
+    all'agenda permettono di ricostruire da un messaggio già consegnato quali
+    orari la cliente — e chi è in lista d'attesa — sa occupati.
+
+    `whatsapp_reminders` e `wa` sono le preferenze della cliente: con
+    `whatsapp_reminders` falso non vuole conferme né promemoria degli
+    appuntamenti su WhatsApp (l'interruttore «Promemoria WhatsApp» dell'app e
+    della scheda Consensi, che finora non leggeva nessuno), con `wa` falso
+    WhatsApp non lo usa. L'evento parte lo stesso: Yourang ha bisogno di sapere
+    dove sta l'appuntamento, e tacere uno spostamento farebbe partire un suo
+    promemoria all'ora vecchia. Il canale lo sceglie Yourang, rispettandole.
+    """
     client = appointment.client
     return {
         "appointment_id": appointment.id,
@@ -856,6 +871,8 @@ def _event_payload(appointment: Appointment) -> dict:
         "client_name": client.full_name,
         "phone": client.phone,
         "lang": client.lang,
+        "whatsapp_reminders": client.whatsapp_reminders,
+        "wa": client.wa,
         "start": appointment.start.isoformat(),
         "end": appointment.end.isoformat(),
         "operator_id": appointment.operator_id,
@@ -864,6 +881,8 @@ def _event_payload(appointment: Appointment) -> dict:
                 "id": item.service_id,
                 "name": item.service.name_it,
                 "duration_min": item.duration_min,
+                "soak_min": item.soak_min,
+                "operator_id": item.operator_id,
             }
             for item in appointment.items.select_related("service")
         ],
@@ -888,6 +907,11 @@ def _event_payload(appointment: Appointment) -> dict:
 # trattenuti sullo stesso appuntamento si fondono in uno solo, con i dati
 # dell'ultimo gesto. È anche ciò che rende «torna indietro» silenzioso: annullare
 # entro la finestra non manda niente a nessuno.
+#
+# Ciò che conta è quello che la cliente SA: l'ultimo messaggio consegnato (o
+# ormai in consegna) sull'appuntamento, vedi `_told_event`. Una fusione o un
+# «torna indietro» non devono mai far tacere una modifica che resta in vigore
+# rispetto a quel messaggio, né raccontarle una modifica che per lei non c'è.
 
 # Quando due eventi si fondono resta il più alto di questa scala: la conferma di
 # un appuntamento appena nato batte lo spostamento, perché la cliente non ha
@@ -898,14 +922,26 @@ _EVENT_PRIORITY = {
     "appointment.updated": 20,
     "appointment.checked_in": 10,
 }
-# Eventi finali: azzerano quelli trattenuti invece di fondersi con loro.
-_TERMINAL_EVENTS = ("appointment.cancelled", "appointment.no_show")
+# Eventi finali: azzerano quelli trattenuti invece di fondersi con loro. Il
+# rilascio per caparra non pagata è uno di loro: partiva per conto suo, e uno
+# spostamento trattenuto un istante prima arrivava a Yourang DOPO «posto
+# liberato», facendo rivivere alla nuova ora un appuntamento annullato.
+_TERMINAL_EVENTS = ("appointment.cancelled", "appointment.no_show", "appointment.released_unpaid")
 # Tutto ciò che racconta l'appuntamento ALLA CLIENTE, e che quindi si fonde.
 # `slot.freed` parla alla lista d'attesa: è un altro discorso e un'altra chiave.
 _CLIENT_EVENTS = tuple(_EVENT_PRIORITY) + _TERMINAL_EVENTS
 # La trattenuta si allunga a ogni correzione, ma non all'infinito: dopo questo
 # multiplo del ritardo, contato dal primo gesto, il messaggio parte comunque.
 MAX_HOLD_FACTOR = 4
+# Stati di un evento che non è mai arrivato e non arriverà.
+_NEVER_DELIVERED = (
+    OutboxEvent.Status.SUPERSEDED,
+    OutboxEvent.Status.FAILED,
+    OutboxEvent.Status.EXPIRED,
+)
+# Un pezzo di agenda liberato più corto di così non si annuncia: non ci sta
+# niente, ed è di solito il resto di un orario tagliato su «adesso».
+MIN_FREED_SLOT_MINUTES = 5
 
 
 def appointment_event_key(appointment_id) -> str:
@@ -925,39 +961,197 @@ def _extended_hold(event, delay: int):
     )
 
 
+def _hold(event, delay: int) -> None:
+    """Trattiene ancora l'evento fuso — o lo libera subito se il ritardo è spento."""
+    if delay > 0:
+        event.next_attempt_at = _extended_hold(event, delay)
+        event.due_at = event.next_attempt_at
+    else:
+        event.next_attempt_at = None
+        event.due_at = timezone.now()
+
+
+def _priority(event_type: str) -> int:
+    return _EVENT_PRIORITY.get(event_type, 0)
+
+
+def _when(value):
+    """Istante di un campo ISO del payload (None se manca o è illeggibile)."""
+    if isinstance(value, dt.datetime) or not value:
+        return value or None
+    try:
+        return parse_datetime(str(value))
+    except ValueError:
+        return None
+
+
+def _told_event(appointment: Appointment):
+    """L'ultimo messaggio sull'appuntamento che la cliente ha ricevuto, o che
+    ormai riceverà: consegnato, in consegna, in ritentativo o scaduta la
+    trattenuta. None se nessuno (tutto ancora trattenuto, sostituito, perso)."""
+    return (
+        OutboxEvent.objects.filter(
+            salon=appointment.salon,
+            coalesce_key=appointment_event_key(appointment.id),
+            event_type__in=_CLIENT_EVENTS,
+        )
+        .exclude(status__in=_NEVER_DELIVERED)
+        .exclude(
+            status=OutboxEvent.Status.PENDING, attempts=0, next_attempt_at__gt=timezone.now()
+        )
+        .order_by("-id")
+        .first()
+    )
+
+
+def _never_told(appointment: Appointment) -> bool:
+    """La cliente non ha mai ricevuto niente: la conferma è ancora ferma in coda,
+    o è sparita con lei. Da non confondere con l'assenza di storia (appuntamento
+    importato da Yourang, messaggi già cancellati dopo i trenta giorni): lì la
+    cliente sa, e non sappiamo cosa."""
+    return (
+        _told_event(appointment) is None
+        and OutboxEvent.objects.filter(
+            salon=appointment.salon,
+            coalesce_key=appointment_event_key(appointment.id),
+            event_type="appointment.created",
+        ).exists()
+    )
+
+
+def _deposit_messages(appointment: Appointment):
+    """Link di pagamento e solleciti della caparra di questo appuntamento."""
+    return OutboxEvent.objects.filter(
+        salon=appointment.salon,
+        event_type__in=("deposit.payment_link", "deposit.reminder"),
+        payload__appointment_id=appointment.id,
+    )
+
+
+def _withdraw_deposit_messages(appointment: Appointment) -> int:
+    """Ritira link e solleciti della caparra mai partiti (non ancora tentati)."""
+    waiting = list(
+        _deposit_messages(appointment)
+        .filter(status=OutboxEvent.Status.PENDING, attempts=0)
+        .select_for_update()
+    )
+    return supersede_events(waiting)
+
+
+def _client_aware(appointment: Appointment) -> bool:
+    """La cliente sa dell'appuntamento anche senza una nostra conferma.
+
+    L'ha prenotato lei dall'app (e ha visto «prenotato» a schermo) o da Yourang,
+    oppure le è arrivato il link per pagare la caparra, che parte subito.
+    Per lei l'appuntamento esiste: se il salone lo annulla va avvisata.
+    """
+    if appointment.created_via in (Appointment.CreatedVia.APP, Appointment.CreatedVia.YOURANG):
+        return True
+    return (
+        _deposit_messages(appointment)
+        .filter(event_type="deposit.payment_link")
+        .exclude(status__in=_NEVER_DELIVERED)
+        .exists()
+    )
+
+
+def _same_for_client(told: dict, current: dict) -> bool:
+    """Per la cliente non è cambiato niente: stessi orari, stessa operatrice,
+    stessi servizi con le stesse durate."""
+    for field in ("start", "end"):
+        if _when(told.get(field)) != _when(current.get(field)):
+            return False
+    if told.get("operator_id") != current.get("operator_id"):
+        return False
+    before, after = told.get("services") or [], current.get("services") or []
+    if len(before) != len(after):
+        return False
+    for was, now in zip(before, after):
+        # I campi che un messaggio di prima non portava non contano.
+        for field in ("id", "duration_min", "soak_min", "operator_id"):
+            if field in was and was.get(field) != now.get(field):
+                return False
+    return True
+
+
 def emit_appointment_event(appointment: Appointment, event_type: str, payload: dict | None = None):
     """Accoda un evento dell'appuntamento fondendolo con quelli ancora trattenuti.
 
     Ritorna l'evento che partirà (nuovo o aggiornato), oppure None quando non
     deve partire più niente: è il caso dell'appuntamento inserito per errore e
-    annullato subito dopo, di cui la cliente non ha mai saputo nulla.
+    annullato subito dopo, di cui la cliente non ha mai saputo nulla, o di un
+    ritocco riportato dov'era prima che partisse.
+
+    Nella fusione uno spostamento conserva l'`old_start` del PRIMO spostamento
+    trattenuto, cioè l'orario che la cliente conosce: 10→11→12 le arrivava come
+    «spostato dalle 11», un orario che non aveva mai saputo, e «sposta, poi
+    allunga» come uno spostamento senza orario di prima.
     """
     salon = appointment.salon
-    payload = _event_payload(appointment) if payload is None else payload
+    payload = _event_payload(appointment) if payload is None else dict(payload)
     key = appointment_event_key(appointment.id)
     delay = automation_delay_seconds(salon)
+    # Anche col ritardo spento si guarda cosa è ancora trattenuto: passando a
+    # «Subito» la correzione partiva al volo e la conferma vecchia trenta
+    # secondi dopo, ultima parola sbagliata per Yourang.
+    held = [e for e in held_events(salon, key, lock=True) if e.event_type in _CLIENT_EVENTS]
+    if held and event_type in _TERMINAL_EVENTS:
+        supersede_events(held)
+        if any(e.event_type == "appointment.created" for e in held) and not _client_aware(appointment):
+            # La conferma non era ancora partita: per il mondo fuori dal
+            # salone quell'appuntamento non è mai esistito. Annunciarne
+            # l'annullamento significherebbe raccontare un appuntamento che
+            # la cliente non ha mai saputo di avere. Non vale per chi l'ha
+            # prenotato dall'app o ha già in mano il link della caparra.
+            return None
+    elif held and event_type in _CLIENT_EVENTS and all(e.event_type in _TERMINAL_EVENTS for e in held):
+        # Un annullamento (o un rilascio) ancora trattenuto e poi rimesso a
+        # posto, per esempio ripristinando subito un appuntamento liberato: non
+        # è partito niente, e se per la cliente tutto è com'era non si dice nulla.
+        supersede_events(held)
+        told = _told_event(appointment)
+        if (
+            told is not None
+            and told.event_type not in _TERMINAL_EVENTS
+            and _same_for_client(told.payload, payload)
+        ):
+            return None
+    elif held and event_type in _CLIENT_EVENTS:
+        keep = max(held, key=lambda e: _priority(e.event_type))
+        supersede_events([e for e in held if e.id != keep.id])
+        if _priority(event_type) > _priority(keep.event_type):
+            keep.event_type = event_type
+        if keep.event_type == "appointment.moved":
+            first = next(
+                (
+                    e.payload.get("old_start")
+                    for e in held  # in ordine di nascita
+                    if e.event_type == "appointment.moved" and e.payload.get("old_start")
+                ),
+                None,
+            )
+            if first or payload.get("old_start"):
+                payload["old_start"] = first or payload["old_start"]
+        else:
+            # la cliente non ha mai saputo l'orario di prima di una conferma
+            payload.pop("old_start", None)
+        if keep.event_type in ("appointment.moved", "appointment.updated"):
+            told = _told_event(appointment)
+            if (
+                told is not None
+                and told.event_type not in _TERMINAL_EVENTS
+                and _same_for_client(told.payload, payload)
+            ):
+                # Riportato com'era prima che il messaggio partisse: per la
+                # cliente non è successo niente.
+                supersede_events([keep])
+                return None
+        keep.payload = payload
+        _hold(keep, delay)
+        keep.save(update_fields=["event_type", "payload", "next_attempt_at", "due_at"])
+        return keep
     if delay <= 0:
         return emit_event(salon, event_type, payload, coalesce_key=key)
-
-    held = [e for e in held_events(salon, key, lock=True) if e.event_type in _CLIENT_EVENTS]
-    if held and event_type in _CLIENT_EVENTS:
-        if event_type in _TERMINAL_EVENTS:
-            supersede_events(held)
-            if any(e.event_type == "appointment.created" for e in held):
-                # La conferma non era ancora partita: per il mondo fuori dal
-                # salone quell'appuntamento non è mai esistito. Annunciarne
-                # l'annullamento significherebbe raccontare un appuntamento che
-                # la cliente non ha mai saputo di avere.
-                return None
-        else:
-            keep = max(held, key=lambda e: _EVENT_PRIORITY.get(e.event_type, 0))
-            supersede_events([e for e in held if e.id != keep.id])
-            if _EVENT_PRIORITY.get(event_type, 0) > _EVENT_PRIORITY.get(keep.event_type, 0):
-                keep.event_type = event_type
-            keep.payload = payload
-            keep.next_attempt_at = _extended_hold(keep, delay)
-            keep.save(update_fields=["event_type", "payload", "next_attempt_at"])
-            return keep
     return emit_event(salon, event_type, payload, delay_seconds=delay, coalesce_key=key)
 
 
@@ -970,41 +1164,306 @@ def suppress_slot_events(salon, appointment_id) -> int:
     return supersede_events(list(held_events(salon, slot_event_key(appointment_id), lock=True)))
 
 
-def revert_held_events(appointment: Appointment, *, fallback_event: str = "") -> None:
+def revert_held_events(
+    appointment: Appointment, *, fallback_event: str = "", previous_spans: dict | None = None
+) -> None:
     """Rimette a posto i messaggi dopo un «torna indietro» (vedi `undo.perform`).
 
-    - conferma non ancora partita → si aggiorna con lo stato ripristinato: alla
-      cliente arriva un messaggio solo, quello giusto;
-    - spostamento o modifica non ancora partiti → spariscono, perché per chi sta
-      fuori dal salone non è successo niente;
-    - niente in attesa, cioè messaggio già partito → si manda la rettifica.
+    Lo stato ripristinato si confronta con quello che la cliente sa (l'ultimo
+    messaggio consegnato, `_told_event`), non con il gesto annullato: i messaggi
+    trattenuti possono portare anche gesti PRECEDENTI ancora in vigore. Prima si
+    buttavano via tutti: spostata alle 14, poi per sbaglio alle 16, «Indietro»
+    → di nuovo alle 14 ma nessun messaggio, e la cliente si presentava alle 10.
+    - la cliente non sa niente (conferma ancora in coda) o le era arrivato
+      l'annullamento → parte la conferma, una sola, con lo stato ripristinato;
+    - per lei non cambia niente → i messaggi trattenuti spariscono;
+    - altrimenti → UN messaggio con lo stato ripristinato: `moved` con come
+      `old_start` l'orario che conosceva, o `updated`.
+    Senza nessuna storia a cui confrontarsi (importato da Yourang, messaggi già
+    cancellati) si fa come prima: via i trattenuti, e se non ce n'erano parte
+    `fallback_event`.
+
+    `previous_spans` (orari occupati prima del ripristino) allinea anche gli
+    annunci alla lista d'attesa; senza, quelli trattenuti spariscono e basta.
     """
     salon = appointment.salon
-    # Lo slot non si è più liberato: alla lista d'attesa non si dice nulla.
-    suppress_slot_events(salon, appointment.id)
-    key = appointment_event_key(appointment.id)
-    held = [e for e in held_events(salon, key, lock=True) if e.event_type in _CLIENT_EVENTS]
-    if not held:
-        if fallback_event:
-            emit_appointment_event(appointment, fallback_event)
-        return
-    keep = max(held, key=lambda e: _EVENT_PRIORITY.get(e.event_type, 0))
-    if keep.event_type == "appointment.created":
-        supersede_events([e for e in held if e.id != keep.id])
-        keep.payload = _event_payload(appointment)
-        keep.save(update_fields=["payload"])
-    else:
+    held = [
+        e for e in held_events(salon, appointment_event_key(appointment.id), lock=True)
+        if e.event_type in _CLIENT_EVENTS
+    ]
+    active = appointment.status not in Appointment.INACTIVE_STATUSES
+    knowledge = _slot_knowledge(appointment, previous_spans) if previous_spans is not None else None
+    if not active:
         supersede_events(held)
+    else:
+        told = _told_event(appointment)
+        payload = _event_payload(appointment)
+        if told is not None and told.event_type not in _TERMINAL_EVENTS:
+            wanted = None
+            if not _same_for_client(told.payload, payload):
+                if (
+                    _when(told.payload.get("start")) != appointment.start
+                    or told.payload.get("operator_id") != appointment.operator_id
+                ):
+                    wanted = "appointment.moved"
+                    payload["old_start"] = told.payload.get("start")
+                else:
+                    wanted = "appointment.updated"
+            _rectify(appointment, held, wanted, payload)
+        elif told is not None or _never_told(appointment):
+            _rectify(appointment, held, "appointment.created", payload)
+        elif held or not fallback_event:
+            supersede_events(held)
+        else:
+            emit_appointment_event(appointment, fallback_event)
+    if previous_spans is None:
+        # Lo slot non si è più liberato: alla lista d'attesa non si dice nulla.
+        suppress_slot_events(salon, appointment.id)
+    else:
+        _sync_freed_slots(
+            appointment,
+            previous_spans,
+            _appointment_spans(appointment) if active else {},
+            knowledge,
+        )
 
 
-def _announce_freed_slot(event) -> bool:
-    """Lo slot liberato si annuncia solo se qualcuno sapeva che era occupato.
+def _rectify(appointment: Appointment, held: list, wanted: str | None, payload: dict) -> None:
+    """Lascia in coda UN messaggio `wanted` (None = nessuno), riusando un trattenuto."""
+    if wanted is None:
+        supersede_events(held)
+        return
+    reusable = [e for e in held if e.event_type not in _TERMINAL_EVENTS]
+    keep = max(reusable, key=lambda e: _priority(e.event_type)) if reusable else None
+    supersede_events([e for e in held if keep is None or e.id != keep.id])
+    delay = automation_delay_seconds(appointment.salon)
+    if keep is None:
+        emit_event(
+            appointment.salon, wanted, payload,
+            delay_seconds=max(delay, 0), coalesce_key=appointment_event_key(appointment.id),
+        )
+        return
+    keep.event_type = wanted
+    keep.payload = payload
+    _hold(keep, delay)
+    keep.save(update_fields=["event_type", "payload", "next_attempt_at", "due_at"])
 
-    Con la conferma ancora trattenuta l'appuntamento è esistito solo dentro il
-    salone: avvisare la lista d'attesa che «si è liberato» un orario che nessuno
-    ha mai visto occupato è solo rumore.
+
+# ---- Slot liberati: cosa dire alla lista d'attesa -------------------------------
+#
+# Gli orari si trattano come intervalli per operatrice ({operator_id: [(inizio,
+# fine), …]}, posa compresa: è il tempo in cui il posto resta preso). Si
+# annuncia ciò che la cliente — e quindi chiunque guardasse l'agenda — sapeva
+# occupato e non lo è più: la differenza fra l'ultimo stato comunicato e quello
+# attuale. Così un ritocco di un quarto d'ora libera un quarto d'ora e non
+# l'intera visita, un cambio di colonna libera l'operatrice di partenza, e
+# 10→14→16 annuncia le 10 (le 14 non le ha mai viste occupate nessuno).
+
+
+def _merge_spans(intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _chain_spans(start, chain) -> dict:
+    """Intervalli occupati da una catena di servizi: chain = [(operator_id, attivo, posa)]."""
+    spans: dict[int, list] = defaultdict(list)
+    cursor = start
+    for operator_id, active_min, soak_min in chain:
+        end = cursor + dt.timedelta(minutes=(active_min or 0) + (soak_min or 0))
+        if operator_id and end > cursor:
+            spans[operator_id].append((cursor, end))
+        cursor = end
+    return {op: _merge_spans(intervals) for op, intervals in spans.items()}
+
+
+def _appointment_spans(appointment: Appointment) -> dict:
+    items = appointment.items.all().order_by("order", "id")
+    return _chain_spans(
+        appointment.start, [(it.operator_id, it.duration_min, it.soak_min) for it in items]
+    )
+
+
+def _payload_spans(payload: dict) -> dict:
+    """Gli orari che un messaggio consegnato dava per occupati."""
+    start = _when(payload.get("start"))
+    if start is None:
+        return {}
+    services = payload.get("services") or []
+    if services and all("operator_id" in s for s in services):
+        return _chain_spans(
+            start, [(s["operator_id"], s.get("duration_min"), s.get("soak_min")) for s in services]
+        )
+    # messaggio di prima che portasse operatrici e pose: tutta la visita
+    end, operator_id = _when(payload.get("end")), payload.get("operator_id")
+    if not operator_id or end is None or end <= start:
+        return {}
+    return {operator_id: [(start, end)]}
+
+
+def _spans_minus(spans: dict, other: dict) -> dict:
+    out = {}
+    for op, intervals in spans.items():
+        pieces = list(intervals)
+        for cut_start, cut_end in other.get(op, ()):
+            pieces = [
+                piece
+                for start, end in pieces
+                for piece in ((start, min(end, cut_start)), (max(start, cut_end), end))
+                if piece[0] < piece[1]
+            ]
+        if pieces:
+            out[op] = _merge_spans(pieces)
+    return out
+
+
+def _spans_union(spans: dict, other: dict) -> dict:
+    out = {op: list(intervals) for op, intervals in spans.items()}
+    for op, intervals in other.items():
+        out.setdefault(op, []).extend(intervals)
+    return {op: _merge_spans(intervals) for op, intervals in out.items()}
+
+
+def _slot_piece(event) -> tuple:
+    start = _when(event.payload.get("start"))
+    return (
+        event.payload.get("operator_id"),
+        start,
+        start + dt.timedelta(minutes=int(event.payload.get("duration_min") or 0)) if start else None,
+    )
+
+
+def _next_minute():
+    """Adesso, arrotondato al minuto successivo."""
+    now = timezone.now()
+    rounded = now.replace(second=0, microsecond=0)
+    return rounded if rounded == now else rounded + dt.timedelta(minutes=1)
+
+
+def _emit_freed_slot(appointment: Appointment, operator_id, start, end, *, since=None):
+    """Accoda (trattenuto) `slot.freed` per un pezzo di agenda liberato.
+
+    Compatibili: voci attive per un servizio della visita, con quell'operatrice
+    o nessuna, e un servizio che nel pezzo ci sta (posa compresa). Con `since`
+    solo chi si è messa in lista dopo quell'istante; se non c'è nessuno non
+    parte niente.
     """
-    return event is not None and event.event_type != "appointment.created"
+    minutes = int((end - start).total_seconds() // 60)
+    service_ids = {item.service_id for item in appointment.items.all()}
+    matching = (
+        WaitlistEntry.objects.filter(
+            salon=appointment.salon,
+            status=WaitlistEntry.Status.ACTIVE,
+            service_id__in=service_ids,
+        )
+        .filter(Q(operator__isnull=True) | Q(operator_id=operator_id))
+        .annotate(needed=F("service__duration_min") + F("service__soak_min"))
+        .filter(needed__lte=minutes)
+    )
+    if since is not None:
+        matching = matching.filter(created_at__gte=since)
+    ids = list(matching.values_list("id", flat=True))
+    if since is not None and not ids:
+        return None
+    payload = {
+        "appointment_id": appointment.id,
+        "start": start.isoformat(),
+        # Tempo che si libera per la cliente successiva: lavoro attivo E posa.
+        # Con la sola fase attiva un colore da 30' di lavoro e 60' di posa
+        # liberava «30 minuti», e alla lista d'attesa venivano proposti servizi
+        # che in quel buco non entravano (o non venivano proposti quelli che ci
+        # stavano).
+        "duration_min": minutes,
+        "operator_id": operator_id,
+        "matching_waitlist": ids,
+    }
+    return emit_event(
+        appointment.salon,
+        "slot.freed",
+        payload,
+        delay_seconds=max(automation_delay_seconds(appointment.salon), 0),
+        coalesce_key=slot_event_key(appointment.id),
+    )
+
+
+def _slot_knowledge(appointment: Appointment, before: dict) -> tuple[dict, object]:
+    """Cosa si sapeva occupato PRIMA del gesto: (orari, da quando conta chi aspetta).
+
+    Va chiesto prima di emettere il messaggio del gesto: col ritardo spento
+    quel messaggio è «già consegnato» un istante dopo, e l'annullamento
+    appena accodato diventava ciò che la cliente sa — niente più slot da
+    annunciare.
+    """
+    told = _told_event(appointment)
+    if told is not None:
+        return ({} if told.event_type in _TERMINAL_EVENTS else _payload_spans(told.payload)), None
+    if _never_told(appointment):
+        return before, (None if _client_aware(appointment) else appointment.created_at)
+    if any(
+        e.event_type in _CLIENT_EVENTS
+        for e in held_events(appointment.salon, appointment_event_key(appointment.id))
+    ):
+        # Nessun messaggio consegnato ma un gesto ancora trattenuto (appuntamento
+        # importato, storico cancellato): l'orario di prima di QUESTO gesto non
+        # l'ha mai saputo nessuno — è quello del gesto trattenuto.
+        return {}, None
+    return before, None
+
+
+def _sync_freed_slots(
+    appointment: Appointment, before: dict, after: dict, knowledge: tuple | None = None
+) -> None:
+    """Allinea gli annunci `slot.freed` trattenuti a ciò che si è liberato davvero.
+
+    `before`/`after`: orari occupati dall'appuntamento prima e dopo il gesto
+    (`after` vuoto se è stato annullato o è sparito); `knowledge` è
+    `_slot_knowledge`, chiesto prima di emettere il messaggio del gesto. Un
+    annuncio trattenuto
+    resta finché il suo orario non torna occupato — prima il gesto successivo
+    lo sostituiva con la posizione intermedia, e l'orario davvero liberato non
+    veniva più proposto a nessuno —; se ne aggiungono i pezzi di `before` che
+    la cliente sapeva occupati. Gli orari già passati non si annunciano.
+
+    Se la cliente non ha mai ricevuto niente, lo slot «non si è mai occupato»
+    per la lista d'attesa, tranne che per chi si è messa in lista DOPO la
+    prenotazione: quella lo ha visto occupato, e va avvisata.
+    """
+    salon = appointment.salon
+    known, since = knowledge if knowledge is not None else _slot_knowledge(appointment, before)
+    held = [
+        e for e in held_events(salon, slot_event_key(appointment.id), lock=True)
+        if e.event_type == "slot.freed"
+    ]
+    announced = {}
+    for event in held:
+        operator_id, start, end = _slot_piece(event)
+        if operator_id and start and end and end > start:
+            announced = _spans_union(announced, {operator_id: [(start, end)]})
+    vacated = _spans_minus(before, after)
+    announced = _spans_union(announced, _spans_minus(vacated, _spans_minus(vacated, known)))
+    wanted = _spans_minus(announced, after)
+    # Niente annunci per orari già finiti (un no-show segnato a metà mattina
+    # proponeva alla lista d'attesa una visita già iniziata): si taglia su adesso.
+    now = _next_minute()
+    pieces = [
+        (op, max(start, now), end)
+        for op, intervals in sorted(wanted.items())
+        for start, end in intervals
+        if end - max(start, now) >= dt.timedelta(minutes=MIN_FREED_SLOT_MINUTES)
+    ]
+    kept = set()
+    for piece in pieces:
+        same = next((e for e in held if e.id not in kept and _slot_piece(e) == piece), None)
+        if same is not None:
+            kept.add(same.id)
+        else:
+            _emit_freed_slot(appointment, *piece, since=since)
+    supersede_events([e for e in held if e.id not in kept])
 
 
 def snapshot_items(appointment: Appointment, resolved: list[tuple]) -> None:
@@ -1282,6 +1741,11 @@ def move_appointment(
     items = list(appointment.items.select_related("service", "operator"))
     if not items:
         raise HttpError(400, "Appuntamento senza servizi")
+    # Orari occupati prima dello spostamento: a spostamento fatto, la lista
+    # d'attesa sente solo ciò che si è liberato davvero (vedi _sync_freed_slots).
+    before_spans = _chain_spans(
+        old_start, [(item.operator_id, item.duration_min, item.soak_min) for item in items]
+    )
 
     source_id = from_operator.id if from_operator is not None else old_operator_id
     target_operators = []
@@ -1366,13 +1830,16 @@ def move_appointment(
             "forced": force,
         },
     )
-    event = emit_appointment_event(
+    knowledge = _slot_knowledge(appointment, before_spans)
+    emit_appointment_event(
         appointment,
         "appointment.moved",
         {**_event_payload(appointment), "old_start": old_start.isoformat()},
     )
-    if _announce_freed_slot(event):
-        free_slot_event(appointment, start=old_start, operator_id=old_operator_id)
+    # Prima si annunciava l'intera visita al vecchio orario, con l'operatrice
+    # principale: anche per un ritocco di un quarto d'ora (ancora occupato) o
+    # per un cambio di colonna, dove a liberarsi era la collega di partenza.
+    _sync_freed_slots(appointment, before_spans, _appointment_spans(appointment), knowledge)
     undo_log.record(
         appointment.salon,
         kind=UndoEntry.Kind.MOVE,
@@ -1637,11 +2104,12 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         actor=actor,
         payload={"appointment_id": appointment.id, "reason": reason},
     )
-    event = emit_appointment_event(
+    occupied = _appointment_spans(appointment)
+    knowledge = _slot_knowledge(appointment, occupied)
+    emit_appointment_event(
         appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason}
     )
-    if _announce_freed_slot(event):
-        free_slot_event(appointment)
+    _sync_freed_slots(appointment, occupied, {}, knowledge)
     undo_log.record(
         appointment.salon,
         kind=UndoEntry.Kind.NO_SHOW,
@@ -1651,6 +2119,32 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         after={"appointments": [undo_log.appointment_snapshot(appointment)]},
     )
     return appointment
+
+
+def _close_deposit_link_after_commit(appointment: Appointment) -> None:
+    """Chiude su Stripe la sessione del link caparra, a transazione chiusa.
+
+    Il link restava pagabile dopo l'annullamento, il rilascio per caparra non
+    pagata o il «torna indietro» di una prenotazione: la cliente pagava lo
+    stesso, e il salone rimborsava perdendo le commissioni (o i soldi finivano
+    su un appuntamento che non esisteva più). La chiamata a Stripe parte dopo
+    il commit, fuori da ogni lock; un suo errore non annulla niente.
+    """
+    if not appointment.deposit_checkout_session_id:
+        return
+    snapshot = copy.copy(appointment)  # l'undo cancella la riga subito dopo
+
+    def close():
+        from apps.sales.stripe_service import expire_deposit_checkout  # lazy
+
+        try:
+            expire_deposit_checkout(snapshot)
+        except Exception:  # noqa: BLE001 — il gesto è fatto, il link è un di più
+            logger.warning(
+                "Link caparra non chiuso (appuntamento %s)", snapshot.pk, exc_info=True
+            )
+
+    transaction.on_commit(close)
 
 
 def cancel_appointment(
@@ -1704,13 +2198,20 @@ def cancel_appointment(
             actor=actor,
             payload={"appointment_id": appointment.id, "reason": reason, "late": late},
         )
-        event = emit_appointment_event(
+        unpaid_link = appointment.deposit_status == Appointment.DepositStatus.REQUIRED
+        if unpaid_link:
+            # Il link della caparra non ha più niente da incassare: quello non
+            # ancora partito non parte, quello già inviato si chiude su Stripe.
+            _withdraw_deposit_messages(appointment)
+            _close_deposit_link_after_commit(appointment)
+        occupied = _appointment_spans(appointment)
+        knowledge = _slot_knowledge(appointment, occupied)
+        emit_appointment_event(
             appointment,
             "appointment.cancelled",
             {**_event_payload(appointment), "reason": reason, "late": late},
         )
-        if _announce_freed_slot(event):
-            free_slot_event(appointment)
+        _sync_freed_slots(appointment, occupied, {}, knowledge)
         # L'annullamento della CLIENTE dall'app non entra nello storico della
         # postazione: chi sta al banco non deve poter rimettere in agenda una
         # visita che la cliente ha disdetto.
@@ -2036,7 +2537,14 @@ def release_for_unpaid_deposit(appointment: Appointment, *, actor=None) -> Appoi
     fra i «da richiamare» in agenda, l'operatrice decide se telefonare o
     ripristinare. Emette `appointment.released_unpaid` (messaggio alla cliente)
     e `slot.freed` per la lista d'attesa.
+
+    Il rilascio passa dalla fusione come evento finale: partiva per conto suo,
+    e uno spostamento trattenuto un istante prima arrivava a Yourang dopo
+    «posto liberato», riportando in vita l'appuntamento alla nuova ora. Il link
+    di pagamento si chiude su Stripe: la cliente lo pagava anche a posto già
+    liberato.
     """
+    before_spans = _appointment_spans(appointment)
     appointment.status = Appointment.Status.CANCELLED
     appointment.cancel_reason = "Caparra non versata entro il termine"
     appointment.cancelled_late = False
@@ -2061,8 +2569,11 @@ def release_for_unpaid_deposit(appointment: Appointment, *, actor=None) -> Appoi
             "due_at": appointment.deposit_due_at.isoformat() if appointment.deposit_due_at else None,
         },
     )
-    emit_event(appointment.salon, "appointment.released_unpaid", _event_payload(appointment))
-    free_slot_event(appointment)
+    _withdraw_deposit_messages(appointment)
+    knowledge = _slot_knowledge(appointment, before_spans)
+    emit_appointment_event(appointment, "appointment.released_unpaid")
+    _sync_freed_slots(appointment, before_spans, {}, knowledge)
+    _close_deposit_link_after_commit(appointment)
     return appointment
 
 
@@ -2208,51 +2719,27 @@ def restore_released(appointment: Appointment, *, actor=None, force: bool = Fals
         payload={"appointment_id": appointment.id, "forced": force},
     )
     emit_appointment_event(appointment, "appointment.created")
+    # L'orario è di nuovo occupato: l'annuncio del rilascio, se non è ancora
+    # partito, non parte più.
+    _sync_freed_slots(appointment, {}, _appointment_spans(appointment))
     return appointment
 
 
 def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):
-    """Emette slot.freed con le voci di lista d'attesa compatibili.
+    """Annuncia alla lista d'attesa come liberata l'intera visita (o da `start`, per `operator_id`).
 
-    Compatibilità: entry attiva, stesso servizio di uno degli item e operatrice
-    non indicata oppure tra quelle coinvolte nell'appuntamento.
-
-    Anche questo evento è trattenuto qualche secondo e si fonde col precedente
-    dello stesso appuntamento: spostare due volte di fila un blocco proponeva lo
-    stesso orario due volte alla lista d'attesa, e riportarlo dov'era lo
-    proponeva pur non essendosi liberato niente.
+    Resta per chi la chiama da fuori dall'agenda: i gesti dell'agenda passano da
+    `_sync_freed_slots`, che annuncia solo ciò che si è liberato davvero. Anche
+    qui l'orario si taglia su adesso (una visita già finita non si propone a
+    nessuno) e sostituisce gli annunci ancora trattenuti dello stesso
+    appuntamento. Ritorna l'evento, o None se non c'è più niente da annunciare.
     """
     start = start or appointment.start
     operator_id = operator_id or appointment.operator_id
-    items = list(appointment.items.all())
-    service_ids = {item.service_id for item in items}
-    operator_ids = {item.operator_id for item in items} | {operator_id}
-
-    matching = (
-        WaitlistEntry.objects.filter(
-            salon=appointment.salon,
-            status=WaitlistEntry.Status.ACTIVE,
-            service_id__in=service_ids,
-        )
-        .filter(Q(operator__isnull=True) | Q(operator_id__in=operator_ids))
-        .values_list("id", flat=True)
-    )
-    key = slot_event_key(appointment.id)
-    delay = automation_delay_seconds(appointment.salon)
-    payload = {
-        "appointment_id": appointment.id,
-        "start": start.isoformat(),
-        # Tempo che si libera per la cliente successiva: lavoro attivo E posa.
-        # Con la sola fase attiva un colore da 30' di lavoro e 60' di posa
-        # liberava «30 minuti», e alla lista d'attesa venivano proposti servizi
-        # che in quel buco non entravano (o non venivano proposti quelli che ci
-        # stavano).
-        "duration_min": sum(item.duration_min + item.soak_min for item in items),
-        "operator_id": operator_id,
-        "matching_waitlist": list(matching),
-    }
-    if delay > 0:
-        supersede_events(list(held_events(appointment.salon, key, lock=True)))
-    return emit_event(
-        appointment.salon, "slot.freed", payload, delay_seconds=delay, coalesce_key=key
-    )
+    total = sum(item.duration_min + item.soak_min for item in appointment.items.all())
+    end = start + dt.timedelta(minutes=total)
+    suppress_slot_events(appointment.salon, appointment.id)
+    begin = max(start, _next_minute())
+    if end - begin < dt.timedelta(minutes=MIN_FREED_SLOT_MINUTES):
+        return None
+    return _emit_freed_slot(appointment, operator_id, begin, end)
