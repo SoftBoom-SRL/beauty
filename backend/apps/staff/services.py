@@ -203,16 +203,8 @@ def month_revenue(operator, on_date: date_cls | None = None) -> Decimal:
 
 
 def today_clients_count(operator, on_date: date_cls | None = None) -> int:
-    """Numero di appuntamenti di oggi per l'operatrice (esclusi annullati/no-show)."""
-    Appointment = _appointment_model()
-    if Appointment is None:
-        return 0
-    on_date = on_date or timezone.localdate()
-    return (
-        Appointment.objects.filter(operator=operator, start__date=on_date)
-        .exclude(status__in=["cancelled", "no_show"])
-        .count()
-    )
+    """Visite di oggi dell'operatrice (esclusi annullati/no-show), servizi secondari compresi."""
+    return today_clients_by_operator([operator], on_date).get(operator.pk, 0)
 
 
 def month_revenue_by_operator(operators, on_date: date_cls | None = None) -> dict[int, Decimal]:
@@ -239,20 +231,46 @@ def month_revenue_by_operator(operators, on_date: date_cls | None = None) -> dic
     return {row["operator_id"]: row["total"] or Decimal("0") for row in rows}
 
 
+def _appointment_item_model():
+    try:
+        return apps.get_model("agenda", "AppointmentService")
+    except LookupError:
+        return None
+
+
 def today_clients_by_operator(operators, on_date: date_cls | None = None) -> dict[int, int]:
-    """Appuntamenti di giornata per OGNI operatrice, in una sola query."""
+    """Visite di giornata per OGNI operatrice, in due query per l'intera lista.
+
+    Conta chi fa un servizio qualsiasi della visita, non solo l'operatrice
+    principale (`Appointment.operator`, quella del PRIMO servizio): Bea che fa
+    tutto il giorno i tagli dopo i colori di Anna risultava «Clienti oggi: 0»,
+    mentre l'incasso di quei tagli le veniva contato (09-04). Una visita conta
+    una volta per operatrice, anche se lei ne fa due servizi.
+    """
     Appointment = _appointment_model()
+    AppointmentService = _appointment_item_model()
     ids = [op.pk for op in operators]
     if Appointment is None or not ids:
         return {}
     on_date = on_date or timezone.localdate()
-    rows = (
+    excluded = ["cancelled", "no_show"]
+    pairs = set(
         Appointment.objects.filter(operator_id__in=ids, start__date=on_date)
-        .exclude(status__in=["cancelled", "no_show"])
-        .values("operator_id")
-        .annotate(total=Count("id"))
+        .exclude(status__in=excluded)
+        .values_list("operator_id", "id")
     )
-    return {row["operator_id"]: row["total"] for row in rows}
+    if AppointmentService is not None:
+        pairs.update(
+            AppointmentService.objects.filter(
+                operator_id__in=ids, appointment__start__date=on_date
+            )
+            .exclude(appointment__status__in=excluded)
+            .values_list("operator_id", "appointment_id")
+        )
+    counts: dict[int, int] = {}
+    for operator_id, _appointment_id in pairs:
+        counts[operator_id] = counts.get(operator_id, 0) + 1
+    return counts
 
 
 def performance_series(operator, months: int = 6) -> list[dict]:
@@ -309,7 +327,17 @@ def served_clients(operator, q: str = "") -> list[dict]:
     if Appointment is None:
         return []
     now = timezone.now()
-    qs = Appointment.objects.filter(operator=operator, start__lt=now).exclude(
+    # Le visite in cui l'operatrice ha fatto almeno un servizio, non solo
+    # quelle in cui è la principale: chi fa i servizi secondari perdeva le sue
+    # clienti dall'elenco (09-04). Sottoquery e non join, così ogni visita
+    # resta una riga sola e il conteggio delle visite non si gonfia.
+    involved = Q(operator=operator)
+    AppointmentService = _appointment_item_model()
+    if AppointmentService is not None:
+        involved |= Q(
+            pk__in=AppointmentService.objects.filter(operator=operator).values("appointment_id")
+        )
+    qs = Appointment.objects.filter(involved, start__lt=now).exclude(
         status__in=["cancelled", "no_show"]
     )
     if q:

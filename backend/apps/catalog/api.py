@@ -209,7 +209,11 @@ def update_service(request, service_id: int, data: ServiceIn):
     service.category = salon_get(ServiceCategory, ctx, payload.pop("category_id"))
     for name, value in payload.items():
         setattr(service, name, value)
-    service.save()
+    # Solo le colonne del modulo: il save() completo riscriveva anche
+    # `yourang_item_id` con il valore letto a inizio richiesta, e la voce
+    # collegata dalla sincronizzazione nel frattempo tornava vuota — al giro
+    # dopo la sync ne creava una seconda su Yourang (18-07).
+    service.save(update_fields=[*payload.keys(), "category"])
     log_activity(
         ctx.salon,
         "service.updated",
@@ -316,7 +320,9 @@ def update_package(request, package_id: int, data: PackageIn):
         _sync_package_items(ctx, package, items)
     for name, value in payload.items():
         setattr(package, name, value)
-    package.save()
+    # Come per i servizi: il save() completo riportava indietro il
+    # `yourang_item_id` scritto dalla sincronizzazione nel frattempo (18-07).
+    package.save(update_fields=list(payload.keys()))
     log_activity(
         ctx.salon,
         "package.updated",
@@ -387,6 +393,7 @@ def public_packages(request, salon: str):
                     "service_id": item.service_id,
                     "name_it": item.service.name_it,
                     "name_en": item.service.name_en,
+                    "soak_min": item.service.soak_min,
                     "qty": item.qty,
                 }
                 for item in p.items.all()

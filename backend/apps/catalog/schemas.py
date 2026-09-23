@@ -107,6 +107,10 @@ class PublicServiceOut(Schema):
     description_it: str = ""
     description_en: str = ""
     duration_min: int
+    # Minuti di posa dopo il lavoro attivo: la cliente resta in salone. Senza,
+    # l'app chiamava «Durata» il solo lavoro — colore 60' + 40' di posa letto
+    # «1 h», mentre l'agenda la tiene 1 h 40' (09-07, C4).
+    soak_min: int = 0
     price: Decimal
 
 
@@ -122,6 +126,7 @@ class PublicPackageItemOut(Schema):
     service_id: int
     name_it: str
     name_en: str
+    soak_min: int = 0  # come in PublicServiceOut (C4)
     qty: int
 
 

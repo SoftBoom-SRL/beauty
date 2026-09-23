@@ -88,7 +88,9 @@ class InvitationOut(Schema):
     id: int
     email: str
     role: RoleOut
-    token: UUID
+    # None per chi non potrebbe concedere il ruolo dell'invito (e per gli inviti
+    # non più accettabili): il codice È l'account, vedi `list_invitations`.
+    token: Optional[UUID] = None
     status: str
     expires_at: datetime
     created_at: datetime
@@ -143,6 +145,8 @@ class ClientMeOut(Schema):
     email: str
     lang: str
     whatsapp_reminders: bool
+    # Lo si cambia con POST /api/marketing/client/marketing-consent {accepted}.
+    marketing_consent: bool = False
 
 
 class ClientMeIn(Schema):

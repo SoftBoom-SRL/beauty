@@ -6,7 +6,8 @@ import logging
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -90,11 +91,25 @@ def _auth_payload(membership, tokens: dict | None = None) -> dict:
 
 
 def _first_membership(user) -> Membership | None:
-    """v1 mono-salone: se l'utente ha più membership prende la prima."""
+    """Il salone in cui entra chi fa login (v1: un salone per sessione, niente selettore).
+
+    Con più membership prendeva la più vecchia e basta: la ex collaboratrice
+    che apre il suo salone con la stessa email (create_salon) entrava sempre
+    in quello di prima, dove magari non ha più nemmeno un ruolo, e il suo non
+    lo raggiungeva mai (08-08). Ora l'ordine è: dove è titolare, poi dove ha
+    un ruolo (una membership senza ruolo non apre nulla), poi la più vecchia.
+    A parità di dati la scelta è sempre la stessa; per il titolare di due
+    saloni resta il primo, come prima: il secondo richiede un selettore.
+    """
     return (
         Membership.objects.select_related("user", "salon", "role")
         .filter(user=user)
-        .order_by("id")
+        .annotate(
+            senza_ruolo=Case(
+                When(role__isnull=True, then=Value(1)), default=Value(0), output_field=IntegerField()
+            )
+        )
+        .order_by("-is_owner", "senza_ruolo", "id")
         .first()
     )
 
@@ -125,7 +140,42 @@ def _client_profile(client) -> dict:
         "email": client.email or "",
         "lang": client.lang,
         "whatsapp_reminders": client.whatsapp_reminders,
+        # Il consenso dato dal form o in salone si revoca dall'app
+        # (POST /api/marketing/client/marketing-consent): senza leggerlo qui
+        # l'app non sapeva nemmeno se c'era qualcosa da revocare (06-17).
+        "marketing_consent": bool((client.consents or {}).get("marketing")),
     }
+
+
+# Una segnalazione al salone per scheda archiviata al giorno: vedi
+# `_notify_archived_client`.
+ARCHIVED_NOTICE_WINDOW_SECONDS = 24 * 3600
+
+
+def _notify_archived_client(salon, client) -> None:
+    """Avvisa il salone se `client` è una scheda archiviata che prova a entrare.
+
+    Alla cliente archiviata l'app non può dire nulla di diverso da un numero
+    sconosciuto — la risposta rivelerebbe la rubrica — e il codice non le parte:
+    restava fuori senza che nessuno lo sapesse. Il salone invece deve saperlo:
+    la segnalazione arriva nel feed (scope clienti) con la scheda da aprire e
+    riattivare, e l'app intanto le dice di contattare il salone. Non la si
+    riattiva da sola: il numero potrebbe essere passato a un'altra persona, che
+    entrerebbe nello storico di chi non è più cliente.
+    """
+    if client is None or client.is_active:
+        return
+    if not ratelimit.hit(
+        f"archived-notice:{client.id}", 1, ARCHIVED_NOTICE_WINDOW_SECONDS
+    ):
+        return
+    log_activity(
+        salon,
+        "client.reactivation_requested",
+        f"{client.full_name}: scheda archiviata, ha provato ad accedere dall'app. "
+        "Riattivala se vuoi che entri.",
+        payload={"client_id": client.id},
+    )
 
 
 def _validate_scopes(scopes: list[str]) -> None:
@@ -150,6 +200,11 @@ LOGIN_MAX_PER_IP = 50
 # Secondi entro cui un refresh appena ruotato è ancora accettato: vedi
 # staff_refresh, serve alle schede multiple della dashboard.
 REFRESH_REUSE_GRACE_SECONDS = 20
+# Tentativi di cambio password con la password attuale da verificare: stessi
+# tetti del login, su chiavi proprie (vedi staff_change_password).
+PASSWORD_CHANGE_WINDOW_SECONDS = 15 * 60
+PASSWORD_CHANGE_MAX_PER_USER = 10
+PASSWORD_CHANGE_MAX_PER_IP = 50
 
 
 def _login_account_key(email: str) -> str:
@@ -181,15 +236,25 @@ def staff_login(request, data: StaffLoginIn):
     if not (ip_ok and account_ok):
         raise HttpError(429, "Troppi tentativi di accesso: riprova tra qualche minuto")
 
-    user = User.objects.filter(email__iexact=email).first()
-    if user is None or not user.is_active:
+    # L'email si confronta senza maiuscole, ma `User.email` è unica solo così
+    # com'è scritta: «Anna@x.it» e «anna@x.it» possono esistere entrambe (le
+    # creava create_salon), e `.first()` senza ordine ne prendeva una a caso —
+    # su PostgreSQL non sempre la stessa (08-08). Si prova prima quella scritta
+    # esattamente così, poi le altre in ordine di creazione, e vale quella di
+    # cui la password è giusta.
+    candidates = sorted(
+        User.objects.filter(email__iexact=email, is_active=True),
+        key=lambda candidate: (candidate.email != email, candidate.id),
+    )
+    if not candidates:
         # Hash a vuoto: senza, l'email inesistente rispondeva in un millesimo di
         # secondo e quella vera dopo il tempo di un PBKDF2. La differenza si
         # misura da fuori e dice quali caselle esistono nel gestionale — il
         # primo passo per provarci le password.
         User().set_password(data.password)
         raise HttpError(401, "Credenziali non valide")
-    if not user.check_password(data.password):
+    user = next((c for c in candidates if c.check_password(data.password)), None)
+    if user is None:
         raise HttpError(401, "Credenziali non valide")
     ratelimit.reset(account_key)
     membership = _first_membership(user)
@@ -227,38 +292,44 @@ def staff_refresh(request, data: RefreshIn):
         raise HttpError(401, "Sessione non più valida: la password è stata modificata")
 
     jti = payload.get("jti")
-    if jti:
-        now = timezone.now()
-        sessione = StaffRefreshToken.objects.filter(
-            jti=jti, user_id=membership.user_id, salon_id=membership.salon_id
-        )
-        # Si revoca con una sola UPDATE filtrata: due rinnovi simultanei con lo
-        # stesso token non possono riuscire entrambi, perché solo uno trova la
-        # riga ancora viva. Il filtro su user e salone impedisce di spendere il
-        # biglietto di qualcun altro.
-        spent = sessione.filter(revoked_at__isnull=True, expires_at__gt=now).update(
-            revoked_at=now, rotated=True
-        )
-        if not spent:
-            # Finestra di tolleranza: la dashboard sta aperta in più schede e
-            # quando l'access token scade partono due rinnovi con lo stesso
-            # refresh a pochi istanti l'uno dall'altro. Senza questa tolleranza
-            # la seconda scheda si ritroverebbe buttata fuori a metà giornata.
-            # Oltre i pochi secondi il token speso non vale più davvero.
-            riutilizzo = sessione.filter(
-                rotated=True,
-                revoked_at__gte=now - dt.timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS),
-                expires_at__gt=now,
-            ).exists()
-            if not riutilizzo:
-                logger.warning(
-                    "Rinnovo rifiutato: refresh già speso o revocato (utente=%s)",
-                    membership.user_id,
-                )
-                raise HttpError(401, "Sessione non più valida: esegui di nuovo l'accesso")
-    # I refresh emessi prima della rotazione non hanno `jti`: si accettano una
-    # volta e vengono sostituiti da uno tracciato, così nessuno viene buttato
-    # fuori al deploy. Scadono comunque entro JWT_REFRESH_TTL_DAYS.
+    if not jti:
+        # I refresh emessi prima della rotazione (18/09) non hanno `jti`. Nella
+        # finestra di passaggio si accettavano per non buttare fuori nessuno al
+        # deploy, ma senza una riga da revocare restavano riusabili all'infinito
+        # e sopravvivevano all'uscita: un refresh legacy rubato rigenerava access
+        # token fino alla sua scadenza, anche dopo il logout del titolare (10-11).
+        # Chi usa la dashboard l'ha già scambiato con uno tracciato al primo
+        # rinnovo; quelli rimasti sono di dispositivi fermi da allora, che rifanno
+        # l'accesso una volta.
+        raise HttpError(401, "Sessione non più valida: esegui di nuovo l'accesso")
+    now = timezone.now()
+    sessione = StaffRefreshToken.objects.filter(
+        jti=jti, user_id=membership.user_id, salon_id=membership.salon_id
+    )
+    # Si revoca con una sola UPDATE filtrata: due rinnovi simultanei con lo
+    # stesso token non possono riuscire entrambi, perché solo uno trova la
+    # riga ancora viva. Il filtro su user e salone impedisce di spendere il
+    # biglietto di qualcun altro.
+    spent = sessione.filter(revoked_at__isnull=True, expires_at__gt=now).update(
+        revoked_at=now, rotated=True
+    )
+    if not spent:
+        # Finestra di tolleranza: la dashboard sta aperta in più schede e
+        # quando l'access token scade partono due rinnovi con lo stesso
+        # refresh a pochi istanti l'uno dall'altro. Senza questa tolleranza
+        # la seconda scheda si ritroverebbe buttata fuori a metà giornata.
+        # Oltre i pochi secondi il token speso non vale più davvero.
+        riutilizzo = sessione.filter(
+            rotated=True,
+            revoked_at__gte=now - dt.timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS),
+            expires_at__gt=now,
+        ).exists()
+        if not riutilizzo:
+            logger.warning(
+                "Rinnovo rifiutato: refresh già speso o revocato (utente=%s)",
+                membership.user_id,
+            )
+            raise HttpError(401, "Sessione non più valida: esegui di nuovo l'accesso")
     tokens = create_staff_tokens(membership.user, membership.salon)
     return _auth_payload(membership, tokens)
 
@@ -307,8 +378,24 @@ def staff_change_password(request, data: PasswordChangeIn):
     """
     ctx = request.auth
     user = ctx.user
+    # Il login ha due tetti, questo endpoint nessuno: chi aveva in mano un
+    # access token (un'ora di vita) ma non la password poteva provarla qui
+    # all'infinito, e la password vale anche per /admin/ e dopo la scadenza
+    # del token (10-13). Si conta ogni tentativo prima di verificare, come al
+    # login, e la chiave dell'utente si azzera appena la password attuale
+    # risulta giusta: chi sbaglia solo le regole della nuova non paga.
+    user_key = f"password-change:{user.id}"
+    ip_ok = ratelimit.hit(
+        f"password-change-ip:{ratelimit.client_ip(request)}",
+        PASSWORD_CHANGE_MAX_PER_IP,
+        PASSWORD_CHANGE_WINDOW_SECONDS,
+    )
+    user_ok = ratelimit.hit(user_key, PASSWORD_CHANGE_MAX_PER_USER, PASSWORD_CHANGE_WINDOW_SECONDS)
+    if not (ip_ok and user_ok):
+        raise HttpError(429, "Troppi tentativi: riprova tra qualche minuto")
     if not user.check_password(data.current_password):
         raise HttpError(400, "La password attuale non è corretta")
+    ratelimit.reset(user_key)
     if data.new_password == data.current_password:
         raise HttpError(400, "La nuova password deve essere diversa da quella attuale")
     try:
@@ -368,6 +455,11 @@ def _require_can_touch_role(ctx, role) -> None:
     _require_grantable(ctx, role.scopes or [])
 
 
+def _can_grant(ctx, role) -> bool:
+    """Vero se chi chiama potrebbe assegnare `role` (stessa regola di `_require_grantable`)."""
+    return ctx.is_owner or all(s in ctx.scopes for s in (role.scopes or []))
+
+
 @router.get("/members", auth=staff_auth, response=list[MemberOut])
 def list_members(request):
     ctx = request.auth
@@ -393,6 +485,13 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         # Il titolare lo tocca solo il titolare.
         if membership.is_owner:
             raise HttpError(403, "Solo il titolare può modificare il proprio ruolo")
+        # Come in `remove_member`: chi ha il solo `team` non toglie i permessi a
+        # una collega più potente di lui. Controllando soltanto il ruolo NUOVO,
+        # «Nessun ruolo» o un ruolo più stretto passavano sulla Manager, che
+        # perdeva cassa, magazzino e listino — mentre rimuoverla dal team era
+        # già vietato (10-05, 15-02).
+        if membership.role is not None:
+            _require_can_touch_role(ctx, membership.role)
     if role is not None:
         _require_grantable(ctx, role.scopes or [])
     membership.role = role
@@ -467,6 +566,12 @@ def update_role(request, role_id: int, data: RoleIn):
     _validate_scopes(data.scopes)
     role = salon_get(Role, ctx, role_id)
     _require_can_touch_role(ctx, role)
+    # La dashboard li presenta come «permessi non modificabili» a tutti, il
+    # titolare compreso, ma l'API li riscriveva: con una chiamata diretta chi
+    # aveva team+agenda+clienti toglieva l'agenda al ruolo «Operatrice» e a
+    # tutte le operatrici insieme (15-10). Come per l'eliminazione, qui no.
+    if role.is_system:
+        raise HttpError(400, "I ruoli di sistema non sono modificabili")
     _require_grantable(ctx, data.scopes)
     if Role.objects.filter(salon=ctx.salon, name=data.name).exclude(id=role.id).exists():
         raise HttpError(400, "Esiste già un ruolo con questo nome")
@@ -500,11 +605,45 @@ def delete_role(request, role_id: int):
 # ---- Staff: inviti ---------------------------------------------------------------
 
 
+def _invitation_out(invitation, *, with_token: bool) -> dict:
+    return {
+        "id": invitation.id,
+        "email": invitation.email,
+        "role": _role_out(invitation.role),
+        "token": invitation.token if with_token else None,
+        "status": invitation.status,
+        "expires_at": invitation.expires_at,
+        "created_at": invitation.created_at,
+    }
+
+
 @router.get("/invitations", auth=staff_auth, response=list[InvitationOut])
 def list_invitations(request):
+    """Inviti del salone; il codice solo a chi potrebbe concedere quel ruolo.
+
+    Il codice di un invito vale un account: chi lo presenta a
+    `accept_invitation` crea l'utente con la password che sceglie e riceve il
+    ruolo dell'invito. Consegnato a chiunque avesse `team`, il front-desk
+    copiava il codice dell'invito «Manager» destinato alla nuova assunta e
+    diventava Manager lui (10-01). A chi può assegnare quel ruolo invece non
+    toglie nulla vederlo: un invito per sé potrebbe crearlo comunque. Oggi
+    l'invio automatico non c'è ancora e il codice si condivide a mano da qui,
+    per questo non sparisce del tutto dalla lista.
+    """
     ctx = request.auth
     require_scope(ctx, "team")
-    return Invitation.objects.filter(salon=ctx.salon).select_related("role")
+    now = timezone.now()
+    return [
+        _invitation_out(
+            invitation,
+            with_token=(
+                invitation.status == Invitation.Status.PENDING
+                and invitation.expires_at > now
+                and _can_grant(ctx, invitation.role)
+            ),
+        )
+        for invitation in Invitation.objects.filter(salon=ctx.salon).select_related("role")
+    ]
 
 
 @router.post("/invitations", auth=staff_auth, response=InvitationOut)
@@ -537,7 +676,8 @@ def create_invitation(request, data: InvitationIn):
         actor=ctx.user,
         payload={"invitation_id": invitation.id, "role_id": role.id},
     )
-    return invitation
+    # Chi l'ha appena creato ha superato `_require_grantable`: il codice è suo.
+    return _invitation_out(invitation, with_token=True)
 
 
 @router.post("/invitations/accept", response=StaffAuthOut)
@@ -567,12 +707,27 @@ def accept_invitation(request, data: InvitationAcceptIn):
         raise HttpError(400, " ".join(exc.messages))
 
     with transaction.atomic():
-        user = User.objects.create_user(
-            email=invitation.email,
-            password=data.password,
-            first_name=data.first_name,
-            last_name=data.last_name,
+        # Un invito vale una volta sola: lo stato si ricontrolla sulla riga
+        # bloccata e riletta. Letto a inizio richiesta, due accettazioni
+        # simultanee dello stesso codice passavano entrambe e la seconda
+        # moriva sull'email già presa con un 500.
+        locked = (
+            Invitation.objects.select_for_update()
+            .filter(pk=invitation.pk, status=Invitation.Status.PENDING)
+            .first()
         )
+        if locked is None:
+            raise HttpError(400, "Invito non più valido")
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    email=invitation.email,
+                    password=data.password,
+                    first_name=data.first_name,
+                    last_name=data.last_name,
+                )
+        except IntegrityError:
+            raise HttpError(400, "Esiste già un utente con questa email")
         membership = Membership.objects.create(
             user=user, salon=invitation.salon, role=invitation.role
         )
@@ -592,11 +747,11 @@ def accept_invitation(request, data: InvitationAcceptIn):
 # ---- Cliente (web app): registrazione e login OTP --------------------------------
 
 # Registrazioni accettate per finestra. Sono numeri generosi per una persona
-# vera (che si registra una volta) e stretti per uno script.
+# vera (che si registra una volta) e stretti per uno script. Il tetto per
+# salone conta solo le schede create davvero: vedi client_register.
 REGISTER_WINDOW_SECONDS = 3600
 REGISTER_MAX_PER_IP = 5
-REGISTER_MAX_PER_SALON = 60
-
+REGISTER_MAX_PER_SALON = 120
 
 
 @router.post("/client/register", response=OkOut)
@@ -617,26 +772,43 @@ def client_register(request, data: ClientRegisterIn):
     if not ratelimit.hit(f"register-ip:{ip}", REGISTER_MAX_PER_IP, REGISTER_WINDOW_SECONDS):
         logger.warning("register: tetto per IP superato (salone=%s, ip=%s)", salon.slug, ip)
         raise HttpError(429, "Troppe registrazioni: riprova tra qualche minuto")
+    existing = find_client_by_phone(salon, phone)
+    if existing is not None:
+        # Stessa risposta per la scheda attiva e per quella archiviata: l'app
+        # mostra la schermata che spiega entrambi i casi e offre di chiamare.
+        _notify_archived_client(salon, existing)
+        raise HttpError(400, "Numero di telefono già registrato")
+    # Il tetto per salone si conta DOPO il controllo sul numero: contato prima,
+    # lo riempivano anche i tentativi respinti (numeri già in rubrica, che non
+    # costano nulla) e da poche reti si bloccava per un'ora l'iscrizione di
+    # tutte le clienti nuove del salone (10-04). Ora lo consuma solo chi crea
+    # una scheda davvero, e il valore è più largo di un picco di campagna.
     if not ratelimit.hit(
         f"register-salon:{salon.id}", REGISTER_MAX_PER_SALON, REGISTER_WINDOW_SECONDS
     ):
         logger.warning("register: tetto per salone superato (salone=%s)", salon.slug)
         raise HttpError(429, "Troppe registrazioni: riprova tra qualche minuto")
-    if find_client_by_phone(salon, phone) is not None:
-        raise HttpError(400, "Numero di telefono già registrato")
 
-    client = Client.objects.create(
-        salon=salon,
-        first_name=data.first_name.strip(),
-        last_name=data.last_name.strip(),
-        phone=phone,
-        email=(data.email or "").strip(),
-        lang=data.lang if data.lang in ("it", "en") else "it",
-        # Data di prima iscrizione: è l'unico campo su cui si appoggia il KPI
-        # «nuovi clienti» del cruscotto, e nessuno lo valorizzava — il numero
-        # restava zero per sempre, anche con la web app piena di iscrizioni.
-        since=timezone.localdate(),
-    )
+    try:
+        # Il controllo qui sopra e l'inserimento non sono atomici: il doppio
+        # tocco su «Registrati» (o un ritentativo di rete) li superava entrambi
+        # e il secondo moriva sul vincolo unico del telefono con un 500 — dopo
+        # che il primo aveva già emesso il codice (10-14, 18-12).
+        with transaction.atomic():
+            client = Client.objects.create(
+                salon=salon,
+                first_name=data.first_name.strip(),
+                last_name=data.last_name.strip(),
+                phone=phone,
+                email=(data.email or "").strip(),
+                lang=data.lang if data.lang in ("it", "en") else "it",
+                # Data di prima iscrizione: è l'unico campo su cui si appoggia il KPI
+                # «nuovi clienti» del cruscotto, e nessuno lo valorizzava — il numero
+                # restava zero per sempre, anche con la web app piena di iscrizioni.
+                since=timezone.localdate(),
+            )
+    except IntegrityError:
+        raise HttpError(400, "Numero di telefono già registrato")
     emit_event(
         salon,
         "client.created",
@@ -657,13 +829,15 @@ def client_register(request, data: ClientRegisterIn):
     return OkOut()
 
 
-# Richieste di codice accettate per finestra. Gli stessi due tetti della
-# registrazione, e per lo stesso motivo: ogni richiesta riuscita fa partire un
-# WhatsApp a spese del salone. Sono generosi per una persona che entra nella
-# web app e stretti per uno script che cicla i numeri.
+# Richieste di codice accettate per finestra. Ogni codice emesso fa partire un
+# WhatsApp a spese del salone. Il tetto per IP vale per ogni richiesta ed è
+# generoso per una persona che entra nella web app e stretto per uno script che
+# cicla i numeri. Quello per salone conta solo i codici EMESSI davvero (vedi
+# client_request_otp); le richieste nel loro insieme sono solo un segnale.
 OTP_WINDOW_SECONDS = 15 * 60
 OTP_MAX_PER_IP = 20
-OTP_MAX_PER_SALON = 60
+OTP_MAX_ISSUED_PER_SALON = 200
+OTP_ALERT_PER_SALON = 60
 OTP_VERIFY_MAX_PER_IP = 30
 
 
@@ -680,14 +854,26 @@ def client_request_otp(request, data: OTPRequestIn):
     trapela fuori, altrimenti basterebbe contare i 429 per sapere chi esiste.
     """
     salon = _salon_by_slug(data.salon_slug)
-    # I tetti si applicano PRIMA della ricerca: valgono anche per i numeri che
-    # non esistono, che sono quelli che interessano a chi sta enumerando.
+    # Il tetto per IP si applica PRIMA della ricerca: vale anche per i numeri
+    # che non esistono, che sono quelli che interessano a chi sta enumerando.
     ip = ratelimit.client_ip(request)
     if not ratelimit.hit(f"otp-ip:{ip}", OTP_MAX_PER_IP, OTP_WINDOW_SECONDS):
         logger.warning("request-otp: tetto per IP superato (salone=%s, ip=%s)", salon.slug, ip)
         raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
-    if not ratelimit.hit(f"otp-salon:{salon.id}", OTP_MAX_PER_SALON, OTP_WINDOW_SECONDS):
-        logger.warning("request-otp: tetto per salone superato (salone=%s)", salon.slug)
+    # Il tetto per salone contava ogni richiesta, anche sui numeri inventati:
+    # da tre reti, venti richieste ciascuna, si teneva fuori dall'app ogni
+    # cliente del salone per quindici minuti alla volta, e bastava una
+    # campagna «prenota dall'app» per chiuderlo senza nessun attacco (16-01,
+    # 10-04). Contate tutte, le richieste restano solo un segnale nei log.
+    if not ratelimit.hit(f"otp-salon:{salon.id}", OTP_ALERT_PER_SALON, OTP_WINDOW_SECONDS):
+        logger.warning("request-otp: molte richieste per il salone (salone=%s)", salon.slug)
+    # Il blocco vero conta solo i codici partiti, cioè il costo: i numeri
+    # inventati non lo toccano, e riempirlo richiede decine di numeri veri
+    # (ognuno ha il suo tetto di cinque). Una volta pieno vale per tutti allo
+    # stesso modo, così la risposta non dice nulla del numero.
+    issued_key = f"otp-issued-salon:{salon.id}"
+    if ratelimit.peek(issued_key) >= OTP_MAX_ISSUED_PER_SALON:
+        logger.warning("request-otp: tetto dei codici emessi per salone (salone=%s)", salon.slug)
         raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
 
     client = _client_by_phone(salon, data.phone)
@@ -698,6 +884,10 @@ def client_request_otp(request, data: OTPRequestIn):
             # Il tetto per cliente ha fatto il suo lavoro: nessun codice parte,
             # ma la risposta resta identica a quella di un numero sconosciuto.
             logger.info("request-otp: codice non inviato (cliente=%s): %s", client.id, exc)
+        else:
+            ratelimit.hit(issued_key, OTP_MAX_ISSUED_PER_SALON, OTP_WINDOW_SECONDS)
+    else:
+        _notify_archived_client(salon, find_client_by_phone(salon, data.phone))
     return OkOut()
 
 
@@ -732,13 +922,30 @@ def client_me(request):
 def client_update_me(request, data: ClientMeIn):
     client = request.auth.client
     updates = data.dict(exclude_unset=True)
+    values = {}
     if "lang" in updates:
         if updates["lang"] not in ("it", "en"):
             raise HttpError(400, "Lingua non valida")
-        client.lang = updates["lang"]
+        values["lang"] = updates["lang"]
     if "email" in updates:
-        client.email = (updates["email"] or "").strip()
+        values["email"] = (updates["email"] or "").strip()
     if "whatsapp_reminders" in updates:
-        client.whatsapp_reminders = bool(updates["whatsapp_reminders"])
-    client.save()
+        values["whatsapp_reminders"] = bool(updates["whatsapp_reminders"])
+    changed = [name for name, value in values.items() if getattr(client, name) != value]
+    for name in changed:
+        setattr(client, name, values[name])
+    if not changed:
+        return _client_profile(client)
+    # Solo le colonne toccate: il save() completo riscriveva la scheda letta
+    # all'autenticazione, cioè riportava indietro nome, consensi, etichette o
+    # dati Stripe cambiati nel frattempo dal salone o dal webhook (18-07).
+    client.save(update_fields=changed)
+    # La scheda aperta in dashboard si ricarica su `client.updated` con il suo
+    # id: senza, la reception continuava a vedere lingua ed email di prima.
+    log_activity(
+        request.auth.salon,
+        "client.updated",
+        f"{client.full_name} ha aggiornato il profilo dall'app",
+        payload={"client_id": client.id, "fields": changed},
+    )
     return _client_profile(client)
