@@ -81,7 +81,7 @@ class ClientDetailOut(ClientOut):
 
 
 class ClientIn(Schema):
-    """Corpo di POST e PUT cliente.
+    """Corpo del POST cliente (il PUT usa `ClientUpdateIn`, tutto facoltativo).
 
     Sul PUT i campi si applicano solo se presenti nel corpo (`exclude_unset` in
     api._client_payload): quasi tutti hanno un default e riversarli su una
@@ -114,6 +114,38 @@ class ClientIn(Schema):
     is_active: bool = True
 
 
+class ClientUpdateIn(Schema):
+    """Corpo del PUT cliente: ogni campo è facoltativo (C15).
+
+    Si applicano solo i campi presenti, e si scrivono solo le colonne che
+    cambiano. Con lo schema del POST nome e telefono erano obbligatori: il PUT
+    di una sola etichetta, o di `is_active` per riattivare una scheda, doveva
+    rimandare tutta la copia letta all'apertura, e con lei i consensi, la
+    lingua e i promemoria che nel frattempo la cliente aveva cambiato
+    dall'app (06-10, 14-05, 18-07). `null` vale solo per compleanno e «cliente
+    dal» (li svuota) e per i testi facoltativi; sugli altri è un errore.
+    """
+
+    first_name: Optional[str] = Field(None, max_length=80)
+    last_name: Optional[str] = Field(None, max_length=80)
+    phone: Optional[str] = Field(None, max_length=32)
+    email: Optional[str] = Field(None, max_length=254)
+    wa: Optional[bool] = None
+    lang: Optional[Literal["it", "en"]] = None
+    category_ids: Optional[list[int]] = None
+    reliability: Optional[int] = Field(None, ge=0, le=100)
+    origin: Optional[str] = Field(None, max_length=60)
+    gender: Optional[str] = None
+    birthday: Optional[str] = None
+    since: Optional[date] = None
+    # Solo i flag contano (privacy, marketing, card_charge): le date della
+    # prova del consenso le scrive il server quando un flag cambia.
+    consents: Optional[dict] = None
+    whatsapp_reminders: Optional[bool] = None
+    deposit_always: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
 # ---- Import CSV (righe già parsate lato client, JSON) ------------------------
 
 
@@ -136,6 +168,10 @@ class ImportRowIn(Schema):
     lang: str = ""              # it | en | ""
     note: str = ""              # diventa una nota privata sul cliente
     categories: list[str] = []  # nomi etichetta: create se mancanti
+    # «Cliente dal» del gestionale di provenienza ('YYYY-MM-DD' | ""). Senza,
+    # la scheda importata resta senza data: prima prendeva quella dell'import
+    # e tutta la rubrica storica risultava cliente «dal 2026» (06-07, 08-05).
+    since: str = ""
 
 
 # Tetto per richiesta. Ogni riga costa 2-5 query dentro un savepoint, in una
@@ -154,13 +190,20 @@ class ImportIn(Schema):
 class ImportErrorOut(Schema):
     row: int
     reason: str
+    # La scheda a cui la riga si riferisce, quando c'è (archiviata, email di
+    # un'altra persona): la dashboard può aprirla invece di un vicolo cieco.
+    client_id: Optional[int] = None
 
 
 class ImportOut(Schema):
     created: int
     updated: int
     skipped: int = 0
+    # Righe NON importate.
     errors: list[ImportErrorOut] = []
+    # Righe importate lasciando fuori un dato che non si poteva leggere (per
+    # esempio il 29/02 di un anno non bisestile): la cliente c'è, quel campo no.
+    warnings: list[ImportErrorOut] = []
 
 
 # ---- Note ----------------------------------------------------------------------
@@ -212,6 +255,14 @@ class NoteUpdateIn(Schema):
 
 
 class TechnicalSheetOut(Schema):
+    """Serializzata da api._sheet_out (dizionari), non da istanze: niente resolver.
+
+    Dal modello ninja serializzava la foto con il suo `.url` nudo, mentre
+    technical_sheets/ si scarica solo con l'URL firmato: nella scheda tecnica
+    le foto erano sempre rotte (403), anche subito dopo il caricamento
+    (06-03). Un resolver qui cancellerebbe `author_name` dei dizionari.
+    """
+
     id: int
     client_id: int
     appointment_id: Optional[int] = None
@@ -229,13 +280,6 @@ class TechnicalSheetOut(Schema):
     author_id: Optional[int] = None
     author_name: str = ""
     created_at: datetime
-
-    @staticmethod
-    def resolve_author_name(obj) -> str:
-        author = getattr(obj, "author", None)
-        if not author:
-            return ""
-        return author.get_full_name() or author.email
 
 
 class TechnicalSheetIn(Schema):
@@ -266,6 +310,12 @@ class HookLeadIn(Schema):
     email: str = Field("", max_length=254)
     marketing: bool = False
     privacy: bool = False
+    # Lingua dell'app da cui arriva il modulo ('it' | 'en'), per il contatto
+    # NUOVO: prima nasceva sempre in italiano e la cliente inglese riceveva
+    # conferme e promemoria in una lingua che non legge (06-20, C13). Testo
+    # libero e non Literal: un valore inatteso da un bundle vecchio vale «it»,
+    # non un 422 che perde il contatto.
+    lang: str = Field("", max_length=5)
     # Honeypot a CHECKBOX, nascosta via CSS: deve arrivare False.
     # Non un campo di testo: l'autofill di Chrome riempiva il vecchio `website`
     # (token che riconosce) e scartava utenti veri in silenzio. Le checkbox

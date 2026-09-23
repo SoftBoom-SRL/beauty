@@ -284,13 +284,16 @@ class ImportUpsertTests(ClientsTestCase):
         self.assertTrue(Client.objects.filter(salon=self.salon, phone="+393339998888").exists())
 
     def test_import_matches_by_email_when_no_phone_match(self):
-        existing = self.make_client(phone="+393330005555", email="giulia@example.com")
+        # Stessa persona (stesso nome): la riga senza telefono aggiorna la scheda.
+        # Con un nome diverso la salta (06-08, vedi tests_caccia22_import).
+        existing = self.make_client(first_name="Giulia", phone="+393330005555", email="giulia@example.com")
         result = import_rows(
-            self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": ""}]
+            self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": "", "lang": "en"}]
         )
         self.assertEqual((result["created"], result["updated"]), (0, 1))
         existing.refresh_from_db()
         self.assertEqual(existing.first_name, "Giulia")
+        self.assertEqual(existing.lang, "en")
 
     def test_import_row_without_phone_or_match_is_skipped(self):
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
@@ -335,9 +338,15 @@ class ImportUpsertTests(ClientsTestCase):
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 0)
 
     def test_imported_clients_get_a_since_date(self):
-        import_rows(self.salon, [{"first_name": "Anna", "phone": "+393330007777"}])
-        client = Client.objects.get(salon=self.salon, first_name="Anna")
-        self.assertEqual(client.since, timezone.localdate())
+        # «Cliente dal» è quello del file; senza colonna resta vuoto, non la
+        # data dell'import: la rubrica storica non è fatta di clienti nuove
+        # (06-07, 08-05).
+        import_rows(self.salon, [
+            {"first_name": "Anna", "phone": "+393330007777"},
+            {"first_name": "Bea", "phone": "+393330008888", "since": "2019-05-02"},
+        ])
+        self.assertIsNone(Client.objects.get(salon=self.salon, first_name="Anna").since)
+        self.assertEqual(Client.objects.get(salon=self.salon, first_name="Bea").since, dt.date(2019, 5, 2))
 
     def test_import_refuses_a_file_bigger_than_the_cap(self):
         """Ogni riga costa 2-5 query in una richiesta sincrona: senza tetto un
@@ -396,7 +405,8 @@ class TechnicalSheetTests(ClientsTestCase):
             client.id,
             TechnicalSheetIn(category="hair", treatment="Colore", appointment_id=appointment.id),
         )
-        self.assertEqual(sheet.appointment_id, appointment.id)
+        # La view restituisce il dizionario di _sheet_out (foto con URL firmato, 06-03).
+        self.assertEqual(sheet["appointment_id"], appointment.id)
 
     def test_an_appointment_of_someone_else_is_refused(self):
         """Prima l'id finiva dritto nella create: quello di un altro salone
@@ -634,20 +644,22 @@ class PublicHookTests(TestCase):
             self.assertEqual(self._post().status_code, 200)
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
 
-    def test_a_disabled_card_comes_back_as_a_new_lead(self):
-        """Una cliente cancellata che ricompila il modulo: prima il consenso
-        veniva registrato ma la scheda restava spenta, quindi fuori da ogni
-        lista e da ogni audience. Contatto raccolto e mai visto da nessuno."""
+    def test_a_disabled_card_is_signalled_not_revived(self):
+        """Una cliente archiviata che ricompila il modulo: il contatto non deve
+        restare invisibile, ma nemmeno tornare attivo da solo con un consenso
+        marketing dato da chiunque conosca nome e numero (10-15). La scheda
+        resta com'è e il salone riceve la segnalazione con la scheda da aprire."""
         disabled = Client.objects.create(
             salon=self.salon, first_name="Sofia", phone="+393331234567", is_active=False
         )
         self.assertEqual(self._post().status_code, 200)
         disabled.refresh_from_db()
-        self.assertTrue(disabled.is_active)
-        self.assertTrue(disabled.consents["privacy"])
-        self.assertTrue(disabled.categories.filter(name="Da form").exists())
+        self.assertFalse(disabled.is_active)
+        self.assertFalse(disabled.consents.get("marketing"))
+        self.assertFalse(disabled.categories.filter(name="Da form").exists())
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
-        self.assertTrue(ActivityLog.objects.filter(type="client.created").exists())
+        notice = ActivityLog.objects.get(type="client.reactivation_requested")
+        self.assertEqual(notice.payload["client_id"], disabled.id)
 
     def test_a_lead_from_the_form_is_a_client_from_today(self):
         self.assertEqual(self._post().status_code, 200)
@@ -771,9 +783,12 @@ class ImportFlexibleTests(ClientsTestCase):
             {"first_name": "A", "phone": "+39222", "birthday": "--02-30"},  # data impossibile
             {"first_name": "B", "phone": "+39333", "gender": "male"},       # ok
         ])
-        self.assertEqual(result["created"], 1)
-        self.assertEqual(result["skipped"], 2)
-        self.assertEqual([e["row"] for e in result["errors"]], [0, 1])
+        # La data impossibile non costa più la cliente: entra senza compleanno,
+        # con un avviso (06-13).
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual([e["row"] for e in result["errors"]], [0])
+        self.assertTrue(any(w["row"] == 1 and "compleanno" in w["reason"] for w in result["warnings"]))
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-media-"))
