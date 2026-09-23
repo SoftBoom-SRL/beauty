@@ -7,7 +7,7 @@ import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 import { fmtExpiry } from './Wallet.jsx';
-import { giftCardTotals, isUnpaid } from './walletLib.js';
+import { fmtCredit, giftCardTotals, isUnpaid } from './walletLib.js';
 
 const PRESETS = [25, 50, 75, 100];
 
@@ -37,7 +37,6 @@ export default function GiftCard() {
   // entrava nel saldo e la cassa poi la rifiutava; quella comprata per
   // un'amica è credito dell'amica (16-03, 07-05, 17-14).
   const totals = giftCardTotals(cards);
-  const totBal = totals.spendable / 100;
   const totPending = totals.pending / 100;
   const value = custom !== '' ? Number(custom) : amount;
   const valid = Number.isFinite(value) && value >= 5 && value <= 1000;
@@ -77,7 +76,7 @@ export default function GiftCard() {
             {/* saldo totale */}
             <div style={{ borderRadius: 'var(--r-lg, 20px)', padding: '20px 22px', background: 'var(--brand)', color: 'var(--brand-on)', marginBottom: 20 }}>
               <div style={{ fontSize: 12.5, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Saldo gift card', 'Gift card balance')}</div>
-              <div className="t-num" style={{ fontSize: 38, fontWeight: 800, marginTop: 4 }}>{fmtEur(totBal, lang)}</div>
+              <div className="t-num" style={{ fontSize: 38, fontWeight: 800, marginTop: 4 }}>{fmtCredit(totals.spendable, lang)}</div>
               <div style={{ fontSize: 12.5, opacity: 0.82, marginTop: 2 }}>
                 {totals.spendableCount} {totals.spendableCount === 1 ? t('carta attiva', 'active card') : t('carte attive', 'active cards')} · {t('spendibili in salone', 'spend in salon')}
               </div>

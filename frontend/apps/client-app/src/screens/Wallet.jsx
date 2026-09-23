@@ -5,7 +5,7 @@ import React from 'react';
 import { Icon, ProgressBar, api, fmtEur, parseISO, salonTzOpts } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
-import { fmtPct, giftCardTotals, isUnpaid } from './walletLib.js';
+import { fmtCredit, fmtPct, giftCardTotals, isUnpaid } from './walletLib.js';
 
 export function fmtExpiry(iso, lang, t) {
   if (!iso) return t('Senza scadenza', 'No expiry');
@@ -50,9 +50,9 @@ export default function Wallet() {
   const loyalty = wallet?.loyalty || [];
   // Nel credito solo le carte che la cassa accetta da lei (vedi isSpendable):
   // quelle ancora da pagare in salone si contano a parte, dicendo che cosa
-  // manca per attivarle; quelle comprate per un'altra persona sono di lei.
+  // manca per attivarle; quelle comprate per un'altra persona sono credito
+  // della destinataria.
   const totals = giftCardTotals(cards);
-  const totBal = totals.spendable / 100;
   const totPending = totals.pending / 100;
 
   return (
@@ -79,7 +79,7 @@ export default function Wallet() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
                       <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Credito utilizzabile', 'Available credit')}</div>
-                      <div className="t-num" style={{ fontSize: 30, fontWeight: 800, marginTop: 2 }}>{fmtEur(totBal, lang)}</div>
+                      <div className="t-num" style={{ fontSize: 30, fontWeight: 800, marginTop: 2 }}>{fmtCredit(totals.spendable, lang)}</div>
                       {totPending > 0 && (
                         <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.82, marginTop: 4 }}>
                           {t(`+ ${fmtEur(totPending, lang)} da attivare: paga in salone`,

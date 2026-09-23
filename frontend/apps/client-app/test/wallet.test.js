@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  cents, fmtPct, giftCardTotals, giftServiceCards, isSpendable,
+  cents, fmtCredit, fmtPct, giftCardTotals, giftServiceCards, isSpendable,
 } from '../src/screens/walletLib.js';
 
 // Il portafoglio di Sofia, come lo manda GET /api/marketing/client/wallet.
@@ -66,4 +66,11 @@ test('lo sconto in percentuale non si arrotonda', () => {
   assert.equal(fmtPct('12.50', 'it'), '12,5');
   assert.equal(fmtPct('12.50', 'en'), '12.5');
   assert.equal(fmtPct('10.00', 'it'), '10');
+});
+
+test('il credito a zero si legge €0,00, non «Gratis»', () => {
+  // Solo una carta da pagare: il saldo spendibile è zero.
+  assert.equal(fmtCredit(giftCardTotals([boughtInApp]).spendable, 'it'), '€0,00');
+  assert.equal(fmtCredit(7000, 'it'), '€70,00');
+  assert.equal(fmtCredit(123450, 'en'), '€1,234.50');
 });

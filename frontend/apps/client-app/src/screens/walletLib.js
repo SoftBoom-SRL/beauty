@@ -48,6 +48,16 @@ export function giftCardTotals(cards) {
   return out;
 }
 
+/** Credito in centesimi → «€70,00». Zero si scrive «€0,00»: fmtEur lo legge
+ *  come un prezzo e scrive «Gratis», e chi aveva solo carte ancora da pagare
+ *  leggeva «Saldo gift card: Gratis». */
+export function fmtCredit(amountCents, lang) {
+  return '€' + (amountCents / 100).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 /** Gift card «a trattamento» che coprono un servizio prenotabile. */
 export function giftServiceCards(cards) {
   return (cards || []).filter((g) => g.gift_service_id && isSpendable(g));
