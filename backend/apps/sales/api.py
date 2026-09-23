@@ -69,6 +69,8 @@ def _line_out(line: SaleLine) -> dict:
         "operator_id": line.operator_id,
         "operator_name": _operator_name(line.operator),
         "service_id": line.service_id,
+        # Nome del servizio (C14): lo storico mostrava «Servizio #12».
+        "service_name": line.service.name_it if line.service_id else "",
         "product_id": line.product_id,
         "product_name": line.product.name if line.product_id else "",
         "gift_card_code": line.gift_card.code if line.gift_card_id else None,
@@ -77,6 +79,7 @@ def _line_out(line: SaleLine) -> dict:
         "discount_pct": line.discount_pct,
         "is_gift": line.is_gift,
         "amount": line.amount,
+        "coupon_share": line.coupon_share,
     }
 
 
@@ -94,6 +97,7 @@ def _sale_out(sale: Sale) -> dict:
         "id": sale.id,
         "kind": sale.kind,
         "appointment_id": sale.appointment_id,
+        "deposit_appointment_id": sale.deposit_appointment_id,
         "client_id": sale.client_id,
         "client_name": sale.client.full_name if sale.client_id else "",
         "location_id": sale.location_id,
@@ -107,7 +111,9 @@ def _sale_out(sale: Sale) -> dict:
 def _sale_detail(sale: Sale) -> dict:
     return {
         **_sale_out(sale),
-        "lines": [_line_out(l) for l in sale.lines.select_related("operator", "gift_card", "product")],
+        "lines": [
+            _line_out(l) for l in sale.lines.select_related("operator", "gift_card", "product", "service")
+        ],
         "payments": [_payment_out(p) for p in sale.payments.select_related("gift_card")],
     }
 
@@ -211,6 +217,17 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
         # Solo lo stato: ogni altra colonna resta quella scritta nel frattempo.
         appointment.status = "closed"
         appointment.save(update_fields=["status", "updated_at"])
+        # Un evento che l'agenda riceve: `sale.created` arriva solo a chi ha
+        # il permesso vendite, e l'operatrice continuava a vedere la visita
+        # «in corso» finché qualcos'altro non le ricaricava la giornata (08-03).
+        # Niente importi: l'agenda la vede anche chi non vede la cassa.
+        log_activity(
+            ctx.salon,
+            "appointment.closed",
+            f"Visita di {appointment.client.full_name} chiusa in cassa",
+            actor=ctx.user,
+            payload={"appointment_id": appointment.id, "status": "closed"},
+        )
 
     # Da qui in poi si parla con Stripe: fuori dalla transazione, perché una
     # rete lenta non deve tenere il lock sull'appuntamento.
@@ -289,8 +306,17 @@ def list_sales(
     ctx = request.auth
     require_scope(ctx, "sales")
     qs = Sale.objects.filter(salon=ctx.salon)
-    if kind:
-        qs = qs.filter(kind=kind)
+    # Le vendite-caparra sono un anticipo, non un conto: il checkout fattura già
+    # il servizio per intero e ne detrae la caparra. Contate qui, «Incasso
+    # totale» diceva 130 per un servizio da 100 con 30 di caparra, i conteggi
+    # raddoppiavano e la caparra compariva come vendita «Da banco» (05-03,
+    # 14-03). Si vedono solo chiedendole: `kind=deposit`.
+    if kind == "deposit":
+        qs = qs.filter(deposit_appointment__isnull=False)
+    else:
+        qs = qs.filter(deposit_appointment__isnull=True)
+        if kind:
+            qs = qs.filter(kind=kind)
     if date_from and (d := parse_date(date_from)):
         qs = qs.filter(created_at__date__gte=d)
     if date_to and (d := parse_date(date_to)):

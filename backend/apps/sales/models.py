@@ -91,8 +91,14 @@ class SaleLine(models.Model):
     amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="qty × unit_price × (1 − discount/100); 0 se omaggio",
+        help_text="qty × unit_price × (1 − discount/100) − coupon_share; 0 se omaggio",
     )
+    # Parte del buono sconto della vendita che cade su questa riga. Lo sconto
+    # del buono stava solo sul totale: le righe sommavano più dell'incasso, e il
+    # fatturato per operatrice (storico filtrato, scheda, KPI del mese) contava
+    # 100 per una vendita incassata 80. Ora è ripartito sulle righe in
+    # proporzione e `amount` è già al netto: le righe sommano il totale.
+    coupon_share = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         ordering = ["id"]

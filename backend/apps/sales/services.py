@@ -159,6 +159,43 @@ def _coupon_for_sale(salon, code: str, client, prepared: list[dict], total: Deci
     return coupon, coupon_discount(coupon, base)
 
 
+def _spread_coupon(prepared: list[dict], discount: Decimal) -> None:
+    """Ripartisce lo sconto del buono sulle righe, in proporzione al loro importo.
+
+    Le gift card restano fuori, come nel calcolo del buono (`_coupon_for_sale`).
+    Ogni quota è arrotondata al centesimo (HALF_UP); la riga più grande prende
+    il resto, così la somma delle quote è esattamente lo sconto e le righe
+    sommano il totale della vendita. Senza questa ripartizione il fatturato per
+    operatrice ignorava il buono: una vendita da 100 con buono da 20 contava
+    80 nello storico e 100 all'operatrice (05-18).
+    """
+    for data in prepared:
+        data.setdefault("coupon_share", Decimal("0.00"))
+    if discount <= 0:
+        return
+    eligible = [
+        d for d in prepared if d["line_type"] != SaleLine.LineType.GIFT_CARD and d["amount"] > 0
+    ]
+    base = sum((d["amount"] for d in eligible), Decimal("0.00"))
+    if base <= 0:
+        return
+    ordered = sorted(eligible, key=lambda d: d["amount"])
+    remaining = discount
+    for data in ordered[:-1]:
+        share = min((discount * data["amount"] / base).quantize(TWO_PLACES, rounding=ROUND_HALF_UP), data["amount"])
+        data["coupon_share"] = share
+        remaining -= share
+    for data in reversed(ordered):  # la più grande assorbe l'arrotondamento
+        if remaining <= 0:
+            break
+        room = data["amount"] - data["coupon_share"]
+        extra = min(remaining, room)
+        data["coupon_share"] += extra
+        remaining -= extra
+    for data in eligible:
+        data["amount"] -= data["coupon_share"]
+
+
 def finalize_sale(
     salon,
     *,
@@ -192,6 +229,7 @@ def finalize_sale(
     # l'anticipo è quello che la cliente deve davvero.
     coupon, discount = _coupon_for_sale(salon, coupon_code, client, prepared, total)
     total -= discount
+    _spread_coupon(prepared, discount)
 
     # Caparra più grande del conto finale (servizi tolti dopo la prenotazione):
     # si detrae solo fino al totale. Prima il dovuto diventava negativo e la
@@ -249,6 +287,7 @@ def finalize_sale(
                 discount_pct=data["discount_pct"],
                 is_gift=data["is_gift"],
                 amount=data["amount"],
+                coupon_share=data["coupon_share"],
             )
             if data["line_type"] == SaleLine.LineType.PRODUCT:
                 has_products = True
