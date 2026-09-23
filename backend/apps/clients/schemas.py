@@ -81,7 +81,7 @@ class ClientDetailOut(ClientOut):
 
 
 class ClientIn(Schema):
-    """Corpo di POST e PUT cliente.
+    """Corpo del POST cliente (il PUT usa `ClientUpdateIn`, tutto facoltativo).
 
     Sul PUT i campi si applicano solo se presenti nel corpo (`exclude_unset` in
     api._client_payload): quasi tutti hanno un default e riversarli su una
@@ -112,6 +112,38 @@ class ClientIn(Schema):
     whatsapp_reminders: bool = True
     deposit_always: bool = False
     is_active: bool = True
+
+
+class ClientUpdateIn(Schema):
+    """Corpo del PUT cliente: ogni campo è facoltativo (C15).
+
+    Si applicano solo i campi presenti, e si scrivono solo le colonne che
+    cambiano. Con lo schema del POST nome e telefono erano obbligatori: il PUT
+    di una sola etichetta, o di `is_active` per riattivare una scheda, doveva
+    rimandare tutta la copia letta all'apertura, e con lei i consensi, la
+    lingua e i promemoria che nel frattempo la cliente aveva cambiato
+    dall'app (06-10, 14-05, 18-07). `null` vale solo per compleanno e «cliente
+    dal» (li svuota) e per i testi facoltativi; sugli altri è un errore.
+    """
+
+    first_name: Optional[str] = Field(None, max_length=80)
+    last_name: Optional[str] = Field(None, max_length=80)
+    phone: Optional[str] = Field(None, max_length=32)
+    email: Optional[str] = Field(None, max_length=254)
+    wa: Optional[bool] = None
+    lang: Optional[Literal["it", "en"]] = None
+    category_ids: Optional[list[int]] = None
+    reliability: Optional[int] = Field(None, ge=0, le=100)
+    origin: Optional[str] = Field(None, max_length=60)
+    gender: Optional[str] = None
+    birthday: Optional[str] = None
+    since: Optional[date] = None
+    # Solo i flag contano (privacy, marketing, card_charge): le date della
+    # prova del consenso le scrive il server quando un flag cambia.
+    consents: Optional[dict] = None
+    whatsapp_reminders: Optional[bool] = None
+    deposit_always: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 
 # ---- Import CSV (righe già parsate lato client, JSON) ------------------------

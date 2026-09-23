@@ -11,6 +11,7 @@ from typing import Optional
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import File, Form, Router
@@ -28,7 +29,14 @@ from common.media import signed_media_url, stored_upload_name, validate_upload
 from common.phone import canonical_phone, find_client_by_phone, phone_key
 from common.utils import salon_get
 
-from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
+from .models import (
+    Client,
+    ClientCategory,
+    ClientNote,
+    ClientNoteAttachment,
+    TechnicalSheet,
+    default_consents,
+)
 from .schemas import (
     AttachmentOut,
     CategoryIn,
@@ -38,6 +46,7 @@ from .schemas import (
     ClientDetailOut,
     ClientIn,
     ClientOut,
+    ClientUpdateIn,
     ImportIn,
     ImportOut,
     NoteIn,
@@ -114,18 +123,38 @@ def delete_category(request, category_id: int):
 # ---- Cliente ------------------------------------------------------------------
 
 
-def _set_categories(client: Client, category_ids: list[int]) -> None:
-    categories = ClientCategory.objects.filter(salon=client.salon_id, id__in=category_ids)
+def _set_categories(client: Client, category_ids: list[int]) -> bool:
+    """Etichette della scheda = quelle indicate (del salone). True se sono cambiate."""
+    categories = list(ClientCategory.objects.filter(salon=client.salon_id, id__in=category_ids))
+    before = set(client.categories.values_list("id", flat=True))
     client.categories.set(categories)
+    return before != {c.id for c in categories}
 
 
 DUPLICATE_PHONE = "Telefono già registrato per un altro cliente"
 
 
-def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) -> None:
-    """Il numero è unico per salone comunque sia scritto (+39 / spazi / 0039)."""
-    if find_client_by_phone(ctx.salon, phone, exclude_id=exclude_id) is not None:
-        raise HttpError(400, DUPLICATE_PHONE)
+def _archived_phone_message(holder: Client, *, creating: bool = True) -> str:
+    if creating:
+        return (
+            f"Il numero è di una scheda archiviata: {holder.full_name}. "
+            "Riattivala invece di crearne un'altra."
+        )
+    return f"Il numero è già di una scheda archiviata: {holder.full_name}."
+
+
+def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) -> Optional[Client]:
+    """Il numero è unico per salone comunque sia scritto (+39 / spazi / 0039).
+
+    Ritorna la scheda ARCHIVIATA che ha già quel numero (il chiamante decide
+    come indicarla), solleva 400 se il numero è di una scheda attiva.
+    """
+    holder = find_client_by_phone(ctx.salon, phone, exclude_id=exclude_id)
+    if holder is None:
+        return None
+    if not holder.is_active:
+        return holder
+    raise HttpError(400, DUPLICATE_PHONE)
 
 
 def _search_filter(q: str) -> Q:
@@ -205,6 +234,44 @@ def _clean_consents(raw) -> dict:
     return cleaned
 
 
+def _stamped_consents(stored, incoming: dict) -> dict:
+    """Consensi dopo una scelta dello staff: i flag dal corpo, le date dal server.
+
+    La scheda Consensi rimandava tutto il dizionario letto all'apertura: le
+    date non le scriveva nessuno (la concessione restava senza `privacy_at` /
+    `marketing_at`, la revoca lasciava `marketing_at`), benché la modale
+    prometta che la scheda «ne conserva la data» (14-14), e la copia vecchia
+    cancellava la revoca fatta nel frattempo dall'app (14-05). Ora dal corpo
+    si leggono solo i tre flag; quando uno CAMBIA il server scrive
+    `<flag>_at` (concesso) o `<flag>_revoked_at` (revocato), come
+    `client_set_marketing_consent`. Le altre chiavi restano quelle salvate.
+    """
+    consents = dict(stored or {})
+    now = timezone.now().isoformat()
+    for name in CONSENT_FLAGS:
+        if name not in incoming:
+            continue
+        value = bool(incoming[name])
+        was = bool(consents.get(name))
+        consents[name] = value
+        if value == was:
+            continue
+        if value:
+            consents[f"{name}_at"] = now
+            consents.pop(f"{name}_revoked_at", None)
+        else:
+            consents[f"{name}_revoked_at"] = now
+            consents[f"{name}_at"] = ""
+    return consents
+
+
+# Campi del PUT per cui `null` significa «svuota»: i testi facoltativi e le
+# due date. Sugli altri un null non ha un significato e finirebbe a 500 sulla
+# colonna NOT NULL (o, peggio, in archivio come valore che nessuno legge).
+_NULL_MEANS_EMPTY = {"last_name": "", "email": "", "origin": "", "gender": ""}
+_NULLABLE = {"birthday", "since", "category_ids"}
+
+
 def _client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Optional[list[int]]]:
     """ClientIn → kwargs del modello: compleanno (con/senza anno) e genere validati.
 
@@ -216,6 +283,12 @@ def _client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Opt
     non manda un campo non lo sta svuotando: non lo sta toccando.
     """
     payload = data.dict(exclude_unset=True) if partial else data.dict()
+    for name, value in list(payload.items()):
+        if value is not None or name in _NULLABLE:
+            continue
+        if name not in _NULL_MEANS_EMPTY:
+            raise HttpError(400, f"Il campo {name} non può essere vuoto")
+        payload[name] = _NULL_MEANS_EMPTY[name]
     category_ids = payload.pop("category_ids", None)  # None = lasciare le etichette come sono
     if "phone" in payload:
         # Salvato in E.164 quando riconoscibile: login OTP, import e sync Yourang
@@ -242,7 +315,25 @@ def create_client(request, data: ClientIn):
     require_scope(ctx, "clients")
     payload, category_ids = _client_payload(data)
     phone = payload["phone"]
-    _check_phone_unique(ctx, phone)
+    archived = _check_phone_unique(ctx, phone)
+    if archived is not None:
+        # Cliente archiviata che richiama per prenotare: la ricerca della
+        # dashboard mostra solo le attive e la creazione rispondeva «già
+        # registrato» senza dire da chi — un vicolo cieco (06-02). Non la si
+        # riattiva da qui: il numero può essere passato a un'altra persona, che
+        # entrerebbe nello storico di chi non è più cliente. Si indica la
+        # scheda (409 con il suo id) e la riattivazione resta una scelta dello
+        # staff: PUT {"is_active": true}.
+        return JsonResponse(
+            {
+                "detail": _archived_phone_message(archived),
+                "archived_client_id": archived.id,
+                "archived_client_name": archived.full_name,
+            },
+            status=409,
+        )
+    # Le date dei consensi le scrive il server, come sul PUT (14-14).
+    payload["consents"] = _stamped_consents(default_consents(), payload.get("consents") or {})
     if not payload.get("since"):
         # Cliente dal giorno in cui è entrata in rubrica. Nessuna via di
         # creazione la valorizzava e il KPI «nuovi clienti» restava a zero per
@@ -291,30 +382,60 @@ def get_client(request, client_id: int):
 
 
 @router.put("/{int:client_id}", auth=staff_auth, response=ClientOut)
-def update_client(request, client_id: int, data: ClientIn):
+def update_client(request, client_id: int, data: ClientUpdateIn):
+    """Applica i soli campi presenti nel corpo e scrive le sole colonne cambiate (C15).
+
+    Il salvataggio completo riscriveva la scheda letta a inizio richiesta —
+    e il corpo completo della dashboard quella letta all'apertura della
+    scheda: lingua, email, promemoria e consensi cambiati nel frattempo
+    dall'app tornavano indietro, e con loro i dati Stripe scritti dal webhook
+    (18-07).
+    """
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     payload, category_ids = _client_payload(data, partial=True)
     phone = payload.get("phone")
-    if phone:
-        _check_phone_unique(ctx, phone, exclude_id=client.id)
-    for name, value in payload.items():
-        setattr(client, name, value)
-    try:
-        with transaction.atomic():
-            client.save()
-    except IntegrityError:
-        raise HttpError(400, DUPLICATE_PHONE)
-    if category_ids is not None:
-        _set_categories(client, category_ids)
-    log_activity(
-        ctx.salon,
-        "client.updated",
-        f"Cliente aggiornato: {client.full_name}",
-        actor=ctx.user,
-        payload={"client_id": client.id},
-    )
+    if phone and phone != client.phone:
+        archived = _check_phone_unique(ctx, phone, exclude_id=client.id)
+        if archived is not None:
+            raise HttpError(400, _archived_phone_message(archived, creating=False))
+    with transaction.atomic():
+        # Riletta sotto lock: i consensi si fondono con quelli salvati, e una
+        # revoca arrivata dall'app un istante prima non deve tornare indietro.
+        client = Client.objects.select_for_update().get(pk=client.pk)
+        marketing_before = bool((client.consents or {}).get("marketing"))
+        if "consents" in payload:
+            payload["consents"] = _stamped_consents(client.consents, payload["consents"])
+        changed = [name for name, value in payload.items() if getattr(client, name) != value]
+        for name in changed:
+            setattr(client, name, payload[name])
+        if changed:
+            try:
+                with transaction.atomic():
+                    client.save(update_fields=changed)
+            except IntegrityError:
+                raise HttpError(400, DUPLICATE_PHONE)
+        if category_ids is not None and _set_categories(client, category_ids):
+            changed.append("category_ids")
+        if changed:
+            reactivated = "is_active" in changed and client.is_active
+            log_activity(
+                ctx.salon,
+                "client.updated",
+                f"Cliente {'riattivato' if reactivated else 'aggiornato'}: {client.full_name}",
+                actor=ctx.user,
+                payload={"client_id": client.id, "fields": changed},
+            )
+        # Il consenso marketing tolto dalla scheda vale anche per le campagne
+        # già programmate, e una scheda disattivata esce dagli invii in coda
+        # (07-03, GDPR art. 7.3): la destinataria fissata al «Programma» di
+        # lunedì riceveva comunque la promozione di sabato.
+        marketing_after = bool((client.consents or {}).get("marketing"))
+        if marketing_after != marketing_before:
+            _marketing_hook("marketing_consent_changed", client, accepted=marketing_after)
+        if payload.get("is_active") is False:
+            _marketing_hook("drop_from_pending_sends", client)
     return client
 
 
@@ -323,16 +444,36 @@ def delete_client(request, client_id: int):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    client.is_active = False
-    client.save(update_fields=["is_active"])
-    log_activity(
-        ctx.salon,
-        "client.deleted",
-        f"Cliente disattivato: {client.full_name}",
-        actor=ctx.user,
-        payload={"client_id": client.id},
-    )
+    with transaction.atomic():
+        client.is_active = False
+        client.save(update_fields=["is_active"])
+        log_activity(
+            ctx.salon,
+            "client.deleted",
+            f"Cliente disattivato: {client.full_name}",
+            actor=ctx.user,
+            payload={"client_id": client.id},
+        )
+        # Archiviata = fuori anche dagli invii marketing non ancora partiti (07-03).
+        _marketing_hook("drop_from_pending_sends", client)
     return OkOut()
+
+
+def _marketing_hook(name: str, *args, **kwargs) -> None:
+    """Chiama `apps.marketing.services.<name>`, se c'è.
+
+    Le due funzioni (marketing_consent_changed, drop_from_pending_sends)
+    appartengono al marketing: un'installazione che non le ha ancora non deve
+    perdere il salvataggio della scheda, ma deve lasciarne traccia nei log.
+    """
+    try:
+        from apps.marketing import services as marketing_services  # lazy: evita cicli
+
+        hook = getattr(marketing_services, name)
+    except (ImportError, AttributeError):
+        logger.warning("clients: apps.marketing.services.%s non disponibile", name)
+        return
+    hook(*args, **kwargs)
 
 
 @router.post("/import", auth=staff_auth, response=ImportOut)
