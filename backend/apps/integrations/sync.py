@@ -7,9 +7,11 @@ idempotenti). I servizi vengono spinti in un unico catalogo per salone.
 """
 
 import logging
+import threading
 from dataclasses import dataclass, field
 
 from django.db import IntegrityError, transaction
+from django.db import connection as db_connection
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -89,6 +91,34 @@ class SyncReport:
     pushed: int = 0
     items: int = 0
     errors: list[str] = field(default_factory=list)
+
+
+class SyncAborted(Exception):
+    """La connessione è sparita o ha cambiato org mentre la sync girava."""
+
+
+def _ensure_linked(conn: YourangConnection) -> None:
+    """Ferma la sync se nel frattempo il salone è stato scollegato o ricollegato.
+
+    La sync lunga gira fuori dalla richiesta (prima sync in background, cron):
+    se intanto il titolare scollega e ricollega un'altra org, continuare
+    scriverebbe sulle schede i contact-id dell'org VECCHIA, e la sync della
+    nuova le salterebbe come «già collegate». Una query indicizzata per giro,
+    niente in confronto alla chiamata HTTP che segue.
+    """
+    if not YourangConnection.objects.filter(
+        pk=conn.pk, yourang_org_id=conn.yourang_org_id
+    ).exists():
+        raise SyncAborted("collegamento Yourang cambiato durante la sincronizzazione: interrotta")
+
+
+def summarize_errors(errors: list[str]) -> str:
+    """Riassunto degli errori di sync da mostrare al titolare ("" se tutto bene)."""
+    if not errors:
+        return ""
+    head = "; ".join(errors[:3])
+    more = f" (+{len(errors) - 3} altri)" if len(errors) > 3 else ""
+    return f"Sincronizzazione parziale: {head}{more}"[:500]
 
 
 # ---- Clienti ↔ Contatti ----------------------------------------------------
@@ -203,6 +233,7 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
 
     # 2) Yourang → locale
     for rc in remote:
+        _ensure_linked(conn)
         try:
             # Savepoint per contatto: un solo salvataggio che fallisce (telefono
             # duplicato, corsa con un'altra consegna) non deve fermare tutta la
@@ -222,6 +253,7 @@ def sync_clients(conn: YourangConnection) -> SyncReport:
         phone = normalize_phone(local.phone)
         if not phone:
             continue
+        _ensure_linked(conn)
         try:
             created = client.create_or_get_contact(
                 phone,
@@ -267,6 +299,7 @@ def sync_services(conn: YourangConnection) -> SyncReport:
         conn.save(update_fields=["catalogue_id"])
 
     for svc in Service.objects.filter(salon=salon, active=True).select_related("category"):
+        _ensure_linked(conn)
         payload = {
             "name": svc.name_it or svc.name_en,
             "sku": f"service-{svc.id}",
@@ -286,6 +319,7 @@ def sync_services(conn: YourangConnection) -> SyncReport:
         report.items += 1
 
     for pkg in Package.objects.filter(salon=salon, active=True):
+        _ensure_linked(conn)
         payload = {
             "name": pkg.name,
             "sku": f"package-{pkg.id}",
@@ -306,6 +340,67 @@ def sync_services(conn: YourangConnection) -> SyncReport:
         report.items += 1
 
     return report
+
+
+# ---- Prima sincronizzazione, fuori dalla richiesta --------------------------
+
+
+def initial_sync(conn_id: int) -> None:
+    """Prima sync completa (clienti + listino) di un salone appena collegato.
+
+    L'esito resta scritto sulla connessione, che è ciò che il titolare vede:
+    `last_sync_at` a fine giro, `last_error` col riassunto degli errori (o
+    l'eccezione che l'ha fermata). Scritture con UPDATE: se nel frattempo la
+    connessione è stata tolta non c'è niente da aggiornare, e non si riscrive
+    nessun'altra colonna.
+    """
+    conn = YourangConnection.objects.select_related("salon").filter(pk=conn_id).first()
+    if conn is None:
+        return
+    try:
+        clients = sync_clients(conn)
+        services = sync_services(conn)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Yourang initial sync failed (salone %s)", conn.salon_id)
+        YourangConnection.objects.filter(pk=conn.pk, yourang_org_id=conn.yourang_org_id).update(
+            last_error=str(exc)[:500], updated_at=timezone.now()
+        )
+        return
+    YourangConnection.objects.filter(pk=conn.pk, yourang_org_id=conn.yourang_org_id).update(
+        last_sync_at=timezone.now(),
+        last_error=summarize_errors(clients.errors + services.errors),
+        updated_at=timezone.now(),
+    )
+
+
+def _run_in_background(conn_id: int) -> None:
+    def run():
+        try:
+            initial_sync(conn_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("Yourang initial sync crashed (connessione %s)", conn_id)
+        finally:
+            # Thread fuori dal ciclo richiesta/risposta: nessuno chiude la sua
+            # connessione al database al posto suo.
+            db_connection.close()
+
+    threading.Thread(target=run, name=f"yourang-sync-{conn_id}", daemon=True).start()
+
+
+def schedule_initial_sync(conn: YourangConnection) -> None:
+    """Avvia la prima sync DOPO il commit, in un thread, e ritorna subito.
+
+    Dentro la richiesta un salone con qualche migliaio di clienti faceva
+    migliaia di chiamate HTTP in fila (download dei contatti, push di ogni
+    scheda non collegata, listino): «Accedi con Yourang» restava appeso per
+    minuti e occupava un thread di gunicorn. Il giro in background è
+    idempotente: se il processo si ferma a metà (deploy) lo completa il cron
+    `sync_yourang`.
+    """
+    conn_id = conn.pk
+    # lambda e non partial: _run_in_background si risolve al momento del
+    # commit (i test lo sostituiscono per eseguirlo in linea).
+    transaction.on_commit(lambda: _run_in_background(conn_id))
 
 
 # ---- Appuntamenti ↔ Eventi -------------------------------------------------

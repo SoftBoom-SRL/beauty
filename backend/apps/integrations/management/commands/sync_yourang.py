@@ -11,7 +11,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.integrations.models import YourangConnection
-from apps.integrations.sync import sync_clients, sync_services
+from apps.integrations.sync import summarize_errors, sync_clients, sync_services
 
 
 class Command(BaseCommand):
@@ -37,23 +37,40 @@ class Command(BaseCommand):
             qs = qs.filter(salon_id=options["salon"])
 
         for conn in qs.select_related("salon"):
+            # UPDATE sulla riga con la stessa org, non save() della copia letta
+            # a inizio giro: se durante la sync il titolare ha scollegato (riga
+            # sparita) o ricollegato, l'esito di questo giro non è più suo.
+            same_link = YourangConnection.objects.filter(
+                pk=conn.pk, yourang_org_id=conn.yourang_org_id
+            )
             try:
                 clients = sync_clients(conn)
                 services = sync_services(conn)
-                conn.last_sync_at = timezone.now()
-                conn.last_error = ""
-                # Il primo giro riuscito riporta la connessione a CONNECTED: è
-                # l'unico modo perché un errore passeggero non diventi definitivo.
-                conn.status = YourangConnection.Status.CONNECTED
-                conn.save(update_fields=["last_sync_at", "last_error", "status"])
-                self.stdout.write(self.style.SUCCESS(
-                    f"[{conn.salon}] clienti: +{clients.created} link {clients.linked} "
-                    f"push {clients.pushed} · voci catalogo {services.items}"
-                ))
-                for err in (clients.errors + services.errors):
-                    self.stdout.write(self.style.WARNING(f"  {err}"))
             except Exception as exc:  # noqa: BLE001
-                conn.last_error = str(exc)
-                conn.status = YourangConnection.Status.ERROR
-                conn.save(update_fields=["last_error", "status"])
+                same_link.update(
+                    last_error=str(exc)[:500],
+                    status=YourangConnection.Status.ERROR,
+                    updated_at=timezone.now(),
+                )
                 self.stdout.write(self.style.ERROR(f"[{conn.salon}] {exc}"))
+                continue
+            errors = clients.errors + services.errors
+            same_link.update(
+                last_sync_at=timezone.now(),
+                # Gli errori parziali (403 senza contacts:write, voci rifiutate)
+                # restano scritti, come fanno collega e login: prima il cron li
+                # azzerava a ogni giro e la dashboard diceva «Connesso ·
+                # sincronizzati» con metà anagrafica mai arrivata.
+                last_error=summarize_errors(errors),
+                # Il primo giro arrivato in fondo riporta la connessione a
+                # CONNECTED: è l'unico modo perché un errore passeggero non
+                # diventi definitivo.
+                status=YourangConnection.Status.CONNECTED,
+                updated_at=timezone.now(),
+            )
+            self.stdout.write(self.style.SUCCESS(
+                f"[{conn.salon}] clienti: +{clients.created} link {clients.linked} "
+                f"push {clients.pushed} · voci catalogo {services.items}"
+            ))
+            for err in errors:
+                self.stdout.write(self.style.WARNING(f"  {err}"))
