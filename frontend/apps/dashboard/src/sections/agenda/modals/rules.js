@@ -246,3 +246,20 @@ export function slotReassignment(items, assignment) {
   });
   return { pair: pairs[0] || null, extra: Math.max(0, pairs.length - 1) };
 }
+
+/* ---- riepilogo di cassa (RightRail) --------------------------------------- */
+
+/** «Incassato oggi» di GET /api/sales/today-summary (contratto C23): si mostra
+ *  quando è diverso dal venduto, con le voci che fanno la differenza — gift
+ *  card usate e caparre detratte (denaro entrato un altro giorno), caparre
+ *  incassate oggi, caparre restituite oggi. Prima compariva solo con gift card
+ *  riscattate (05-16). `cash_in` arriva già al netto dei rimborsi: qui non si
+ *  sottrae niente. Confronto in centesimi. */
+export function cashUpLines(summary) {
+  if (!summary) return null;
+  const cents = (v) => Math.round(Number(v || 0) * 100);
+  const parts = ['deposit_cashed', 'gift_card_redeemed', 'deposit_used', 'deposit_refunded']
+    .filter((key) => cents(summary[key]) > 0)
+    .map((key) => ({ key, amount: Number(summary[key]) }));
+  return { show: cents(summary.cash_in) !== cents(summary.total), cashIn: Number(summary.cash_in || 0), parts };
+}
