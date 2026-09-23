@@ -110,6 +110,9 @@ class Http:
     def post(self, path, **kw):
         return self.request("POST", path, **kw)
 
+    def put(self, path, **kw):
+        return self.request("PUT", path, **kw)
+
 
 # ---------------------------------------------------------------------------
 # Helper di dominio
@@ -276,7 +279,17 @@ def step_01_staff_login(api, ctx, args):
     _, me = api.get("/api/auth/me", token=ctx["staff_token"], label="GET /api/auth/me")
     if me.get("salon", {}).get("slug") != SALON_SLUG:
         raise StepFail(f"/auth/me salone inatteso: {short(me)}")
-    return f"login owner ok, salone={me['salon']['slug']}, scopes owner, access+refresh emessi"
+    # Messaggi senza trattenuta, come nei test unitari (_no_automation_delay):
+    # lo smoke fa in pochi secondi gesti che al banco sono lontani minuti, e con
+    # i 30 secondi di serie prenotazione e annullamento si fondevano — lo step
+    # 11 cercava uno slot.freed che per regola non doveva partire.
+    _, settings = api.put("/api/core/settings", token=ctx["staff_token"],
+                          body={"automation_delay_seconds": 0},
+                          label="PUT /api/core/settings")
+    if settings.get("automation_delay_seconds") != 0:
+        raise StepFail(f"ritardo messaggi non azzerato: {short(settings)}")
+    return (f"login owner ok, salone={me['salon']['slug']}, scopes owner, access+refresh emessi; "
+            "messaggi verso Yourang senza trattenuta")
 
 
 def step_02_staff_refresh(api, ctx, args):

@@ -331,3 +331,15 @@ class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
         self.assertEqual(purge_delivered(), 3)
         self.assertEqual(list(OutboxEvent.objects.values_list("id", flat=True)), [last.id])
         self.assertFalse(OutboxEvent.objects.filter(id__in=[first.id, visit_over.id, otp.id]).exists())
+
+
+class OpeningHoursNotSetTests(TestCase):
+    """Segnalato da CORE-INSIGHTS: `{}` è «non impostati», non «chiuso tutti i giorni»."""
+
+    def test_an_empty_week_stays_not_set(self):
+        from .services import normalize_opening_hours_week
+
+        self.assertEqual(normalize_opening_hours_week({}), {})
+        # sette giorni vuoti scritti per esteso restano invece «chiuso»
+        closed = normalize_opening_hours_week({str(day): [] for day in range(7)})
+        self.assertEqual(closed, {str(day): [] for day in range(7)})

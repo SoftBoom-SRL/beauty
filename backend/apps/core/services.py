@@ -143,10 +143,14 @@ def normalize_opening_hours_week(value) -> dict:
     Solleva ValueError con messaggio user-facing. Accetta chiavi int o str,
     intervalli come liste/tuple di due stringhe "H:MM"/"HH:MM"; ordina e
     rifiuta sovrapposizioni e intervalli invertiti.
+
+    `{}` (come None o "") vuol dire «orari non impostati», com'è in /admin/:
+    prima diventava sette giorni vuoti, cioè «chiuso tutti i giorni», e
+    l'agenda smetteva di proporre orari.
     """
     import re
 
-    if value in (None, ""):
+    if value in (None, "") or (isinstance(value, dict) and not value):
         return {}
     if not isinstance(value, dict):
         raise ValueError("Orari non validi")
