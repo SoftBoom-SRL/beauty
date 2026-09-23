@@ -186,8 +186,8 @@ def lock_salon(salon) -> None:
     «Controllo che lo slot sia libero» e «inserisco» non sono atomici di per sé:
     su PostgreSQL due richieste simultanee potevano superare entrambe la
     verifica prima che una delle due fosse visibile all'altra, e finire
-    sovrapposte. Il lock sulla riga del salone (SELECT … FOR UPDATE) fa
-    attendere la seconda finché la prima non ha committato. Su SQLite è un
+    sovrapposte. Il lock sulla riga del salone (SELECT … FOR NO KEY UPDATE)
+    fa attendere la seconda finché la prima non ha committato. Su SQLite è un
     no-op, ma lì le scritture sono già seriali. Va chiamata DENTRO atomic().
 
     Il lock è FOR NO KEY UPDATE, non FOR UPDATE. Su PostgreSQL le chiavi
