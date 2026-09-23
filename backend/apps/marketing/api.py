@@ -42,7 +42,9 @@ from .schemas import (
 from .services import (
     cancel_pending_send,
     create_gift_card,
+    marketing_consent_changed,
     send_communication,
+    settle_due_communications,
     unique_code,
 )
 
@@ -623,10 +625,36 @@ def enroll_loyalty_client(request, program_id: int, data: LoyaltyEnrollIn):
 @router.get("/communications", auth=staff_auth, response=list[CommunicationOut])
 @paginate(LimitOffsetPagination)
 def list_communications(request, status: str = ""):
-    qs = Communication.objects.filter(salon=request.auth.salon)
+    salon = request.auth.salon
+    # Le programmate arrivate alla data sono partite: la scheda le mostra fra
+    # le inviate, non più modificabili (07-02).
+    settle_due_communications(salon)
+    qs = Communication.objects.filter(salon=salon)
     if status:
         qs = qs.filter(status=status)
-    return qs
+    return qs.order_by("-created_at", "-id")
+
+
+def _locked_communication(ctx, comm_id: int) -> Communication:
+    """La comunicazione del salone, bloccata fino a fine transazione.
+
+    Modifica, invio ed eliminazione decidevano ciascuna sulla propria copia
+    letta a inizio richiesta: un «Programma» e una modifica nello stesso
+    momento lasciavano un invio vivo su una bozza.
+    """
+    comm = salon_get(Communication, ctx, comm_id)
+    return Communication.objects.select_for_update().get(pk=comm.pk)
+
+
+def _already_sent(comm: Communication) -> bool:
+    """Inviata, o programmata con la data già passata: l'evento è partito."""
+    if comm.status == Communication.Status.SENT:
+        return True
+    return (
+        comm.status == Communication.Status.SCHEDULED
+        and comm.scheduled_at is not None
+        and comm.scheduled_at <= timezone.now()
+    )
 
 
 def _check_audience(data: CommunicationIn):
@@ -657,25 +685,30 @@ def create_communication(request, data: CommunicationIn):
 def update_communication(request, comm_id: int, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    if comm.status == Communication.Status.SENT:
-        raise HttpError(422, "Comunicazione già inviata: non modificabile")
     _check_audience(data)
-    # Modificare una comunicazione già programmata annulla l'invio in coda e la
-    # riporta in bozza: altrimenti Yourang consegnava alla data la versione
-    # vecchia, e un nuovo «Invia» ne accodava una seconda copia.
-    cancel_pending_send(comm)
-    comm.status = Communication.Status.DRAFT
-    for name, value in data.dict().items():
-        setattr(comm, name, value)
-    comm.save()
-    log_activity(
-        ctx.salon,
-        "communication.updated",
-        f"Comunicazione «{comm.title}» aggiornata",
-        actor=ctx.user,
-        payload={"communication_id": comm.id},
-    )
+    fields = data.dict()
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        if _already_sent(comm):
+            raise HttpError(422, "Comunicazione già inviata: non modificabile")
+        # Modificare una comunicazione già programmata annulla l'invio in coda
+        # (o presso Yourang, se l'ha già ricevuto) e la riporta in bozza:
+        # altrimenti alla data partiva la versione vecchia, e un nuovo «Invia»
+        # ne accodava una seconda copia.
+        cancel_pending_send(comm)
+        comm.status = Communication.Status.DRAFT
+        for name, value in fields.items():
+            setattr(comm, name, value)
+        # Solo i campi della maschera: il save completo riscriveva anche
+        # sent_at e l'immagine della copia letta a inizio richiesta (18-07).
+        comm.save(update_fields=[*fields, "status"])
+        log_activity(
+            ctx.salon,
+            "communication.updated",
+            f"Comunicazione «{comm.title}» aggiornata",
+            actor=ctx.user,
+            payload={"communication_id": comm.id},
+        )
     return comm
 
 
@@ -683,18 +716,20 @@ def update_communication(request, comm_id: int, data: CommunicationIn):
 def delete_communication(request, comm_id: int):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    log_activity(
-        ctx.salon,
-        "communication.deleted",
-        f"Comunicazione «{comm.title}» eliminata",
-        actor=ctx.user,
-        payload={"communication_id": comm.id},
-    )
-    # Prima l'invio in coda partiva lo stesso: i clienti ricevevano il messaggio
-    # di una campagna che il salone aveva cancellato.
-    cancel_pending_send(comm)
-    comm.delete()
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        log_activity(
+            ctx.salon,
+            "communication.deleted",
+            f"Comunicazione «{comm.title}» eliminata",
+            actor=ctx.user,
+            payload={"communication_id": comm.id},
+        )
+        # Prima l'invio in coda partiva lo stesso: i clienti ricevevano il
+        # messaggio di una campagna che il salone aveva cancellato. Se Yourang
+        # l'aveva già ricevuto, ora gli arriva l'annullamento.
+        cancel_pending_send(comm)
+        comm.delete()
     return OkOut()
 
 
@@ -702,23 +737,27 @@ def delete_communication(request, comm_id: int):
 def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    comm = salon_get(Communication, ctx, comm_id)
-    # Si invia solo da bozza. Prima una comunicazione già programmata restava
-    # rinviabile all'infinito e ogni clic accodava un invio in più: la stessa
-    # promozione arrivava due, tre, dieci volte alla stessa cliente. Per
-    # cambiarle data si passa dalla modifica, che la riporta in bozza.
-    if comm.status != Communication.Status.DRAFT:
-        if comm.status == Communication.Status.SENT:
-            raise HttpError(422, "Comunicazione già inviata")
-        raise HttpError(
-            422, "Comunicazione già programmata: modificala per cambiarle data"
-        )
     # `scheduled_at` assente = «usa la data salvata»; `scheduled_at: null`
     # esplicito = «invia adesso» anche se una data è salvata.
     fields = data.dict(exclude_unset=True)
-    if "scheduled_at" in fields:
-        return send_communication(comm, scheduled_at=fields["scheduled_at"], actor=ctx.user)
-    return send_communication(comm, actor=ctx.user)
+    with transaction.atomic():
+        comm = _locked_communication(ctx, comm_id)
+        # Si invia solo da bozza. Prima una comunicazione già programmata
+        # restava rinviabile all'infinito e ogni clic accodava un invio in più:
+        # la stessa promozione arrivava due, tre, dieci volte alla stessa
+        # cliente. Per cambiarle data si passa dalla modifica, che la riporta in
+        # bozza.
+        if comm.status != Communication.Status.DRAFT:
+            if _already_sent(comm):
+                raise HttpError(422, "Comunicazione già inviata")
+            raise HttpError(
+                422, "Comunicazione già programmata: modificala per cambiarle data"
+            )
+        if "scheduled_at" in fields:
+            return send_communication(
+                comm, scheduled_at=fields["scheduled_at"], actor=ctx.user
+            )
+        return send_communication(comm, actor=ctx.user)
 
 
 # ---- Endpoint app cliente ----------------------------------------------------
@@ -847,6 +886,7 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
     client = request.auth.client
     now = timezone.now().isoformat()
     consents = dict(client.consents or {})
+    was_accepted = bool(consents.get("marketing"))
     consents["marketing"] = bool(data.accepted)
     # Si tiene traccia di QUANDO: il consenso va dimostrato, e la revoca pure.
     if data.accepted:
@@ -857,6 +897,11 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
         consents["marketing_at"] = ""
     client.consents = consents
     client.save(update_fields=["consents"])
+    # La revoca vale anche per le campagne già programmate o in coda (07-03):
+    # si ripete a ogni revoca, perché la cliente può essere finita in un invio
+    # anche quando il consenso era stato tolto da un'altra parte.
+    if not data.accepted or not was_accepted:
+        marketing_consent_changed(client, bool(data.accepted))
     log_activity(
         request.auth.salon,
         "client.consent_updated",

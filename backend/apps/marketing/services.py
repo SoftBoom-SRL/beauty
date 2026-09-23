@@ -6,6 +6,7 @@ apps.sales.finalize_sale (import lazy lato sales): le firme NON vanno cambiate.
 """
 
 import math
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.apps import apps as django_apps
@@ -14,7 +15,7 @@ from django.db.models import F
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from apps.core.services import emit_event, log_activity
+from apps.core.services import emit_event, log_activity, supersede_events
 from common.utils import human_code
 
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
@@ -489,37 +490,186 @@ def mark_coupon_redeemed(coupon, sale) -> bool:
 
 # ---- Comunicazioni -----------------------------------------------------------
 
+SEND_EVENT = "communication.send"
+# Annulla presso Yourang invii che potrebbe avere già in mano: payload
+# {communication_id, outbox_event_ids}. Gli id sono quelli degli eventi
+# `communication.send` consegnati, che Yourang ha ricevuto come `id` e come
+# Idempotency-Key «outbox-<id>»: annullarli due volte non cambia niente.
+CANCEL_EVENT = "communication.cancel"
+# Consenso marketing cambiato: {client_id, phone, lang, marketing}. Con
+# marketing=false Yourang toglie la cliente anche dagli invii che ha già.
+CONSENT_EVENT = "client.marketing_consent"
+
+
+def _scheduled_ahead(value, now) -> bool:
+    """La data programmata scritta nel payload è ancora da venire?"""
+    if not value:
+        return False  # invio immediato: è già partito, non c'è niente da fermare
+    try:
+        when = datetime.fromisoformat(str(value))
+    except ValueError:
+        return True  # illeggibile: meglio un annullamento inutile che un invio in più
+    if timezone.is_naive(when):
+        when = timezone.make_aware(when)
+    return when > now
+
 
 def cancel_pending_send(comm: Communication) -> int:
-    """Toglie dalla coda l'invio non ancora partito di questa comunicazione.
+    """Ferma l'invio di questa comunicazione che non è ancora partito.
 
-    Una comunicazione programmata lascia in outbox un evento con la data futura:
-    Yourang lo consegnerà comunque. Senza questa pulizia, riprogrammare una
-    comunicazione accodava un secondo evento (e ogni cliente riceveva il
-    messaggio due volte), ed eliminarla non fermava niente — il messaggio
-    partiva per una campagna che non esisteva più.
+    Una programmata ora resta TRATTENUTA in outbox fino alla sua data (vedi
+    send_communication): modificarla, riprogrammarla o eliminarla la marca
+    «superseded» e non partirà mai. Prima l'evento usciva subito, il worker lo
+    consegnava in pochi secondi e questa pulizia — che guardava solo i
+    `pending` — non trovava più niente: dopo «Modifica per riprogrammare» ogni
+    cliente riceveva due messaggi, il primo col refuso, e una campagna
+    eliminata partiva lo stesso (07-02).
 
-    Gli eventi già presi in carico da un worker (`sending`/`sent`) non si
-    recuperano: quelli restano. Ritorna quanti ne sono stati annullati.
+    Quello che Yourang può avere già ricevuto — consegnato prima di questa
+    correzione, preso in carico da un worker proprio adesso, o tentato e forse
+    arrivato con la risposta persa — non si richiama dalla coda: per quello si
+    accoda un `communication.cancel` con gli id da annullare, se la data non è
+    ancora passata. Un evento già annullato non si annulla una seconda volta.
+
+    Ritorna quanti invii sono stati fermati o annullati.
     """
     OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
-    return OutboxEvent.objects.filter(
-        salon=comm.salon,
-        event_type="communication.send",
-        status=OutboxEvent.Status.PENDING,
-        payload__communication_id=comm.id,
-    ).delete()[0]
+    sends = list(
+        OutboxEvent.objects.filter(
+            salon=comm.salon, event_type=SEND_EVENT, payload__communication_id=comm.id
+        ).exclude(status=OutboxEvent.Status.SUPERSEDED)
+    )
+    if not sends:
+        return 0
+    supersede_events([e for e in sends if e.status == OutboxEvent.Status.PENDING])
+    # Riletti dopo l'UPDATE: chi un worker ha preso in carico nel frattempo
+    # resta vivo, ed è in volo.
+    alive = set(
+        OutboxEvent.objects.filter(pk__in=[e.pk for e in sends])
+        .exclude(status=OutboxEvent.Status.SUPERSEDED)
+        .values_list("pk", flat=True)
+    )
+    stopped = {e.pk for e in sends if e.pk not in alive}
+    already = set()
+    for cancel in OutboxEvent.objects.filter(
+        salon=comm.salon, event_type=CANCEL_EVENT, payload__communication_id=comm.id
+    ).exclude(status=OutboxEvent.Status.SUPERSEDED):
+        already.update(cancel.payload.get("outbox_event_ids") or [])
+    now = timezone.now()
+    reached = [
+        e.pk
+        for e in sends
+        if (e.pk in alive or e.attempts > 0)
+        and e.pk not in already
+        and _scheduled_ahead((e.payload or {}).get("scheduled_at"), now)
+    ]
+    if reached:
+        emit_event(
+            comm.salon,
+            CANCEL_EVENT,
+            {"communication_id": comm.id, "outbox_event_ids": reached},
+        )
+    return len(stopped | set(reached))
+
+
+def settle_due_communications(salon, now=None) -> int:
+    """Le programmate con la data passata diventano «inviate».
+
+    Alla data l'evento parte (o è appena partito): restare «Programmata» per
+    sempre lasciava la campagna modificabile e rinviabile anche dopo l'invio.
+    `sent_at` è la data programmata, e `scheduled_at` si svuota come per
+    l'invio immediato, perché l'interfaccia non creda che parta un'altra volta.
+    """
+    now = now or timezone.now()
+    return Communication.objects.filter(
+        salon=salon, status=Communication.Status.SCHEDULED, scheduled_at__lte=now
+    ).update(
+        status=Communication.Status.SENT, sent_at=F("scheduled_at"), scheduled_at=None
+    )
+
+
+def drop_from_pending_sends(client) -> int:
+    """Toglie la cliente dagli invii marketing non ancora consegnati (07-03).
+
+    I destinatari si fissano quando si preme «Programma»: la cliente che
+    revocava il consenso il martedì riceveva comunque il sabato la promozione
+    programmata il lunedì (GDPR art. 7.3). Si riscrivono solo gli eventi mai
+    tentati; uno già tentato può essere arrivato, e per quello c'è
+    CONSENT_EVENT. Ritorna quanti invii sono stati toccati.
+    """
+    OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
+    touched = 0
+    with transaction.atomic():
+        # Sotto lock: il worker che prende in carico l'evento aspetta la
+        # riscrittura, oppure l'ha già preso e qui non compare più.
+        events = OutboxEvent.objects.select_for_update().filter(
+            salon_id=client.salon_id,
+            event_type=SEND_EVENT,
+            status=OutboxEvent.Status.PENDING,
+            attempts=0,
+        )
+        for event in events:
+            payload = dict(event.payload or {})
+            ids = payload.get("client_ids") or []
+            if client.id not in ids:
+                continue
+            payload["client_ids"] = [cid for cid in ids if cid != client.id]
+            langs = dict(payload.get("langs") or {})
+            langs.pop(str(client.id), None)
+            payload["langs"] = langs
+            event.payload = payload
+            event.save(update_fields=["payload"])
+            touched += 1
+    return touched
+
+
+def marketing_consent_changed(client, accepted: bool) -> None:
+    """Da chiamare dopo aver salvato il consenso marketing di una cliente.
+
+    La revoca vale anche per ciò che è già in coda: la cliente esce dagli invii
+    non ancora partiti, e Yourang riceve CONSENT_EVENT per quelli che ha già in
+    mano. Anche il consenso ridato si notifica, così Yourang toglie il blocco.
+    """
+    if not accepted:
+        drop_from_pending_sends(client)
+    emit_event(
+        client.salon,
+        CONSENT_EVENT,
+        {
+            "client_id": client.id,
+            "phone": client.phone,
+            "lang": client.lang,
+            "marketing": bool(accepted),
+        },
+    )
 
 
 def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
     """Risolve l'audience in client ids (consents.marketing=True) ed emette
-    `communication.send`. Se programmata l'evento esce SUBITO con scheduled_at
-    nel payload: l'invio alla data è demandato a Yourang.
+    `communication.send`.
+
+    Programmata: l'evento resta TRATTENUTO in outbox fino a `scheduled_at`
+    (next_attempt_at) e parte alla data, con scheduled_at nel payload. Finché è
+    in coda modifica ed eliminazione lo fermano davvero (cancel_pending_send);
+    prima usciva subito e da lì in poi nessuno lo richiamava più.
 
     `scheduled_at` omesso significa «usa la data salvata sulla comunicazione»;
     `scheduled_at=None` esplicito significa «invia adesso»."""
     salon = comm.salon
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
+
+    if scheduled_at is _UNSET:
+        scheduled_at = comm.scheduled_at
+    now = timezone.now()
+    if scheduled_at and timezone.is_naive(scheduled_at):
+        scheduled_at = timezone.make_aware(scheduled_at)
+    # Una bozza con una data vecchia diventava «Programmata» per sempre con la
+    # data nel passato, e cosa facesse Yourang con un invio già scaduto non lo
+    # sapeva nessuno (07-14).
+    if scheduled_at and scheduled_at <= now:
+        raise HttpError(
+            422, "La data di invio è già passata: scegline una futura oppure invia subito"
+        )
 
     # Solo chi ha il consenso marketing ATTIVO adesso: la revoca (GDPR art. 7.3)
     # si scrive sullo stesso campo, quindi chi l'ha ritirato sparisce da qui.
@@ -542,15 +692,16 @@ def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
         "langs": {str(c.id): c.lang for c in clients},
     }
 
-    if scheduled_at is _UNSET:
-        scheduled_at = comm.scheduled_at
     # Un invio nuovo sostituisce quello eventualmente ancora in coda: mai due
     # eventi vivi per la stessa comunicazione.
     cancel_pending_send(comm)
+    delay = 0
     if scheduled_at:
         comm.status = Communication.Status.SCHEDULED
         comm.scheduled_at = scheduled_at
         payload["scheduled_at"] = scheduled_at.isoformat()
+        # Per eccesso: l'evento non deve diventare consegnabile prima della data.
+        delay = math.ceil((scheduled_at - now).total_seconds())
         summary = f"Comunicazione «{comm.title}» programmata ({len(clients)} destinatari)"
     else:
         comm.status = Communication.Status.SENT
@@ -561,7 +712,13 @@ def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
         summary = f"Comunicazione «{comm.title}» inviata a {len(clients)} clienti"
     comm.save(update_fields=["status", "scheduled_at", "sent_at"])
 
-    emit_event(salon, "communication.send", payload)
+    emit_event(
+        salon,
+        SEND_EVENT,
+        payload,
+        delay_seconds=delay,
+        coalesce_key=f"communication:{comm.id}",
+    )
     log_activity(
         salon,
         "communication.send",
