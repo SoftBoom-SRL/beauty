@@ -439,9 +439,13 @@ class ActivityFeedApiTests(TestCase):
         self.assertIsNone(data["events"][1]["actor_id"])
         # il cursore avanza oltre l'evento filtrato, così non viene richiesto in eterno
         self.assertEqual(data["cursor"], e3.id)
-        # secondo giro: niente di nuovo
+        # secondo giro: niente di nuovo. Può tornare un evento appena scritto con
+        # id sotto il cursore (finestra di sicurezza, contratto C20): mai uno
+        # non ancora visto, e la dashboard scarta i doppioni per id.
         again = self._feed(after=data["cursor"])
-        self.assertEqual(again["events"], [])
+        self.assertTrue(
+            {e["id"] for e in again["events"]} <= {e["id"] for e in data["events"]}
+        )
         self.assertEqual(again["cursor"], e3.id)
 
     def test_feed_is_scoped_to_the_salon(self):

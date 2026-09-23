@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
@@ -424,7 +425,7 @@ def list_activity(
 # I prefissi di evento del feed live e i permessi richiesti sono definiti UNA
 # volta in core.views (stream SSE) e riusati qui dal polling di riserva: due
 # elenchi separati avevano perso `settings.` e `client_category.` solo lato HTTP.
-from .views import allowed_prefixes  # noqa: E402
+from .views import LIVE_FEED_SAFETY_SECONDS, allowed_prefixes  # noqa: E402
 
 LIVE_FEED_LIMIT = 50
 
@@ -436,7 +437,10 @@ def activity_feed(request, after: int | None = None):
     Senza `after` restituisce solo il cursore corrente: il client parte da lì
     e non riceve lo storico (un salone nuovo parte da 0, che è un cursore
     valido). Con `after=<id>` restituisce, in ordine cronologico, gli eventi
-    con id maggiore (max LIVE_FEED_LIMIT) e il nuovo cursore. Ogni membro riceve
+    con id maggiore (max LIVE_FEED_LIMIT) e il nuovo cursore, più quelli con id
+    minore comparsi da poco (finestra di sicurezza, vedi
+    core.views.LIVE_FEED_SAFETY_SECONDS): un evento può quindi arrivare due
+    volte, e la dashboard lo scarta per id (contratto C20). Ogni membro riceve
     solo gli eventi delle aree su cui ha il permesso: il feed non deve essere
     una scorciatoia per leggere in tempo reale incassi, magazzino o impostazioni
     a chi il permesso d'area li nega (lo stream SSE applica lo stesso filtro).
@@ -456,6 +460,17 @@ def activity_feed(request, after: int | None = None):
         events = list(
             qs.filter(id__gt=after).filter(prefix_q).order_by("id")[:LIVE_FEED_LIMIT]
         )
+        # Un id sotto il cursore che si vede solo ora è una transazione che ha
+        # committato dopo una successiva: senza rileggerli il cursore l'aveva già
+        # scavalcato e l'evento non arrivava più a nessuno. Il cursore stesso è
+        # un evento che il client ha già.
+        horizon = timezone.now() - timedelta(seconds=LIVE_FEED_SAFETY_SECONDS)
+        late = list(
+            qs.filter(id__lt=after, created_at__gte=horizon)
+            .filter(prefix_q)
+            .order_by("id")[:LIVE_FEED_LIMIT]
+        )
+        events = late + events
     # Il cursore avanza sempre fino all'ultimo id visto (anche se filtrato via),
     # così un evento amministrativo non viene richiesto all'infinito.
     scanned = qs.filter(id__gt=after).order_by("id").values_list("id", flat=True)[:LIVE_FEED_LIMIT]
@@ -520,14 +535,16 @@ def activity_stream_ticket(request):
     from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
     ctx = request.auth
-    # I permessi viaggiano nel biglietto: lo stream non ha altro modo di sapere
-    # chi sta ascoltando e consegnava tutto a chiunque fosse autenticato.
+    # Il biglietto dice chi sta ascoltando (lo stream non ha altro modo di
+    # saperlo): utente e versione della password, con cui lo stream rilegge la
+    # membership e i permessi all'apertura.
     return {
         "ticket": issue_stream_ticket(
             ctx.salon.id,
             ctx.user.id if ctx.user else None,
             is_owner=ctx.is_owner,
             scopes=ctx.scopes,
+            token_version=getattr(ctx.user, "token_version", 0) or 0,
         ),
         "expires_in": STREAM_TICKET_TTL,
     }
