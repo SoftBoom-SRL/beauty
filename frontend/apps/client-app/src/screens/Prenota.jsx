@@ -12,7 +12,7 @@ import {
   nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
 import { giftServiceCards } from './walletLib.js';
-import { svcMinutes } from './visitLib.js';
+import { sameBooking, svcMinutes } from './visitLib.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 
@@ -147,26 +147,28 @@ export default function Prenota() {
    * risposta perdersi: la cliente vede un errore, ritocca «Conferma» e si
    * ritrova due appuntamenti (il backend non rifiuta due prenotazioni della
    * stessa cliente sullo stesso orario, e con «Prima disponibile» il secondo
-   * prende un'altra operatrice, occupando due slot). Prima di riprovare LO
-   * STESSO orario si va a vedere se l'appuntamento esiste già.
+   * prende un'altra operatrice, occupando due slot). Prima di riprovare LA
+   * STESSA prenotazione si va a vedere se l'appuntamento esiste già: stesso
+   * orario E stessi servizi. Col solo orario, il taglio già fissato alle 10:00
+   * passava per la manicure appena tentata alle 10:00, e dopo un primo POST
+   * perso per strada (rete, 502 durante un deploy) compariva «Fatto!» per una
+   * manicure che non esisteva (16-08).
    * La via più pulita — una chiave di idempotenza inviata col POST — richiede
    * un campo nuovo nello schema del backend: vedi rapporto. */
   const postedFor = React.useRef(null);
-  const findBooked = async (startIso) => {
+  const findBooked = async (startIso, ids) => {
     try {
       const data = await api.get('/api/agenda/client/appointments');
-      const wanted = new Date(startIso).getTime();
-      return (data?.upcoming || []).find(
-        (a) => new Date(a.start).getTime() === wanted && a.status !== 'cancelled',
-      ) || null;
+      return (data?.upcoming || []).find((a) => sameBooking(a, startIso, ids)) || null;
     } catch { return null; }
   };
   const createAppointment = async () => {
-    if (postedFor.current === slot.start) {
-      const existing = await findBooked(slot.start);
+    const attempt = slot.start + '|' + [...serviceIds].sort((a, b) => a - b).join(',');
+    if (postedFor.current === attempt) {
+      const existing = await findBooked(slot.start, serviceIds);
       if (existing) return existing;
     }
-    postedFor.current = slot.start;
+    postedFor.current = attempt;
     return api.post('/api/agenda/client/appointments', { items, start: slot.start });
   };
 

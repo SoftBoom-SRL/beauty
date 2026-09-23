@@ -34,3 +34,16 @@ export function apptMinutes(appt) {
   if (Number.isFinite(span) && span > 0) return Math.round(span);
   return (appt?.services || []).reduce((sum, x) => sum + svcMinutes(x), 0);
 }
+
+const sortedIds = (ids) => ids.map(Number).sort((a, b) => a - b).join(',');
+
+/** L'appuntamento `appt` (dall'elenco della cliente) è proprio quello tentato:
+ *  stesso inizio E stessi servizi, e non annullato. Col solo orario, un taglio
+ *  già fissato alle 10:00 passava per la manicure appena tentata alle 10:00 e
+ *  compariva «Fatto!» per una prenotazione che non esisteva (16-08). */
+export function sameBooking(appt, startIso, serviceIds) {
+  if (!appt || appt.status === 'cancelled') return false;
+  if (new Date(appt.start).getTime() !== new Date(startIso).getTime()) return false;
+  const booked = (appt.services || []).map((s) => s.service_id);
+  return sortedIds(booked) === sortedIds(serviceIds || []);
+}

@@ -2,7 +2,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { apptMinutes, depositDueMs, depositExpired, svcMinutes } from '../src/screens/visitLib.js';
+import {
+  apptMinutes, depositDueMs, depositExpired, sameBooking, svcMinutes,
+} from '../src/screens/visitLib.js';
 
 // 16-05: la Home lasciata aperta mostrava «Paga ora» anche dopo la scadenza
 // della caparra; il pagamento arrivava dopo il rilascio dell'orario e finiva
@@ -40,4 +42,19 @@ test('durata di un appuntamento = dall\'inizio alla fine, posa compresa', () => 
   assert.equal(apptMinutes(appt), 100);
   // senza la fine: la somma dei servizi (con la posa, se c'è)
   assert.equal(apptMinutes({ services: [{ duration_min: 60, soak_min: 40 }, { duration_min: 30 }] }), 130);
+});
+
+// 16-08: la cliente ha già il taglio alle 10:00 e prenota la manicure alle
+// 10:00; il primo POST si perde per strada, lei riprova e il controllo «esiste
+// già?» trovava il taglio: «Fatto!» per una manicure mai creata.
+test('riprova: è la stessa prenotazione solo con lo stesso orario E gli stessi servizi', () => {
+  const taglio = { start: '2026-09-24T10:00:00+02:00', status: 'confirmed', services: [{ service_id: 1 }] };
+  const start = '2026-09-24T08:00:00.000Z'; // stesso istante, scritto come lo manda la disponibilità
+  assert.equal(sameBooking(taglio, start, [2]), false);
+  assert.equal(sameBooking(taglio, start, [1]), true);
+  const coppia = { ...taglio, services: [{ service_id: 2 }, { service_id: 1 }] };
+  assert.equal(sameBooking(coppia, start, [1, 2]), true);
+  assert.equal(sameBooking(coppia, start, [1]), false);
+  assert.equal(sameBooking({ ...taglio, status: 'cancelled' }, start, [1]), false);
+  assert.equal(sameBooking(taglio, '2026-09-24T08:30:00.000Z', [1]), false);
 });
