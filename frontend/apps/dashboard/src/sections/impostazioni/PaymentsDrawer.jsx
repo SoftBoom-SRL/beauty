@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, ApiError, Icon, NumInput } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { toastErr, LockNote } from './lib.jsx';
 
@@ -19,6 +20,9 @@ export default function PaymentsDrawer({ onClose }) {
   const [reminder, setReminder] = useState(settings?.deposit_reminder_minutes || 0);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  // «Scollega» staccava l'account al primo clic (15-08): da lì le caparre
+  // pagate dal link finivano sull'account della piattaforma. Ora si chiede.
+  const [confirmOff, setConfirmOff] = useState(false);
 
   const loadStripe = () => api.get('/api/sales/stripe/connect/status').then(setStripe).catch(() => setStripe(null));
   useEffect(() => { loadStripe(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -44,7 +48,8 @@ export default function PaymentsDrawer({ onClose }) {
     try {
       const res = await api.del('/api/sales/stripe/connect');
       setStripe(res);
-      await reload.salon();
+      setConfirmOff(false);
+      reload.salon().catch(() => {});
       fireToast({ msg: t('Account Stripe scollegato', 'Stripe account disconnected'), icon: 'check' });
     } catch (err) { toastErr(err, fireToast, t); }
     finally { setBusy(false); }
@@ -95,7 +100,7 @@ export default function PaymentsDrawer({ onClose }) {
               </div>
             </div>
             {isOwner && stripe?.available && (stripeOk
-              ? <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={disconnect}>{t('Scollega', 'Disconnect')}</button>
+              ? <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={() => setConfirmOff(true)}>{t('Scollega', 'Disconnect')}</button>
               : <button className="dk-btn dk-btn--clay" onClick={connect}><Icon name="plus" size={16} color="#fff" />{t('Collega Stripe', 'Connect Stripe')}</button>)}
           </div>
           <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
@@ -158,6 +163,21 @@ export default function PaymentsDrawer({ onClose }) {
           </button>
         )}
       </div>
+      <DkConfirm
+        open={confirmOff}
+        busy={busy}
+        onClose={() => setConfirmOff(false)}
+        onConfirm={disconnect}
+        title={t('Scollegare Stripe?', 'Disconnect Stripe?')}
+        message={t('L’account Stripe del salone verrà scollegato.', 'The salon’s Stripe account will be disconnected.')}
+        detail={stripe?.payments_enabled
+          ? t('Da quel momento le caparre pagate dal link finiscono sull’account della piattaforma, non sul conto del salone, e lo stesso gli addebiti no-show sulla carta salvata. Per tornare indietro dovrai rifare il collegamento con Stripe.',
+            'From then on, deposits paid through the link land on the platform account, not the salon’s, and so do no-show charges on saved cards. To undo it you will have to connect Stripe again.')
+          : t('Da quel momento i link di pagamento della caparra non funzionano più: le clienti pagano la caparra in salone. Per tornare indietro dovrai rifare il collegamento con Stripe.',
+            'From then on, deposit payment links stop working: clients pay the deposit in the salon. To undo it you will have to connect Stripe again.')}
+        confirmLabel={t('Scollega', 'Disconnect')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
     </DkDrawer>
   );
 }

@@ -1,11 +1,12 @@
 // RestockModal.jsx — batch "Carico merce": pick existing products and/or paste a CSV,
-// then POST /api/inventory/load-csv (matches sku→name; creates missing products when a
-// supplier is set). Shows the per-row results/errors returned by the API.
+// then POST /api/inventory/load-csv (rows with a known product carry its id — C7;
+// the others are created when a supplier is set). Shows the per-row results/errors
+// returned by the API.
 import React, { useMemo, useState } from 'react';
 import { api, EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { errMsg, fmtQty, num, parseRestockCsv } from './lib.js';
+import { errMsg, fmtQty, matchRestockKey, num, parseRestockCsv, restockRowsBody } from './lib.js';
 import { NumBox, inputCss } from './bits.jsx';
 
 let keySeq = 0;
@@ -13,7 +14,7 @@ const nextKey = () => 'k' + (keySeq++) + '_' + Date.now();
 
 export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
   const { t, lang, fireToast } = useDash();
-  const [lines, setLines] = useState([]);       // {key, product?, name, sku, qty, isNew}
+  const [lines, setLines] = useState([]);       // {key, product?, name, sku, qty, isNew, candidates?}
   const [pickQ, setPickQ] = useState('');
   const [csvOpen, setCsvOpen] = useState(false);
   const [csvText, setCsvText] = useState('');
@@ -40,12 +41,11 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
       return;
     }
     const parsed = rows.map((r) => {
-      const key = r.key.toLowerCase();
-      const match = activeProds.find((p) => (p.sku || '').toLowerCase() === key) ||
-        activeProds.find((p) => p.name.toLowerCase() === key);
-      return match
-        ? { key: nextKey(), product: match, name: match.name, sku: match.sku || '', qty: r.qty, isNew: false }
-        : { key: nextKey(), product: null, name: r.key, sku: '', qty: r.qty, isNew: true };
+      const { product: match, candidates } = matchRestockKey(r.key, activeProds);
+      if (match) return { key: nextKey(), product: match, name: match.name, sku: match.sku || '', qty: r.qty, isNew: false };
+      // Due «Shampoo idratante» di marche diverse: si sceglie qui, non si indovina.
+      if (candidates.length > 1) return { key: nextKey(), product: null, name: r.key, sku: '', qty: r.qty, isNew: false, candidates };
+      return { key: nextKey(), product: null, name: r.key, sku: '', qty: r.qty, isNew: true };
     });
     setLines((ls) => [...ls, ...parsed]);
     setCsvText('');
@@ -54,16 +54,18 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
   };
 
   const totalUnits = lines.reduce((s, l) => s + (parseInt(l.qty, 10) || 0), 0);
-  const validLines = lines.filter((l) => (parseInt(l.qty, 10) || 0) > 0 && (l.name || '').trim());
+  const unresolved = lines.filter((l) => !l.product && l.candidates);
+  const validLines = lines.filter((l) => (parseInt(l.qty, 10) || 0) > 0 && (l.name || '').trim() && !(l.candidates && !l.product));
   const hasNew = validLines.some((l) => l.isNew);
-  const canApply = validLines.length > 0 && !busy && !(hasNew && !supplierId);
+  const canApply = validLines.length > 0 && !busy && !(hasNew && !supplierId) && !unresolved.length;
+  const prodLabel = (p) => [p.brand, p.sku, p.supplier_name].filter(Boolean).join(' · ');
 
   const apply = async () => {
     if (!canApply) return;
     setBusy(true);
     try {
       const body = {
-        rows: validLines.map((l) => ({ name: l.sku ? '' : l.name.trim(), sku: l.sku, qty: parseInt(l.qty, 10) || 0 })),
+        rows: restockRowsBody(validLines),
         supplier_id: supplierId ? Number(supplierId) : null,
       };
       const res = await api.post('/api/inventory/load-csv', body);
@@ -168,7 +170,7 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
                   return (
                     <button key={p.id} className="dk-row" onClick={() => addExisting(p)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 11px', borderRadius: 8, textAlign: 'left' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}</div>
+                        <div style={{ fontWeight: 600, fontSize: 13.5 }}>{p.name}{prodLabel(p) && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 500 }}> · {prodLabel(p)}</span>}</div>
                         <div className="t-sm" style={{ color: lowItem ? 'var(--warn)' : 'var(--muted-2)', fontWeight: lowItem ? 700 : 400 }}>{t('Attuale', 'Current')}: {fmtQty(p.stock_qty, lang)} {p.package_unit || t('unità', 'units')}{lowItem ? ' · ' + t('sottoscorta', 'low stock') : ''}</div>
                       </div>
                       <Icon name="plus" size={15} color="var(--clay-ink)" />
@@ -197,9 +199,20 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
                         </div>
                         <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 1 }}>
                           {l.product
-                            ? <React.Fragment>{t('Attuale', 'Current')}: {fmtQty(cur, lang)} {unit} <span style={{ color: 'var(--clay-ink)', fontWeight: 700 }}>→ {fmtQty(result, lang)} {unit}</span></React.Fragment>
-                            : t('Nuovo prodotto dal CSV', 'New product from CSV')}
+                            ? <React.Fragment>{prodLabel(l.product) ? prodLabel(l.product) + ' · ' : ''}{t('Attuale', 'Current')}: {fmtQty(cur, lang)} {unit} <span style={{ color: 'var(--clay-ink)', fontWeight: 700 }}>→ {fmtQty(result, lang)} {unit}</span></React.Fragment>
+                            : l.candidates
+                              ? <span style={{ color: 'var(--warn)', fontWeight: 600 }}>{t(`${l.candidates.length} prodotti con questo nome: scegli quale`, `${l.candidates.length} products with this name: pick one`)}</span>
+                              : t('Nuovo prodotto dal CSV', 'New product from CSV')}
                         </div>
+                        {l.candidates && (
+                          <select value={l.product ? l.product.id : ''} onChange={(e) => {
+                            const p = l.candidates.find((c) => c.id === Number(e.target.value));
+                            setLine(l.key, p ? { product: p, name: p.name, sku: p.sku || '' } : { product: null });
+                          }} style={{ ...inputCss, marginTop: 6, padding: '6px 9px', fontSize: 12.5, cursor: 'pointer', width: 'auto', maxWidth: '100%' }}>
+                            <option value="">{t('Scegli il prodotto…', 'Pick the product…')}</option>
+                            {l.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{prodLabel(c) ? ' · ' + prodLabel(c) : ''}</option>)}
+                          </select>
+                        )}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                         <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>+</span>

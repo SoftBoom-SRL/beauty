@@ -7,7 +7,7 @@
 // creazioni meno frequenti. In agenda il giorno proposto è quello che si sta
 // guardando (ctx.agendaDate), non oggi.
 import React, { useEffect, useRef, useState } from 'react';
-import { Avatar, EmptyState, Icon, fmtDateIt } from '@youty/shared';
+import { Avatar, EmptyState, Icon, fmtDateIt, salonTzOpts } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 
 const TITLES = {
@@ -27,12 +27,14 @@ const TITLES = {
 
 /* Chiude un popover al click fuori o con Esc. Non usa un fondo `position: fixed`:
  * dentro `.dk-top` il backdrop-filter lo confinerebbe alla sola barra e i click
- * sul resto della pagina non lo raggiungerebbero (il pannello restava aperto). */
+ * sul resto della pagina non lo raggiungerebbero (il pannello restava aperto).
+ * Esc qui chiude il popover e basta: `preventDefault()` dice alla pila dei
+ * livelli (ui/layers.js) di non chiudere anche la finestra sotto. */
 function useClickAway(ref, open, onClose) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('pointerdown', onDown, true); document.removeEventListener('keydown', onKey); };
@@ -135,7 +137,9 @@ function relTime(iso, lang) {
   if (diff < 60) return lang === 'en' ? 'now' : 'adesso';
   if (diff < 3600) return `${Math.floor(diff / 60)} min`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
-  return new Date(iso).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short' });
+  // Il giorno del salone, non del dispositivo: un'azione delle 23:30 di Roma
+  // vista da un portatile in UTC compariva col giorno dopo.
+  return new Date(iso).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts({ day: 'numeric', month: 'short' }));
 }
 /* `streamOk` arriva come prop: il pannello non ha accesso al contesto `live`
  * della Topbar e leggerlo direttamente faceva crollare il rendering

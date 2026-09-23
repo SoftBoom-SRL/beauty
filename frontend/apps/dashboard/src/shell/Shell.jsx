@@ -8,11 +8,12 @@ import DkModals from '../modals/DkModals.jsx';
 import { DkToast, DkDrawer } from '../ui/index.js';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
+import ChunkErrorBoundary from './ChunkErrorBoundary.jsx';
 
 const AnalystDrawer = lazy(() => import('../sections/insight/AnalystDrawer.jsx'));
 
 export default function Shell() {
-  const { tab, drawer, setDrawer, toastProps, t, lang, session, fireToast } = useDash();
+  const { tab, drawer, setDrawer, toastProps, t, lang, hasScope, fireToast } = useDash();
 
   const [sideCollapsed, setSideCollapsed] = useState(() => {
     try { return localStorage.getItem('dk-side-collapsed') === '1'; } catch { return false; }
@@ -30,25 +31,32 @@ export default function Shell() {
       <div className="dk-main">
         <Topbar />
         <div className="dk-content" key={tab}>
-          <Suspense fallback={<SectionSkeleton />}>
-            {Section
-              ? <Section />
-              : <div className="dk-page"><EmptyState icon="sparkle" title={tab} sub="—" /></div>}
-          </Suspense>
+          {/* Un chunk che non si carica (deploy nel frattempo) o un errore di
+              rendering restano confinati alla sezione: prima smontavano tutto. */}
+          <ChunkErrorBoundary t={t} variant="page">
+            <Suspense fallback={<SectionSkeleton />}>
+              {Section
+                ? <Section />
+                : <div className="dk-page"><EmptyState icon="sparkle" title={tab} sub="—" /></div>}
+            </Suspense>
+          </ChunkErrorBoundary>
         </div>
       </div>
 
-      {/* global AI FAB — insights ask is owner-only, so gate it */}
-      {session?.is_owner && (
+      {/* global AI FAB — «Chiedi a Youty» risponde a chi vede l'Analisi dati:
+          il titolare o chi ha il permesso «Analisi dati» (contratto C11) */}
+      {hasScope('insights') && (
         <button
           type="button"
           className="press"
           aria-label={t('Chiedi a Youty', 'Ask Youty')}
           title={t('Chiedi a Youty', 'Ask Youty')}
           onClick={() => setDrawer(
-            <Suspense fallback={null}>
-              <AnalystDrawer t={t} lang={lang} fireToast={fireToast} onClose={() => setDrawer(null)} />
-            </Suspense>
+            <ChunkErrorBoundary t={t} variant="inline">
+              <Suspense fallback={null}>
+                <AnalystDrawer t={t} lang={lang} fireToast={fireToast} onClose={() => setDrawer(null)} />
+              </Suspense>
+            </ChunkErrorBoundary>
           )}
           style={{
             position: 'fixed', right: 22, bottom: 22, zIndex: 40,

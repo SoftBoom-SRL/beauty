@@ -7,21 +7,12 @@ import { api, Icon, Toggle } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { dayLabel } from './hours.js';
+
+export { dayLabel, todayRanges } from './hours.js';
 
 export const DAYS = [['Lunedì', 'Monday'], ['Martedì', 'Tuesday'], ['Mercoledì', 'Wednesday'], ['Giovedì', 'Thursday'], ['Venerdì', 'Friday'], ['Sabato', 'Saturday'], ['Domenica', 'Sunday']];
 const DEFAULT_DAY = [['09:00', '13:00'], ['14:00', '19:00']];
-
-/** giorno → etichetta "9:00–13:00 · 14:00–19:00" / "chiuso" */
-export function dayLabel(ranges, t) {
-  if (!ranges || !ranges.length) return t('chiuso', 'closed');
-  return ranges.map(([a, b]) => `${a.replace(/^0/, '')}–${b.replace(/^0/, '')}`).join(' · ');
-}
-/** orari di oggi da settings.opening_hours_week (0 = lunedì) */
-export function todayRanges(week, date = new Date()) {
-  if (!week || !Object.keys(week).length) return null;
-  const idx = (date.getDay() + 6) % 7;
-  return week[String(idx)] || [];
-}
 
 export default function HoursDrawer({ onClose }) {
   const { t, session, settings, reload, fireToast } = useDash();
@@ -71,7 +62,7 @@ export default function HoursDrawer({ onClose }) {
         <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose} aria-label={t('Chiudi', 'Close')}><Icon name="x" size={18} /></button>
       </div>
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px 22px' }}>
-        {!isOwner && <LockNote t={t} text={t('Solo il titolare può modificare gli orari.', 'Only the owner can edit the hours.')} />}
+        {!isOwner && <LockNote t={t} msg={t('Solo il titolare può modificare gli orari.', 'Only the owner can edit the hours.')} />}
         {isNew && isOwner && (
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 12px', background: 'var(--clay-tint)', borderRadius: 12, marginBottom: 14 }}>
             <Icon name="info" size={15} color="var(--clay-ink)" />
@@ -89,6 +80,13 @@ export default function HoursDrawer({ onClose }) {
                   <span className="t-sm" style={{ color: open ? 'var(--ink-2)' : 'var(--muted-2)', flex: 1 }} >{dayLabel(week[d], t)}</span>
                   {isOwner && open && d < 5 && <button type="button" onClick={() => copyToWorkdays(d)} title={t('Copia su lunedì–venerdì', 'Copy to Monday–Friday')} style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}>{t('copia lun–ven', 'copy Mon–Fri')}</button>}
                 </div>
+                {/* chiudere un giorno che era aperto spegne le prenotazioni di quel
+                    giorno, anche con le operatrici in turno: meglio dirlo qui */}
+                {!open && !isNew && (initial[String(d)] || initial[d] || []).length > 0 && (
+                  <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginTop: 6, paddingLeft: 56 }}>
+                    {t('Salvando, in questo giorno non si potrà più prenotare, nemmeno con le operatrici in turno.', 'Once saved, this day can no longer be booked, even with stylists on shift.')}
+                  </div>
+                )}
                 {open && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, paddingLeft: 56 }}>
                     {week[d].map((r, i) => (
@@ -108,7 +106,12 @@ export default function HoursDrawer({ onClose }) {
         </div>
         {(err || problems.length > 0) && <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 7, color: 'var(--danger)', fontSize: 13, fontWeight: 600 }}><Icon name="alert" size={14} color="var(--danger)" />{err || problems[0]}</div>}
         <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 14, lineHeight: 1.5 }}>
-          {t('Gli orari compaiono nell’app cliente e in cima all’agenda. Non limitano da soli le prenotazioni: quelle seguono i turni delle operatrici.', 'Hours show in the client app and at the top of the agenda. They do not limit bookings on their own: those follow the staff shifts.')}
+          {/* Il testo diceva che gli orari «non limitano le prenotazioni»: dal
+              16/09 invece i turni si intersecano con queste fasce e un giorno
+              senza fasce è chiuso (15-06, 08-19). Chi li impostava «a occhio»
+              perdeva il pomeriggio del sabato senza capire perché. */}
+          {t('Gli orari compaiono nell’app cliente e in cima all’agenda, e limitano le prenotazioni: fuori da queste fasce non si prenota, né online né in agenda, anche se l’operatrice è in turno. Un giorno senza fasce è chiuso. Dall’agenda lo staff può comunque forzare una prenotazione.',
+             'Hours show in the client app and at the top of the agenda, and they limit bookings: outside these ranges nothing can be booked, online or in the agenda, even when a stylist is on shift. A day with no ranges is closed. Staff can still force a booking from the agenda.')}
         </div>
       </div>
       {isOwner && (

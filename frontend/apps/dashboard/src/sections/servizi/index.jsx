@@ -54,7 +54,10 @@ export default function ServiziSection() {
   /* ---- service mutations ---- */
 
   /** operator assignment lives on the operator: PUT /api/staff/{id} with updated
-   *  service_ids. Fetch fresh, diff against wanted set, send only the changed ones. */
+   *  service_ids. Fetch fresh, diff against wanted set, send only the changed ones.
+   *  La PUT porta SOLO `service_ids` (contratto C19): col corpo completo copiato
+   *  da GET /api/staff/ riscriveva anche colore e costo orario dalla sua copia,
+   *  annullando ciò che la scheda operatrice o l'agenda avevano appena salvato. */
   const syncOperators = useCallback(async (serviceId, wantedOpIds) => {
     const fresh = await api.get('/api/staff/');
     const changed = fresh.filter((o) => {
@@ -68,19 +71,7 @@ export default function ServiziSection() {
       const ids = want
         ? [...(o.service_ids || []), serviceId]
         : (o.service_ids || []).filter((id) => id !== serviceId);
-      return api.put(`/api/staff/${o.id}`, {
-        first_name: o.first_name,
-        last_name: o.last_name,
-        color: o.color,
-        role_title: o.role_title,
-        location_id: o.location_id,
-        user_id: o.user_id,
-        service_ids: ids,
-        hourly_cost: o.hourly_cost,
-        cycle_weeks: o.cycle_weeks,
-        active: o.active,
-        order: o.order,
-      });
+      return api.put(`/api/staff/${o.id}`, { service_ids: ids });
     }));
     return true;
   }, []);

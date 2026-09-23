@@ -7,9 +7,11 @@ import React from 'react';
 import { Icon } from '@youty/shared';
 import DkModal from './DkModal.jsx';
 
+/* `confirmDisabled`: spegne solo il pulsante di conferma (per esempio mentre si
+ * contano le cose che l'azione cancellerebbe), lasciando libero «Annulla». */
 export default function DkConfirm({
   open, onClose, onConfirm, title, message, detail,
-  confirmLabel, cancelLabel, busy = false, danger = true,
+  confirmLabel, cancelLabel, busy = false, danger = true, confirmDisabled = false,
 }) {
   return (
     <DkModal
@@ -25,7 +27,7 @@ export default function DkConfirm({
           <button
             className={danger ? 'dk-btn dk-btn--danger' : 'dk-btn dk-btn--clay'}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             style={danger ? { background: 'var(--danger)', color: '#fff' } : undefined}
           >
             <Icon name={danger ? 'alert' : 'check'} size={16} color="#fff" />

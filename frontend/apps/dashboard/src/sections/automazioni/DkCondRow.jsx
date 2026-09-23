@@ -52,6 +52,8 @@ export default function DkCondRow({ c, onChange, onRemove, t, lang, fields, oper
               value={c.value}
               onChange={(v) => onChange({ value: v })}
               options={clientCategories.map((cat) => ({ value: cat.name, label: cat.name }))}
+              missingLabel={(v) => t(`etichetta non trovata: ${v}`, `label not found: ${v}`)}
+              loose
             />
           ) : (
             <input

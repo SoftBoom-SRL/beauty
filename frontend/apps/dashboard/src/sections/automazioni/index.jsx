@@ -49,7 +49,9 @@ export default function AutomazioniSection() {
   }, [toastErr]);
 
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useLive(/^automation\./, () => load());
+  // client_category: rinominando un'etichetta il server riscrive le condizioni
+  // delle automazioni che la citano (il Builder aperto fonde la versione nuova)
+  useLive(/^(automation|client_category)\./, () => load());
 
   /* ---- toggle active (optimistic, then refetch) ---- */
   const toggle = async (rule) => {
@@ -179,7 +181,7 @@ export default function AutomazioniSection() {
         ) : sel === 'new' ? (
           <Builder key="new" rule={null} catalog={catalog} canWrite={canWrite} onSaved={onSaved} />
         ) : curRule ? (
-          <Builder key={curRule.id + ':' + curRule.updated_at} rule={curRule} catalog={catalog} canWrite={canWrite} onSaved={onSaved} />
+          <Builder key={curRule.id} rule={curRule} catalog={catalog} canWrite={canWrite} onSaved={onSaved} />
         ) : (
           <div style={{ padding: '24px 28px' }}>
             <EmptyState icon="bolt" title={t('Seleziona un’automazione', 'Select an automation')} sub={t('Oppure creane una nuova dalla lista.', 'Or create a new one from the list.')} />
@@ -240,7 +242,10 @@ function DelaySetting({ t, settings, isOwner, reload, fireToast, onError }) {
     setSaving(true);
     try {
       await api.put('/api/core/settings', { automation_delay_seconds: next });
-      await reload.salon();
+      // Salvato: la ricarica delle impostazioni va per conto suo. Stava nello
+      // stesso try e, se cadeva, la pillola tornava al valore vecchio anche se
+      // il server aveva salvato il nuovo (15-19).
+      reload.salon().catch(() => {});
       fireToast({
         msg: next === 0
           ? t('I messaggi partono subito', 'Messages go out immediately')

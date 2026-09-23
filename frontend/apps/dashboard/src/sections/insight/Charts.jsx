@@ -4,6 +4,7 @@
 // prototype.
 import React from 'react';
 import { ProgressBar, fmtEur } from '@youty/shared';
+import { occupancyStats } from './chartMath.js';
 
 /** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un ricavo a
  *  zero in un grafico è «€0». */
@@ -79,22 +80,30 @@ export function CategoryBars({ rows, lang }) {
   );
 }
 
-/** Occupancy-by-weekday bars — ports the min/max highlighted bar chart. */
+/** Occupancy-by-weekday bars — ports the min/max highlighted bar chart.
+ *  I giorni senza capacità (null, C10) si vedono «chiuso» e restano fuori da
+ *  minimo, massimo e giorno più scarico. */
 export function OccupancyByWeekday({ rows, lang, t }) {
   if (!rows || !rows.length) return null;
   const WEEKDAY_LABEL = [
     { it: 'Lun', en: 'Mon' }, { it: 'Mar', en: 'Tue' }, { it: 'Mer', en: 'Wed' },
     { it: 'Gio', en: 'Thu' }, { it: 'Ven', en: 'Fri' }, { it: 'Sab', en: 'Sat' }, { it: 'Dom', en: 'Sun' },
   ];
-  const vals = rows.map((r) => r.occupancy_pct);
-  const lo = Math.min(...vals);
-  const hi = Math.max(...vals);
-  const quietest = rows.reduce((a, r) => (r.occupancy_pct < a.occupancy_pct ? r : a), rows[0]);
+  const { lo, hi, quietest } = occupancyStats(rows);
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, height: 140 }}>
         {rows.map((r) => {
-          const v = r.occupancy_pct;
+          if (r.occupancy_pct == null) {
+            return (
+              <div key={r.weekday} title={t('Nessuna capacità: salone chiuso o nessun turno', 'No capacity: salon closed or no shifts')} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
+                <span className="t-sm" style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-2)' }}>{t('chiuso', 'closed')}</span>
+                <div style={{ width: '64%', maxWidth: 26, height: 5, borderRadius: 6, border: '1px dashed var(--line-strong, var(--hair))', boxSizing: 'border-box' }} />
+                <span className="t-sm" style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-2)' }}>{t(WEEKDAY_LABEL[r.weekday].it, WEEKDAY_LABEL[r.weekday].en)}</span>
+              </div>
+            );
+          }
+          const v = Number(r.occupancy_pct);
           const barCol = v === lo && hi > 0 ? '#F4A6A6' : v >= hi - 5 && hi > 0 ? '#BCE3C0' : '#CBCED8';
           const numCol = v === lo && hi > 0 ? '#C0524F' : v >= hi - 5 && hi > 0 ? '#3F8A50' : 'var(--muted-2)';
           return (
@@ -106,7 +115,7 @@ export function OccupancyByWeekday({ rows, lang, t }) {
           );
         })}
       </div>
-      {hi > 0 && (
+      {hi > 0 && quietest && (
         <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', marginTop: 12 }}>
           {t(WEEKDAY_LABEL[quietest.weekday].it, WEEKDAY_LABEL[quietest.weekday].en) + ' ' + t('è il giorno più scarico', 'is the quietest day')}
         </div>

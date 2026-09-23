@@ -1,17 +1,20 @@
 // DepositRules.jsx — CRUD on /api/core/deposit-rules (owner-only, read included).
 // Port of DkDepositRules / DkDepositRuleCard with the API conditions model:
 // { op: 'and'|'or', rules: [{ field, cmp, value }] } + amount_type pct|fixed.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, Icon, Toggle, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
-import { useDash } from '../../ctx.jsx';
-import { DkCondRow, depositFields, ruleSentence, inputCss, toastErr, LockNote } from './lib.jsx';
+import { useDash, useLive } from '../../ctx.jsx';
+import { DkCondRow, amountForType, depositFields, ruleSentence, inputCss, toastErr, LockNote } from './lib.jsx';
 
-export default function DepositRules() {
+/* `drafts` (facoltativo): la pagina che ospita le regole ci trova le bozze non
+ * salvate delle card, per salvarle col suo «Salva» (vedi BookingsOptimPage). */
+export default function DepositRules({ drafts }) {
   const { t, lang, session, clientCategories, fireToast } = useDash();
   const isOwner = !!session?.is_owner;
   const [rules, setRules] = useState(null);   // null = loading
   const [openId, setOpenId] = useState(null);
+  const [adding, setAdding] = useState(false);
   const fields = depositFields(clientCategories, t, lang);
 
   const load = useCallback(async () => {
@@ -19,6 +22,9 @@ export default function DepositRules() {
     catch (err) { toastErr(err, fireToast, t); setRules([]); }
   }, [fireToast, t]);
   useEffect(() => { if (isOwner) load(); }, [isOwner, load]);
+  /* Rinominare un'etichetta riscrive sul server le condizioni che la citano:
+   * le regole si ricaricano (le card con una bozza aperta la tengono). */
+  useLive(/^(client_category|deposit_rule)\./, () => { if (isOwner) load(); });
 
   if (!isOwner) {
     return (
@@ -29,6 +35,9 @@ export default function DepositRules() {
   }
 
   const add = async () => {
+    // doppio clic = due «Nuova regola» con la stessa priorità (15-20)
+    if (adding) return;
+    setAdding(true);
     try {
       const created = await api.post('/api/core/deposit-rules', {
         name: t('Nuova regola', 'New rule'),
@@ -40,7 +49,7 @@ export default function DepositRules() {
       });
       setRules((l) => [...(l || []), created]);
       setOpenId(created.id);
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastErr(err, fireToast, t); } finally { setAdding(false); }
   };
 
   const save = async (id, payload) => {
@@ -68,7 +77,7 @@ export default function DepositRules() {
           <div style={{ fontWeight: 600, fontSize: 14.5 }}>{t('Regole deposito', 'Deposit rules')}</div>
           <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('A chi richiedere un acconto. Si applicano in automatico alla prenotazione.', 'Who is asked for a deposit. Applied automatically at booking.')}</div>
         </div>
-        <button className="dk-btn dk-btn--clay" style={{ flexShrink: 0 }} onClick={add}><Icon name="plus" size={16} color="#fff" />{t('Nuova regola deposito', 'New deposit rule')}</button>
+        <button className="dk-btn dk-btn--clay" style={{ flexShrink: 0, opacity: adding ? 0.6 : 1 }} disabled={adding} onClick={add}><Icon name="plus" size={16} color="#fff" />{t('Nuova regola deposito', 'New deposit rule')}</button>
       </div>
 
       {rules === null ? (
@@ -81,7 +90,7 @@ export default function DepositRules() {
             <RuleCard key={r.id} rule={r} fields={fields} open={openId === r.id}
               onToggleOpen={() => setOpenId(openId === r.id ? null : r.id)}
               onSave={(payload) => save(r.id, payload)} onDelete={() => del(r.id)}
-              t={t} lang={lang} fireToast={fireToast} />
+              drafts={drafts} t={t} lang={lang} fireToast={fireToast} />
           ))}
           {!rules.length && <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '10px 2px' }}>{t('Nessuna regola. Creane una per proporre acconti in automatico.', 'No rules yet. Create one to suggest deposits automatically.')}</div>}
         </div>
@@ -98,7 +107,7 @@ export default function DepositRules() {
 let CID = 1;
 const newCondId = () => 'c' + (CID++);
 
-function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang, fireToast }) {
+function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, drafts, t, lang, fireToast }) {
   // draft: local editable copy (conditions rules get client-side ids for React keys)
   const toDraft = (r) => ({
     name: r.name,
@@ -110,7 +119,12 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
   });
   const [draft, setDraft] = useState(() => toDraft(rule));
   const [dirty, setDirty] = useState(false);
-  useEffect(() => { setDraft(toDraft(rule)); setDirty(false); }, [rule]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* La regola arriva nuova anche quando si ricarica la lista (feed live, per
+   * esempio dopo il rinomina di un'etichetta): la bozza si riallinea al server
+   * solo se non ci sono modifiche in corso, altrimenti le si butterebbe via. */
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  useEffect(() => { if (!dirtyRef.current) setDraft(toDraft(rule)); }, [rule]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const upd = (patch) => { setDraft((d) => ({ ...d, ...patch })); setDirty(true); };
   const setConds = (fn) => { setDraft((d) => ({ ...d, conds: fn(d.conds) })); setDirty(true); };
@@ -146,13 +160,24 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
 
   const toggleActive = async (v) => {
     const upd2 = await onSave(payloadOf(v));
-    if (upd2) { setDirty(false); fireToast({ msg: v ? t('Regola attivata', 'Rule enabled') : t('Regola disattivata', 'Rule disabled'), icon: 'check' }); }
+    if (upd2) { setDraft(toDraft(upd2)); setDirty(false); fireToast({ msg: v ? t('Regola attivata', 'Rule enabled') : t('Regola disattivata', 'Rule disabled'), icon: 'check' }); }
   };
 
-  const saveDraft = async () => {
+  const saveDraft = async ({ quiet = false } = {}) => {
     const upd2 = await onSave(payloadOf(rule.active));
-    if (upd2) { setDirty(false); fireToast({ msg: t('Regola salvata', 'Rule saved'), icon: 'check' }); }
+    if (upd2) {
+      setDraft(toDraft(upd2));
+      setDirty(false);
+      if (!quiet) fireToast({ msg: t('Regola salvata', 'Rule saved'), icon: 'check' });
+    }
+    return !!upd2;
   };
+  // la pagina ospite salva con il suo «Salva» anche le bozze aperte qui (15-03)
+  useEffect(() => {
+    if (!drafts) return undefined;
+    drafts.current.set(rule.id, { dirty, save: () => saveDraft({ quiet: true }) });
+    return () => { drafts.current.delete(rule.id); };
+  });
 
   return (
     <div className="dk-card" style={{ boxShadow: 'none', border: '1px solid var(--hair)', borderLeft: '3px solid ' + (rule.active ? 'var(--clay)' : 'var(--faint)'), opacity: rule.active ? 1 : 0.65 }}>
@@ -205,7 +230,7 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, t, lang,
           {/* amount */}
           <div className="t-meta" style={{ margin: '18px 0 8px' }}>{t('Importo dell’acconto', 'Deposit amount')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <DkSeg value={draft.amount_type} onChange={(v) => upd({ amount_type: v })} options={[{ value: 'pct', label: t('% del totale', '% of total') }, { value: 'fixed', label: t('Importo fisso', 'Fixed amount') }]} />
+            <DkSeg value={draft.amount_type} onChange={(v) => upd({ amount_type: v, amount: amountForType(draft.amount, v) })} options={[{ value: 'pct', label: t('% del totale', '% of total') }, { value: 'fixed', label: t('Importo fisso', 'Fixed amount') }]} />
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid var(--hair)', borderRadius: 9, padding: '0 10px', height: 36, background: 'var(--surface)' }}>
               {draft.amount_type === 'fixed' && <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>}
               <NumInput value={draft.amount} min={0} integer={draft.amount_type === 'pct'} max={draft.amount_type === 'pct' ? 100 : undefined} onChange={(amount) => upd({ amount })} style={{ width: 52, border: 'none', outline: 'none', background: 'transparent', fontSize: 14.5, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }} />

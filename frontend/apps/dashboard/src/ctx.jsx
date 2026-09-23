@@ -2,6 +2,7 @@
 // modal/drawer/toast plumbing, live feed. Section agents CONSUME this via useDash().
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, API_URL, setSalonTz, staffAuth, useT, useToastHost } from '@youty/shared';
+import { createSeen } from './liveSeen.js';
 
 const DashCtx = createContext(null);
 export const useDash = () => useContext(DashCtx);
@@ -59,11 +60,18 @@ function useLiveFeed(session) {
   const [version, setVersion] = useState(0);  // cambia quando arrivano eventi di altri
   const [streamOk, setStreamOk] = useState(false);
   const streamOkRef = useRef(false);
+  const seen = useRef(null);
+  if (!seen.current) seen.current = createSeen();
   const myId = session?.user?.id;
 
-  /* consegna comune (stream o polling): aggiorna cursore, lista, ascoltatori */
-  const deliver = useCallback((list, newCursor) => {
+  /* consegna comune (stream o polling): aggiorna cursore, lista, ascoltatori.
+   * Stream e polling possono riconsegnare eventi già arrivati (finestra di
+   * sicurezza del server, contratto C20): si scartano per id PRIMA di lista,
+   * contatore e ascoltatori, altrimenti la campanella li mostrava due volte, i
+   * non letti crescevano da soli e ogni vista si ricaricava due volte. */
+  const deliver = useCallback((incoming, newCursor) => {
     cursor.current = Math.max(cursor.current, Number(newCursor) || 0);
+    const list = seen.current.fresh(incoming);
     if (!list.length) return;
     setEvents((l) => [...list.slice().reverse(), ...l].slice(0, LIVE_KEEP));
     const foreign = list.filter((e) => e.actor_id !== myId);

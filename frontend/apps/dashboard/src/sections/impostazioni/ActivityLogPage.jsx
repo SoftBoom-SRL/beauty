@@ -4,9 +4,10 @@
 // The prototype's per-author filter has no API param → dropped (q searches the summary).
 // Scope 'activity_log' (owner bypasses).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Icon, todayStr, toDateStr, addDays } from '@youty/shared';
+import { api, Icon, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { logDateLabel, salonDaysAgo } from './dates.js';
 
 const PAGE = 50;
 
@@ -48,21 +49,6 @@ function typeMeta(type) {
   return { icon: base.icon, color: SUFFIX_COLOR[suffix] || base.color };
 }
 
-function logDateLabel(iso, lang) {
-  const d = new Date(iso);
-  const now = new Date();
-  const day0 = new Date(d); day0.setHours(0, 0, 0, 0);
-  const t0 = new Date(now); t0.setHours(0, 0, 0, 0);
-  const diff = Math.round((t0 - day0) / 86400000);
-  const hm = d.toTimeString().slice(0, 5);
-  if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
-  if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
-  const months = lang === 'en'
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + hm;
-}
-
 export default function ActivityLogPage({ onBack, initialPeriod }) {
   const { t, lang, hasScope, fireToast } = useDash();
   const canLog = hasScope('activity_log');
@@ -71,7 +57,8 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const [qDeb, setQDeb] = useState('');
   const [filt, setFilt] = useState('');            // type prefix, '' = all
   const [period, setPeriod] = useState(initialPeriod || 'all');
-  const [from, setFrom] = useState(toDateStr(addDays(new Date(), -30)));
+  // periodi contati dal giorno del salone, come il filtro «Oggi» sul server
+  const [from, setFrom] = useState(() => salonDaysAgo(30));
   const [to, setTo] = useState(todayStr());
   const [items, setItems] = useState(null);        // null = loading
   const [count, setCount] = useState(0);
@@ -83,9 +70,9 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const dateRange = useCallback(() => {
     const today = todayStr();
     if (period === 'today') return { date_from: today, date_to: today };
-    if (period === '7d') return { date_from: toDateStr(addDays(new Date(), -7)), date_to: today };
-    if (period === '30d') return { date_from: toDateStr(addDays(new Date(), -30)), date_to: today };
-    if (period === 'year') return { date_from: toDateStr(addDays(new Date(), -365)), date_to: today };
+    if (period === '7d') return { date_from: salonDaysAgo(7, today), date_to: today };
+    if (period === '30d') return { date_from: salonDaysAgo(30, today), date_to: today };
+    if (period === 'year') return { date_from: salonDaysAgo(365, today), date_to: today };
     if (period === 'custom') return { date_from: from, date_to: to };
     return {};
   }, [period, from, to]);

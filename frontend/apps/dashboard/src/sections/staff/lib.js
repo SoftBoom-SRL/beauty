@@ -195,6 +195,90 @@ export const inputCss = {
 
 export function opName(o) { return `${o.first_name} ${o.last_name}`.trim(); }
 
+/* ---- scheda operatrice: modulo, modifiche, dati nascosti ---- */
+
+/** Segnaposto dei dati di cassa/HR che il server non manda a chi non ha il
+ *  permesso (arrivano null, con `cash_hidden: true`: contratto C6). */
+export const HIDDEN = '•••';
+
+/** OperatorDetailOut → stato del modulo Anagrafica. */
+export function formFromDetail(d) {
+  return {
+    first_name: d.first_name || '',
+    last_name: d.last_name || '',
+    color: d.color,
+    role_title: d.role_title || '',
+    // null e non «0»: senza permesso il costo orario non arriva, e mostrarlo
+    // come 0 € sarebbe un dato falso (C6).
+    hourly_cost: d.hourly_cost == null ? null : String(Number(d.hourly_cost)),
+    active: d.active,
+    service_ids: d.service_ids || [],
+    location_id: d.location_id ?? null,
+    user_id: d.user_id ?? null,
+    order: d.order,
+  };
+}
+
+const sortedIds = (ids) => [...(ids || [])].sort((a, b) => a - b);
+const cents = (v) => (Number(v) || 0).toFixed(2);
+
+/** Confronto campo per campo del modulo: i servizi sono un insieme, il colore
+ *  non bada alle maiuscole, i testi agli spazi ai lati, il costo ai centesimi. */
+export function sameOperatorField(a, b, key) {
+  if (key === 'service_ids') return sortedIds(a).join(',') === sortedIds(b).join(',');
+  if (key === 'color') return String(a || '').toUpperCase() === String(b || '').toUpperCase();
+  if (key === 'first_name' || key === 'last_name' || key === 'role_title') return String(a || '').trim() === String(b || '').trim();
+  if (key === 'hourly_cost') return (a == null || b == null) ? (a == null && b == null) : cents(a) === cents(b);
+  return (a ?? null) === (b ?? null);
+}
+
+/**
+ * Solo i campi dell'Anagrafica cambiati rispetto a `detail` (il server), pronti
+ * per la PUT parziale (contratto C19). La PUT a corpo pieno costruita dal modulo
+ * letto all'apertura riscriveva anche ciò che era cambiato nel frattempo: il
+ * colore scelto in agenda e il servizio abilitato dal listino tornavano indietro
+ * al primo «Salva» (09-09).
+ */
+export function changedOperatorFields(form, detail) {
+  const base = formFromDetail(detail);
+  const out = {};
+  Object.keys(base).forEach((k) => {
+    if (sameOperatorField(form[k], base[k], k)) return;
+    if (k === 'hourly_cost') {
+      if (form.hourly_cost != null) out.hourly_cost = cents(form.hourly_cost);
+    } else if (k === 'first_name' || k === 'last_name' || k === 'role_title') {
+      out[k] = String(form[k] || '').trim();
+    } else if (k === 'service_ids') {
+      out.service_ids = [...(form.service_ids || [])];
+    } else {
+      out[k] = form[k] ?? null;
+    }
+  });
+  return out;
+}
+
+/** Stesso pattern turni? (confronto sul modello dell'editor, testo compreso) */
+export function sameWeeks(a, b) {
+  return JSON.stringify(a || []) === JSON.stringify(b || []);
+}
+
+/** Serie mensile degli incassi per il grafico Performance.
+ *  `hidden`: il server non ha mandato gli importi (C6). La media NON si
+ *  arrotonda all'euro: eur() la scrive con i centesimi, e sei mesi per 7.407 €
+ *  davano «€1.235,00» invece di €1.234,50 (15-18), con la riga della media
+ *  disegnata sul valore arrotondato. */
+export function perfStats(perf) {
+  const rows = perf || [];
+  const hidden = rows.some((p) => p.revenue == null);
+  const values = rows.map((p) => (p.revenue == null ? 0 : Number(p.revenue) || 0));
+  const max = Math.max(...values, 1);
+  const last = values[values.length - 1] || 0;
+  const prev = values[values.length - 2] || 0;
+  const delta = prev > 0 ? Math.round(((last - prev) / prev) * 100) : 0;
+  const avg = values.reduce((a, b) => a + b, 0) / (values.length || 1);
+  return { hidden, values, max, last, prev, delta, avg };
+}
+
 /** € per ricavi e costi: lo 0 dev'essere «€0», non il «Gratis» di fmtEur
  *  (convenzione dei listini servizi).
  *  I centesimi si scrivono sempre: senza minimumFractionDigits un costo orario
