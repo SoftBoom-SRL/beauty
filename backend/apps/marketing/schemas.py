@@ -158,6 +158,10 @@ class LoyaltyAccountOut(Schema):
         return obj.client.full_name
 
 
+class LoyaltyEnrollIn(Schema):
+    client_id: int
+
+
 # ---- Comunicazioni -----------------------------------------------------------
 
 

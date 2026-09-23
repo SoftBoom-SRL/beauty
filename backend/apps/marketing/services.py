@@ -10,7 +10,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.apps import apps as django_apps
 from django.db import transaction
-from django.db.models import F, Sum
+from django.db.models import F
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -200,7 +200,12 @@ def _issue_reward(program, client):
 
     if reward_type == LoyaltyProgram.RewardType.FREE_SERVICE:
         service = program.reward_service
-        if service is None:
+        # Un servizio a prezzo zero non diventa una carta (create_gift_card
+        # rifiuta il valore 0): l'errore saliva dentro la transazione della
+        # cassa e ogni scontrino di quella cliente veniva rifiutato. Il prezzo
+        # può essere stato azzerato dopo aver salvato il programma, quindi il
+        # controllo della maschera da solo non basta.
+        if service is None or Decimal(str(service.price or 0)) <= 0:
             return None
         card = create_gift_card(
             salon,
@@ -251,22 +256,78 @@ def _issue_reward(program, client):
 MAX_REWARDS_PER_SALE = 10
 
 
-def _points_earned(sale, program) -> int:
+def _loyalty_basis(sale) -> dict:
+    """Quanto della vendita conta per la fedeltà: una volta per vendita, non
+    una per programma.
+
+    - Le gift card vendute non danno punti: li darà la spesa fatta con la
+      carta. Contarle significava pagare due volte lo stesso denaro, una
+      all'acquisto e una al riscatto. Per la stessa ragione una vendita fatta
+      SOLO di gift card non è una visita: cinque carte di Natale in cinque
+      scontrini valevano cinque timbri.
+    - Il premio speso non fa guadagnare altro: una piega omaggio da 45 € pagata
+      con la carta premio accreditava 45 punti, e con i timbri per servizio
+      l'omaggio contava come timbro — il premio arrivava ogni nove visite
+      pagate invece che ogni dieci. Le carte premio sono quelle con
+      paid_method="loyalty" (vedi _issue_reward); i buoni premio abbassano già
+      `sale.total`, e contano solo se il conto l'hanno pagato per intero.
+    """
+    sold_cards = Decimal("0")
+    gift_card_lines = other_lines = services = 0
+    for line in sale.lines.all():
+        if line.line_type == "gift_card":
+            gift_card_lines += 1
+            sold_cards += Decimal(str(line.amount))
+        else:
+            other_lines += 1
+            if line.line_type == "service":
+                services += 1
+    reward_paid = Decimal("0")
+    reward_service_cards = set()
+    for payment in sale.payments.filter(
+        method="gift_card", gift_card__paid_method="loyalty"
+    ).select_related("gift_card"):
+        reward_paid += Decimal(str(payment.amount))
+        if payment.gift_card.gift_service_id:
+            reward_service_cards.add(payment.gift_card_id)
+    reward_coupon = sale.coupons.filter(origin=Coupon.Origin.LOYALTY).exists()
+    paid = Decimal(str(sale.total)) - sold_cards - reward_paid
+    return {
+        "paid": paid,
+        "only_gift_cards": gift_card_lines > 0 and other_lines == 0,
+        # Il conto l'ha pagato per intero un premio: non è una visita pagata.
+        "reward_only": (reward_paid > 0 or reward_coupon) and paid <= 0,
+        # Ogni carta «servizio omaggio» spesa copre un servizio del conto.
+        "services": max(0, services - len(reward_service_cards)),
+    }
+
+
+def _points_earned(sale, program, basis=None) -> int:
     """Punti maturati dalla vendita secondo la metrica del programma."""
-    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-        # Le gift card vendute non danno punti: li darà la spesa fatta con
-        # la carta. Contarle qui significava pagare due volte lo stesso
-        # denaro, una all'acquisto e una al riscatto.
-        gift_card_sold = sale.lines.filter(line_type="gift_card").aggregate(
-            total=Sum("amount")
-        )["total"] or Decimal("0")
-        base = Decimal(sale.total) - Decimal(gift_card_sold)
-        return math.floor(base * program.earn_ratio) if base > 0 else 0
-    if program.earn_metric == LoyaltyProgram.EarnMetric.PER_VISIT:
-        return math.floor(program.earn_ratio)
+    basis = basis or _loyalty_basis(sale)
+    metric = program.earn_metric
+    # Un programma «A timbri» dà un timbro per visita o per servizio, MAI per
+    # euro: la dashboard creava le tessere timbri con la metrica «per euro»
+    # rimasta dal modello vuoto, e una piega da 45 € valeva 45 timbri — più
+    # premi a ogni scontrino. L'API ora rifiuta la combinazione e la
+    # migrazione 0004 ha corretto i programmi salvati; qui si resta al sicuro
+    # anche con un programma scritto da un'altra via. Il rapporto non conta:
+    # la maschera non lo mostra per i timbri, e un valore rimasto da «Punti»
+    # (2, oppure 0,5 che arrotondato dava zero timbri) cambiava la tessera
+    # senza che nessuno lo vedesse.
+    stamps = program.type == LoyaltyProgram.Type.STAMPS
+    if stamps and metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        metric = LoyaltyProgram.EarnMetric.PER_VISIT
+    if metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        paid = basis["paid"]
+        return math.floor(paid * program.earn_ratio) if paid > 0 else 0
+    if basis["only_gift_cards"] or basis["reward_only"]:
+        return 0
+    if metric == LoyaltyProgram.EarnMetric.PER_VISIT:
+        return 1 if stamps else math.floor(program.earn_ratio)
     # per_service
-    n_services = sale.lines.filter(line_type="service").count()
-    return math.floor(program.earn_ratio * n_services)
+    n_services = basis["services"]
+    return n_services if stamps else math.floor(program.earn_ratio * n_services)
 
 
 def accrue_loyalty(sale):
@@ -276,6 +337,7 @@ def accrue_loyalty(sale):
     if client is None:
         return
     salon = sale.salon
+    basis = None  # calcolata al primo programma che serve, poi riusata
     for program in LoyaltyProgram.objects.filter(salon=salon, active=True):
         # Lettura del saldo, emissione dei premi e scrittura stanno in una sola
         # transazione con la riga del conto bloccata. Prima erano una lettura, una
@@ -300,7 +362,9 @@ def accrue_loyalty(sale):
                     program=program, client=client
                 )
 
-            earned = _points_earned(sale, program)
+            if basis is None:
+                basis = _loyalty_basis(sale)
+            earned = _points_earned(sale, program, basis)
             if earned <= 0:
                 continue
 

@@ -30,6 +30,7 @@ from .schemas import (
     GiftCardListOut,
     GiftCardOut,
     LoyaltyAccountOut,
+    LoyaltyEnrollIn,
     LoyaltyProgramIn,
     LoyaltyProgramOut,
     MarketingConsentIn,
@@ -415,12 +416,25 @@ def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
         raise HttpError(422, "Modalità di accumulo non valida")
     if data.enrollment not in LoyaltyProgram.Enrollment.values:
         raise HttpError(422, "Modalità di iscrizione non valida")
+    # Una tessera «A timbri» salvata con la metrica «per euro» (quella del
+    # modello vuoto della dashboard, che per i timbri nasconde il selettore)
+    # dava un timbro per euro: una piega da 45 € valeva quattro premi.
+    stamps = data.type == LoyaltyProgram.Type.STAMPS
+    if stamps and data.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
+        raise HttpError(
+            400,
+            "Un programma a timbri dà un timbro per visita o per servizio, non per euro speso",
+        )
     # threshold=0 faceva accumulare punti che non diventavano mai un premio.
     if not 1 <= data.threshold <= MAX_THRESHOLD:
         raise HttpError(422, "La soglia dev'essere un numero di punti fra 1 e 1.000.000")
-    earn_ratio = Decimal(str(data.earn_ratio))
-    if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
-        raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
+    # Per i timbri il rapporto non si sceglie (un timbro a visita o a servizio,
+    # vedi services._points_earned): si scrive 1 qualunque cosa arrivi, così
+    # quello che la scheda mostra è quello che succede in cassa.
+    if not stamps:
+        earn_ratio = Decimal(str(data.earn_ratio))
+        if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
+            raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
     if Decimal(str(data.reward_value or 0)) > MAX_MONEY:
         raise HttpError(422, "Valore del premio fuori scala")
     if data.reward_type == "discount_pct" and Decimal(str(data.reward_value or 0)) > 100:
@@ -432,10 +446,21 @@ def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
     if data.reward_service_id:
         Service = django_apps.get_model("catalog", "Service")  # lazy
         program.reward_service = salon_get(Service, ctx, data.reward_service_id)
+        # Il listino ammette servizi a 0 €: come premio diventavano una carta da
+        # zero che nessuno può emettere, e alla soglia l'errore bloccava ogni
+        # incasso di quella cliente.
+        if data.reward_type == "free_service" and Decimal(
+            str(program.reward_service.price or 0)
+        ) <= 0:
+            raise HttpError(
+                422, "Il servizio da regalare ha prezzo zero: scegline uno a pagamento"
+            )
     else:
         program.reward_service = None
     for name, value in data.dict(exclude={"reward_service_id"}).items():
         setattr(program, name, value)
+    if stamps:
+        program.earn_ratio = Decimal("1")
     program.save()
     return program
 
@@ -502,10 +527,50 @@ def list_loyalty_accounts(request, program_id: int, client_id: Optional[int] = N
     tutte per mostrare i punti di una sola persona.
     """
     program = salon_get(LoyaltyProgram, request.auth, program_id)
-    qs = program.accounts.select_related("client")
+    # `id` come spareggio: con migliaia di iscritte a pari punti (i timbri
+    # vanno da 0 a 9) PostgreSQL non garantisce lo stesso ordine fra una
+    # pagina e l'altra, e una cliente poteva non cadere in nessuna pagina —
+    # «Non ancora iscritta» per chi era a un timbro dal premio.
+    qs = program.accounts.select_related("client").order_by("-points", "id")
     if client_id:
         qs = qs.filter(client_id=client_id)
     return qs
+
+
+@router.post(
+    # Stessa stringa di percorso dell'elenco: con «{int:program_id}» Django
+    # registrerebbe un secondo pattern, e la POST finirebbe sul primo (solo GET).
+    "/loyalty-programs/{program_id}/accounts",
+    auth=staff_auth,
+    response=LoyaltyAccountOut,
+)
+def enroll_loyalty_client(request, program_id: int, data: LoyaltyEnrollIn):
+    """Iscrive una cliente al programma dallo staff.
+
+    Con l'iscrizione «Su richiesta» o «A pagamento» nessuna via creava il conto
+    (accrue_loyalty iscrive da sola solo con «Automatica»): il programma si
+    salvava, il cassetto prometteva l'iscrizione su richiesta, e le nuove
+    clienti non maturavano niente, in silenzio.
+    """
+    ctx = request.auth
+    require_scope(ctx, "marketing")
+    program = salon_get(LoyaltyProgram, ctx, program_id)
+    if not program.active:
+        raise HttpError(400, "Programma disattivato: riattivalo per iscrivere nuove clienti")
+    client = _get_client(ctx, data.client_id)
+    # get_or_create: due clic ravvicinati non fanno esplodere la unique, il
+    # secondo trova il conto e riceve il 400.
+    account, created = LoyaltyAccount.objects.get_or_create(program=program, client=client)
+    if not created:
+        raise HttpError(400, "La cliente è già iscritta a questo programma")
+    log_activity(
+        ctx.salon,
+        "loyalty.enrolled",
+        f"{client.full_name} iscritta al programma fedeltà «{program.name}»",
+        actor=ctx.user,
+        payload={"program_id": program.id, "client_id": client.id, "account_id": account.id},
+    )
+    return account
 
 
 # ---- Comunicazioni -----------------------------------------------------------
