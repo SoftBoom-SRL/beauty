@@ -2009,17 +2009,43 @@ def schedule_deposit_hold(appointment: Appointment) -> None:
     now = timezone.now()
     if appointment.start <= now:
         return
-    appointment.deposit_due_at = min(now + dt.timedelta(minutes=hold), appointment.start)
+    # Il termine intero resta scritto a parte (`deposit_hold_until`): se la
+    # visita viene spostata, la scadenza si ricalcola dal nuovo inizio invece
+    # di restare tagliata su quello vecchio (vedi `_effective_deposit_due`).
+    appointment.deposit_hold_until = now + dt.timedelta(minutes=hold)
+    appointment.deposit_due_at = min(appointment.deposit_hold_until, appointment.start)
     appointment.deposit_reminder_sent_at = None
-    appointment.save(update_fields=["deposit_due_at", "deposit_reminder_sent_at", "updated_at"])
+    appointment.save(
+        update_fields=["deposit_due_at", "deposit_hold_until", "deposit_reminder_sent_at", "updated_at"]
+    )
 
 
 def clear_deposit_hold(appointment: Appointment) -> None:
-    """La caparra è arrivata: niente più scadenza né rilascio."""
-    if appointment.deposit_due_at is None:
+    """La caparra è arrivata (o non c'è modo di pagarla): niente più scadenza né rilascio."""
+    if appointment.deposit_due_at is None and appointment.deposit_hold_until is None:
         return
     appointment.deposit_due_at = None
-    appointment.save(update_fields=["deposit_due_at", "updated_at"])
+    appointment.deposit_hold_until = None
+    appointment.save(update_fields=["deposit_due_at", "deposit_hold_until", "updated_at"])
+
+
+def _effective_deposit_due(appointment: Appointment, hold: int):
+    """Scadenza vera della caparra: fine del termine, ma mai oltre l'inizio attuale.
+
+    `deposit_due_at` è tagliato sull'inizio che la visita aveva quando il
+    termine è stato fissato. Spostandola più avanti restava la scadenza di
+    prima: la visita spostata a martedì veniva liberata all'ora del vecchio
+    appuntamento, con «posto liberato» alla cliente (02-04). Per le caparre di
+    prima di `deposit_hold_until` il termine intero si ricostruisce dalla
+    creazione, senza mai anticipare la scadenza salvata.
+    """
+    hold_until = appointment.deposit_hold_until
+    if hold_until is None:
+        hold_until = max(
+            appointment.deposit_due_at,
+            appointment.created_at + dt.timedelta(minutes=hold),
+        )
+    return min(hold_until, appointment.start)
 
 
 @transaction.atomic
@@ -2138,6 +2164,15 @@ def process_deposit_holds(salon, *, now=None) -> dict:
             # si libera e soprattutto non le si scrive che l'appuntamento è
             # saltato. La caparra resta da incassare al banco.
             continue
+        due = _effective_deposit_due(appointment, hold)
+        if due != appointment.deposit_due_at:
+            # Visita spostata: la scadenza mostrata in agenda (e nel messaggio
+            # alla cliente) si allinea. Solo quella colonna, senza toccare
+            # `updated_at`: è un dato derivato, non una modifica di qualcuno.
+            Appointment.objects.filter(
+                pk=appointment.pk, deposit_due_at=appointment.deposit_due_at
+            ).update(deposit_due_at=due)
+            appointment.deposit_due_at = due
         if appointment.deposit_due_at <= now:
             with transaction.atomic():
                 locked = (
@@ -2156,7 +2191,14 @@ def process_deposit_holds(salon, *, now=None) -> dict:
                 result["released"] += 1
             continue
         if reminder and appointment.deposit_reminder_sent_at is None:
-            remind_at = appointment.deposit_due_at - dt.timedelta(minutes=max(hold - reminder, 0))
+            # «Il sollecito parte dopo `deposit_reminder_minutes`» dalla
+            # prenotazione: si conta dal termine intero, non dalla scadenza
+            # tagliata sull'inizio. Con quella, per una prenotazione a ridosso
+            # il sollecito cadeva nel passato e partiva insieme al link (02-16).
+            hold_until = appointment.deposit_hold_until or appointment.deposit_due_at
+            remind_at = hold_until - dt.timedelta(minutes=max(hold - reminder, 0))
+            if remind_at >= appointment.deposit_due_at:
+                continue  # arriverebbe a termine già scaduto: niente sollecito
             if remind_at <= now:
                 # UPDATE condizionale: chi lo vince manda il sollecito, gli altri
                 # vedono 0 righe aggiornate e non mandano niente.

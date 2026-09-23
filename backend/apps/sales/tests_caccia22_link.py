@@ -192,8 +192,9 @@ class LinkLifetimeTests(StripeTestBase):
         self.salon.refresh_from_db()
         self._with_link(expires_at=timezone.now() - dt.timedelta(minutes=1))
         # sollecito dovuto adesso: 10' dopo una prenotazione con 60' di termine
+        due = timezone.now() + dt.timedelta(minutes=50)
         Appointment.objects.filter(pk=self.appointment.pk).update(
-            deposit_due_at=timezone.now() + dt.timedelta(minutes=50)
+            deposit_due_at=due, deposit_hold_until=due,
         )
         self.fake([
             ("GET", "/v1/checkout/sessions/cs_old", _session("cs_old", expires_in=-60, status="expired")),
