@@ -3,12 +3,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, lineAmount, methodLabel, money, opName, saleDateLabel } from './lib.js';
+import { centsToEur, inputCss, lineAmount, methodLabel, money, opName, saleDateLabel } from './lib.js';
+import { lineGrossCents, saleLineLabel } from './history.js';
 
 const LIMIT = 50;
 
 export default function HistoryTab() {
-  const { t, lang, operators, fireToast, hasScope } = useDash();
+  const { t, lang, operators, services, fireToast, hasScope } = useDash();
 
   /* ---- filters ---- */
   const [q, setQ] = useState('');
@@ -198,19 +199,26 @@ export default function HistoryTab() {
                             <span style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13.5, fontWeight: 600, minWidth: 0 }}>
                               <Icon name={lineIcon(l.line_type)} size={15} color="var(--muted)" />
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {l.line_type === 'gift_card'
-                                  ? 'Gift card' + (l.gift_card_code ? ' · ' + l.gift_card_code : '')
-                                  : (l.service_name || l.product_name || (l.line_type === 'product' ? t('Prodotto', 'Product') : t('Servizio', 'Service')) + ' #' + (l.service_id ?? l.product_id ?? ''))}
+                                {saleLineLabel(l, det, { services, lang, t })}
                                 {l.qty > 1 ? ' × ' + l.qty : ''}
                               </span>
                               {l.operator_name && <span className="t-sm" style={{ color: 'var(--muted-2)', flexShrink: 0 }}>· {l.operator_name}</span>}
                               {l.discount_pct > 0 && <span className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 700, flexShrink: 0 }}>−{l.discount_pct}%</span>}
                             </span>
                             <span className="t-num" style={{ fontWeight: 700, flexShrink: 0, color: l.is_gift ? 'var(--ok)' : 'var(--ink)' }}>
-                              {l.is_gift ? t('Omaggio', 'Free') : money(l.amount, lang)}
+                              {l.is_gift ? t('Omaggio', 'Free') : money(centsToEur(lineGrossCents(l)), lang)}
                             </span>
                           </div>
                         ))}
+                        {/* il buono sotto le righe, come sullo scontrino: le righe mostrano l'importo prima del buono */}
+                        {Number(det.coupon_discount) > 0 && (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 0', borderTop: '1px solid var(--hair)', color: 'var(--clay-ink)' }}>
+                            <span className="t-sm" style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <Icon name="coupon" size={14} color="var(--clay-ink)" />{t('Buono sconto', 'Voucher')}
+                            </span>
+                            <span className="t-num" style={{ fontWeight: 700 }}>−{money(det.coupon_discount, lang)}</span>
+                          </div>
+                        )}
                         {Number(det.deposit_deducted) > 0 && (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 0', borderTop: '1px solid var(--hair)', color: 'var(--ok)' }}>
                             <span className="t-sm" style={{ fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
