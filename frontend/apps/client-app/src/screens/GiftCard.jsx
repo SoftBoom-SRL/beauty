@@ -7,6 +7,7 @@ import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 import { fmtExpiry } from './Wallet.jsx';
+import { giftCardTotals, isUnpaid } from './walletLib.js';
 
 const PRESETS = [25, 50, 75, 100];
 
@@ -31,7 +32,13 @@ export default function GiftCard() {
 
   const loading = !wallet && !error;
   const cards = wallet?.gift_cards || [];
-  const totBal = cards.reduce((s, g) => s + Number(g.balance || 0), 0);
+  // «Spendibili in salone» sono solo le carte che la cassa accetta da lei, come
+  // nel Portafoglio: la carta appena comprata dall'app (da pagare in salone)
+  // entrava nel saldo e la cassa poi la rifiutava; quella comprata per
+  // un'amica è credito dell'amica (16-03, 07-05, 17-14).
+  const totals = giftCardTotals(cards);
+  const totBal = totals.spendable / 100;
+  const totPending = totals.pending / 100;
   const value = custom !== '' ? Number(custom) : amount;
   const valid = Number.isFinite(value) && value >= 5 && value <= 1000;
 
@@ -72,8 +79,14 @@ export default function GiftCard() {
               <div style={{ fontSize: 12.5, fontWeight: 700, opacity: 0.82, letterSpacing: '0.04em' }}>{t('Saldo gift card', 'Gift card balance')}</div>
               <div className="t-num" style={{ fontSize: 38, fontWeight: 800, marginTop: 4 }}>{fmtEur(totBal, lang)}</div>
               <div style={{ fontSize: 12.5, opacity: 0.82, marginTop: 2 }}>
-                {cards.length} {t('carte attive', 'active cards')} · {t('spendibili in salone', 'spend in salon')}
+                {totals.spendableCount} {totals.spendableCount === 1 ? t('carta attiva', 'active card') : t('carte attive', 'active cards')} · {t('spendibili in salone', 'spend in salon')}
               </div>
+              {totPending > 0 && (
+                <div style={{ fontSize: 12.5, fontWeight: 600, opacity: 0.82, marginTop: 4 }}>
+                  {t(`+ ${fmtEur(totPending, lang)} da attivare: paga in salone`,
+                    `+ ${fmtEur(totPending, lang)} to activate: pay in the salon`)}
+                </div>
+              )}
             </div>
 
             {/* conferma acquisto appena fatto */}
@@ -105,6 +118,11 @@ export default function GiftCard() {
                           {fmtEur(Number(g.balance), lang)} <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 600 }}>/ {fmtEur(initial, lang)}</span>
                         </div>
                         {g.recipient_name && <div className="t-sm" style={{ color: 'var(--muted)' }}>{t(`Per ${g.recipient_name}`, `For ${g.recipient_name}`)}</div>}
+                        {isUnpaid(g) && (
+                          <span style={{ display: 'inline-block', marginTop: 4, fontSize: 11, fontWeight: 700, color: 'var(--warn, #B4761F)', background: 'var(--warn-tint, #FDF2E3)', padding: '3px 9px', borderRadius: 99 }}>
+                            {t('Da pagare in salone', 'To pay in the salon')}
+                          </span>
+                        )}
                       </div>
                       <span className="tabnum" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', background: 'var(--paper-2)', padding: '4px 9px', borderRadius: 8, letterSpacing: '0.04em' }}>{g.code}</span>
                     </div>

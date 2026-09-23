@@ -11,6 +11,7 @@ import {
   ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
   nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
+import { giftServiceCards } from './walletLib.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 
@@ -63,13 +64,19 @@ export default function Prenota() {
     if (!session) { setGiftCards([]); return undefined; }
     let alive = true;
     api.get('/api/marketing/client/wallet')
-      // `received`: la carta che ho COMPRATO per un'altra persona non è un mio
-      // regalo — prometterebbe un prezzo sbagliato a chi prenota.
-      .then((w) => { if (alive) setGiftCards((w.gift_cards || []).filter((g) => g.gift_service_id && g.payment_status === 'paid' && g.received)); })
+      // Solo le carte che la cassa applica a lei (isSpendable, la regola di
+      // gift_index): quella che ho COMPRATO per un'altra persona non è un mio
+      // regalo, mentre quella «a trattamento» comprata per me senza
+      // destinataria sì — filtrando su `received` qui mancava, e la cassa
+      // poi la applicava (16-07).
+      .then((w) => { if (alive) setGiftCards(giftServiceCards(w.gift_cards)); })
       .catch(() => { if (alive) setGiftCards([]); });
     return () => { alive = false; };
   }, [session]);
   const giftFor = (serviceId) => giftCards.find((g) => g.gift_service_id === serviceId) || null;
+  // «Regalo di …» solo per la carta ricevuta: su quella comprata per sé il
+  // nome di chi l'ha pagata è il suo.
+  const giftFrom = (g) => (g && g.received && g.buyer_name) || '';
   const giftedSelected = serviceIds.map(giftFor).filter(Boolean);
 
   const allSvcs = React.useMemo(
@@ -436,7 +443,7 @@ export default function Prenota() {
                           {giftFor(sv.id) && (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
                               <Icon name="gift" size={12} color="var(--brand-ink)" />
-                              {giftFor(sv.id).buyer_name ? t(`Regalo di ${giftFor(sv.id).buyer_name}`, `A gift from ${giftFor(sv.id).buyer_name}`) : t('Hai un regalo', 'You have a gift')}
+                              {giftFrom(giftFor(sv.id)) ? t(`Regalo di ${giftFrom(giftFor(sv.id))}`, `A gift from ${giftFrom(giftFor(sv.id))}`) : t('Hai un regalo', 'You have a gift')}
                             </span>
                           )}
                         </div>
@@ -700,7 +707,7 @@ export default function Prenota() {
                 <b style={{ color: 'var(--brand-ink)' }}>{t('Coperto da gift card', 'Covered by a gift card')}</b>
                 {': '}
                 {giftedSelected.map((g) => g.gift_service_name).join(', ')}
-                {giftedSelected[0].buyer_name ? t(` · regalo di ${giftedSelected[0].buyer_name}`, ` · a gift from ${giftedSelected[0].buyer_name}`) : ''}
+                {giftFrom(giftedSelected[0]) ? t(` · regalo di ${giftFrom(giftedSelected[0])}`, ` · a gift from ${giftFrom(giftedSelected[0])}`) : ''}
                 {'. '}
                 {t('In salone non pagherai questa parte.', 'You will not pay this part in the salon.')}
               </div>

@@ -10,6 +10,6 @@
     "dev:dashboard": "npm run dev --workspace apps/dashboard",
     "dev:client": "npm run dev --workspace apps/client-app",
     "build": "npm run build --workspace apps/dashboard && npm run build --workspace apps/client-app",
-    "test": "node --import ./test/register.mjs --test 'packages/shared/test/*.test.js' 'apps/dashboard/test/*.test.js'"
+    "test": "node --import ./test/register.mjs --test 'packages/shared/test/*.test.js' 'apps/dashboard/test/*.test.js' 'apps/client-app/test/*.test.js'"
   }
 }

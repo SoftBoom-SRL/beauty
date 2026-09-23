@@ -5,6 +5,7 @@ import React from 'react';
 import { Icon, ProgressBar, api, fmtEur, parseISO, salonTzOpts } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
+import { fmtPct, giftCardTotals, isUnpaid } from './walletLib.js';
 
 export function fmtExpiry(iso, lang, t) {
   if (!iso) return t('Senza scadenza', 'No expiry');
@@ -22,7 +23,7 @@ export function fmtExpiry(iso, lang, t) {
 
 export function couponLabel(c, lang, t) {
   return c.kind === 'percent'
-    ? t(`Sconto del ${Math.round(Number(c.value))}%`, `${Math.round(Number(c.value))}% off`)
+    ? t(`Sconto del ${fmtPct(c.value, lang)}%`, `${fmtPct(c.value, lang)}% off`)
     : t(`Buono da ${fmtEur(Number(c.value), lang)}`, `${fmtEur(Number(c.value), lang)} voucher`);
 }
 
@@ -47,14 +48,12 @@ export default function Wallet() {
   const cards = wallet?.gift_cards || [];
   const coupons = wallet?.coupons || [];
   const loyalty = wallet?.loyalty || [];
-  // Le carte ancora da pagare in salone NON sono credito: la cassa le rifiuta
-  // finché il salone non incassa. Sommarle nel «saldo totale» prometteva alla
-  // cliente soldi che non poteva spendere. Si contano a parte, dicendo che
-  // cosa manca per attivarle.
-  const spendable = cards.filter((g) => g.payment_status !== 'unpaid');
-  const pending = cards.filter((g) => g.payment_status === 'unpaid');
-  const totBal = spendable.reduce((acc, g) => acc + Number(g.balance || 0), 0);
-  const totPending = pending.reduce((acc, g) => acc + Number(g.balance || 0), 0);
+  // Nel credito solo le carte che la cassa accetta da lei (vedi isSpendable):
+  // quelle ancora da pagare in salone si contano a parte, dicendo che cosa
+  // manca per attivarle; quelle comprate per un'altra persona sono di lei.
+  const totals = giftCardTotals(cards);
+  const totBal = totals.spendable / 100;
+  const totPending = totals.pending / 100;
 
   return (
     <div style={{ paddingBottom: 30 }}>
@@ -96,7 +95,7 @@ export default function Wallet() {
                     const initial = Number(g.initial_value || 0);
                     const used = initial > 0 ? Math.round((1 - Number(g.balance) / initial) * 100) : 0;
                     const gifted = g.gift_service_name;      // carta «a trattamento»
-                    const unpaid = g.payment_status === 'unpaid';
+                    const unpaid = isUnpaid(g);
                     return (
                       <button key={g.id} className="card press" onClick={() => setView('giftcard')} style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', textAlign: 'left', width: '100%' }}>
                         {(gifted || g.buyer_name || unpaid) && (
