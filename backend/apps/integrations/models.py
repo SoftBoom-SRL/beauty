@@ -56,3 +56,28 @@ class YourangConnection(models.Model):
 
     def __str__(self):
         return f"Yourang · {self.salon_id} ({self.status})"
+
+
+class YourangEventSync(models.Model):
+    """Ultimi valori ricevuti da Yourang per un evento importato.
+
+    Yourang rimanda l'evento intero a ogni `event.*`, anche quando è cambiato
+    solo lo stato (un'approvazione): riscrivere ogni volta orario e cliente
+    annullava lo spostamento fatto in salone, e la prenotazione tornava alle 10
+    sopra la cliente messa lì nel frattempo (11-07). Confrontando con l'ultimo
+    remoto visto si applica solo ciò che è cambiato DAVVERO su Yourang. Sta qui
+    e non sull'appuntamento: è stato dell'integrazione, non dell'agenda.
+    """
+
+    appointment = models.OneToOneField(
+        "agenda.Appointment", on_delete=models.CASCADE, related_name="+"
+    )
+    remote_start = models.DateTimeField(null=True, blank=True)
+    # Telefono normalizzato e nome come arrivano nell'evento: la cliente.
+    remote_client = models.CharField(max_length=255, blank=True)
+    remote_duration_min = models.PositiveIntegerField(null=True, blank=True)
+    remote_status = models.CharField(max_length=32, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Evento Yourang · appuntamento {self.appointment_id}"

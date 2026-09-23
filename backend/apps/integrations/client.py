@@ -63,6 +63,22 @@ class YourangClient:
 
     def __init__(self, conn: YourangConnection):
         self.conn = conn
+        self._http: httpx.Client | None = None
+
+    # `with YourangClient(conn) as client:` apre UN client httpx per tutto il
+    # giro e ne riusa le connessioni. Prima ogni chiamata ne apriva una nuova
+    # (httpx.request crea e chiude un client ogni volta): un giro di sync con
+    # qualche migliaio di schede erano migliaia di handshake TLS verso il proxy.
+    # Fuori da un `with` si resta alla chiamata singola, che per un evento o un
+    # contatto basta.
+    def __enter__(self):
+        self._http = httpx.Client(timeout=TIMEOUT)
+        return self
+
+    def __exit__(self, *exc_info):
+        http, self._http = self._http, None
+        if http is not None:
+            http.close()
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         if not self.conn.yourang_org_id:
@@ -71,7 +87,8 @@ class YourangClient:
             "Authorization": f"Bearer {_api_key()}",
             "X-Yourang-Org": self.conn.yourang_org_id,
         }
-        resp = httpx.request(
+        send = self._http.request if self._http is not None else httpx.request
+        resp = send(
             method, f"{_proxy_base()}/api{path}", headers=headers, timeout=TIMEOUT, **kwargs
         )
         resp.raise_for_status()
@@ -85,6 +102,11 @@ class YourangClient:
     def list_contacts(self, limit: int = 100, offset: int = 0) -> list[dict]:
         resp = self._request("GET", f"/contacts?limit={limit}&offset={offset}")
         return self._data(resp) or []
+
+    def get_contact(self, contact_id: str) -> dict:
+        # L'id arriva dal webhook, non è nostro: percent-encodato come gli altri.
+        resp = self._request("GET", f"/contacts/{quote(str(contact_id), safe='')}")
+        return self._data(resp) or {}
 
     def create_or_get_contact(self, phone: str, payload: dict) -> dict:
         """Crea il contatto; se il telefono esiste già lo recupera e basta.

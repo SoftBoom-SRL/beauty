@@ -2,22 +2,28 @@
 
 Flusso "Collega Yourang" (tutti i portali passano dal proxy connect.<brand>):
   1. dashboard apre un popup su /oauth-popup/start
-  2. la pagina chiama GET /oauth/start → riceve l'URL di login sul proxy
-  3. il proxy gestisce consenso e PKCE e torna su /oauth-popup/done?yr_link=…
-  4. exchange riscatta il link code lato server e fa il primo sync
+  2. la pagina chiama GET /oauth/start → riceve l'URL di login sul proxy e un
+     nonce, che tiene nel sessionStorage della finestra
+  3. il proxy gestisce consenso e PKCE e torna su
+     /oauth-popup/done?mode=…&state=…&yr_link=…
+  4. exchange verifica state + nonce, riscatta il link code lato server e
+     avvia la prima sync (in background)
 
-Niente PKCE, niente state, niente token da queste parti: sono tutti nel proxy.
+PKCE, state verso Yourang e token sono del proxy. Lo `state` di qui è un'altra
+cosa: lega il codice alla finestra (e, per il connect, al titolare) che ha
+avviato il flusso.
 """
 
 import hashlib
 import hmac
 import json
 import logging
+import secrets
 import time
+from urllib.parse import urlencode
 
-from django.apps import apps as django_apps
 from django.conf import settings
-from django.utils import timezone
+from django.core import signing
 from ninja import Router
 from ninja.errors import HttpError
 
@@ -27,6 +33,7 @@ from common.permissions import require_owner
 
 from . import client as yc
 from . import sync
+from .connection import OrgConflict, link_org, reset_remote_refs
 from .login import login_with_link_code
 from .models import YourangConnection
 from .schemas import AuthorizeOut, ExchangeIn, OkOut, StatusOut
@@ -38,24 +45,22 @@ WEBHOOK_TOLERANCE_SECONDS = 300
 
 
 def _status_out(conn: YourangConnection | None) -> dict:
+    # `last_error` anche fuori da CONNECTED: in ERROR è proprio lì che il
+    # titolare deve leggere perché la sync si è fermata.
     if conn is None or conn.status != YourangConnection.Status.CONNECTED:
-        return {"connected": False, "status": conn.status if conn else "disconnected"}
+        return {
+            "connected": False,
+            "status": conn.status if conn else "disconnected",
+            "last_error": conn.last_error if conn else "",
+        }
     return {
         "connected": True,
         "status": conn.status,
         "connected_at": conn.connected_at,
         "last_sync_at": conn.last_sync_at,
         "yourang_org_id": conn.yourang_org_id,
+        "last_error": conn.last_error,
     }
-
-
-def _first_sync_error(errors: list[str]) -> str:
-    """Riassunto degli errori di sync da mostrare al titolare ("" se tutto bene)."""
-    if not errors:
-        return ""
-    head = "; ".join(errors[:3])
-    more = f" (+{len(errors) - 3} altri)" if len(errors) > 3 else ""
-    return f"Sincronizzazione parziale: {head}{more}"[:500]
 
 
 def _require_config() -> None:
@@ -63,14 +68,72 @@ def _require_config() -> None:
         raise HttpError(503, "Integrazione Yourang non configurata")
 
 
-def _return_to(mode: str) -> str:
-    """Dove il proxy rimanda il browser dopo il consenso (vi aggiunge ?yr_link=).
+# ---- State del flusso: chi ha chiesto questo codice? -------------------------
+#
+# Il codice monouso del proxy (?yr_link=) non porta nessun legame con chi ha
+# avviato il flusso: /oauth-popup/done?mode=connect&yr_link=<codice di un altro>
+# veniva riscattato con la sessione del titolare (localStorage) e il salone
+# finiva collegato all'org dell'attaccante, anagrafica compresa; con mode=login
+# la vittima si ritrovava dentro il salone dell'attaccante. Ora l'avvio conia:
+#   - un `nonce` casuale, che il popup tiene nel sessionStorage della SUA
+#     finestra (un link aperto altrove non ce l'ha) e rimanda all'exchange;
+#   - uno `state` firmato con dentro il flusso, l'hash del nonce e, per il
+#     connect, titolare e salone. Viaggia nel return_to: il guard anti
+#     open-redirect del proxy confronta solo schema+host+porta, quindi la query
+#     string torna intatta (è così che già viaggiava `mode`).
+# Nessuna riga a database: la firma e la scadenza bastano, e il nonce ha senso
+# solo nella finestra che l'ha ricevuto.
 
-    Il `mode` viaggia qui perché non esiste più una riga di stato lato nostro a
-    ricordarlo: il proxy possiede PKCE e state, e il guard sull'open-redirect
-    confronta solo schema+host+porta, quindi una query string passa intatta.
+OAUTH_STATE_SALT = "apps.integrations.yourang-oauth-state"
+OAUTH_STATE_MAX_AGE = 15 * 60  # secondi: consenso e login su Yourang compresi
+OAUTH_MODES = ("login", "connect")
+_BAD_FLOW = (
+    "Richiesta di collegamento non valida: riavvia «Yourang» da questa finestra"
+)
+
+
+def _nonce_digest(nonce: str) -> str:
+    return hashlib.sha256(nonce.encode()).hexdigest()
+
+
+def _return_to(mode: str, state: str) -> str:
+    """Dove il proxy rimanda il browser dopo il consenso (vi aggiunge yr_link)."""
+    query = urlencode({"mode": mode, "state": state})
+    return f"{settings.FRONTEND_ORIGIN.rstrip('/')}/oauth-popup/done?{query}"
+
+
+def _start_flow(mode: str, ctx=None) -> dict:
+    nonce = secrets.token_urlsafe(32)
+    claims = {"m": mode, "n": _nonce_digest(nonce)}
+    if ctx is not None:
+        claims["u"] = ctx.user.pk
+        claims["s"] = ctx.salon.pk
+    state = signing.dumps(claims, salt=OAUTH_STATE_SALT)
+    return {"authorize_url": yc.proxy_login_url(_return_to(mode, state)), "nonce": nonce}
+
+
+def _check_flow(data: ExchangeIn, ctx=None) -> None:
+    """400 se il codice non arriva dal flusso avviato da questa finestra/sessione.
+
+    Si controlla PRIMA di riscattare il codice: un tentativo respinto non deve
+    né consumarlo né rivelare l'identità che c'è dietro.
     """
-    return f"{settings.FRONTEND_ORIGIN.rstrip('/')}/oauth-popup/done?mode={mode}"
+    try:
+        claims = signing.loads(data.state or "", salt=OAUTH_STATE_SALT, max_age=OAUTH_STATE_MAX_AGE)
+    except signing.SignatureExpired:
+        raise HttpError(400, "Collegamento con Yourang scaduto: riprova")
+    except signing.BadSignature:
+        raise HttpError(400, _BAD_FLOW)
+    if not isinstance(claims, dict) or claims.get("m") != data.mode:
+        raise HttpError(400, _BAD_FLOW)
+    if not data.nonce or not hmac.compare_digest(
+        str(claims.get("n") or ""), _nonce_digest(data.nonce)
+    ):
+        raise HttpError(400, _BAD_FLOW)
+    if ctx is not None and (claims.get("u") != ctx.user.pk or claims.get("s") != ctx.salon.pk):
+        # State di un altro utente o di un altro salone (anche dello stesso
+        # titolare): il codice non è stato chiesto da questa sessione.
+        raise HttpError(400, _BAD_FLOW)
 
 
 # ---- Connect (OAuth) -------------------------------------------------------
@@ -81,27 +144,29 @@ def oauth_start(request):
     """Avvia il flusso "connect" (dalle impostazioni, utente loggato)."""
     require_owner(request.auth)
     _require_config()
-    return {"authorize_url": yc.proxy_login_url(_return_to("connect"))}
+    return _start_flow("connect", request.auth)
 
 
 @router.get("/yourang/oauth/login/start", auth=None, response=AuthorizeOut)
 def oauth_login_start(request):
     """Avvia il flusso "login con Yourang" (dalla pagina di login, nessuna sessione)."""
     _require_config()
-    return {"authorize_url": yc.proxy_login_url(_return_to("login"))}
+    return _start_flow("login")
 
 
 @router.post("/yourang/oauth/exchange", auth=None)
 def oauth_exchange(request, data: ExchangeIn):
-    """Riscatta il link code. `mode` distingue i due flussi (lo state non esiste
-    più lato nostro: PKCE e state vivono nel proxy).
+    """Riscatta il link code del flusso `mode`, verificato con state + nonce.
 
     connect → collega il salone della sessione staff corrente;
     login   → provisiona/collega salone+utente e conia la sessione staff.
     """
     _require_config()
+    if data.mode not in OAUTH_MODES:
+        raise HttpError(400, _BAD_FLOW)
 
     if data.mode == "login":
+        _check_flow(data)
         try:
             session = login_with_link_code(data.code)
         except Exception as exc:
@@ -114,6 +179,7 @@ def oauth_exchange(request, data: ExchangeIn):
     if not ctx:
         raise HttpError(401, "Sessione staff richiesta")
     require_owner(ctx)
+    _check_flow(data, ctx)
 
     try:
         identity = yc.redeem_link_code(data.code)
@@ -125,33 +191,16 @@ def oauth_exchange(request, data: ExchangeIn):
     if not org:
         raise HttpError(502, "Identità Yourang senza organizzazione")
 
-    # Un'org serve UN salone: se è già altrove, collegarla qui spezzerebbe
-    # silenziosamente l'altro (il webhook risolve il salone dall'org).
-    taken = YourangConnection.objects.filter(yourang_org_id=org).exclude(salon=ctx.salon).first()
-    if taken:
-        raise HttpError(409, "Questa organizzazione Yourang è già collegata a un altro salone")
-
-    conn, _ = YourangConnection.objects.get_or_create(salon=ctx.salon)
-    conn.yourang_org_id = org
-    conn.connected_by = ctx.user
-    conn.status = YourangConnection.Status.CONNECTED
-    conn.last_error = ""
-    conn.save()
-
+    # Un'org serve UN salone, e un salone già collegato non cambia org senza
+    # prima scollegarsi: le due regole stanno in link_org, comuni al login.
     try:
-        clients = sync.sync_clients(conn)
-        services = sync.sync_services(conn)
-        conn.last_sync_at = timezone.now()
-        # Gli errori della prima sync venivano buttati via: la dashboard diceva
-        # "Connesso" mentre su Yourang non era arrivato nulla. Restano scritti
-        # sulla connessione, che è ciò che il titolare vede.
-        conn.last_error = _first_sync_error(clients.errors + services.errors)
-        conn.save(update_fields=["last_sync_at", "last_error"])
-    except Exception as exc:
-        logger.exception("Yourang initial sync failed")
-        conn.last_error = str(exc)[:500]
-        conn.save(update_fields=["last_error"])
+        conn = link_org(ctx.salon, org, ctx.user)
+    except OrgConflict as exc:
+        raise HttpError(409, str(exc)) from exc
 
+    # La prima sync (migliaia di chiamate su un salone grande) gira fuori dalla
+    # richiesta: il suo esito compare in /status (last_sync_at, last_error).
+    sync.schedule_initial_sync(conn)
     return {"mode": "connect", "status": _status_out(conn)}
 
 
@@ -168,16 +217,8 @@ def disconnect(request):
     YourangConnection.objects.filter(salon=ctx.salon).delete()
     # Via anche i riferimenti remoti: restavano appiccicati ai record locali e
     # dopo una riconnessione (org e catalogo nuovi) ogni cliente veniva saltato
-    # perché "già sincronizzato" e ogni PUT catalogues/items/{id} rispondeva 404,
-    # cioè il listino non arrivava MAI nel catalogo nuovo. I modelli sono di
-    # altre app: accesso lazy, come altrove nel progetto.
-    django_apps.get_model("clients", "Client").objects.filter(salon=ctx.salon).exclude(
-        yourang_contact_id=""
-    ).update(yourang_contact_id="")
-    for model_name in ("Service", "Package"):
-        django_apps.get_model("catalog", model_name).objects.filter(
-            salon=ctx.salon
-        ).exclude(yourang_item_id="").update(yourang_item_id="")
+    # perché "già sincronizzato" e ogni PUT catalogues/items/{id} rispondeva 404.
+    reset_remote_refs(ctx.salon)
     return OkOut()
 
 
@@ -245,8 +286,20 @@ def webhook(request):
     entity_id = str(payload.get("resource_id") or "")
 
     try:
-        if event_type.startswith("contact"):
-            sync.sync_clients(conn)  # riconciliazione completa (robusta al payload)
+        if event_type == "contact.deleted":
+            # Niente da fare: la scheda locale resta (storico, caparre, note) e
+            # il suo contact-id non viene più usato; toglierlo farebbe
+            # rispingere su Yourang, al prossimo giro, il contatto appena
+            # cancellato lì. Prima qui partiva comunque la sync completa.
+            pass
+        elif event_type.startswith("contact") and entity_id:
+            # Solo quel contatto: la sync completa (elenco + push di ogni
+            # scheda non collegata) dentro ogni webhook costava migliaia di
+            # chiamate a raffica. Il push resta al primo collegamento e al cron.
+            sync.sync_contact(conn, entity_id)
+        elif event_type.startswith("contact"):
+            # Payload senza resource_id: riconciliazione completa, senza push.
+            sync.sync_clients(conn, push=False)
         elif event_type == "event.deleted" and entity_id:
             # `and entity_id` come nel ramo gemello qui sotto: senza, un
             # event.deleted col campo assente (o rinominato ancora dal proxy)
