@@ -177,3 +177,51 @@ class DeleteLabelTests(_Base):
         self.deposit_rule(_label_rule("VIP"))
         delete_category(self.request, label.id)
         self.assertFalse(ClientCategory.objects.filter(id=label.id).exists())
+
+
+class DeleteLabelRaceTests(_Base):
+    """Bug sospetti del 24/09, voce 26: controllo e cancellazione non erano
+    atomici. Una regola salvata da un'altra postazione fra i due passi citava
+    un'etichetta che non c'era più, e non scattava per nessuna senza avviso:
+    proprio il caso che il controllo vuole evitare. Ora il controllo si fa
+    nella transazione della cancellazione, dopo il lock del salone."""
+
+    def _deleting_after(self, other_station):
+        """Elimina l'etichetta mentre `other_station` salva e committa per prima."""
+        from apps.agenda.services.locking import lock_salon as real_lock
+
+        state = {"done": False}
+
+        def lock_after_the_other_station(salon):
+            if not state["done"]:
+                state["done"] = True
+                other_station()
+            return real_lock(salon)
+
+        return patch("apps.agenda.services.locking.lock_salon", side_effect=lock_after_the_other_station)
+
+    def test_a_rule_saved_while_waiting_for_the_lock_is_seen(self):
+        label = create_category(self.request, ClientCategoryIn(name="A rischio"))
+        with self._deleting_after(lambda: self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")) as lock:
+            with self.assertRaises(HttpError) as caught:
+                delete_category(self.request, label.id)
+        lock.assert_called_once_with(self.salon)
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("Caparra a rischio", caught.exception.message)
+        self.assertTrue(ClientCategory.objects.filter(id=label.id).exists())
+
+    def test_a_rename_saved_while_waiting_for_the_lock_is_seen(self):
+        label = create_category(self.request, ClientCategoryIn(name="A rischio"))
+        self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")
+
+        def rename():
+            # rinomina e riscrive la regola: «A rischio» non la cita più nessuno
+            update_category(self.request, label.id, ClientCategoryIn(name="Rischio alto"))
+
+        with self._deleting_after(rename) as lock:
+            with self.assertRaises(HttpError) as caught:
+                delete_category(self.request, label.id)
+        lock.assert_called_once_with(self.salon)
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("«Rischio alto»", caught.exception.message)
+        self.assertTrue(ClientCategory.objects.filter(id=label.id).exists())

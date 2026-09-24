@@ -163,32 +163,50 @@ def update_label(ctx, category: ClientCategory, payload: dict) -> ClientCategory
 
 
 def delete_label(ctx, category: ClientCategory) -> None:
-    """Elimina l'etichetta, se nessuna regola caparra o automazione la cita."""
+    """Elimina l'etichetta, se nessuna regola caparra o automazione la cita.
+
+    Controllo e cancellazione stanno nella stessa transazione, dopo il lock del
+    salone e poi della riga dell'etichetta (l'ordine salone → riga di
+    `agenda.services.locking`). Erano due passi separati: una regola salvata
+    da un'altra postazione fra i due citava un'etichetta che non c'era più, e
+    non scattava per nessuna senza avviso (voce 26 dei bug sospetti del
+    24/09). Perché il controllo veda sempre la regola salvata nel frattempo,
+    chi salva regole caparra e automazioni deve prendere lo stesso lock.
+    """
+    from apps.agenda.services.locking import lock_salon  # lazy
+
     category_id = category.id  # dopo delete() l'istanza non ha più il suo id
-    name = category.name
-    # Eliminata l'etichetta, la regola che la cita non scatta più per nessuna,
-    # senza che niente lo dica — lo stesso silenzio del rinomina. Togliere la
-    # condizione al posto del titolare sarebbe peggio: in una regola «E» il
-    # resto varrebbe per tutte le clienti. Prima si sistemano le regole.
-    rules, automations = rules_citing_label(ctx.salon, name)
-    if rules or automations:
-        used_by = [f"regola caparra «{r.name}»" for r in rules] + [
-            f"automazione «{a.name}»" for a in automations
-        ]
-        more = f" e altre {len(used_by) - 3}" if len(used_by) > 3 else ""
-        raise HttpError(
-            400,
-            f"L'etichetta «{name}» è usata da {', '.join(used_by[:3])}{more}: "
-            "togli la condizione da lì, poi eliminala.",
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        # Riletta dopo il lock: rinominata nel frattempo, le regole la citano
+        # con il nome nuovo, e il controllo va fatto su quello.
+        category = ClientCategory.objects.select_for_update().filter(pk=category_id).first()
+        if category is None:
+            raise HttpError(404, "Etichetta non trovata")
+        name = category.name
+        # Eliminata l'etichetta, la regola che la cita non scatta più per nessuna,
+        # senza che niente lo dica — lo stesso silenzio del rinomina. Togliere la
+        # condizione al posto del titolare sarebbe peggio: in una regola «E» il
+        # resto varrebbe per tutte le clienti. Prima si sistemano le regole.
+        rules, automations = rules_citing_label(ctx.salon, name)
+        if rules or automations:
+            used_by = [f"regola caparra «{r.name}»" for r in rules] + [
+                f"automazione «{a.name}»" for a in automations
+            ]
+            more = f" e altre {len(used_by) - 3}" if len(used_by) > 3 else ""
+            raise HttpError(
+                400,
+                f"L'etichetta «{name}» è usata da {', '.join(used_by[:3])}{more}: "
+                "togli la condizione da lì, poi eliminala.",
+            )
+        category.delete()
+        log_activity(
+            ctx.salon,
+            "client_category.deleted",
+            f"Etichetta eliminata: {name}",
+            actor=ctx.user,
+            payload={"category_id": category_id},
         )
-    category.delete()
-    log_activity(
-        ctx.salon,
-        "client_category.deleted",
-        f"Etichetta eliminata: {name}",
-        actor=ctx.user,
-        payload={"category_id": category_id},
-    )
 
 
 # ---- Etichette di una scheda --------------------------------------------------
