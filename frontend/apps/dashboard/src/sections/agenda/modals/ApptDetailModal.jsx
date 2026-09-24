@@ -1,21 +1,21 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
+import { ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, fmtDateIt, toDateStr, statusMeta, depositMeta, NumInput } from '@youty/shared';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
-import { useDash, useLive } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
+import { useDash } from '../../../ctx.jsx';
+import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
 import {
-  depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode,
-  handoverOps, otherOpNames, itemSpans, gapNotes,
+  depositDueLabel, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, usableCode,
+  handoverOps, otherOpNames, itemSpans, gapNotes, TERMINAL,
 } from './rules.js';
 import { withForceRetry } from '../lib/retry.js';
-import { panelMovedText, undoneText, nothingToUndoText } from '../lib/toastText.js';
 import * as agendaApi from '../agendaApi.js';
 import RescheduleFlow from './RescheduleFlow.jsx';
-
-const TERMINAL = ['closed', 'no_show', 'cancelled'];
+import { useApptCopy } from '../hooks/useApptCopy.js';
+import { useDepositActions } from '../hooks/useDepositActions.js';
+import { useMoveFromPanel } from '../hooks/useMoveFromPanel.js';
 
 // Motivazioni predefinite: il titolare può sostituirle dalle Impostazioni
 // (settings.no_show_reasons / cancel_reasons); qui restano come fallback.
@@ -33,8 +33,11 @@ const timeCellCss = {
 export default function ApptDetailModal({ appointment, onMutate, onClose, onShowDate }) {
   const { t, lang, operators, opColors, services, serviceCategories, settings, session, fireToast, openModal, setTab, setDeepLink, setSelClient, hasScope } = useDash();
   const canWrite = hasScope('agenda');
-  const [appt, setAppt] = useState(appointment);
-  const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel'
+  /* la copia dell'appuntamento, le modifiche in sospeso e la schermata (useApptCopy) */
+  const {
+    appt, flow, setFlow, alive, note, setNote, editItems, setEditItems, mkEditItems, itemSeq, addingSvc, setAddingSvc,
+    rowDrafts, setRowDrafts, apptRef, adopt, fetchFresh, reload,
+  } = useApptCopy({ appointment, t, fireToast, onClose });
   const [reason, setReason] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
   // Annullamento: chi l'ha chiesto. La cliente che disdice al telefono (l'app
@@ -46,151 +49,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const [busy, setBusy] = useState(false);
   const noShowReasons = customReasons(settings?.no_show_reasons, NOSHOW_REASONS);
   const cancelReasons = customReasons(settings?.cancel_reasons, CANCEL_REASONS);
-  const [linkBusy, setLinkBusy] = useState(false);
 
-  /* Le risposte possono arrivare quando al posto di questo pannello ce n'è già
-   * un altro (si è aperto un altro appuntamento mentre il check-in era in
-   * volo): onClose e openModal sono globali, e chiudevano quello nuovo. */
-  const alive = useRef(true);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-
-  /* note edit (salvata insieme ai servizi, dal piede del pannello) */
-  const [note, setNote] = useState(appointment?.note || '');
   const noteDirty = note !== (appt?.note || '');
-
-  /* services edit → PUT /appointments/{id} with the full items list */
-  const itemSeq = useRef(1);
-  const mkEditItems = (list) => (list || []).map((it) => editRow(it, 'e' + (itemSeq.current++)));
-  const [editItems, setEditItems] = useState(() => mkEditItems(appointment?.items));
-  const [addingSvc, setAddingSvc] = useState(false);
   const [savingItems, setSavingItems] = useState(false);
   const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
-  // orari di riga mentre si digitano (vedi commitItemStart / commitItemEnd)
-  const [rowDrafts, setRowDrafts] = useState({});
 
-  /* ---- la copia dell'appuntamento e le modifiche in sospeso ---------------
-   * `appt` è l'ultima versione nota del server; servizi e nota modificati e
-   * non ancora salvati sono una bozza sopra di lei. Ogni versione nuova —
-   * risposta di un comando del pannello, trascinamento o ridimensionamento in
-   * griglia, «Indietro», caparra pagata online, un'altra postazione — si
-   * prende sempre, e la bozza ci viene riportata sopra (rebaseDraft) invece di
-   * sparire. Prima un effetto su [appt] rifaceva la lista dei servizi a ogni
-   * risposta: la «Piega» appena aggiunta spariva premendo «›» o inviando il
-   * link della caparra (13-05), mentre `appt` non seguiva niente di quello
-   * che succedeva fuori dal pannello e i suoi comandi ripartivano da una copia
-   * vecchia, disfacendo o raddoppiando le modifiche fatte intanto (13-03).
-   * `how`: 'mine' = risposta di un comando del pannello, 'saved' = risposta
-   * del salvataggio della bozza, 'external' = arrivata da fuori. */
-  const apptRef = useRef(appointment);
-  const draftRef = useRef(null);
-  draftRef.current = { rows: editItems, note };
-  const flowRef = useRef(flow);
-  flowRef.current = flow;
-  const cmdSeq = useRef(0);
-  function adopt(fresh, how = 'mine', extra = {}) {
-    if (!fresh) return;
-    const base = apptRef.current;
-    if (how === 'external' && (isOlder(fresh, base) || apptVersion(fresh) === apptVersion(base))) return;
-    if (how !== 'external') cmdSeq.current += 1;
-    apptRef.current = fresh;
-    setAppt(fresh);
-    if (how === 'saved') {
-      // la bozza è stata scritta: si riparte dalla risposta (le righe hanno id
-      // nuovi), ma una nota ribattuta mentre il salvataggio era in volo resta
-      const rows = mkEditItems(fresh.items);
-      const n = draftRef.current.note === extra.sentNote ? (fresh.note || '') : draftRef.current.note;
-      draftRef.current = { rows, note: n };
-      setEditItems(rows); setNote(n); setRowDrafts({}); setAddingSvc(false);
-      return;
-    }
-    const d = draftRef.current;
-    const wasDirty = itemsSig(d.rows) !== itemsSig(base?.items) || d.note !== (base?.note || '');
-    const r = rebaseDraft({ base, rows: d.rows, note: d.note, theirs: fresh });
-    draftRef.current = { rows: r.rows, note: r.note };
-    setEditItems(r.rows); setNote(r.note);
-    if (how !== 'external') return;
-    const ended = TERMINAL.includes(fresh.status) && !TERMINAL.includes(base?.status);
-    if (ended && flowRef.current) {
-      // no-show, annullamento o riprogrammazione a metà su una visita che
-      // intanto è stata chiusa o annullata: si torna al dettaglio
-      setFlow(null);
-      if (!wasDirty) fireToast({ msg: t('L’appuntamento è stato chiuso o annullato nel frattempo', 'The appointment was closed or cancelled in the meantime'), icon: 'info' });
-    }
-    if (!wasDirty) return;
-    // Chi aveva modifiche in sospeso deve sapere che sotto è cambiato qualcosa
-    // che le riguarda, prima di salvarle.
-    if (ended) {
-      fireToast({ msg: t('L’appuntamento è stato chiuso o annullato nel frattempo: le modifiche non salvate non si possono più salvare', 'The appointment was closed or cancelled in the meantime: unsaved changes can no longer be saved'), icon: 'alert' });
-    } else if (r.lost) {
-      fireToast({ msg: t('I servizi sono stati modificati nel frattempo: alcune tue modifiche non salvate non valevano più e sono state tolte. Controlla prima di salvare.', 'The services were changed in the meantime: some of your unsaved changes no longer applied and were dropped. Check before saving.'), icon: 'alert' });
-    } else if (itemsSig(fresh.items) !== itemsSig(base?.items) || (fresh.note || '') !== (base?.note || '')) {
-      fireToast({ msg: t('Servizi o nota cambiati nel frattempo: le tue modifiche non salvate sono state riportate sulla versione nuova. Controlla prima di salvare.', 'Services or note changed in the meantime: your unsaved changes were carried over to the new version. Check before saving.'), icon: 'alert' });
-    }
-  }
-
-  const fetchFresh = () => agendaApi.getAppointment(apptRef.current.id);
-  const reloadSeq = useRef(0);
-  async function reload() {
-    if (!apptRef.current?.id) return;
-    const my = ++reloadSeq.current, since = cmdSeq.current;
-    try {
-      const fresh = await fetchFresh();
-      // una risposta partita prima di un comando del pannello, o superata da un
-      // ricarico più recente, riporterebbe indietro quello che si vede
-      if (!alive.current || my !== reloadSeq.current || since !== cmdSeq.current) return;
-      adopt(fresh, 'external');
-    } catch (err) {
-      if (!alive.current) return;
-      if (err instanceof ApiError && err.status === 404) {
-        fireToast({ msg: t('L’appuntamento non esiste più: è stato tolto con «Indietro» o da un’altra postazione', 'The appointment no longer exists: it was undone or removed from another workstation'), icon: 'info' });
-        onClose?.();
-      }
-    }
-  }
-  /* Il pannello segue l'appuntamento: si rilegge a ogni evento live che lo
-   * riguarda (i propri compresi — la versione uguale non cambia niente). */
-  useLive(/^(appointment|deposit|sale)\./, (events) => {
-    if (events.some((e) => eventConcerns(e, apptRef.current?.id))) reload();
-  });
-  /* Se chi ha aperto il pannello gli passa una versione nuova della stessa
-   * visita (la griglia dopo «Sposta qui»), la si prende come le altre. */
-  const propRef = useRef(appointment);
-  useEffect(() => {
-    if (!appointment || appointment === propRef.current) return;
-    propRef.current = appointment;
-    if (appointment.id === apptRef.current?.id) adopt(appointment, 'external');
-  }, [appointment]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* link di pagamento della caparra: crea (o rimanda come sollecito) e copia */
-  async function sendDepositLink() {
-    if (linkBusy) return;
-    setLinkBusy(true);
-    try {
-      const cur = apptRef.current;
-      const res = await agendaApi.sendDepositLink(cur.id);
-      if (alive.current) adopt({ ...apptRef.current, deposit_payment_link: res.url, deposit_due_at: res.due_at || apptRef.current.deposit_due_at });
-      fireToast({ msg: cur.deposit_payment_link ? t('Sollecito inviato alla cliente', 'Reminder sent to the client') : t('Link di pagamento inviato alla cliente', 'Payment link sent to the client'), icon: 'check' });
-      onMutate?.(apptRef.current);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 503) fireToast({ msg: t('Pagamenti online non configurati: collega Stripe in Impostazioni → Pagamenti', 'Online payments not configured: connect Stripe in Settings → Payments'), icon: 'alert' });
-      else toastApiError(err, fireToast, t);
-    } finally { if (alive.current) setLinkBusy(false); }
-  }
-  /* Caparra incassata al banco (contanti o POS del salone). Senza questo,
-   * l'unico modo di segnarla pagata era il pagamento online: dove Stripe non
-   * è configurato — o quando la cliente paga di persona — il termine scadeva
-   * lo stesso e lo slot si liberava da solo. */
-  async function cashDeposit(method) {
-    if (linkBusy) return;
-    setLinkBusy(true);
-    try {
-      const res = await agendaApi.cashDeposit(apptRef.current.id, method);
-      if (alive.current) adopt(res);
-      fireToast({ msg: t('Caparra incassata e registrata in cassa', 'Deposit cashed and recorded in the till'), icon: 'check' });
-      onMutate?.(res);
-    } catch (err) { toastApiError(err, fireToast, t); }
-    finally { if (alive.current) setLinkBusy(false); }
-  }
+  // caparra: link di pagamento, incasso al banco, copia del link
+  const { linkBusy, linkCopyFailed, sendDepositLink, cashDeposit, copyDepositLink } = useDepositActions({ apptRef, alive, adopt, t, fireToast, onMutate });
 
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
   const [matchCount, setMatchCount] = useState(null);
@@ -219,114 +84,11 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     return () => clearTimeout(id);
   }, [justAdded]);
 
-  /* ---- orario e operatrice, modificabili qui senza passare da «Riprogramma» ----
-   * «Riprogramma» resta per cercare uno slot libero o un altro giorno; spostare
-   * di un quarto d'ora o passare la cliente alla collega sono invece gesti da
-   * fare sul posto, ed erano dietro un flusso a sé. */
+  /* ---- orario, giorno e operatrice, modificabili qui (useMoveFromPanel) ---- */
   const stepMin = slotStep(settings);
-  const [timeDraft, setTimeDraft] = useState(null);   // "HH:MM" mentre si digita
-  const [movingBusy, setMovingBusy] = useState(false);
-  useEffect(() => { setTimeDraft(null); }, [appt?.start]);
-
-  /* ---- giorno da guardare -------------------------------------------------
-   * «La cliente chiama e vuole spostare»: si sfogliano i giorni da qui e
-   * l'agenda di fianco li mostra man mano (giorno o settimana, quella che è
-   * aperta). Finché non si preme «Sposta», non si è ancora toccato niente. */
-  const [viewDate, setViewDate] = useState(() => toDateStr(appointment?.start));
-  useEffect(() => { setViewDate(toDateStr(appt?.start)); }, [appt?.start]);
-  const showDate = (iso) => {
-    if (!iso) return;
-    setViewDate(iso);
-    onShowDate?.(iso);     // l'agenda accanto si sposta su quel giorno
-  };
-  const shiftViewDate = (days) => {
-    const d = parseISO(viewDate);
-    d.setDate(d.getDate() + days);
-    showDate(toDateStr(d));
-  };
-
-  /* Spostamento dal pannello. Orario, giorno e operatrice di destinazione sono
-   * calcolati su quello che si vede, quindi prima di mandarli si rilegge la
-   * visita: se nel frattempo un trascinamento, «Indietro» o un'altra
-   * postazione l'hanno spostata, il comando si ferma e il pannello mostra la
-   * versione nuova. Prima «Passa a Bea» dopo aver trascinato il blocco dalle
-   * 10 alle 14 rimandava start 10:00 e disfaceva lo spostamento (13-03). */
-  async function applyMove({ startMin, operatorId, dateIso }) {
-    if (movingBusy) return;
-    const seen = apptRef.current;
-    setMovingBusy(true);
-    try {
-      let base = seen;
-      try {
-        const fresh = await fetchFresh();
-        if (!alive.current) return;
-        if (movedMeanwhile(seen, fresh)) {
-          adopt(fresh, 'external');
-          setTimeDraft(null);
-          fireToast({ msg: t('L’appuntamento è cambiato nel frattempo: controlla l’orario e riprova', 'The appointment changed in the meantime: check the time and try again'), icon: 'alert' });
-          return;
-        }
-        base = fresh;
-      } catch (err) {
-        // la visita non c'è più: lo dice (e chiude) il ricarico
-        if (err instanceof ApiError && err.status === 404) { reload(); return; }
-        // senza la rilettura si prova lo stesso: il server valida comunque
-      }
-      const baseDate = toDateStr(base.start);
-      const day = dateIso || baseDate;
-      const from = minutesOfDay(base.start);
-      const target = startMin ?? from;
-      const toOp = operatorId ?? base.operator_id;
-      const reassigned = toOp !== base.operator_id;
-      if (target === from && !reassigned && day === baseDate) return;
-      const body = {
-        start: isoAtMin(day, target),
-        ...(reassigned ? { operator_id: toOp, from_operator_id: base.operator_id } : {}),
-      };
-      // Slot occupato o fuori turno (409): si scrive lo stesso, come in griglia —
-      // chi sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
-      const { res } = await withForceRetry((force) => agendaApi.moveAppointment(base.id, { ...body, force }));
-      if (alive.current) adopt(res);
-      // Il gesto da annullare è questo: se ne prende l'id subito, così
-      // «Annulla» non disfa un gesto fatto dopo da un'altra scheda.
-      const entry = agendaApi.getUndoStack().then((list) => (list?.[0]?.kind === 'move' ? list[0].id : null)).catch(() => null);
-      const who = operators.find((x) => x.id === toOp);
-      fireToast({
-        // il giorno si scrive solo se cambia (panelMovedText)
-        msg: panelMovedText(t, { reassigned, who, day, baseDate, target }),
-        icon: 'calendar',
-        undo: t('Annulla', 'Undo'),
-        undoFn: () => { undoMove(entry); },
-      });
-      onShowDate?.(day);     // l'agenda resta su quello che si è appena fatto
-      onMutate?.(res);
-    } catch (err) {
-      if (alive.current) setTimeDraft(null);
-      toastApiError(err, fireToast, t);
-    } finally { if (alive.current) setMovingBusy(false); }
-  }
-
-  /* «Annulla» dell'avviso: il «torna indietro» del server, come la griglia, e
-   * poi il pannello si rilegge (le righe tornano con i loro id). Prima rifaceva
-   * lo spostamento al contrario forzandolo: la visita restava «Forzata», nelle
-   * visite divise la parte della collega cambiava mano, e il messaggio ancora
-   * trattenuto diventava un secondo «spostato» per la cliente (13-06, 03-07,
-   * 17-05). Il 409 dice il motivo vero (conto chiuso, cambiata nel frattempo,
-   * posto occupato): si mostra così com'è. */
-  async function undoMove(entryPromise) {
-    const entryId = await entryPromise;
-    try {
-      const res = await agendaApi.undoGesture(entryId);
-      fireToast({ msg: undoneText(t, res.label), icon: 'undo' });
-      if (res.date) onShowDate?.(res.date);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) fireToast({ msg: nothingToUndoText(t), icon: 'info' });
-      else toastApiError(err, fireToast, t);
-    } finally {
-      if (alive.current) reload();
-      onMutate?.();
-    }
-  }
+  const { timeDraft, setTimeDraft, movingBusy, viewDate, showDate, shiftViewDate, applyMove } = useMoveFromPanel({
+    appt, apptRef, alive, adopt, fetchFresh, reload, operators, t, fireToast, onShowDate, onMutate,
+  });
 
   /* margin (behind a small toggle) — si rilegge quando cambiano servizi,
    * operatrici o prezzo: restava quello di prima del salvataggio (13-24). */
@@ -353,18 +115,6 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     const id = setTimeout(() => setClockTick((n) => n + 1), wait + 1000);
     return () => clearTimeout(id);
   }, [appt?.status, appt?.start]);
-
-  /* «Copia link»: la conferma si dà solo se la copia è riuscita; se non lo è,
-   * il link resta scritto nel pannello da copiare a mano (13-25). */
-  const [linkCopyFailed, setLinkCopyFailed] = useState(false);
-  async function copyDepositLink() {
-    const ok = await copyText(apptRef.current?.deposit_payment_link);
-    if (!alive.current) return;
-    setLinkCopyFailed(!ok);
-    fireToast(ok
-      ? { msg: t('Link copiato', 'Link copied'), icon: 'check' }
-      : { msg: t('Copia non riuscita: il link è scritto nel pannello, selezionalo e copialo a mano', 'Copy failed: the link is shown in the panel, select it and copy it by hand'), icon: 'alert' });
-  }
 
   if (!appt) return null;
   const o = operators.find((x) => x.id === appt.operator_id);

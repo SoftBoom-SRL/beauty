@@ -15,6 +15,10 @@ export function depositDueLabel(iso, lang) {
 
 /* ---- la copia dell'appuntamento nel pannello di dettaglio ------------------ */
 
+/** Stati in cui la visita è finita (conto chiuso, no-show, annullata): niente
+ *  più modifiche né comandi dal pannello. */
+export const TERMINAL = ['closed', 'no_show', 'cancelled'];
+
 /** Firma dei servizi di una visita: id, servizio, operatrice, durata, posa. */
 export const itemsSig = (list) => JSON.stringify((list || []).map((i) => [
   i.id ?? null, i.service_id, i.operator_id ?? null, Number(i.duration_min) || 0, Number(i.soak_min) || 0,
