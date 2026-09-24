@@ -11,8 +11,8 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from common.auth import create_staff_tokens
 from common.conditions import evaluate
+from common.testing import bearer
 
 from .. import views
 from ..models import ActivityLog, Salon, SalonSettings
@@ -79,8 +79,7 @@ class ActivityFeedApiTests(TestCase):
         self.user = User.objects.create_user(email="mara@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role, is_owner=False)
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
     def _feed(self, after=None):
         url = "/api/core/activity/feed" + (f"?after={after}" if after is not None else "")
@@ -199,7 +198,7 @@ class ActivityFeedApiTests(TestCase):
 
         owner = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
         Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        auth = bearer(owner, self.salon)
         start = self.client.get("/api/core/activity/feed", **auth).json()["cursor"]
         log_activity(self.salon, "sale.created", "Incasso")
         log_activity(self.salon, "settings.updated", "Impostazioni")
@@ -217,8 +216,7 @@ class ActivityStreamTests(TestCase):
         self.user = User.objects.create_user(email="mara2@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role, is_owner=False)
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
     def test_ticket_requires_auth_and_opens_stream(self):
         self.assertEqual(self.client.post("/api/core/activity/stream-ticket").status_code, 401)
@@ -300,7 +298,7 @@ class StreamConnectionCapTests(TestCase):
         user = User.objects.create_user(email="sole@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Owner", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        self.auth = bearer(user, self.salon)
 
     def _ticket(self):
         res = self.client.post("/api/core/activity/stream-ticket", **self.auth)
@@ -401,8 +399,7 @@ class _Member(TestCase):
         self.membership = Membership.objects.create(user=self.user, salon=self.salon, role=self.role)
 
     def _auth(self):
-        tokens = create_staff_tokens(self.user, self.salon)
-        return {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        return bearer(self.user, self.salon)
 
     def _ticket(self):
         res = self.client.post("/api/core/activity/stream-ticket", **self._auth())

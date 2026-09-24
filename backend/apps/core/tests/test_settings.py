@@ -14,7 +14,7 @@ from unittest.mock import patch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 
-from common.auth import create_staff_tokens
+from common.testing import bearer, post_json, put_json
 
 from ..admin import SalonSettingsAdminForm
 from ..models import DepositRule, Location, Salon, SalonSettings
@@ -35,16 +35,10 @@ class SettingsApiTests(TestCase):
         Membership.objects.create(
             user=self.user, salon=self.salon, role=role, is_owner=True
         )
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
     def _put(self, payload):
-        return self.client.put(
-            "/api/core/settings",
-            data=json.dumps(payload),
-            content_type="application/json",
-            **self.auth,
-        )
+        return put_json(self.client, "/api/core/settings", payload, **self.auth)
 
     def test_opening_hours_week_is_normalized_and_summarised(self):
         week = {"0": [["9:00", "13:00"], ["14:00", "19:00"]], "1": [["09:00", "13:00"], ["14:00", "19:00"]],
@@ -247,8 +241,7 @@ class LogoApiTests(TestCase):
         Membership.objects.create(
             user=self.user, salon=self.salon, role=role, is_owner=True
         )
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
         self._media_root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self._media_root, ignore_errors=True)
@@ -325,12 +318,10 @@ class LocationDefaultTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         owner = User.objects.create_user(email="titolare2@theparlour.it", password="x" * 10)
         Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        self.auth = bearer(owner, self.salon)
 
     def _post(self, body):
-        return self.client.post(
-            "/api/core/locations", data=json.dumps(body), content_type="application/json", **self.auth
-        )
+        return post_json(self.client, "/api/core/locations", body, **self.auth)
 
     def test_marking_a_new_default_clears_the_previous_one(self):
         first = self._post({"name": "Centro", "address": "Via Roma 1", "is_default": True}).json()
@@ -347,10 +338,10 @@ class LocationDefaultTests(TestCase):
     def test_promoting_an_existing_location_demotes_the_others(self):
         first = self._post({"name": "Centro", "is_default": True}).json()
         second = self._post({"name": "Nuova sede", "is_default": False}).json()
-        resp = self.client.put(
+        resp = put_json(
+            self.client,
             f"/api/core/locations/{second['id']}",
-            data=json.dumps({"name": "Nuova sede", "is_default": True}),
-            content_type="application/json",
+            {"name": "Nuova sede", "is_default": True},
             **self.auth,
         )
         self.assertEqual(resp.status_code, 200, resp.content)
@@ -367,10 +358,10 @@ class SettingsAuditExtrasTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         owner = User.objects.create_user(email="owner@theparlour.it", password="x" * 10)
         Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        self.auth = bearer(owner, self.salon)
 
     def _put(self, body):
-        return self.client.put("/api/core/settings", data=json.dumps(body), content_type="application/json", **self.auth)
+        return put_json(self.client, "/api/core/settings", body, **self.auth)
 
     def test_hold_reminder_and_reasons_round_trip(self):
         res = self._put({"deposit_hold_minutes": 20, "deposit_reminder_minutes": 10, "cancel_reasons": [" Richiesta cliente ", "Malattia", ""], "no_show_reasons": ["Non presentata"]})
@@ -441,10 +432,7 @@ class SettingsSavedByFieldTests(TestCase):
 
     def test_put_settings_keeps_the_stripe_account_written_meanwhile(self):
         with _StaleSettings():
-            resp = self.client.put(
-                "/api/core/settings", data=json.dumps({"brand_color": "#112233"}),
-                content_type="application/json", **self.auth,
-            )
+            resp = put_json(self.client, "/api/core/settings", {"brand_color": "#112233"}, **self.auth)
         self.assertEqual(resp.status_code, 200, resp.content)
         settings = SalonSettings.objects.get(salon=self.salon)
         self.assertEqual(settings.brand_color, "#112233")
@@ -478,9 +466,7 @@ class DepositRuleAmountTests(TestCase):
 
     def _post(self, **body):
         payload = {"name": "Regola", "amount_type": "pct", "amount": "30", **body}
-        return self.client.post(
-            "/api/core/deposit-rules", data=json.dumps(payload), content_type="application/json", **self.auth
-        )
+        return post_json(self.client, "/api/core/deposit-rules", payload, **self.auth)
 
     def test_percentages_stay_between_0_and_100(self):
         self.assertEqual(self._post(amount="150").status_code, 400)
@@ -496,10 +482,11 @@ class DepositRuleAmountTests(TestCase):
 
     def test_converting_a_fixed_rule_to_percent_needs_a_valid_value(self):
         rule_id = self._post(amount_type="fixed", amount="150").json()["id"]
-        resp = self.client.put(
+        resp = put_json(
+            self.client,
             f"/api/core/deposit-rules/{rule_id}",
-            data=json.dumps({"name": "Regola", "amount_type": "pct", "amount": "150"}),
-            content_type="application/json", **self.auth,
+            {"name": "Regola", "amount_type": "pct", "amount": "150"},
+            **self.auth,
         )
         self.assertEqual(resp.status_code, 400)
         rule = DepositRule.objects.get(pk=rule_id)
@@ -510,10 +497,11 @@ class DepositRuleAmountTests(TestCase):
         from apps.core.models import ActivityLog
 
         rule_id = self._post(amount_type="fixed", amount="20").json()["id"]
-        resp = self.client.put(
+        resp = put_json(
+            self.client,
             f"/api/core/deposit-rules/{rule_id}",
-            data=json.dumps({"name": "Colore", "amount_type": "fixed", "amount": "25"}),
-            content_type="application/json", **self.auth,
+            {"name": "Colore", "amount_type": "fixed", "amount": "25"},
+            **self.auth,
         )
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(self.client.delete(f"/api/core/deposit-rules/{rule_id}", **self.auth).status_code, 200)

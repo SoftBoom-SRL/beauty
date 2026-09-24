@@ -10,7 +10,7 @@ from django.db import connection
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..models import OutboxEvent, Salon, SalonSettings
 from ..services import emit_event
@@ -247,11 +247,11 @@ class OutboxStatusApiTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         owner = User.objects.create_user(email="owner2@theparlour.it", password="x" * 10)
         Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        self.auth = bearer(owner, self.salon)
         staff = User.objects.create_user(email="front2@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front", scopes=["agenda"])
         Membership.objects.create(user=staff, salon=self.salon, role=role)
-        self.staff_auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(staff, self.salon)['access']}"}
+        self.staff_auth = bearer(staff, self.salon)
 
     @override_settings(YOURANG_API_URL="")
     def test_without_delivery_url_the_queue_is_reported(self):

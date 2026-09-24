@@ -1,6 +1,5 @@
 """Comandi di gestione del core: create_salon e seed_demo."""
 
-import json
 import re
 from io import StringIO
 
@@ -10,6 +9,7 @@ from django.test import TestCase, override_settings
 
 from apps.accounts.models import Membership, User
 from apps.clients.models import Client
+from common.testing import post_json
 
 from ..management.commands.seed_demo import DEMO_OWNER_EMAIL, DEMO_SLUG, _teardown
 from ..models import Salon
@@ -29,11 +29,7 @@ def _create(slug="secondo", email="anna@x.it", **extra):
 
 class CreateSalonOwnerTests(TestCase):
     def _login(self, email, password="pw-lunga-123"):
-        resp = self.client.post(
-            "/api/auth/staff/login",
-            data=json.dumps({"email": email, "password": password}),
-            content_type="application/json",
-        )
+        resp = post_json(self.client, "/api/auth/staff/login", {"email": email, "password": password})
         self.assertEqual(resp.status_code, 200, resp.content)
         return resp.json()["salon"]["slug"]
 
