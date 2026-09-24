@@ -1,136 +1,15 @@
 // ProductDrawer.jsx — unified product card: create/edit form + movement log + quick load/unload.
 // Ported from the prototype's ProductDrawer (which superseded ProdEditModal); mock state →
 // POST/PUT /api/inventory/products, movements from GET /products/{id}/movements.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { fmtEur, Icon, toastApiError, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
 import { MOVE_META, STOCK_META, UNIT_OPTIONS, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
 import { productsApi } from '../../api/inventory.js';
-import { useClickAway } from '../../hooks/useClickAway.js';
-import { CAT_SWATCHES } from '../../ui/palette.js';
-
-/* category colour: fallback + pastel presets offered in the picker (CAT_SWATCHES) */
-const CAT_FALLBACK = '#E0E7FF';
-const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
-const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
-
-/* Compact colour control for the currently-selected category. Keeps a local
- * draft of the hex; commits to the parent via onCatColor only on blur / swatch
- * click / colour-picker close — never on every keystroke. Remount via `key`
- * (parent passes key={cat.id}) resets local state when the selection changes.
- * Il selettore nativo emette `onChange` a ogni movimento del cursore: salvare lì
- * voleva dire decine di PUT della categoria e altrettante ricariche di tutto il
- * magazzino, in parallelo, con la categoria che poteva restare su un colore
- * intermedio (15-12). Lì si aggiorna solo l'anteprima; la scrittura parte a mano
- * ferma (400 ms, come il colore operatrice in ctx), all'uscita dal campo o se la
- * scheda si chiude prima. */
-function CatColorControl({ cat, onCatColor, t }) {
-  const current = cat.color || CAT_FALLBACK;
-  const [hex, setHex] = useState(current);
-  const committed = useRef(current);
-  const pickTimer = useRef(null);
-  const pickPending = useRef(null);
-  const commit = (raw) => {
-    clearTimeout(pickTimer.current);
-    pickPending.current = null;
-    let v = String(raw == null ? hex : raw).trim();
-    if (v && v[0] !== '#') v = '#' + v;
-    if (!HEX_RE.test(v)) { setHex(current); return; }
-    setHex(v);
-    if (v.toLowerCase() !== committed.current.toLowerCase()) {
-      committed.current = v;
-      onCatColor(cat.id, v);
-    }
-  };
-  const pick = (v) => {
-    setHex(v);
-    pickPending.current = v;
-    clearTimeout(pickTimer.current);
-    pickTimer.current = setTimeout(() => commit(v), 400);
-  };
-  const commitRef = useRef(commit);
-  commitRef.current = commit;
-  useEffect(() => () => {
-    clearTimeout(pickTimer.current);
-    if (pickPending.current) commitRef.current(pickPending.current);
-  }, []);
-  const swatch = HEX6_RE.test(hex) ? hex : (HEX6_RE.test(current) ? current : CAT_FALLBACK);
-  return (
-    <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--hair)', borderRadius: 10, background: 'var(--surface-2)' }}>
-      <div className="t-meta" style={{ marginBottom: 8 }}>{t('Colore di', 'Colour of')} «{cat.name}»</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <input type="color" value={swatch} onChange={(e) => pick(e.target.value)} onBlur={() => { if (pickPending.current) commit(pickPending.current); }} title={t('Scegli colore', 'Pick colour')}
-          style={{ width: 38, height: 38, padding: 0, border: '1px solid var(--hair)', borderRadius: 9, background: 'var(--surface)', cursor: 'pointer' }} />
-        <input value={hex} onChange={(e) => setHex(e.target.value)} onBlur={(e) => commit(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(e.target.value); } }}
-          placeholder={CAT_FALLBACK} spellCheck={false} maxLength={7}
-          style={{ width: 100, border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13.5, fontFamily: 'var(--mono, ui-monospace, monospace)', padding: '9px 10px', background: 'var(--surface)', textTransform: 'uppercase' }} />
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {CAT_SWATCHES.map((p) => {
-            const on = p.toLowerCase() === hex.toLowerCase();
-            return (
-              <button key={p} onClick={() => commit(p)} title={p}
-                style={{ width: 22, height: 22, borderRadius: 99, cursor: 'pointer', background: p, border: '1px solid rgba(0,0,0,0.08)', boxShadow: on ? '0 0 0 2px var(--surface-2), 0 0 0 3px var(--ink)' : 'none' }} />
-            );
-          })}
-        </div>
-      </div>
-      <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 8 }}>{t('Vale per tutti i prodotti di questa categoria · usato anche altrove.', 'Applies to every product in this category · used elsewhere too.')}</div>
-    </div>
-  );
-}
-
-/* Searchable predictive supplier picker over the in-memory `suppliers` list.
- * Matches the platform's client search (dk-search input + results dropdown).
- * Filters client-side by name; click to select; selected shows a change/clear affordance. */
-function SupplierPicker({ suppliers, value, onChange, canWrite, t }) {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-  const boxRef = useRef(null);
-  const selected = suppliers.find((s) => s.id === value) || null;
-
-  // Esc con la tendina aperta chiude la tendina e basta: preventDefault()
-  // dice alla pila dei livelli (ui/layers.js) di non chiudere la scheda.
-  const close = useCallback(() => setOpen(false), []);
-  useClickAway(boxRef, open, close, { escape: true });
-
-  if (selected) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 12, background: 'var(--surface-2)', opacity: canWrite ? 1 : 0.7 }}>
-        <span style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--surface)', border: '1px solid var(--hair)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="box" size={15} color="var(--muted)" /></span>
-        <span style={{ flex: 1, fontWeight: 700, fontSize: 14, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.name}</span>
-        {canWrite && <button className="dk-iconbtn" style={{ width: 30, height: 30 }} onClick={() => { onChange(null); setQuery(''); setOpen(true); }} title={t('Cambia fornitore', 'Change supplier')}><Icon name="x" size={15} /></button>}
-      </div>
-    );
-  }
-
-  const ql = query.trim().toLowerCase();
-  const matches = ql ? suppliers.filter((s) => (s.name || '').toLowerCase().includes(ql)) : suppliers;
-
-  return (
-    <div ref={boxRef} style={{ position: 'relative' }}>
-      <div className="dk-search" style={{ width: '100%', height: 42 }}>
-        <Icon name="search" size={16} color="var(--muted-2)" />
-        <input value={query} disabled={!canWrite} onChange={(e) => { setQuery(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)}
-          placeholder={t('Cerca fornitore…', 'Search supplier…')} />
-        <button onClick={() => canWrite && setOpen((v) => !v)} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="chevD" size={15} color="var(--muted-2)" /></button>
-      </div>
-      {open && canWrite && (
-        <div className="dk-card scroll" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20, padding: 6, boxShadow: 'var(--sh-pop)', maxHeight: 220, overflowY: 'auto' }}>
-          {matches.map((s) => (
-            <button key={s.id} className="dk-row" onClick={() => { onChange(s.id); setOpen(false); setQuery(''); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px', borderRadius: 9, textAlign: 'left', cursor: 'pointer' }}>
-              <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</span>
-            </button>
-          ))}
-          {!matches.length && <div className="t-sm" style={{ color: 'var(--muted-2)', padding: 12, textAlign: 'center' }}>{t('Nessun fornitore', 'No supplier found')}</div>}
-        </div>
-      )}
-    </div>
-  );
-}
+import CatColorControl, { CAT_FALLBACK } from './CatColorControl.jsx';
+import SupplierPicker from './SupplierPicker.jsx';
 
 export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose, onSaved, onDeleted, onAdj, onCatColor, onCreated }) {
   const { t, lang, fireToast } = useDash();
