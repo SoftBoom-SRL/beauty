@@ -110,6 +110,18 @@ export function AppProvider({ children }) {
     setViewParams(params);
   }, []);
 
+  /* ---- uscita (Utility e Profilo) ----
+   * Prima la home, poi il logout, poi il toast. Uscendo DA una schermata
+   * personale il gate la riconosceva subito come vietata e rilanciava la
+   * schermata d'accesso a tutto schermo, insieme al toast «Sei uscita», con la
+   * ripresa sulla schermata appena lasciata (16-09). Chiamata dal tocco su
+   * «Esci», React applica i due aggiornamenti insieme e il gate non scatta. */
+  const logout = useCallback(() => {
+    setView('home');
+    clientAuth.logout();
+    fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' });
+  }, [setView, fireToast, t]);
+
   const ctx = {
     t, lang, setLang: setLangChosen,
     brand, reloadBrand: loadBrand, brandError,
@@ -117,6 +129,7 @@ export function AppProvider({ children }) {
     authOpen, openAuth, closeAuth,
     fireToast, toastProps,
     view, setView, viewParams,
+    logout,
   };
 
   return <AppCtx.Provider value={ctx}>{children}</AppCtx.Provider>;

@@ -1,7 +1,7 @@
 // Profilo.jsx — identity + contacts (GET/PUT /api/auth/client/me), language
 // toggle, WhatsApp reminders toggle, waitlist summary, loyalty snapshot, logout.
 import React from 'react';
-import { Icon, Toggle, clientAuth } from '@youty/shared';
+import { Icon, Toggle } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
@@ -10,7 +10,7 @@ import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 
 export default function Profilo() {
-  const { t, lang, setLang, brand, client, setView, fireToast } = useApp();
+  const { t, lang, setLang, brand, client, setView, fireToast, logout } = useApp();
   const { data: me, setData: setMe } = useApiData(getMe, [], { onError: (e) => errToast(e, fireToast, t) });
   // Richieste attive in lista d'attesa e punti fedeltà sono un di più: se non
   // arrivano si legge 0, senza toast. Il conto si fa appena arriva la risposta.
@@ -155,11 +155,9 @@ export default function Profilo() {
           )}
         </div>
 
-        {/* Prima la home, poi il logout, come in Utility.jsx: uscendo da qui,
-          * schermata personale, il gate la vedeva vietata e riapriva subito
-          * l'accesso a tutto schermo, con la ripresa sul Profilo (16-09). */}
+        {/* uscita: prima la home, poi il logout (vedi logout in ctx.jsx, 16-09) */}
         <button className="press"
-          onClick={() => { setView('home'); clientAuth.logout(); fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' }); }}
+          onClick={() => logout()}
           style={{ width: '100%', textAlign: 'center', padding: 13, borderRadius: 'var(--r-pill)', color: 'var(--muted)', fontWeight: 600, fontSize: 14 }}>
           {t('Esci', 'Log out')}
         </button>
