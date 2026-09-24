@@ -13,7 +13,7 @@ Nati sul proxy, portati sul flusso diretto al merge con main (24/09), dove il
 proxy è stato tolto (YR-502). In coda i test più vecchi dell'accesso: identità
 Yourang, unicità dell'org, disconnessione.
 
-    python manage.py test apps.integrations.tests_caccia22_collegamento
+    python manage.py test apps.integrations.tests.test_oauth
 """
 
 from datetime import timedelta

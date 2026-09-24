@@ -7,7 +7,7 @@ idoneo per ogni operatrice · 11-05/18-13 annullamento remoto dal dominio ·
 il salone aveva deciso · 11-16 consegne concorrenti · 11-17 prenotazioni senza
 telefono · 08-05 (lato sync) rubrica senza «since» di oggi.
 
-    python manage.py test apps.integrations.tests_caccia22_eventi
+    python manage.py test apps.integrations.tests.test_events
 """
 
 import datetime as dt

@@ -5,7 +5,7 @@ veloci; gli altri casi di 11-12 stanno in test_sync). Nato sul proxy, portato su
 flusso diretto al merge con main (24/09): token del salone sulla connessione,
 segreto del webhook per salone.
 
-    python manage.py test apps.integrations.tests_caccia22_webhook
+    python manage.py test apps.integrations.tests.test_webhook
 """
 
 import json

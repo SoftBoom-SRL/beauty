@@ -4,6 +4,10 @@ Solo ciò che serve a più di un modulo: la chiave di cifratura dei test, la fir
 dei webhook, le impostazioni del flusso diretto verso l'external API e il client
 httpx finto con i suoi aiuti. Niente classi con test: un modulo che le
 importasse le farebbe girare due volte.
+
+I test stanno nei moduli test_<argomento>.py accanto a questo; tutti insieme:
+
+    python manage.py test apps.integrations
 """
 
 import hashlib
