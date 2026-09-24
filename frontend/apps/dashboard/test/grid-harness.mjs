@@ -1,4 +1,5 @@
-// Banco di prova per i componenti della griglia d'agenda (DayGrid, WeekView)
+// Banco di prova per i componenti dell'agenda (le griglie DayGrid e WeekView,
+// la sezione, il pannello di dettaglio, il drawer «Nuova prenotazione»)
 // senza browser. esbuild compila il componente VERO con un React finto — gli
 // hook girano in modo sincrono, gli effetti subito dopo il render — e un DOM
 // minimo fatto di rettangoli. Si chiamano gli stessi gestori che chiamerebbe

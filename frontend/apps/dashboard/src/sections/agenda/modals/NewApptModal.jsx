@@ -6,7 +6,7 @@
 // servizio, orario: se l'orario richiesto non è disponibile, spiega PERCHÉ e
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { toastApiError, Icon, Toggle, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
+import { toastApiError, Icon, Toggle, addDays, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
@@ -156,7 +156,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const ready = canWrite && !missing.length && !saving;
 
   const dateLabel = relativeDateLabel(date, lang, t);
-  const shiftDate = (n) => { const d = parseISO(date); d.setDate(d.getDate() + n); const iso = toDateStr(d); if (iso >= todayStr()) { setDate(iso); choose(null, null, false); } };
+  const shiftDate = (n) => { const iso = toDateStr(addDays(date, n)); if (iso >= todayStr()) { setDate(iso); choose(null, null, false); } };
 
   /* «Copia link caparra» dall'avviso: si conferma solo a copia riuscita, e
    * l'avviso nuovo parte dopo che quello cliccato si è chiuso (13-25). */

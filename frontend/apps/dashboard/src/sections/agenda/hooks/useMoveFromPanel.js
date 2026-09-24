@@ -4,7 +4,7 @@
 // spostamento si rilegge la visita; al 409 si forza, come in griglia; il suo
 // «Annulla» passa dal «torna indietro» del server.
 import { useEffect, useState } from 'react';
-import { ApiError, toastApiError, minutesOfDay, toDateStr, parseISO } from '@youty/shared';
+import { ApiError, toastApiError, addDays, minutesOfDay, toDateStr } from '@youty/shared';
 import { isoAtMin } from '../lib.js';
 import { movedMeanwhile } from '../modals/rules.js';
 import { withForceRetry } from '../lib/retry.js';
@@ -35,11 +35,7 @@ export function useMoveFromPanel({ appt, apptRef, alive, adopt, fetchFresh, relo
     setViewDate(iso);
     onShowDate?.(iso);     // l'agenda accanto si sposta su quel giorno
   };
-  const shiftViewDate = (days) => {
-    const d = parseISO(viewDate);
-    d.setDate(d.getDate() + days);
-    showDate(toDateStr(d));
-  };
+  const shiftViewDate = (days) => showDate(toDateStr(addDays(viewDate, days)));
 
   /* Spostamento dal pannello. Orario, giorno e operatrice di destinazione sono
    * calcolati su quello che si vede, quindi prima di mandarli si rilegge la

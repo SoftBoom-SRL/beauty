@@ -2,7 +2,7 @@
 // calendario, senza fuso: vedi packages/shared/src/format.js).
 // Logica pura: la caricano anche i test con `node --test`.
 import {
-  MONTHS_LONG_EN, MONTHS_LONG_IT, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, parseISO, timeLabel, toDateStr, todayStr,
+  MONTHS_LONG_EN, MONTHS_LONG_IT, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, addDays, parseISO, timeLabel, toDateStr, todayStr,
 } from '@youty/shared';
 
 /* Nomi dei mesi (0 = gennaio) e dei giorni (0 = lunedì, come l'API) con i
@@ -55,11 +55,7 @@ export function addMonths(dateStr, n) {
  *  in vista giorno, una settimana in vista settimana, un mese (dal primo) nel
  *  mese. */
 export function shiftAnchor(view, date, dir) {
-  if (view === 'day' || view === 'week') {
-    const d = parseISO(date);
-    d.setDate(d.getDate() + dir * (view === 'week' ? 7 : 1));
-    return toDateStr(d);
-  }
+  if (view === 'day' || view === 'week') return toDateStr(addDays(date, dir * (view === 'week' ? 7 : 1)));
   return addMonths(date, dir);
 }
 
