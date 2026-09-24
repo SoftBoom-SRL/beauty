@@ -44,7 +44,11 @@ export default function TimeStep({
             <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--ok)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="check" size={16} color="#fff" stroke={2.6} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14 }} className="tabnum">{timeLabel(req.startMin)}–{timeLabel(req.startMin + totalDur)}{reqOp ? ' · ' + reqOp.first_name : ''}</div>
-              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600 }}>{t('Disponibile', 'Available')}{selStart ? ' · ' + t('selezionato', 'selected') : ''}</div>
+              {/* «selezionato» solo se l'orario scelto è proprio quello chiesto,
+                  come nel pannello ambra: scelto un altro orario da «Altri
+                  orari», qui restava «10:00–10:30 · Disponibile · selezionato»
+                  e la prenotazione partiva alle 10:30. */}
+              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600 }}>{t('Disponibile', 'Available')}{selStart && minutesOfDay(selStart) === req.startMin ? ' · ' + t('selezionato', 'selected') : ''}</div>
             </div>
             <button type="button" onClick={() => setShowAll((v) => !v)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>{showAll ? t('Nascondi altri', 'Hide others') : t('Altri orari', 'Other times')}</button>
           </div>
