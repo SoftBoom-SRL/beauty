@@ -23,8 +23,12 @@ export {
   salonDateParts, salonTzOpts, fmtTime, toDateTimeLocal, dateTimeLocalToIso,
 } from './format.js';
 
-// Etichette bilingui (logica pura): nameIn(servizio, lang) → name_en o name_it.
-export { nameIn } from './labels.js';
+// Etichette bilingui (logica pura): nameIn(servizio, lang) → name_en o name_it;
+// nomi di mesi (0 = gennaio) e giorni (0 = lunedì, come l'API).
+export {
+  nameIn,
+  MONTHS_LONG_IT, MONTHS_LONG_EN, MONTHS_SHORT_IT, MONTHS_SHORT_EN, WEEKDAYS_SHORT_IT, WEEKDAYS_SHORT_EN,
+} from './labels.js';
 
 // Telefoni: elenco prefissi + conversioni da/verso E.164 (logica pura).
 export {
