@@ -2,10 +2,11 @@
 // Port of prototype DkStaff grid; data = ctx operators (GET /api/staff/ → OperatorStatusOut).
 // Sotto, a richiesta, le operatrici disattivate (GET /api/staff/?include_inactive=true, C8).
 import { useCallback, useEffect, useState } from 'react';
-import { api, Avatar, Icon } from '@youty/shared';
+import { Avatar, Icon } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { HIDDEN, todayStatus, opName, eur } from './lib.js';
 import NewOperatorModal from './NewOperatorModal.jsx';
+import { staffApi } from '../../api/staff.js';
 
 export default function StaffGrid({ onOpen }) {
   const { t, lang, operators, reload, showRevenue, hasScope, opColors } = useDash();
@@ -21,7 +22,7 @@ export default function StaffGrid({ onOpen }) {
    * collegata allo stesso utente falliva (09-05, 15-05). */
   const [showInactive, setShowInactive] = useState(false);
   const [inactive, setInactive] = useState(null);
-  const loadInactive = useCallback(() => api.get('/api/staff/', { params: { include_inactive: true } })
+  const loadInactive = useCallback(() => staffApi.list({ include_inactive: true })
     .then((list) => setInactive((list || []).filter((o) => o.active === false)))
     .catch(() => setInactive((l) => l || [])), []);
   useEffect(() => { if (showInactive) loadInactive(); }, [showInactive, loadInactive]);

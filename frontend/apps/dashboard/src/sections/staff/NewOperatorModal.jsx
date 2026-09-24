@@ -1,10 +1,11 @@
 // NewOperatorModal — create operator form (POST /api/staff/). Rendered locally
 // by the staff section (not in the shell modal registry).
 import React, { useState } from 'react';
-import { api, Icon, NumInput, toastApiError } from '@youty/shared';
+import { Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { GD_PALETTE, inputCss, svcLabel } from './lib.js';
+import { staffApi } from '../../api/staff.js';
 
 export default function NewOperatorModal({ onClose, onCreated }) {
   const { t, lang, services, locations, operators, reload, fireToast, opPalette } = useDash();
@@ -22,7 +23,7 @@ export default function NewOperatorModal({ onClose, onCreated }) {
     if (!valid || saving) return;
     setSaving(true);
     try {
-      const created = await api.post('/api/staff/', {
+      const created = await staffApi.create({
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         color: form.color,

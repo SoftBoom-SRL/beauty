@@ -3,7 +3,7 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Avatar, Icon, NumInput, nameIn, salonTzOpts, toastApiError, apiErrorText } from '@youty/shared';
+import { Avatar, Icon, NumInput, nameIn, salonTzOpts, toastApiError, apiErrorText } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import { rebaseDraft } from '../../ui/rebase.js';
 import { useDash, useLive } from '../../ctx.jsx';
@@ -14,6 +14,8 @@ import {
 } from './lib.js';
 import ShiftPattern from './ShiftPattern.jsx';
 import AbsenceCalendar from './AbsenceCalendar.jsx';
+import { absencesApi, staffApi } from '../../api/staff.js';
+import { servicesApi } from '../../api/catalog.js';
 
 export default function StaffPage({ id, onBack }) {
   const { t, lang, services, serviceCategories, locations, reload, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
@@ -50,9 +52,9 @@ export default function StaffPage({ id, onBack }) {
     let alive = true;
     setDetail(null); setForm(null); setPerf(null); setAbsences(null);
     Promise.all([
-      api.get(`/api/staff/${id}`),
-      api.get(`/api/staff/${id}/performance`, { params: { months: 6 } }),
-      api.get(`/api/staff/${id}/absences`),
+      staffApi.get(id),
+      staffApi.performance(id, { months: 6 }),
+      absencesApi.list(id),
     ]).then(([d, p, a]) => {
       if (!alive) return;
       applyDetail(d); setPerf(p); setAbsences(a);
@@ -65,7 +67,7 @@ export default function StaffPage({ id, onBack }) {
   useEffect(() => {
     clearTimeout(qTimer.current);
     qTimer.current = setTimeout(() => {
-      api.get(`/api/staff/${id}/clients`, { params: { q: clientQ || undefined } })
+      staffApi.clients(id, { q: clientQ || undefined })
         .then(setClients)
         .catch(() => setClients([]));
     }, clientQ ? 300 : 0);
@@ -73,7 +75,7 @@ export default function StaffPage({ id, onBack }) {
   }, [id, clientQ]);
 
   const reloadAbsences = useCallback(
-    () => api.get(`/api/staff/${id}/absences`).then(setAbsences),
+    () => absencesApi.list(id).then(setAbsences),
     [id],
   );
 
@@ -120,11 +122,11 @@ export default function StaffPage({ id, onBack }) {
       const cycleChanged = doShifts && weeks.length !== detail.cycle_weeks;
       if (doBasics || cycleChanged) {
         const body = { ...changes, ...(cycleChanged ? { cycle_weeks: weeks.length } : {}) };
-        const updated = await api.put(`/api/staff/${id}`, body);
+        const updated = await staffApi.update(id, body);
         setDetail((d) => ({ ...d, ...updated }));
       }
       if (doShifts) {
-        const saved = await api.put(`/api/staff/${id}/shifts`, { shifts: rows });
+        const saved = await staffApi.updateShifts(id, { shifts: rows });
         setDetail((d) => ({ ...d, cycle_weeks: weeks.length, shifts: saved }));
         setWeeks(weeksFromShifts(saved, weeks.length));
       }
@@ -153,7 +155,7 @@ export default function StaffPage({ id, onBack }) {
   const refreshDetail = async () => {
     if (savingRef.current) { pendingRefresh.current = true; return; }
     let fresh;
-    try { fresh = await api.get(`/api/staff/${id}`); } catch { return; }
+    try { fresh = await staffApi.get(id); } catch { return; }
     const { detail: old, form: curForm, weeks: curWeeks } = live.current;
     if (!old || !curForm) return;
     const merged = rebaseDraft(curForm, formFromDetail(old), formFromDetail(fresh), sameOperatorField);
@@ -355,7 +357,7 @@ export default function StaffPage({ id, onBack }) {
                 const addTo = (ids) => [...new Set([...(ids || []), svc.id])];
                 setForm((f) => ({ ...f, service_ids: addTo(f.service_ids) }));
                 try {
-                  const updated = await api.put(`/api/staff/${id}`, { service_ids: addTo(live.current.detail?.service_ids) });
+                  const updated = await staffApi.update(id, { service_ids: addTo(live.current.detail?.service_ids) });
                   setDetail((d) => ({ ...d, ...updated }));
                   reload.operators().catch(() => {});
                   return 'enabled';
@@ -584,7 +586,7 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
     if (!draft.category_id) { setErr(t('Scegli una categoria', 'Pick a category')); return; }
     setSaving(true); setErr('');
     try {
-      const svc = await api.post('/api/catalog/services', {
+      const svc = await servicesApi.create({
         category_id: draft.category_id, name_it: name, name_en: '',
         duration_min: Math.max(5, parseInt(draft.duration_min, 10) || 45),
         price: Number(draft.price || 0).toFixed(2), active: true, order: 0,
