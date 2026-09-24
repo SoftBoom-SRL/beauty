@@ -584,12 +584,31 @@ class MidnightPauseTests(AgendaTestBase):
         self.assertIn(9, starts)      # appena finita, si riparte
 
 
+def _next_spring_forward(today):
+    """Il primo giorno dopo `today` in cui gli orologi del salone vanno avanti.
+
+    In Italia è l'ultima domenica di marzo (alle 02:00 si salta alle 03:00); lo
+    dice il database dei fusi, così il test regge anche se la regola cambia.
+    """
+    tz = timezone.get_current_timezone()
+    for ahead in range(1, 400):
+        day = today + dt.timedelta(days=ahead)
+        midnight = dt.datetime.combine(day, dt.time(0), tzinfo=tz)
+        evening = dt.datetime.combine(day, dt.time(23, 59), tzinfo=tz)
+        if evening.utcoffset() > midnight.utcoffset():
+            return day
+    return None
+
+
 class DaylightSavingTests(AgendaTestBase):
     """L'ora che non esiste non si prenota."""
 
     def test_the_hour_skipped_by_dst_is_never_offered(self):
-        # Ultima domenica di marzo 2027: alle 02:00 gli orologi saltano alle 03:00.
-        day = dt.date(2027, 3, 28)
+        # La prossima notte in cui alle 02:00 gli orologi saltano alle 03:00. Con
+        # il giorno fisso (28/03/2027) il test falliva dal mattino stesso, quando
+        # gli orari della notte erano già passati, e poi per sempre.
+        day = _next_spring_forward(timezone.localdate())
+        self.assertIsNotNone(day, "nel fuso del salone l'ora non cambia più: il test va ripensato")
         with self._windows({self.op1.id: [(0, 6 * 60)]}):
             slots = get_free_slots(
                 self.salon, day,
