@@ -8,7 +8,6 @@ del login per mostrare listino e pacchetti del salone (solo elementi attivi).
 from typing import Optional
 
 from django.db import transaction
-from django.db.models import Prefetch
 from django.db.models.deletion import ProtectedError
 from ninja import Router
 from ninja.errors import HttpError
@@ -21,7 +20,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 from common.validation import MAX_POSITIVE_INT, validate_category_in
 
-from .models import Package, PackageItem, Service, ServiceCategory
+from .models import Package, Service, ServiceCategory
 from .schemas import (
     CategoryIn,
     CategoryOut,
@@ -32,6 +31,13 @@ from .schemas import (
     ReorderIn,
     ServiceIn,
     ServiceOut,
+)
+from .services import (
+    package_out,
+    public_package_list,
+    public_price_list,
+    set_category_order,
+    sync_package_items,
 )
 
 router = Router(tags=["catalog"])
@@ -121,17 +127,7 @@ def delete_category(request, category_id: int):
 def reorder_categories(request, data: ReorderIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
-    categories = {
-        c.id: c
-        for c in ServiceCategory.objects.filter(salon=ctx.salon, id__in=data.ids)
-    }
-    for order, cat_id in enumerate(data.ids):
-        category = categories.get(cat_id)
-        if category is None:
-            continue
-        if category.order != order:
-            category.order = order
-            category.save(update_fields=["order"])
+    set_category_order(ctx.salon, data.ids)
     log_activity(
         ctx.salon,
         "category.reordered",
@@ -226,36 +222,11 @@ def delete_service(request, service_id: int):
 # ---- Pacchetti ------------------------------------------------------------------
 
 
-def _package_out(package: Package) -> dict:
-    return {
-        "id": package.id,
-        "name": package.name,
-        "description": package.description,
-        "price": package.price,
-        "active": package.active,
-        "items": list(package.items.all()),
-    }
-
-
-def _sync_package_items(ctx, package: Package, items: list[dict]) -> None:
-    """Ricrea integralmente gli items del pacchetto (spec: ricreati a ogni update).
-
-    Prima si risolvono TUTTI i servizi (404 se uno non è del salone), poi si
-    cancella e ricrea: un id sbagliato non deve lasciare il pacchetto senza righe.
-    """
-    resolved = [
-        (salon_get(Service, ctx, item["service_id"]), item.get("qty", 1)) for item in items
-    ]
-    package.items.all().delete()
-    for service, qty in resolved:
-        PackageItem.objects.create(package=package, service=service, qty=qty)
-
-
 @router.get("/packages", auth=staff_auth, response=list[PackageOut])
 def list_packages(request):
     ctx = request.auth
     qs = Package.objects.filter(salon=ctx.salon).prefetch_related("items")
-    return [_package_out(p) for p in qs]
+    return [package_out(p) for p in qs]
 
 
 @router.post("/packages", auth=staff_auth, response=PackageOut)
@@ -266,7 +237,7 @@ def create_package(request, data: PackageIn):
     payload = data.dict()
     items = payload.pop("items") or []
     package = Package.objects.create(salon=ctx.salon, **payload)
-    _sync_package_items(ctx, package, items)
+    sync_package_items(ctx, package, items)
     log_activity(
         ctx.salon,
         "package.created",
@@ -274,7 +245,7 @@ def create_package(request, data: PackageIn):
         actor=ctx.user,
         payload={"package_id": package.id},
     )
-    return _package_out(package)
+    return package_out(package)
 
 
 @router.put("/packages/{int:package_id}", auth=staff_auth, response=PackageOut)
@@ -291,7 +262,7 @@ def update_package(request, package_id: int, data: PackageIn):
     # un PUT che cambiava solo nome o prezzo cancellava i servizi del pacchetto,
     # e il pacchetto continuava a essere venduto senza contenere più nulla.
     if items is not None:
-        _sync_package_items(ctx, package, items)
+        sync_package_items(ctx, package, items)
     for name, value in payload.items():
         setattr(package, name, value)
     # Come per i servizi: il save() completo riportava indietro il
@@ -304,7 +275,7 @@ def update_package(request, package_id: int, data: PackageIn):
         actor=ctx.user,
         payload={"package_id": package.id},
     )
-    return _package_out(package)
+    return package_out(package)
 
 
 @router.delete("/packages/{int:package_id}", auth=staff_auth, response=OkOut)
@@ -334,22 +305,7 @@ def public_services(request, salon: str):
     ratelimit.enforce_public(
         request, s, "services", PUBLIC_CATALOG_MAX_PER_WINDOW, PUBLIC_CATALOG_WINDOW_SECONDS
     )
-    categories = ServiceCategory.objects.filter(salon=s).order_by("order", "id").prefetch_related(
-        Prefetch(
-            "services",
-            queryset=Service.objects.filter(active=True).order_by("order", "id"),
-        )
-    )
-    return [
-        {
-            "id": c.id,
-            "name_it": c.name_it,
-            "name_en": c.name_en,
-            "color": c.color,
-            "services": list(c.services.all()),
-        }
-        for c in categories
-    ]
+    return public_price_list(s)
 
 
 @router.get("/public/packages", response=list[PublicPackageOut])
@@ -359,23 +315,4 @@ def public_packages(request, salon: str):
     ratelimit.enforce_public(
         request, s, "packages", PUBLIC_CATALOG_MAX_PER_WINDOW, PUBLIC_CATALOG_WINDOW_SECONDS
     )
-    packages = Package.objects.filter(salon=s, active=True).prefetch_related("items__service")
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "description": p.description,
-            "price": p.price,
-            "items": [
-                {
-                    "service_id": item.service_id,
-                    "name_it": item.service.name_it,
-                    "name_en": item.service.name_en,
-                    "soak_min": item.service.soak_min,
-                    "qty": item.qty,
-                }
-                for item in p.items.all()
-            ],
-        }
-        for p in packages
-    ]
+    return public_package_list(s)
