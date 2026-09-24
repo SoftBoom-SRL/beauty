@@ -23,7 +23,7 @@ from ..api import (
     update_service,
 )
 from ..models import Package, PackageItem, Service, ServiceCategory
-from ..schemas import CategoryIn, PackageIn, PackageItemIn, ServiceIn
+from ..schemas import PackageIn, PackageItemIn, ServiceCategoryIn, ServiceIn
 from .base import CatalogTestCase, _CatalogSetup
 
 
@@ -174,7 +174,7 @@ class PackageUpdateAtomicityTests(CatalogTestCase):
     def test_failed_update_keeps_items_and_price(self):
         from django.http import Http404
 
-        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
         service = create_service(
             self.request,
             ServiceIn(category_id=category.id, name_it="Manicure", duration_min=30, price=Decimal("20")),
@@ -207,7 +207,7 @@ class PackageUpdateAtomicityTests(CatalogTestCase):
 
 class ServiceDescriptionTests(CatalogTestCase):
     def test_description_is_stored_and_public(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
         create_service(
             self.request,
             ServiceIn(category_id=category.id, name_it="Manicure", description_it="Cura completa di mani e unghie",

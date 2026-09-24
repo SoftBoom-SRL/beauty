@@ -16,13 +16,13 @@ from apps.core.models import DepositRule
 from apps.core.services import log_activity
 
 from .models import Client, ClientCategory
-from .schemas import CategoryIn
+from .schemas import ClientCategoryIn
 
 DUPLICATE_LABEL = "Esiste già un'etichetta con questo nome"
 
 
-def label_payload(ctx, data: CategoryIn, *, exclude_id: Optional[int] = None) -> dict:
-    """CategoryIn ripulito, con il nome unico nel salone senza badare alle maiuscole.
+def label_payload(ctx, data: ClientCategoryIn, *, exclude_id: Optional[int] = None) -> dict:
+    """ClientCategoryIn ripulito, con il nome unico nel salone senza badare alle maiuscole.
 
     Un nome già usato (o il doppio clic su «Salva») arrivava al vincolo del
     database e usciva come 500 (06-12). E «VIP» accanto a «vip» sono due

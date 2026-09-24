@@ -9,17 +9,34 @@ from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent, Salon
 from common.testing import staff_context
+from config.api import api
 
 from ..api import create_category, delete_category, update_category
 from ..models import Client, ClientCategory
-from ..schemas import CategoryIn
+from ..schemas import ClientCategoryIn
 from .base import ClientsTestCase
 
 
 class CategoryTests(ClientsTestCase):
     def test_create_category(self):
-        category = create_category(self.request, CategoryIn(name="VIP"))
+        category = create_category(self.request, ClientCategoryIn(name="VIP"))
         self.assertTrue(ClientCategory.objects.filter(id=category.id).exists())
+
+
+class LabelOpenApiTests(TestCase):
+    """Bug sospetti del 24/09, voce 24: django-ninja dà ai componenti OpenAPI il
+    nome della classe, e le `ClientCategoryIn`/`ClientCategoryOut` di etichette cliente,
+    listino e magazzino si sovrascrivevano: ne restava una sola, quella del
+    magazzino. Le etichette risultavano documentate senza il limite del nome
+    né il formato del colore."""
+
+    def test_the_labels_are_documented_with_their_own_schema(self):
+        schema = api.get_openapi_schema()
+        post = schema["paths"]["/api/clients/categories"]["post"]
+        body = post["requestBody"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        fields = schema["components"]["schemas"][body]["properties"]
+        self.assertEqual(fields["name"]["maxLength"], 60)
+        self.assertEqual(fields["color"]["pattern"], "^#[0-9A-Fa-f]{6}$")
 
 
 # ---------------------------------------------------------------------------
@@ -58,17 +75,17 @@ class RenameLabelTests(_Base):
     def test_renaming_keeps_the_deposit_rule_working(self):
         from apps.agenda.services.deposits import compute_deposit
 
-        label = create_category(self.request, CategoryIn(name="Da seguire"))
+        label = create_category(self.request, ClientCategoryIn(name="Da seguire"))
         self.client_obj.categories.add(label)
         rule = self.deposit_rule(_label_rule("Da seguire"))
         self.assertEqual(compute_deposit(self.salon, self.client_obj, Decimal("100")), Decimal("20.00"))
-        update_category(self.request, label.id, CategoryIn(name="Da seguire!", color=label.color))
+        update_category(self.request, label.id, ClientCategoryIn(name="Da seguire!", color=label.color))
         rule.refresh_from_db()
         self.assertEqual(rule.conditions["rules"][0]["value"], "Da seguire!")
         self.assertEqual(compute_deposit(self.salon, self.client_obj, Decimal("100")), Decimal("20.00"))
 
     def test_renaming_rewrites_the_automations_and_tells_yourang(self):
-        label = create_category(self.request, CategoryIn(name="VIP"))
+        label = create_category(self.request, ClientCategoryIn(name="VIP"))
         automation = self.automation(
             {"op": "or", "rules": [
                 {"field": "categories", "cmp": "contains", "value": "vip"},
@@ -76,7 +93,7 @@ class RenameLabelTests(_Base):
             ]}
         )
         other = self.automation(_label_rule("Nuova"), name="Benvenuto")
-        update_category(self.request, label.id, CategoryIn(name="Clienti VIP"))
+        update_category(self.request, label.id, ClientCategoryIn(name="Clienti VIP"))
         automation.refresh_from_db()
         other.refresh_from_db()
         self.assertEqual(
@@ -93,18 +110,18 @@ class RenameLabelTests(_Base):
         self.assertEqual(sent[0].payload["conditions"]["rules"][0]["value"], "Clienti VIP")
 
     def test_a_case_only_rename_is_rewritten_too(self):
-        label = create_category(self.request, CategoryIn(name="vip"))
+        label = create_category(self.request, ClientCategoryIn(name="vip"))
         rule = self.deposit_rule(_label_rule("vip"))
-        update_category(self.request, label.id, CategoryIn(name="VIP"))
+        update_category(self.request, label.id, ClientCategoryIn(name="VIP"))
         rule.refresh_from_db()
         self.assertEqual(rule.conditions["rules"][0]["value"], "VIP")
 
     def test_changing_only_the_colour_touches_no_rule(self):
-        label = create_category(self.request, CategoryIn(name="VIP"))
+        label = create_category(self.request, ClientCategoryIn(name="VIP"))
         rule = self.deposit_rule(_label_rule("VIP"))
         before = rule.updated_at
         self.automation(_label_rule("VIP"))
-        update_category(self.request, label.id, CategoryIn(name="VIP", color="#FF0000"))
+        update_category(self.request, label.id, ClientCategoryIn(name="VIP", color="#FF0000"))
         rule.refresh_from_db()
         self.assertEqual(rule.updated_at, before)
         self.assertFalse(OutboxEvent.objects.filter(event_type="automation.updated").exists())
@@ -112,40 +129,40 @@ class RenameLabelTests(_Base):
 
 class DuplicateLabelTests(_Base):
     def test_a_name_already_used_is_a_400(self):
-        create_category(self.request, CategoryIn(name="VIP"))
+        create_category(self.request, ClientCategoryIn(name="VIP"))
         for name in ("VIP", "vip", " VIP "):
             with self.subTest(name=name), self.assertRaises(HttpError) as caught:
-                create_category(self.request, CategoryIn(name=name))
+                create_category(self.request, ClientCategoryIn(name=name))
             self.assertEqual(caught.exception.status_code, 400)
         self.assertEqual(ClientCategory.objects.filter(salon=self.salon).count(), 1)
 
     def test_renaming_onto_another_label_is_a_400(self):
-        create_category(self.request, CategoryIn(name="VIP"))
-        other = create_category(self.request, CategoryIn(name="Nuova"))
+        create_category(self.request, ClientCategoryIn(name="VIP"))
+        other = create_category(self.request, ClientCategoryIn(name="Nuova"))
         with self.assertRaises(HttpError) as caught:
-            update_category(self.request, other.id, CategoryIn(name="Vip"))
+            update_category(self.request, other.id, ClientCategoryIn(name="Vip"))
         self.assertEqual(caught.exception.status_code, 400)
         other.refresh_from_db()
         self.assertEqual(other.name, "Nuova")
 
     def test_a_double_click_racing_the_check_is_a_400_not_a_500(self):
-        create_category(self.request, CategoryIn(name="VIP"))
+        create_category(self.request, ClientCategoryIn(name="VIP"))
         with patch("apps.clients.labels.ClientCategory.objects.filter") as filtered:
             filtered.return_value.exists.return_value = False
             with self.assertRaises(HttpError) as caught:
-                create_category(self.request, CategoryIn(name="VIP"))
+                create_category(self.request, ClientCategoryIn(name="VIP"))
         filtered.assert_called_once()
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_an_empty_name_is_refused(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="   "))
+            create_category(self.request, ClientCategoryIn(name="   "))
         self.assertEqual(caught.exception.status_code, 400)
 
 
 class DeleteLabelTests(_Base):
     def test_a_label_cited_by_a_rule_is_not_deleted_in_silence(self):
-        label = create_category(self.request, CategoryIn(name="A rischio"))
+        label = create_category(self.request, ClientCategoryIn(name="A rischio"))
         self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")
         self.automation(_label_rule("a rischio"), name="Richiamo")
         with self.assertRaises(HttpError) as caught:
@@ -156,7 +173,7 @@ class DeleteLabelTests(_Base):
         self.assertTrue(ClientCategory.objects.filter(id=label.id).exists())
 
     def test_a_label_nobody_cites_is_deleted(self):
-        label = create_category(self.request, CategoryIn(name="Nuova"))
+        label = create_category(self.request, ClientCategoryIn(name="Nuova"))
         self.deposit_rule(_label_rule("VIP"))
         delete_category(self.request, label.id)
         self.assertFalse(ClientCategory.objects.filter(id=label.id).exists())

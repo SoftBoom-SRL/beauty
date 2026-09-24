@@ -43,13 +43,18 @@ class SupplierOut(Schema):
 # ---- Categorie ---------------------------------------------------------------
 
 
-class CategoryIn(Schema):
+# Il prefisso dell'app serve: django-ninja chiama i componenti OpenAPI con il
+# nome della classe, e le `CategoryIn`/`CategoryOut` di magazzino, listino ed
+# etichette si sovrascrivevano. Ne restava una sola, quella del magazzino, e
+# le altre due risultavano documentate con i suoi campi (voce 24 dei bug
+# sospetti del 24/09).
+class ProductCategoryIn(Schema):
     name: str
     order: int = 0
     color: Optional[str] = None
 
 
-class CategoryOut(Schema):
+class ProductCategoryOut(Schema):
     id: int
     name: str
     order: int

@@ -10,7 +10,12 @@ from common.validation import MAX_POSITIVE_INT
 # ---- Categorie --------------------------------------------------------------
 
 
-class CategoryOut(Schema):
+# Il prefisso dell'app serve: django-ninja chiama i componenti OpenAPI con il
+# nome della classe, e le `CategoryIn`/`CategoryOut` di listino, etichette e
+# magazzino si sovrascrivevano. Ne restava una sola, e il listino risultava
+# documentato con `name` invece di `name_it` e `name_en` (voce 24 dei bug
+# sospetti del 24/09).
+class ServiceCategoryOut(Schema):
     id: int
     name_it: str
     name_en: str
@@ -18,7 +23,7 @@ class CategoryOut(Schema):
     order: int
 
 
-class CategoryIn(Schema):
+class ServiceCategoryIn(Schema):
     name_it: str
     name_en: str = ""
     # Assente = «non toccare il colore». Con il default a "#E0E7FF" bastava

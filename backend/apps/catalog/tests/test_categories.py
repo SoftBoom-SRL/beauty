@@ -10,18 +10,19 @@ from ninja.errors import HttpError
 
 from apps.core.models import Salon
 from common.testing import bearer
+from config.api import api
 
 from ..api import create_category, reorder_categories, update_category
 from ..models import ServiceCategory
-from ..schemas import CategoryIn, ReorderIn
+from ..schemas import ReorderIn, ServiceCategoryIn
 from .base import CatalogTestCase
 
 
 class ReorderCategoriesTests(CatalogTestCase):
     def test_reorder_updates_order_field(self):
-        c1 = create_category(self.request, CategoryIn(name_it="Unghie"))
-        c2 = create_category(self.request, CategoryIn(name_it="Capelli"))
-        c3 = create_category(self.request, CategoryIn(name_it="Viso"))
+        c1 = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
+        c2 = create_category(self.request, ServiceCategoryIn(name_it="Capelli"))
+        c3 = create_category(self.request, ServiceCategoryIn(name_it="Viso"))
         self.assertEqual([c1.order, c2.order, c3.order], [0, 0, 0])
 
         reorder_categories(self.request, ReorderIn(ids=[c3.id, c1.id, c2.id]))
@@ -34,7 +35,7 @@ class ReorderCategoriesTests(CatalogTestCase):
         self.assertEqual(c2.order, 2)
 
     def test_reorder_ignores_unknown_ids(self):
-        c1 = create_category(self.request, CategoryIn(name_it="Unghie"))
+        c1 = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
         result = list(reorder_categories(self.request, ReorderIn(ids=[999, c1.id])))
         self.assertEqual([c.id for c in result], [c1.id])
 
@@ -43,21 +44,21 @@ class CategoryColorTests(CatalogTestCase):
     """Rinominare una categoria non deve riportarne il colore a quello di fabbrica."""
 
     def test_update_without_color_keeps_the_existing_one(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
-        update_category(self.request, category.id, CategoryIn(name_it="Mani", order=2))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie", color="#123456"))
+        update_category(self.request, category.id, ServiceCategoryIn(name_it="Mani", order=2))
         category.refresh_from_db()
         self.assertEqual(category.color, "#123456")
         self.assertEqual(category.name_it, "Mani")
         self.assertEqual(category.order, 2)
 
     def test_update_with_color_changes_it(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
-        update_category(self.request, category.id, CategoryIn(name_it="Unghie", color="#00FF00"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie", color="#123456"))
+        update_category(self.request, category.id, ServiceCategoryIn(name_it="Unghie", color="#00FF00"))
         category.refresh_from_db()
         self.assertEqual(category.color, "#00FF00")
 
     def test_create_without_color_uses_the_default(self):
-        category = create_category(self.request, CategoryIn(name_it="Viso"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Viso"))
         self.assertEqual(category.color, "#E0E7FF")
 
 
@@ -66,18 +67,18 @@ class CategoryValidationTests(CatalogTestCase):
 
     def test_invalid_color_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name_it="Unghie", color="rosso"))
+            create_category(self.request, ServiceCategoryIn(name_it="Unghie", color="rosso"))
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_negative_order_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name_it="Unghie", order=-1))
+            create_category(self.request, ServiceCategoryIn(name_it="Unghie", order=-1))
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_update_with_invalid_color_is_a_400_and_changes_nothing(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie", color="#123456"))
         with self.assertRaises(HttpError) as caught:
-            update_category(self.request, category.id, CategoryIn(name_it="X", color="#12"))
+            update_category(self.request, category.id, ServiceCategoryIn(name_it="X", color="#12"))
         self.assertEqual(caught.exception.status_code, 400)
         category.refresh_from_db()
         self.assertEqual((category.name_it, category.color), ("Unghie", "#123456"))
@@ -139,3 +140,20 @@ class CatalogHttpSmokeTests(TestCase):
         res = self.client.get(f"/api/catalog/public/services?salon={self.salon.slug}")
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.json(), [])
+
+
+class CategoryOpenApiTests(TestCase):
+    """Bug sospetti del 24/09, voce 24: django-ninja dà ai componenti OpenAPI il
+    nome della classe, e le `ServiceCategoryIn`/`ServiceCategoryOut` di listino, etichette
+    cliente e magazzino si sovrascrivevano: ne restava una sola, quella del
+    magazzino. Le categorie del listino risultavano documentate con `name`
+    invece di `name_it` e `name_en`."""
+
+    def test_the_categories_are_documented_with_their_own_fields(self):
+        schema = api.get_openapi_schema()
+        components = schema["components"]["schemas"]
+        post = schema["paths"]["/api/catalog/categories"]["post"]
+        body = post["requestBody"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        out = post["responses"][200]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        self.assertEqual(set(components[body]["properties"]), {"name_it", "name_en", "color", "order"})
+        self.assertEqual(set(components[out]["properties"]), {"id", "name_it", "name_en", "color", "order"})

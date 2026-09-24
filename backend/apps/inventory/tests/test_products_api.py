@@ -15,6 +15,7 @@ from ninja.errors import HttpError
 from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.testing import bearer, staff_context
+from config.api import api
 
 from .. import api as inventory_api
 from ..api import (
@@ -25,7 +26,7 @@ from ..api import (
     update_product,
 )
 from ..models import Product, ProductCategory, StockMovement, Supplier
-from ..schemas import CategoryIn, MovementOut, ProductIn, ProductUnloadIn
+from ..schemas import MovementOut, ProductCategoryIn, ProductIn, ProductUnloadIn
 from ..services import apply_movement
 from .base import _InventorySetup
 
@@ -54,26 +55,26 @@ class InventoryApiTests(TestCase):
     # ---- colore categorie ----------------------------------------------------
 
     def test_create_category_persists_color(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#FF0000"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#FF0000"))
         self.assertEqual(cat.color, "#FF0000")
         self.assertEqual(ProductCategory.objects.get(pk=cat.id).color, "#FF0000")
 
     def test_create_category_defaults_color(self):
-        cat = create_category(self.request, CategoryIn(name="Cura"))
+        cat = create_category(self.request, ProductCategoryIn(name="Cura"))
         self.assertEqual(cat.color, "#E0E7FF")
 
     def test_update_category_without_color_keeps_existing(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#123456"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#123456"))
         # payload senza color (come dal gestore categorie delle impostazioni)
-        update_category(self.request, cat.id, CategoryIn(name="Colori", order=3))
+        update_category(self.request, cat.id, ProductCategoryIn(name="Colori", order=3))
         cat.refresh_from_db()
         self.assertEqual(cat.color, "#123456")  # colore invariato
         self.assertEqual(cat.name, "Colori")
         self.assertEqual(cat.order, 3)
 
     def test_update_category_with_color_updates_it(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#123456"))
-        update_category(self.request, cat.id, CategoryIn(name="Tinte", color="#00FF00"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#123456"))
+        update_category(self.request, cat.id, ProductCategoryIn(name="Tinte", color="#00FF00"))
         cat.refresh_from_db()
         self.assertEqual(cat.color, "#00FF00")
 
@@ -193,19 +194,36 @@ class CategoryValidationTests(TestCase):
 
     def test_invalid_color_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", color="verde acqua"))
+            create_category(self.request, ProductCategoryIn(name="Tinte", color="verde acqua"))
         self.assertEqual(caught.exception.status_code, 400)
         self.assertFalse(ProductCategory.objects.exists())
 
     def test_negative_order_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", order=-1))
+            create_category(self.request, ProductCategoryIn(name="Tinte", order=-1))
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_order_beyond_the_column_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", order=99999))
+            create_category(self.request, ProductCategoryIn(name="Tinte", order=99999))
         self.assertEqual(caught.exception.status_code, 400)
+
+
+class CategoryOpenApiTests(TestCase):
+    """Bug sospetti del 24/09, voce 24: django-ninja dà ai componenti OpenAPI il
+    nome della classe, e le `ProductCategoryIn`/`ProductCategoryOut` di magazzino, listino ed
+    etichette cliente si sovrascrivevano. Restava quella del magazzino, che
+    quindi era documentata giusta solo perché registrata per ultima."""
+
+    def test_the_categories_are_documented_with_their_own_fields(self):
+        schema = api.get_openapi_schema()
+        components = schema["components"]["schemas"]
+        post = schema["paths"]["/api/inventory/categories"]["post"]
+        body = post["requestBody"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        out = post["responses"][200]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        self.assertEqual(set(components[body]["properties"]), {"name", "order", "color"})
+        self.assertIn({"type": "null"}, components[body]["properties"]["color"]["anyOf"])
+        self.assertEqual(set(components[out]["properties"]), {"id", "name", "order", "color"})
 
 
 class InventoryHttpSmokeTests(TestCase):

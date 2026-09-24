@@ -60,8 +60,8 @@ from .records import (
     validate_attachment,
 )
 from .schemas import (
-    CategoryIn,
-    CategoryOut,
+    ClientCategoryIn,
+    ClientCategoryOut,
     HookLeadIn,
     HookLeadOut,
     ClientDetailOut,
@@ -86,21 +86,21 @@ router = Router(tags=["clients"])
 # ---- Etichette (ClientCategory) ---------------------------------------------
 
 
-@router.get("/categories", auth=staff_auth, response=list[CategoryOut])
+@router.get("/categories", auth=staff_auth, response=list[ClientCategoryOut])
 def list_categories(request):
     return request.auth.salon.client_categories.all()
 
 
-@router.post("/categories", auth=staff_auth, response=CategoryOut)
-def create_category(request, data: CategoryIn):
+@router.post("/categories", auth=staff_auth, response=ClientCategoryOut)
+def create_category(request, data: ClientCategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     payload = label_payload(ctx, data)
     return create_label(ctx, payload)
 
 
-@router.put("/categories/{int:category_id}", auth=staff_auth, response=CategoryOut)
-def update_category(request, category_id: int, data: CategoryIn):
+@router.put("/categories/{int:category_id}", auth=staff_auth, response=ClientCategoryOut)
+def update_category(request, category_id: int, data: ClientCategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     category = salon_get(ClientCategory, ctx, category_id)

@@ -18,8 +18,6 @@ from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 from .csv_load import load_rows
 from .models import STOCK_WARNING_FACTOR, Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
-    CategoryIn,
-    CategoryOut,
     LoadCsvIn,
     LoadCsvOut,
     MovementOut,
@@ -28,6 +26,8 @@ from .schemas import (
     OrderReceiveOut,
     OrderSendIn,
     OrderUpdateIn,
+    ProductCategoryIn,
+    ProductCategoryOut,
     ProductIn,
     ProductLoadIn,
     ProductOut,
@@ -412,13 +412,13 @@ def delete_supplier(request, supplier_id: int):
 # ---- Categorie prodotto ------------------------------------------------------
 
 
-@router.get("/categories", auth=staff_auth, response=list[CategoryOut])
+@router.get("/categories", auth=staff_auth, response=list[ProductCategoryOut])
 def list_categories(request):
     return ProductCategory.objects.filter(salon=request.auth.salon)
 
 
-@router.post("/categories", auth=staff_auth, response=CategoryOut)
-def create_category(request, data: CategoryIn):
+@router.post("/categories", auth=staff_auth, response=ProductCategoryOut)
+def create_category(request, data: ProductCategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
@@ -430,8 +430,8 @@ def create_category(request, data: CategoryIn):
     )
 
 
-@router.put("/categories/{int:category_id}", auth=staff_auth, response=CategoryOut)
-def update_category(request, category_id: int, data: CategoryIn):
+@router.put("/categories/{int:category_id}", auth=staff_auth, response=ProductCategoryOut)
+def update_category(request, category_id: int, data: ProductCategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
