@@ -14,9 +14,13 @@ import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
   DK_START, PXM, WEEK_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, HOVER_CLEAR_WEEK, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, visibleMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue, weekGridRange,
+  GRID_LINE_STYLE, gridMarks, visibleMarks, opSegments, serviceBands, AGENDA_LIVE_RE, apptRevenue, weekGridRange,
   slotStep, openApptIdOf, hoverPlacement,
 } from './lib.js';
+import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
+import {
+  weekDays, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
+} from './lib/week.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
 const TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
@@ -205,25 +209,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     );
   }
 
-  // override ottimistico: l'appuntamento in POST compare già nel giorno/operatrice/orario di arrivo
-  const pendingSrc = pending ? days.flatMap((d) => d.appointments).find((a) => a.id === pending.id) : null;
-  const dayData = days.map((d, i) => {
-    const src = pending ? d.appointments.filter((a) => a.id !== pending.id) : d.appointments;
-    const list = src.map((a) => { const s = minutesOfDay(a.start); return { ...a, startMin: s, endMin: s + (a.duration_min || 0) }; });
-    if (pendingSrc && pending.dayIdx === i) {
-      list.push({ ...pendingSrc, operator_id: pending.nop, startMin: pending.ns, endMin: pending.ns + (pendingSrc.duration_min || 0) });
-    }
-    // TUTTE le operatrici della sede attiva, ogni giorno, anche dove non hanno
-    // niente in agenda: le sotto-colonne sono il posto dove si clicca per
-    // prenotare, e disegnarle solo dove c'era già lavoro lasciava i giorni
-    // liberi — quelli su cui si prenota di più — senza nulla da cliccare e
-    // senza modo di dire a chi.
-    // In coda restano le operatrici non più in elenco (disattivate) che hanno
-    // ancora appuntamenti: altrimenti il giorno li CONTA ma non li mostra da
-    // nessuna parte, e la cliente si presenta a un orario che in agenda non
-    // esiste. Vedi weekDayOps.
-    return { ...d, list, dayOps: weekDayOps(operators, locationId, list, t('Non più in team', 'No longer on the team')) };
-  });
+  // i giorni da disegnare: sotto-colonne di TUTTE le operatrici della sede, e
+  // l'appuntamento in POST già dove è stato lasciato (vedi weekDays)
+  const dayData = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'));
   const dayWidth = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
 
   /* ---- drag & drop: which day column + operator sub-column is under clientX ---- */
@@ -261,26 +249,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
   }
 
-  /* Aggancio al vicino, come in vista giorno: con trattamenti che non cadono
-   * sulle fasce (venti minuti, venticinque) lo scatto alla griglia lasciava
-   * sempre un ritaglio invendibile fra un appuntamento e l'altro. */
-  const snapTol = Math.min(8, Math.max(4, Math.floor(step / 2) - 1));
-  function bestSnap(rawMin, day, opId, d) {
-    if (!day) return null;
-    const span = Math.max(0, d.obj.endMin - d.obj.startMin);
-    let best = null;
-    const consider = (min, label) => {
-      const dist = Math.abs(min - rawMin);
-      if (dist > snapTol || (best && dist >= best.dist)) return;
-      best = { min, dist, label };
-    };
-    for (const a of day.list) {
-      if (a.id === d.id || a.operator_id !== opId) continue;
-      consider(a.endMin, a.client_name);                 // ci si attacca sotto
-      consider(a.startMin - span, a.client_name);        // ci si attacca sopra
-    }
-    return best;
-  }
+  // aggancio al vicino, come in vista giorno (weekBestSnap)
+  const snapTol = snapTolerance(step);
 
   function onMove(e) {
     const d = drag.current;
@@ -295,15 +265,13 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (d && canWrite) track(d);
   }
   function track(d) {
-    const dy = d.cy - d.startY + ((scrollRef.current?.scrollTop || 0) - (d.startScroll || 0));
+    const dy = dragDy(d, scrollRef.current?.scrollTop || 0);
     const dx = d.cx - d.startX;
     const { dayIdx, opId } = targetFromX(d.cx);
     const rawMin = d.orig + dy / pxm;
-    let ns = Math.round(rawMin / step) * step;
-    const snap = bestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d);
-    d.snap = snap && snap.min !== ns ? snap : null;
-    if (snap) ns = snap.min;
-    ns = Math.max(G0, Math.min(G1 - step, ns));
+    const near = weekBestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d, snapTol);
+    const { ns, snap } = snapStart(rawMin, step, near, G0, G1);
+    d.snap = snap;
     d.ns = ns;
     d.dayIdx = dayIdx == null ? d.origDayIdx : dayIdx;
     d.hoverOp = opId;
@@ -332,16 +300,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (!d.moved) { openDetail(d.obj); return; }   // click semplice → dettaglio; il drag no
     justDragged.current = true;
     setTimeout(() => { justDragged.current = false; }, 0);
-    const changed = d.ns !== d.orig || d.dayIdx !== d.origDayIdx || d.nop !== d.origOp;
-    if (changed && canWrite) commitMove(d);
+    if (weekDropChanged(d) && canWrite) commitMove(d);
   }
   onUpRef.current = onUp;
-
-  function whereLabel(dayIdx, opId, ns) {
-    const day = dayData[dayIdx];
-    const op = operators.find((o) => o.id === opId);
-    return `${day ? `${t(DOW_IT[dayIdx], DOW_EN[dayIdx])} ${parseISO(day.date).getDate()} · ` : ''}${op ? op.first_name + ' · ' : ''}${timeLabel(ns)}`;
-  }
 
   /* Uno spostamento su un orario occupato o fuori turno NON si ferma a chiedere
    * conferma: chi usa l'agenda tutti i giorni sa quando sta incastrando una
@@ -352,15 +313,13 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   async function commitMove(d, opts = {}) {
     const day = dayData[d.dayIdx];
     if (!day) return;
-    const body = { start: isoAtMin(day.date, d.ns) };
-    if (d.nop != null && d.nop !== d.origOp) { body.operator_id = d.nop; body.from_operator_id = d.origOp; }
-    if (opts.force) body.force = true;
+    const body = weekMoveBody(day, d, opts.force);
     const mark = undoMark();   // voce più recente di «torna indietro» prima del gesto
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
       await api.post(`/api/agenda/appointments/${d.id}/move`, body);
       fireToast({
-        msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns),
+        msg: t('Spostato · ', 'Moved · ') + whereLabel(dayData, operators, d.dayIdx, d.nop, d.ns, t),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         // «Torna indietro» del server, lo stesso del tasto in barra, per la
@@ -427,32 +386,15 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     openAt(dayIso, minutesFrom(e.clientY, e.currentTarget), targetFromX(e.clientX).opId);
   }
 
-  /* I servizi dell'appuntamento aperto, in fila dalla sua ora: servono a
-   * disegnarne l'ombra sul giorno che si sta guardando. */
-  const ghostSpans = (() => {
-    if (!ghost) return [];
-    let cursor = minutesOfDay(ghost.start);
-    return (ghost.items || []).map((it, i) => {
-      const dur = (it.duration_min || 0) + (it.soak_min || 0);
-      const span = { key: it.id ?? i, opId: it.operator_id ?? ghost.operator_id, startMin: cursor, dur: Math.max(10, dur) };
-      cursor += dur;
-      return span;
-    });
-  })();
+  // l'ombra dell'appuntamento aperto, servizio per servizio (weekGhostSpans)
+  const ghostSpans = weekGhostSpans(ghost);
 
   const dg = drag.current;
   const dragging = !!(dg && dg.moved);
   // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
-  const movingObj = dragging ? { ...dg.obj, operator_id: dg.nop, startMin: dg.ns, endMin: dg.ns + (dg.obj.endMin - dg.obj.startMin) } : null;
+  const movingObj = dragging ? movingBlock(dg) : null;
 
-  /* Il payload della settimana è più compatto di quello del giorno: qui si
-   * riporta alla forma che la scheda di anteprima già sa leggere, così la
-   * scheda resta una sola per le due viste. */
-  const hoverShape = (a) => ({
-    ...a,
-    client: { full_name: a.client_name, phone: a.client_phone },
-    total_duration_min: a.duration_min,
-  });
+  // anteprima al passaggio del mouse, con la scheda della vista giorno (hoverShape)
   const openHover = (a, el) => {
     if (drag.current) return;
     setHover({ a: hoverShape(a), ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });

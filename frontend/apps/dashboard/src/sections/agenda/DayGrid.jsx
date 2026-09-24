@@ -19,10 +19,14 @@ import { Avatar, Icon, fmtDur, timeLabel, statusMeta, parseISO } from '@youty/sh
 import { useDash } from '../../ctx.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import {
-  DK_START, PXM, COLW, DAY_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
+  DK_START, PXM, COLW, DAY_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, clampZoom, aStartMin, aEndMin, svcLabel, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
   ghostBlockAt, apptRevenue, dayGridRange, openingFor, dayLabel, slotStep, openApptIdOf, visibleMarks, closedIntervals,
 } from './lib.js';
+import {
+  dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, resizeStep, dragDy, dropIntent,
+  itemPosition, pausePosition, verdictTone, dragBadge,
+} from './lib/drag.js';
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
@@ -62,17 +66,11 @@ export default function DayGrid({
   // primo servizio dell'ombra che cade in una colonna disegnata: lì va «qui»
   const ghostFirstId = ghost ? (itemBlocks(ghost).find((b) => ops.some((o) => o.id === b.opId))?.item.id ?? null) : null;
   const opFirsts = ops.map((o) => firstName(o.name)); // disambiguazione omonimie
-  const rowOf = (opId) => dataRows.find((r) => r.operator.id === opId);
-  const opName = (opId) => firstName(rowOf(opId)?.operator?.name || '');
-  /* Abilitazione al servizio (Staff → servizi dell'operatrice). Il server
-   * rifiuta con un 400 la riassegnazione a chi non è abilitata: meglio dirlo
-   * durante il trascinamento, quando si può ancora scegliere un'altra colonna.
-   * Se l'elenco manca (payload vecchio) non si blocca niente. */
-  const canDo = (opId, serviceId) => {
-    const op = (allOperators || []).find((x) => x.id === opId);
-    if (!op || !Array.isArray(op.service_ids) || !op.service_ids.length) return true;
-    return op.service_ids.includes(serviceId);
-  };
+  /* I conti del trascinamento (lib/drag.js: aggancio ai vicini, esito del
+   * rilascio, abilitazione al servizio) si fanno su `dataRows`. */
+  const dragCtx = dayDragContext({ rows: dataRows, operators: allOperators, step, nowMin, t });
+  const { blocks: allBlocks, pauses: allPauses } = dragCtx;
+  const opName = (opId) => opFirstName(dragCtx, opId);
   /* La fascia tratteggiata sotto un servizio è la posa del listino oppure
    * l'attesa che il salone ha lasciato di proposito prima del trattamento
    * dopo: chiamarla «POSA» in tutti e due i casi faceva cercare un colore che
@@ -82,19 +80,6 @@ export default function DayGrid({
       ? t('POSA', 'SOAK')
       : t('ATTESA', 'WAIT')
   );
-  const skillVerdict = (opId, blocks) => {
-    const bad = blocks.find((b) => !canDo(opId, b.item.service_id));
-    if (!bad) return null;
-    return {
-      ok: false, code: 'skill',
-      label: t(`${opName(opId)} non fa ${bad.item.service_name}`, `${opName(opId)} does not do ${bad.item.service_name}`),
-      detail: t('Abilita il servizio in Staff', 'Enable the service in Staff'),
-    };
-  };
-
-  // tutti i blocchi-servizio del giorno (ogni appuntamento compare una volta nel payload)
-  const allBlocks = dataRows.flatMap((r) => r.appointments).flatMap((a) => itemBlocks(a));
-  const allPauses = dataRows.flatMap((r) => r.pauses);
 
   /* ---- Zoom: la scala si cambia senza perdere il punto in cui si stava
    * guardando. Cambiando l'altezza dell'ora, lo stesso minuto resta dov'era
@@ -303,122 +288,6 @@ export default function DayGrid({
     });
   }
 
-  /* ---- Aggancio ai vicini --------------------------------------------------
-   * Le fasce dell'agenda sono di 15 minuti, i trattamenti no: un servizio da 20
-   * finisce alle 09:20 e il blocco trascinato sotto si fermava alle 09:15 o alle
-   * 09:30, lasciando ogni volta un buco che nessuno può vendere. Qui, oltre alla
-   * griglia, si guardano i BORDI di quello che c'è nella colonna: la fine di ciò
-   * che sta sopra (ci si attacca di testa), l'inizio di ciò che sta sotto (ci si
-   * attacca di coda), la fine della fase attiva di un colore in posa — dove
-   * l'operatrice è libera davvero — e gli estremi del turno. Se uno di questi è
-   * più vicino della tolleranza, vince sulla griglia: il blocco si incastra.
-   */
-  // Tolleranza un filo sotto la metà della fascia: abbastanza da "chiamare" il
-  // blocco, non tanto da rubare le posizioni normali della griglia.
-  const snapTol = Math.min(8, Math.max(4, Math.floor(step / 2) - 1));  // minuti
-  function anchorsFor(opId, d) {
-    const out = [];
-    const skip = (b) => (d.kind !== 'item' ? false : d.detach ? b.item.id === d.itemId : b.apptId === d.apptId);
-    for (const b of allBlocks) {
-      if (b.opId !== opId || skip(b)) continue;
-      out.push({ min: b.startMin + b.dur, side: 'after', label: b.item.service_name });
-      if (b.soakMin > 0) out.push({ min: b.startMin + b.activeMin, side: 'after', label: t(`posa di ${b.item.service_name}`, `${b.item.service_name} soak`) });
-      out.push({ min: b.startMin, side: 'before', label: b.item.service_name });
-    }
-    for (const p of allPauses) {
-      if (p.operator_id !== opId || (d.kind === 'pause' && p.id === d.id)) continue;
-      const ps = aStartMin(p);
-      out.push({ min: ps + (p.duration_min || 0), side: 'after', label: t('pausa', 'break') });
-      out.push({ min: ps, side: 'before', label: t('pausa', 'break') });
-    }
-    (rowOf(opId)?.windows || []).forEach(([a, b]) => {
-      out.push({ min: hmToMin(a), side: 'after', label: t('inizio turno', 'shift start') });
-      out.push({ min: hmToMin(b), side: 'before', label: t('fine turno', 'shift end') });
-    });
-    return out;
-  }
-  /** Quanto occupa, in colonna, quello che si sta trascinando. */
-  function dragSpan(d) {
-    if (d.kind === 'pause') return d.obj.duration_min || 0;
-    if (d.detach) return d.block.dur || 0;
-    const group = itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp);
-    if (!group.length) return d.block.dur || 0;
-    return Math.max(...group.map((b) => b.startMin + b.dur)) - Math.min(...group.map((b) => b.startMin));
-  }
-  /** Fine agganciata più vicina a `rawEnd` (allungando un blocco): ci si ferma
-   *  dove comincia quello che sta sotto, senza lasciare un ritaglio invendibile. */
-  function bestSnapEnd(rawEnd, d, opId) {
-    let best = null;
-    for (const a of anchorsFor(opId, d)) {
-      if (a.side !== 'before') continue;
-      const dist = Math.abs(a.min - rawEnd);
-      if (dist > snapTol || (best && dist >= best.dist)) continue;
-      best = { min: a.min, dist, label: a.label, side: 'before' };
-    }
-    return best;
-  }
-  /** Inizio agganciato più vicino a `rawMin`, o null se nessuno è abbastanza vicino. */
-  function bestSnap(rawMin, d, opId) {
-    const span = dragSpan(d);
-    let best = null;
-    for (const a of anchorsFor(opId, d)) {
-      const start = a.side === 'after' ? a.min : a.min - span;
-      const dist = Math.abs(start - rawMin);
-      if (dist > snapTol) continue;
-      if (!best || dist < best.dist) best = { min: start, dist, label: a.label, side: a.side };
-    }
-    return best;
-  }
-
-  /* esito del rilascio, calcolato sui dati in pagina (stesse regole del backend) */
-  function validateDrag(d) {
-    if (!d || d.mode === 'resize') return null;
-    if (d.kind === 'pause') {
-      const row = rowOf(d.nop);
-      return row ? explainSlot(row, d.ns, d.obj.duration_min, { excludePauseId: d.id, t, rows: dataRows }) : null;
-    }
-    const appt = d.block.appt;
-    if (d.detach) {
-      // Si muove solo questo servizio: validarlo come se si spostasse tutta la
-      // visita dava un verdetto su uno spostamento che non sta avvenendo, e lo
-      // stacco veniva rifiutato senza che succedesse niente.
-      const row = rowOf(d.nop);
-      if (!row) return null;
-      if (d.nop !== d.origOp) {
-        const skill = skillVerdict(d.nop, [d.block]);
-        if (skill) return skill;
-      }
-      return explainSlot(row, d.ns, d.block.activeMin || d.block.dur, {
-        excludeItemId: d.itemId, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows,
-      });
-    }
-    return visitVerdict(appt, d.ns - d.orig, d.origOp, d.nop);
-  }
-  /* Esito dello spostamento di una visita intera: tutti i servizi slittano di
-   * `delta` minuti e quelli della colonna `origOp` passano a `nop`. */
-  function visitVerdict(appt, delta, origOp, nop) {
-    // Cambio di colonna: cambiano mano i servizi della colonna di PARTENZA —
-    // quelli che la spina tiene insieme lì — mentre quelli affidati ad altre
-    // colleghe restano dove sono (stessa regola del server, from_operator_id).
-    const moved = itemBlocks(appt).filter((b) => b.opId === origOp);
-    if (nop !== origOp) {
-      const skill = skillVerdict(nop, moved);
-      if (skill) return skill;
-    }
-    let warn = null;
-    for (const b of itemBlocks(appt)) {
-      const opId = b.opId === origOp ? nop : b.opId;
-      const row = rowOf(opId);
-      if (!row) continue;
-      // `nowMin` anche qui: senza, il badge del drag diceva «Disponibile» su un
-      // orario già passato mentre il menu sullo stesso slot lo vietava.
-      const r = explainSlot(row, b.startMin + delta, b.activeMin || b.dur, { excludeApptId: appt.id, sameClientId: appt.client?.id ?? null, nowMin, t, rows: dataRows });
-      if (!r.ok) return r;
-      if (r.code === 'soak') warn = r;
-    }
-    return warn || { ok: true, code: 'ok', label: t('Disponibile', 'Available'), detail: '' };
-  }
-
   function onMove(e) {
     const d = drag.current;
     if (!d || otherPointer(e)) return;
@@ -440,33 +309,12 @@ export default function DayGrid({
   }
 
   /* Posizione del trascinamento: dal puntatore (d.cx, d.cy) più quanto è
-   * scorsa la griglia da quando è cominciato. */
+   * scorsa la griglia da quando è cominciato (dragDy). */
   function track(d) {
-    const dy = d.cy - d.startY + ((scrollRef.current?.scrollTop || 0) - (d.startScroll || 0));
+    const dy = dragDy(d, scrollRef.current?.scrollTop || 0);
     if (d.mode === 'resize') {
-      const rawDur = d.origDur + dy / pxm;
-      // Un tocco sulla maniglia non cambia niente: arrotondata ai 5 minuti (o
-      // agganciata a un vicino) la durata cambiava senza che nessuno l'avesse
-      // chiesto, e partiva il PUT.
-      const still = Math.abs(rawDur - d.origDur) < 2.5;
-      let nd = still ? d.origDur : Math.round(rawDur / 5) * 5;
-      // anche allungando ci si attacca al vicino: la fine del blocco (posa
-      // compresa) va a combaciare con l'inizio di quello che c'è sotto
-      const soak = d.block?.soakMin || 0;
-      // La pausa non ha `block`: leggere d.block.opId dava un TypeError a ogni
-      // movimento, e la pausa pranzo non si allungava più.
-      const opId = d.kind === 'pause' ? d.obj.operator_id : d.block.opId;
-      const snap = still ? null : bestSnapEnd(d.orig + rawDur + soak, d, opId);
-      d.snap = null;
-      if (snap) {
-        const snapped = snap.min - d.orig - soak;
-        if (snapped >= 5) { nd = snapped; d.snap = snap; }
-      }
-      // Nessun tetto alla fine della griglia: un servizio che finisce dopo la
-      // griglia (salone aperto fino alle 21, incastro serale) veniva accorciato
-      // fino al bordo — bastava toccare la maniglia. Il limite è la mezzanotte.
-      nd = Math.max(5, Math.min(24 * 60 - d.orig - soak, nd));
-      d.ndur = nd; d.moved = d.moved || Math.abs(dy) > 2;
+      // la durata nuova: passi di 5 minuti, aggancio al vicino, mai oltre la mezzanotte
+      Object.assign(d, resizeStep(dragCtx, d, dy, pxm));
       force((x) => x + 1);
       return;
     }
@@ -491,15 +339,12 @@ export default function DayGrid({
     d.outside = false; d.dayTarget = null;
     const rawMin = d.orig + dy / pxm;
     const nop = colFromX(d.cx) ?? d.origOp;
-    let ns = Math.round(rawMin / step) * step;
-    const snap = bestSnap(rawMin, d, nop);
-    d.snap = snap && snap.min !== ns ? snap : null;
-    if (snap) ns = snap.min;
-    ns = Math.max(G0, Math.min(G1 - step, ns));
+    const { ns, snap } = snapStart(rawMin, step, bestSnap(dragCtx, rawMin, d, nop), G0, G1);
+    d.snap = snap;
     d.ns = ns; d.nop = nop;
     d.moved = d.moved || Math.abs(dy) > 4 || nop !== d.origOp;
     if (d.moved && !wasMoved) startedMoving();
-    if (d.moved) d.verdict = validateDrag(d);
+    if (d.moved) d.verdict = validateDrag(dragCtx, d);
     force((x) => x + 1);
   }
 
@@ -559,25 +404,11 @@ export default function DayGrid({
     if (onDropOnDate) onDropOnDate(d.block.appt, dayTarget, d.apptStart);
   }
 
-  /* Rilascio dentro la griglia: spostamento, stacco o pausa. */
+  /* Rilascio dentro la griglia: spostamento, stacco o pausa (vedi dropIntent). */
   function commitDrop(d) {
-    if (d.ns === d.orig && d.nop === d.origOp) return;
-    // Intenzione di spostamento, calcolata una volta sola: la usa il ramo valido
-    // e viene passata anche al rilascio non valido, così il padre può offrire
-    // «Sposta comunque» (POST con force) senza rifare i conti.
-    let intent;
-    if (d.kind === 'item' && d.detach) {
-      intent = { kind: 'split', appt: d.block.appt, item: d.block.item, startMin: d.ns, opId: d.nop };
-    } else if (d.kind === 'item') {
-      // la visita si sposta così che il servizio trascinato finisca dove lasciato;
-      // in un'altra colonna cambiano mano i servizi della colonna di partenza
-      const appt = d.block.appt;
-      const newApptStart = d.apptStart + (d.ns - d.orig);
-      intent = { kind: 'appt', appt, newApptStart, opArg: d.nop, fromOp: d.origOp };
-    } else {
-      intent = { kind: 'pause', pause: d.obj, startMin: d.ns, opId: d.nop };
-    }
-    const verdict = validateDrag(d);
+    const intent = dropIntent(d);
+    if (!intent) return;
+    const verdict = validateDrag(dragCtx, d);
     if (verdict && !verdict.ok) {
       onInvalidDrop && onInvalidDrop(verdict, d, intent); // i primi due argomenti restano quelli di prima
       return; // il blocco torna al suo posto: nessuna chiamata al server
@@ -588,53 +419,13 @@ export default function DayGrid({
   }
 
   /* posizione: ghost del drag attivo > override ottimistico (pending) > valore server */
-  const itemPos = (block) => {
-    const d = drag.current;
-    const phases = { activeMin: block.activeMin, soakMin: block.soakMin };
-    if (d && d.kind === 'item' && d.apptId === block.apptId && d.mode !== 'resize' && d.moved) {
-      if (d.detach) {
-        // stacco: gli altri servizi della visita restano dove sono
-        if (d.itemId !== block.item.id) return { startMin: block.startMin, opId: block.opId, ...phases };
-        return { startMin: d.ns, opId: d.nop, ...phases, dragging: true, verdict: d.verdict };
-      }
-      // sposta tutti i blocchi della stessa visita del delta trascinato; quelli
-      // della colonna di partenza seguono anche il cambio di operatrice
-      const startMin = d.itemId === block.item.id ? d.ns : block.startMin + (d.ns - d.orig);
-      const opId = block.opId === d.origOp ? d.nop : block.opId;
-      return { startMin, opId, ...phases, dragging: true, verdict: d.verdict };
-    }
-    if (d && d.kind === 'item' && d.mode === 'resize' && d.apptId === block.apptId) {
-      // durante il resize cambia SOLO il tempo attivo; la posa resta
-      if (d.itemId === block.item.id) return { startMin: block.startMin, opId: block.opId, activeMin: d.ndur, soakMin: block.soakMin, resizing: true };
-      // I servizi di una visita sono concatenati: allungando il primo, quelli
-      // dopo slittano. Lasciandoli fermi l'anteprima mostrava una visita che il
-      // server non avrebbe mai scritto (e una finta sovrapposizione).
-      if (block.startMin > d.orig) return { startMin: block.startMin + (d.ndur - d.origDur), opId: block.opId, ...phases };
-      return { startMin: block.startMin, opId: block.opId, ...phases };
-    }
-    if (pending && pending.kind === 'appt' && pending.id === block.apptId) {
-      const opId = pending.fromOp != null && block.opId === pending.fromOp ? pending.opId : block.opId;
-      return { startMin: pending.startMin + (block.startMin - aStartMin(block.appt)), opId, ...phases };
-    }
-    return { startMin: block.startMin, opId: block.opId, ...phases };
-  };
-  const pausePos = (p) => {
-    const d = drag.current;
-    if (d && d.kind === 'pause' && d.id === p.id && d.mode !== 'resize' && d.moved) return { startMin: d.ns, opId: d.nop, dragging: true, verdict: d.verdict };
-    if (d && d.kind === 'pause' && d.id === p.id && d.mode === 'resize') return { startMin: aStartMin(p), opId: p.operator_id, dur: d.ndur, resizing: true };
-    if (pending && pending.kind === 'pause' && pending.id === p.id) return { startMin: pending.startMin, opId: pending.opId, dur: pending.dur };
-    return { startMin: aStartMin(p), opId: p.operator_id };
-  };
+  const itemPos = (block) => itemPosition(block, drag.current, pending);
+  const pausePos = (p) => pausePosition(p, drag.current, pending);
 
   const d = drag.current;
   const dragging = d && d.moved && d.mode !== 'resize';
   // colonna di arrivo evidenziata: nessuna quando il puntatore è fuori dalla griglia
   const targetOp = dragging && !d.outside ? d.nop : null;
-  // Nessuno slot è vietato: fuori turno, sovrapposizione e fase di posa sono
-  // AVVISI, non divieti. Chi sta al banco incastra dove vuole — il rilascio
-  // «non valido» finisce in onInvalidDrop, che scrive lo stesso forzando — e il
-  // rosso raccontava un blocco che non esiste. Il tono massimo è l'ambra.
-  const verdictTone = (v) => (!v ? '' : v.ok && v.code !== 'soak' ? 'ok' : 'warn');
 
   return (
     <div
@@ -753,7 +544,7 @@ export default function DayGrid({
                    * spostamento intero, non di un quarto d'ora di quella colonna. */
                   const gb = ghostBlockAt(ghost, o.id, raw);
                   if (gb) {
-                    onSlotMenu(o.id, gb.startMin, e.clientX, e.clientY, visitVerdict(ghost, 0, ghost.operator_id, ghost.operator_id), { ghostHit: true });
+                    onSlotMenu(o.id, gb.startMin, e.clientX, e.clientY, visitVerdict(dragCtx, ghost, 0, ghost.operator_id, ghost.operator_id), { ghostHit: true });
                     return;
                   }
                   const snapped = Math.max(G0, Math.min(G1 - step, Math.floor(raw / step) * step));
@@ -898,22 +689,8 @@ export default function DayGrid({
       {dragging && (() => {
         const v = d.verdict;
         const tone = verdictTone(v);
-        // Uno STACCO muove un servizio solo: durata della visita intera,
-        // orario d'inizio della visita e nome dell'operatrice di partenza
-        // annunciavano tutt'altro rispetto a quel che sarebbe arrivato al
-        // server («Anna 13:15-14:45» per un 14:00-14:45 su Giulia).
-        const detach = d.kind === 'item' && !!d.detach;
-        const durMin = d.kind === 'pause' ? d.obj.duration_min
-          : detach ? d.block.dur
-            : (d.block.appt.total_duration_min || d.block.dur);
-        const start = (d.kind === 'pause' || detach) ? d.ns : d.apptStart + (d.ns - d.orig);
-        // Quanti servizi cambiano mano: trascinando la spina di una visita
-        // divisa fra due colleghe si muove il gruppo di QUESTA colonna, e senza
-        // dirlo sembrava che partisse tutta la visita.
-        const group = d.kind === 'item' && !detach
-          ? itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp).length
-          : 1;
-        const moving = d.kind === 'item' && !detach && group < (d.block.appt.items || []).length;
+        // durata, inizio e servizi che cambiano mano (uno stacco muove un servizio solo)
+        const { detach, durMin, start, group, moving } = dragBadge(d);
         // Fuori dalla griglia il badge dice che cosa farà il rilascio, non un
         // orario e una colonna che non ci sono (vedi track).
         if (d.outside) {
