@@ -14,6 +14,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from ninja.errors import HttpError
 
 from apps.agenda.models import Appointment
 from apps.clients.models import Client
@@ -277,7 +278,8 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
     # `checkout.session.completed` quasi insieme: senza lock passavano tutte e
     # due il controllo e le righe erano due, e la seconda poteva dire «da
     # rimborsare a mano» se Stripe le rifiutava la chiave ancora in uso. Ora la
-    # seconda consegna trova la riga ed esce senza chiamare Stripe.
+    # seconda consegna trova la riga e non chiama Stripe: 200 se l'esito c'è
+    # già, 503 se il rimborso è ancora in corso (e Stripe la ripete).
     with transaction.atomic():
         lock_salon(salon)
         now = timezone.now()
@@ -289,19 +291,30 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
                 salon, "deposit.orphan_payment", summary.format("rimborso in corso"),
                 payload={**payload, "claimed_at": now.isoformat()},
             )
+        elif (log.payload or {}).get("refund_status") != "in_progress":
+            return  # esito già scritto: stesso pagamento già trattato
         elif _orphan_claim_is_stuck(log, now):
             # La consegna che l'aveva presa è morta prima dell'esito: i
             # ritentativi di Stripe trovavano la riga ed uscivano, e la cliente
             # restava senza rimborso. La si riprende con l'istante di adesso,
-            # così un altro ritentativo che arriva intanto la trova fresca ed
-            # esce. Il rimborso riparte con la stessa chiave: se il primo era
+            # così un altro ritentativo che arriva intanto la trova fresca e
+            # riceve 503. Il rimborso riparte con la stessa chiave: se il primo era
             # arrivato a Stripe, Stripe lo ridà invece di rifarlo (le chiavi
             # valgono 24 ore; dopo, il secondo rimborso di un pagamento già
             # rimborsato è rifiutato, e la riga dice di controllare a mano).
             log.payload = {**(log.payload or {}), "claimed_at": now.isoformat()}
             log.save(update_fields=["payload"])
         else:
-            return  # esito già scritto, o un'altra consegna sta rimborsando
+            # Un'altra consegna sta rimborsando: non si chiama Stripe insieme a
+            # lei. Con un 200 Stripe dava questa consegna per buona e non la
+            # ripeteva più, e se quel worker moriva prima dell'esito il rimborso
+            # non ripartiva. Con il 503 Stripe riprova: troverà l'esito, oppure
+            # una presa abbastanza vecchia da riprenderla.
+            logger.info(
+                "Caparra %s pagata per un appuntamento che non c'è più: rimborso in corso "
+                "da un'altra consegna, a Stripe si chiede di riprovare", intent_id,
+            )
+            raise HttpError(503, "Rimborso della caparra in corso: riprova tra poco")
     # Il rimborso fuori dalla transazione: con il lock tenuto durante la
     # chiamata, una risposta lenta di Stripe fermava l'agenda del salone per
     # tutto quel tempo. Poi la stessa riga prende l'esito vero, anche se la

@@ -8,7 +8,6 @@ rimborso parte fuori dalla transazione).
 """
 
 import datetime as dt
-import json
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -268,10 +267,12 @@ class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTest
             HTTP_STRIPE_SIGNATURE=sign(payload, "whsec_platform"),
         )
 
-    def test_the_second_delivery_finds_the_row_while_stripe_answers(self):
-        from .. import stripe_service, stripe_webhooks
+    RETRY_LATER = "Rimborso della caparra in corso: riprova tra poco"
 
-        session = json.loads(self._ghost_event("checkout.session.completed", event_id="evt_2"))
+    def test_the_second_delivery_finds_the_row_while_stripe_answers(self):
+        from .. import stripe_service
+
+        session = self._ghost_event("checkout.session.completed", event_id="evt_2")
         real_refund = stripe_service.refund_payment_intent
         seen = {}
 
@@ -281,18 +282,24 @@ class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTest
                 seen["rows"] = list(
                     ActivityLog.objects.filter(type="deposit.orphan_payment").values_list("summary", "payload")
                 )
-                stripe_webhooks.handle_event(session)  # la sessione arriva mentre Stripe risponde
+                seen["session"] = self._post_event(session)  # la sessione arriva mentre Stripe risponde
             return real_refund(*args, **kwargs)
 
         http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
         with patch("apps.sales.stripe_service.refund_payment_intent",
                    side_effect=refund_while_the_session_arrives) as refunds:
             self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+            # Ripetuta da Stripe più tardi, la sessione trova l'esito: 200, e niente da fare.
+            again = self._post_event(session)
         self.assertIs(seen["in_atomic_block"], False)
-        # Durante la chiamata la riga c'era già, «in corso», e la sessione l'ha trovata.
+        # Durante la chiamata la riga c'era già, «in corso»: la sessione ha ricevuto
+        # 503, così Stripe la ripete invece di darla per consegnata.
         [(summary, payload)] = seen["rows"]
         self.assertEqual(summary, "Caparra pagata per un appuntamento che non esiste più: rimborso in corso")
         self.assertEqual((payload["refund_status"], payload["refund_id"]), ("in_progress", ""))
+        self.assertEqual(seen["session"].status_code, 503, seen["session"].content)
+        self.assertEqual(seen["session"].json()["detail"], self.RETRY_LATER)
+        self.assertEqual(again.status_code, 200, again.content)
         refunds.assert_called_once()
         self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
         # Poi la stessa riga, con l'esito vero e i campi di sempre.
@@ -350,8 +357,27 @@ class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTest
         self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
         self.assertRefunded(log)
 
-    def test_a_fresh_claim_is_left_to_its_delivery(self):
+    def test_a_fresh_claim_is_left_to_its_delivery_and_stripe_is_asked_to_retry(self):
+        # Con un 200 Stripe dava la consegna per buona e non la ripeteva più: se
+        # la presa era di un worker che poi moriva, il rimborso non ripartiva.
         log = self._stuck_claim(minutes_ago=5)
+        before = (log.summary, log.payload)
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        res = self._post_event(self._ghost_event())
+        self.assertEqual(res.status_code, 503, res.content)
+        self.assertEqual(res.json()["detail"], self.RETRY_LATER)
+        self.assertEqual(http.calls_to("/v1/refunds"), [])
+        log.refresh_from_db()
+        self.assertEqual((log.summary, log.payload), before)
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_a_row_with_its_outcome_answers_200_and_does_nothing(self):
+        log = self._stuck_claim(minutes_ago=30)
+        ActivityLog.objects.filter(pk=log.pk).update(
+            summary="Caparra pagata per un appuntamento che non esiste più: rimborsata",
+            payload={**log.payload, "refund_id": "re_ghost", "refund_status": "succeeded"},
+        )
+        log.refresh_from_db()
         before = (log.summary, log.payload)
         http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
         self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
@@ -360,23 +386,27 @@ class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTest
         self.assertEqual((log.summary, log.payload), before)
 
     def test_two_deliveries_on_the_same_stuck_claim_call_stripe_once(self):
-        from .. import stripe_service, stripe_webhooks
+        from .. import stripe_service
 
         log = self._stuck_claim(minutes_ago=11)
-        session = json.loads(self._ghost_event("checkout.session.completed", event_id="evt_2"))
+        session = self._ghost_event("checkout.session.completed", event_id="evt_2")
         real_refund = stripe_service.refund_payment_intent
         seen = {}
 
         def refund_while_the_session_arrives(*args, **kwargs):
             if not seen:
                 seen["in_atomic_block"] = connection.in_atomic_block
-                stripe_webhooks.handle_event(session)  # l'altro ritentativo, mentre Stripe risponde
+                seen["session"] = self._post_event(session)  # l'altro ritentativo, mentre Stripe risponde
             return real_refund(*args, **kwargs)
 
         http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
         with patch("apps.sales.stripe_service.refund_payment_intent",
                    side_effect=refund_while_the_session_arrives) as refunds:
             self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+            again = self._post_event(session)
+        # L'altro ritentativo trova la presa appena rinnovata: 503, e dopo l'esito 200.
+        self.assertEqual(seen["session"].status_code, 503, seen["session"].content)
+        self.assertEqual(again.status_code, 200, again.content)
         refunds.assert_called_once()
         self.assertIs(seen["in_atomic_block"], False)
         self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
