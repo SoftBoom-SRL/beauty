@@ -27,7 +27,7 @@ from ..schemas import ClientIn, ClientUpdateIn
 MARKETING = "apps.marketing.services"
 
 
-def _staff_http(salon, scopes=("clients",)):
+def _reception_auth(salon, scopes=("clients",)):
     from apps.accounts.models import Membership, Role, User
 
     user = User.objects.create_user(email=f"reception{salon.id}@theparlour.it", password="x" * 10)
@@ -52,7 +52,7 @@ class _Base(TestCase):
 class PartialPutOverHttpTests(_Base):
     def setUp(self):
         super().setUp()
-        self.auth = _staff_http(self.salon)
+        self.auth = _reception_auth(self.salon)
 
     def put(self, client, body):
         return self.client.put(
@@ -225,7 +225,7 @@ class ArchivedPhoneTests(_Base):
             "/api/clients/",
             json.dumps({"first_name": "Anna", "last_name": "Verdi", "phone": "333 123 4567"}),
             content_type="application/json",
-            **_staff_http(self.salon),
+            **_reception_auth(self.salon),
         )
         self.assertEqual(res.status_code, 409, res.content)
         body = res.json()
@@ -294,7 +294,7 @@ class GiftCodesOnTheCardTests(TestCase):
         )
 
     def _codes(self, scopes):
-        auth = _staff_http(self.salon, scopes)
+        auth = _reception_auth(self.salon, scopes)
         visits = self.client.get(f"/api/clients/{self.sofia.id}/appointments", **auth)
         history = self.client.get(f"/api/clients/{self.sofia.id}/history", **auth)
         self.assertEqual(visits.status_code, 200, visits.content)
