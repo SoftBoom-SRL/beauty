@@ -11,7 +11,13 @@ import { afterEach, test } from 'node:test';
 import { fmtDateIt, isoAtMin, parseISO, toDateStr, todayStr } from '@youty/shared';
 import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
-const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/ApptDetailModal.jsx');
+const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/ApptDetailModal.jsx', {
+  // i pezzi senza hook del dettaglio, che per i test fanno parte del pannello
+  expand: [
+    'DetailFooter', 'ClientMetaBar', 'WhoWhenCard', 'DepositCard', 'NoteEditor', 'MarginSection', 'ServicesReadOnly', 'ServicesEditor',
+    'ReasonPicker', 'WhoCancels',
+  ],
+});
 
 const TODAY = todayStr();
 const plus = (n) => { const d = parseISO(TODAY); d.setDate(d.getDate() + n); return toDateStr(d); };
@@ -158,6 +164,38 @@ test('un altro giorno sfogliato dal pannello: «Sposta a …» alla stessa ora, 
   assert.deepEqual(undo.map((p) => p.body), [{ entry_id: 90 }]);
   assert.equal(g.lastToast().msg, 'Annullato · Spostamento di Maria');
   assert.deepEqual(g.props.onShowDate.calls.at(-1), [DAY]);
+});
+
+test('un evento live sulla visita: il pannello si rilegge e mostra la versione nuova', async () => {
+  const g = setup();
+  await settle(g);
+  const startInput = () => find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Ora di inizio');
+  assert.equal(startInput().props.value, '10:00');
+  g.state.server = visit({ start: isoAtMin(DAY, 14 * 60), updated_at: '2026-09-20T09:00:00.000000+00:00' });
+  // un evento di un'altra visita non la fa rileggere
+  const before = g.calls.get.filter((x) => x.url === '/api/agenda/appointments/41').length;
+  globalThis.__useLive([{ type: 'appointment.moved', payload: { appointment_id: 55 } }]);
+  await settle(g);
+  assert.equal(g.calls.get.filter((x) => x.url === '/api/agenda/appointments/41').length, before);
+  globalThis.__useLive([{ type: 'appointment.moved', payload: { appointment_id: 41 } }]);
+  await settle(g);
+  assert.equal(startInput().props.value, '14:00');
+  assert.equal(g.panel().props.sub.includes('14:00'), true);
+});
+
+test('la nota non salvata resta sopra la versione nuova arrivata da fuori, e lo si dice', async () => {
+  const g = setup();
+  await settle(g);
+  find(g.m.tree, (el) => el.type === 'textarea').props.onChange({ target: { value: 'Porta la foto' } });
+  g.render();
+  g.state.server = visit({ note: 'Allergia al nichel', updated_at: '2026-09-20T09:00:00.000000+00:00' });
+  globalThis.__useLive([{ type: 'appointment.updated', payload: { appointment_id: 41 } }]);
+  await settle(g);
+  assert.equal(find(g.m.tree, (el) => el.type === 'textarea').props.value, 'Porta la foto');
+  assert.deepEqual(g.lastToast(), {
+    msg: 'Servizi o nota cambiati nel frattempo: le tue modifiche non salvate sono state riportate sulla versione nuova. Controlla prima di salvare.',
+    icon: 'alert',
+  });
 });
 
 test('nota modificata: «Salva» scrive sulla versione letta (expected_updated_at)', async () => {
