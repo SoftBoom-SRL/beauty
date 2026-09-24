@@ -555,22 +555,31 @@ helper `period_range(period, date)` → (start, end).
 
 ---
 
-## 13a. apps/integrations — Yourang via proxy
+## 13a. apps/integrations — Yourang (OAuth diretto)
 
-Il portale non è un client OAuth: lo è il proxy (vedi DEPLOY.md §8).
+Il portale è il client OAuth di Yourang (OIDC + PKCE, vedi DEPLOY.md §8): token
+del salone cifrati sulla connessione, segreto del webhook per salone.
 - GET `/yourang/oauth/start` (staff, titolare) e GET `/yourang/oauth/login/start`
-  (pubblico) → `{authorize_url, nonce}`. Il `nonce` resta nel sessionStorage della
-  finestra che avvia il flusso.
-- POST `/yourang/oauth/exchange` `{code, mode, state, nonce}`: `state` (firmato
-  all'avvio, torna nel return_to) e `nonce` legano il codice alla finestra e alla
-  sessione che l'hanno chiesto. Senza, o non validi → 400; salone già collegato a
-  un'altra organizzazione (o organizzazione già di un altro salone) → 409
-  «scollegalo prima». `connect` → `{mode, status}` (la prima sync gira in
-  background); `login` → `{mode, session}`.
-- GET `/yourang/status` → `{connected, status, connected_at, last_sync_at,
+  (pubblico) → `{authorize_url, nonce}`. Lo `state` sta a database con il verifier
+  PKCE (e, per il collegamento, salone e utente); il `nonce` (HMAC dello state)
+  resta nel sessionStorage della finestra che avvia il flusso.
+- POST `/yourang/oauth/exchange` `{code, state, nonce}`: il `nonce` si controlla
+  prima di consumare lo state; senza, o non valido → 400. State sconosciuto,
+  già usato o più vecchio di 10 minuti → 400. Il modo lo decide lo state (con
+  salone → collegamento, senza → accesso), non la richiesta. Salone già collegato
+  a un'altra organizzazione (o organizzazione già di un altro salone) → 409
+  «scollegalo prima». `connect` → `{mode, status}` (webhook registrato di nuovo,
+  prima sync in background); `login` → `{mode, session}`.
+- «Accedi con Yourang» collega da solo un salone solo se chi entra ne è il
+  titolare ed è l'unico suo senza connessione; su un'org già collegata non
+  ridefinisce la connessione, salvo rimetterla in piedi se è senza token o in
+  errore.
+- GET `/yourang/status` → `{connected, status, connected_at, last_sync_at, scope,
   yourang_org_id, last_error}`; `last_error` "" se l'ultima sync è andata bene.
-- Webhook in ingresso: gli annullamenti arrivati DA Yourang non vengono rimandati
-  a Yourang come `appointment.cancelled`.
+- Webhook in ingresso: firma col segreto del salone dell'`organization_id`;
+  `contact.*` con `resource_id` riconcilia solo quel contatto. Gli annullamenti
+  arrivati DA Yourang non vengono rimandati a Yourang come
+  `appointment.cancelled`.
 
 ## 13. Note per l'integratore (non per gli agenti)
 

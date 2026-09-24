@@ -1,7 +1,7 @@
-// Ritorno del popup Yourang: il codice si riscatta solo se il flusso è stato
-// avviato in QUESTA finestra. Il caso che conta: un link
-// /oauth-popup/done?mode=connect&yr_link=<codice di un altro> aperto dal titolare
-// non deve trovare nessun nonce, quindi l'exchange non parte.
+// Ritorno del popup Yourang: il codice si scambia solo se il flusso è stato
+// avviato in QUESTA finestra. Il caso che conta: il link
+// /oauth-popup/done?code=…&state=… dell'accesso di un altro, aperto qui, non
+// deve trovare nessun nonce, quindi l'exchange non parte.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -71,4 +71,11 @@ test('il login senza flusso riparte da capo una volta sola, poi errore', () => {
   assert.equal(s.has(RESTART_KEY), false);
   assert.equal(claimRestart(null), false);
   assert.equal(claimRestart(brokenStorage), false);
+});
+
+test('senza mode (ritorno del flusso OAuth diretto) vale quello salvato all\'avvio', () => {
+  const s = memoryStorage();
+  saveFlow(s, 'login', 'n-3');
+  assert.deepEqual(takeFlow(s), { mode: 'login', nonce: 'n-3' });
+  assert.equal(takeFlow(s), null);
 });

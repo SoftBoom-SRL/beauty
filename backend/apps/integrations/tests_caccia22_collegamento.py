@@ -1,38 +1,72 @@
-"""Caccia del 22/09 — collegamento e accesso Yourang.
+"""Caccia del 22/09 — collegamento e accesso Yourang (flusso OAuth diretto).
 
-11-01/10-02: il codice del proxy va legato al flusso avviato da questa finestra
-(state firmato + nonce) e un salone collegato non cambia org senza disconnettersi.
+11-01/10-02: il codice va legato alla finestra che ha avviato il flusso (nonce,
+HMAC dello state) e un salone collegato non cambia org senza disconnettersi.
 11-02/10-03: «Accedi con Yourang» collega da solo solo il salone di cui l'utente
-è titolare, e solo se è uno. 11-14: cambio org → riferimenti remoti azzerati.
+è titolare, e solo se è uno; il collega che accede non ridefinisce una
+connessione che funziona. 11-14: cambio org → riferimenti remoti azzerati.
 18-15: primo accesso atomico. 11-18/17-13 (C9): last_error esposto e scritto dal
 cron. 11-12: la prima sync gira fuori dalla richiesta.
+
+Nati sul proxy, portati sul flusso diretto al merge con main (24/09), dove il
+proxy è stato tolto (YR-502).
 
     python manage.py test apps.integrations.tests_caccia22_collegamento
 """
 
 import json
+from datetime import timedelta
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
+import jwt
 from django.core.management import call_command
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from apps.accounts.models import Membership, Role, User
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
-from apps.integrations import sync
-from apps.integrations.models import YourangConnection
+from apps.integrations import crypto, sync
+from apps.integrations.models import YourangConnection, YourangOAuthState
 from apps.integrations.sync import SyncReport
 from common.auth import create_staff_tokens
 
+from .tests import TEST_KEY
+
 EXCHANGE = "/api/integrations/yourang/oauth/exchange"
-PROXY = dict(
-    YOURANG_PROXY_URL="https://proxy.invalid",
-    YOURANG_PROXY_API_KEY="k",
+DIRECT = dict(
+    YOURANG_ISSUER_URL="https://yourang.invalid",
+    YOURANG_CLIENT_ID="beauty",
+    YOURANG_CLIENT_SECRET="segreto-del-client",
+    YOURANG_WEBHOOK_RECEIVER_URL="",
     FRONTEND_ORIGIN="https://beauty.example",
+    ENCRYPTION_KEY=TEST_KEY,
 )
+DISCOVERY = {
+    "authorization_endpoint": "https://app.yourang.invalid/oauth/authorize",
+    "token_endpoint": "https://yourang.invalid/oauth/token",
+}
+RECEIVER = "https://api.beauty.example/api/integrations/yourang/webhook"
+# Solo per firmare i JWT finti: il client ne legge i claim senza verificarli.
+_JWT_KEY = "chiave-dei-test-per-i-jwt-finti-0123456789abcdef"
+
+
+def _jwt(claims):
+    return jwt.encode(claims, _JWT_KEY, algorithm="HS256")
+
+
+def _token_resp(org, email="", *, verified=True, name=""):
+    """Risposta del token endpoint: `org` nell'access token, l'identità nell'id_token."""
+    return {
+        "access_token": _jwt({"org": org, "sub": email or "u"}),
+        "id_token": _jwt({"email": email, "email_verified": verified, "name": name}),
+        "refresh_token": f"refresh-{org}",
+        "expires_in": 3600,
+        "scope": "openid contacts:read contacts:write events:read",
+    }
 
 
 def _member(salon, email, *, owner=False, scopes=None):
@@ -46,28 +80,32 @@ def _bearer(user, salon):
     return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
 
 
-def _state_of(authorize_url: str) -> tuple[str, str]:
-    """(mode, state) dal return_to che il proxy rimanderà indietro."""
-    return_to = parse_qs(urlparse(authorize_url).query)["return_to"][0]
-    params = parse_qs(urlparse(return_to).query)
-    return params["mode"][0], params["state"][0]
-
-
-@override_settings(**PROXY)
+@override_settings(**DIRECT)
 class _FlowCase(TestCase):
     def start(self, mode, headers=None):
         url = "/api/integrations/yourang/oauth/" + ("login/start" if mode == "login" else "start")
-        r = self.client.get(url, **(headers or {}))
+        with mock.patch("apps.integrations.client._discovery", return_value=DISCOVERY):
+            r = self.client.get(url, **(headers or {}))
         self.assertEqual(r.status_code, 200, r.content)
         body = r.json()
-        got_mode, state = _state_of(body["authorize_url"])
-        self.assertEqual(got_mode, mode)
+        query = parse_qs(urlparse(body["authorize_url"]).query)
+        self.assertEqual(query["redirect_uri"], ["https://beauty.example/oauth-popup/done"])
+        self.assertEqual(query["code_challenge_method"], ["S256"])
+        state = query["state"][0]
+        # Il modo sta nello state a database: con un salone è un collegamento.
+        flow = YourangOAuthState.objects.get(state=state)
+        self.assertEqual(flow.salon_id is None, mode == "login")
         return state, body["nonce"]
 
     def exchange(self, payload, headers=None):
         return self.client.post(
             EXCHANGE, data=json.dumps(payload), content_type="application/json", **(headers or {})
         )
+
+    @staticmethod
+    def redeem(token_resp=None):
+        """Il token endpoint di Yourang: il codice vale `token_resp`."""
+        return mock.patch("apps.integrations.client.exchange_code", return_value=token_resp)
 
 
 class ConnectStateTests(_FlowCase):
@@ -76,72 +114,78 @@ class ConnectStateTests(_FlowCase):
         self.owner = _member(self.salon, "owner@p.it", owner=True)
         self.auth = _bearer(self.owner, self.salon)
 
-    def test_code_from_a_link_without_the_flow_is_refused_before_redeeming(self):
-        """/oauth-popup/done?mode=connect&yr_link=<codice altrui>: niente state/nonce."""
-        with mock.patch("apps.integrations.client.redeem_link_code") as redeem:
-            r = self.exchange({"code": "codice-dell-attaccante", "mode": "connect"}, self.auth)
+    def test_a_return_link_without_the_nonce_is_refused_before_redeeming(self):
+        """/oauth-popup/done?code=…&state=… aperto in un'altra finestra: lo state
+        è buono, ma il nonce sta solo nel sessionStorage di chi l'ha avviato."""
+        state, _ = self.start("connect", self.auth)
+        with self.redeem() as redeem:
+            r = self.exchange({"code": "codice-altrui", "state": state}, self.auth)
         self.assertEqual(r.status_code, 400, r.content)
-        redeem.assert_not_called()  # il codice non si consuma e l'identità non si vede
+        redeem.assert_not_called()  # il codice non si consuma
+        # E nemmeno lo state: chi ha avviato il flusso può ancora completarlo.
+        self.assertTrue(YourangOAuthState.objects.filter(state=state).exists())
         self.assertFalse(YourangConnection.objects.filter(salon=self.salon).exists())
 
-    def test_state_of_another_session_is_refused(self):
-        """L'attaccante avvia il SUO flusso (state e nonce validi, ma suoi):
-        riscattato con la sessione del titolare non passa."""
-        other = Salon.objects.create(name="Altro", slug="altro")
-        attacker = _member(other, "evil@x.it", owner=True)
-        state, nonce = self.start("connect", _bearer(attacker, other))
-        with mock.patch("apps.integrations.client.redeem_link_code") as redeem:
-            r = self.exchange(
-                {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
-            )
-        self.assertEqual(r.status_code, 400, r.content)
-        redeem.assert_not_called()
-
-    def test_state_without_its_nonce_is_refused(self):
+    def test_a_nonce_opens_only_its_own_flow(self):
         state, _ = self.start("connect", self.auth)
-        with mock.patch("apps.integrations.client.redeem_link_code") as redeem:
-            for nonce in ("", "un-altro-nonce"):
-                r = self.exchange(
-                    {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
-                )
+        _, nonce_of_another_flow = self.start("connect", self.auth)
+        with self.redeem() as redeem:
+            for nonce in ("", "un-altro-nonce", nonce_of_another_flow):
+                r = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
                 self.assertEqual(r.status_code, 400, r.content)
         redeem.assert_not_called()
 
-    def test_login_state_does_not_open_a_connect(self):
+    def test_a_state_is_used_once(self):
+        state, nonce = self.start("connect", self.auth)
+        with self.redeem(_token_resp("org-legit")) as redeem, \
+                mock.patch("apps.integrations.sync._run_in_background"):
+            first = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
+            again = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(again.status_code, 400, again.content)
+        self.assertEqual(redeem.call_count, 1)
+
+    def test_the_mode_comes_from_the_state_not_from_the_request(self):
+        """Uno state di «Accedi» resta un accesso anche se arriva con la sessione
+        del titolare e `mode: connect`: il salone di quella sessione non si tocca."""
         state, nonce = self.start("login")
-        with mock.patch("apps.integrations.client.redeem_link_code") as redeem:
+        with self.redeem(_token_resp("org-sua", "altra@p.it", name="Altra")), \
+                mock.patch("apps.integrations.sync._run_in_background"):
             r = self.exchange(
                 {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
             )
-        self.assertEqual(r.status_code, 400, r.content)
-        redeem.assert_not_called()
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["mode"], "login")
+        self.assertEqual(r.json()["session"]["user"]["email"], "altra@p.it")
+        self.assertFalse(YourangConnection.objects.filter(salon=self.salon).exists())
 
     def test_expired_state_is_refused(self):
         state, nonce = self.start("connect", self.auth)
-        import time as real_time
-
-        later = real_time.time() + 16 * 60
-        with mock.patch("django.core.signing.time.time", return_value=later), \
-                mock.patch("apps.integrations.client.redeem_link_code") as redeem:
-            r = self.exchange(
-                {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
-            )
+        YourangOAuthState.objects.filter(state=state).update(
+            created_at=timezone.now() - timedelta(minutes=11)
+        )
+        with self.redeem() as redeem:
+            r = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
         self.assertEqual(r.status_code, 400, r.content)
         self.assertIn("scaduto", r.json()["detail"])
         redeem.assert_not_called()
 
     def test_the_flow_started_here_connects_and_syncs_outside_the_request(self):
         state, nonce = self.start("connect", self.auth)
-        with mock.patch("apps.integrations.client.redeem_link_code",
-                        return_value={"org_id": "org-legit"}), \
+        with self.redeem(_token_resp("org-legit")), \
+                override_settings(YOURANG_WEBHOOK_RECEIVER_URL=RECEIVER), \
+                mock.patch("apps.integrations.client.YourangClient.register_webhook",
+                           return_value="whsec-1") as register, \
                 mock.patch("apps.integrations.sync._run_in_background") as background, \
                 self.captureOnCommitCallbacks(execute=True):
-            r = self.exchange(
-                {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
-            )
+            r = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
         self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["mode"], "connect")
         conn = YourangConnection.objects.get(salon=self.salon)
         self.assertEqual((conn.yourang_org_id, conn.connected_by_id), ("org-legit", self.owner.id))
+        self.assertEqual(crypto.decrypt(conn.refresh_token_enc), "refresh-org-legit")
+        register.assert_called_once_with(RECEIVER, ["contact.*", "event.*"])
+        self.assertEqual(crypto.decrypt(conn.webhook_secret_enc), "whsec-1")
         background.assert_called_once_with(conn.pk)  # la sync non gira nella richiesta
 
 
@@ -161,13 +205,10 @@ class OrgChangeTests(_FlowCase):
 
     def _connect(self, org):
         state, nonce = self.start("connect", self.auth)
-        with mock.patch("apps.integrations.client.redeem_link_code",
-                        return_value={"org_id": org}), \
+        with self.redeem(_token_resp(org)), \
                 mock.patch("apps.integrations.sync._run_in_background") as background, \
                 self.captureOnCommitCallbacks(execute=True):
-            r = self.exchange(
-                {"code": "c", "mode": "connect", "state": state, "nonce": nonce}, self.auth
-            )
+            r = self.exchange({"code": "c", "state": state, "nonce": nonce}, self.auth)
         return r, background
 
     def test_a_connected_salon_does_not_switch_org_without_disconnecting(self):
@@ -179,6 +220,7 @@ class OrgChangeTests(_FlowCase):
         self.assertIn("scollegalo", r.json()["detail"])
         conn = YourangConnection.objects.get(salon=self.salon)
         self.assertEqual((conn.yourang_org_id, conn.catalogue_id), ("org-legit", "cat-legit"))
+        self.assertEqual(conn.access_token_enc, "")  # i token dell'altra org non ci finiscono
         self.linked.refresh_from_db()
         self.assertEqual(self.linked.yourang_contact_id, "c-old")
         background.assert_not_called()
@@ -193,6 +235,7 @@ class OrgChangeTests(_FlowCase):
         conn = YourangConnection.objects.get(salon=self.salon)
         self.assertEqual(conn.status, YourangConnection.Status.CONNECTED)
         self.assertEqual((conn.last_error, conn.catalogue_id), ("", "cat-legit"))
+        self.assertEqual(crypto.decrypt(conn.refresh_token_enc), "refresh-org-legit")
         self.linked.refresh_from_db()
         self.assertEqual(self.linked.yourang_contact_id, "c-old")
         background.assert_called_once_with(conn.pk)
@@ -235,32 +278,31 @@ class OrgChangeTests(_FlowCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertTrue(seen)
         self.assertTrue(all(fields is not None for fields in seen), seen)
-        self.assertNotIn("last_sync_at", seen[0])
+        self.assertTrue(all("last_sync_at" not in fields for fields in seen), seen)
 
 
-@override_settings(**PROXY)
 class LoginAdoptionTests(_FlowCase):
-    def _login(self, identity):
-        from apps.integrations.login import login_with_link_code
+    def _login(self, org, email, name=""):
+        from apps.integrations.login import login_with_yourang
 
-        with mock.patch("apps.integrations.client.redeem_link_code", return_value=identity), \
+        with self.redeem(_token_resp(org, email, name=name)), \
                 mock.patch("apps.integrations.sync._run_in_background") as background, \
                 self.captureOnCommitCallbacks(execute=True):
-            session = login_with_link_code("code")
+            session = login_with_yourang("code", "verifier")
         return session, background
 
     def test_login_exchange_needs_the_flow_of_this_window(self):
-        with mock.patch("apps.integrations.client.redeem_link_code") as redeem:
-            r = self.exchange({"code": "codice-altrui", "mode": "login"})
+        """Il link di ritorno dell'accesso di un altro, aperto qui: senza il nonce
+        di questa finestra non entra nessuno (e lo state non si brucia)."""
+        state, nonce = self.start("login")
+        with self.redeem() as redeem:
+            r = self.exchange({"code": "codice-altrui", "state": state})
         self.assertEqual(r.status_code, 400, r.content)
         redeem.assert_not_called()
 
-        state, nonce = self.start("login")
-        identity = {"org_id": "org-nuova", "email": "nuova@p.it", "email_verified": True,
-                    "name": "Nuova"}
-        with mock.patch("apps.integrations.client.redeem_link_code", return_value=identity), \
+        with self.redeem(_token_resp("org-nuova", "nuova@p.it", name="Nuova")), \
                 mock.patch("apps.integrations.sync._run_in_background"):
-            r = self.exchange({"code": "c", "mode": "login", "state": state, "nonce": nonce})
+            r = self.exchange({"code": "c", "state": state, "nonce": nonce})
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()["session"]["user"]["email"], "nuova@p.it")
 
@@ -268,9 +310,7 @@ class LoginAdoptionTests(_FlowCase):
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         _member(salon, "owner@p.it", owner=True)
         op = _member(salon, "op@p.it", scopes=["agenda"])
-        session, background = self._login(
-            {"org_id": "org-op", "email": "op@p.it", "email_verified": True, "name": "Op"}
-        )
+        session, background = self._login("org-op", "op@p.it", "Op")
         self.assertEqual((session["salon"]["id"], session["user"]["id"]), (salon.id, op.id))
         self.assertFalse(session["is_owner"])
         self.assertFalse(YourangConnection.objects.filter(salon=salon).exists())
@@ -283,9 +323,7 @@ class LoginAdoptionTests(_FlowCase):
         user = User.objects.create_user(email="tit@p.it", password="x-Segretissima-1")
         Membership.objects.create(user=user, salon=s1, is_owner=True)
         Membership.objects.create(user=user, salon=s2, is_owner=True)
-        session, background = self._login(
-            {"org_id": "org-mare", "email": "tit@p.it", "email_verified": True, "name": "T"}
-        )
+        session, background = self._login("org-mare", "tit@p.it", "T")
         self.assertIn(session["salon"]["id"], (s1.id, s2.id))
         self.assertFalse(YourangConnection.objects.exists())
         self.assertEqual(Salon.objects.count(), 2)  # nessun salone nuovo al posto di Mare
@@ -297,58 +335,79 @@ class LoginAdoptionTests(_FlowCase):
         user = _member(salon, "tit@p.it", owner=True)
         Membership.objects.create(user=user, salon=linked, is_owner=True)
         YourangConnection.objects.create(salon=linked, yourang_org_id="org-centro")
-        session, background = self._login(
-            {"org_id": "org-mare", "email": "tit@p.it", "email_verified": True, "name": "T"}
-        )
+        session, background = self._login("org-mare", "tit@p.it", "T")
         conn = YourangConnection.objects.get(yourang_org_id="org-mare")
         self.assertEqual((conn.salon_id, conn.connected_by_id), (salon.id, user.id))
+        self.assertEqual(crypto.decrypt(conn.refresh_token_enc), "refresh-org-mare")
         self.assertEqual(session["salon"]["id"], salon.id)
         self.assertTrue(session["is_owner"])
         background.assert_called_once_with(conn.pk)
 
-    def test_colleague_login_on_a_mapped_org_leaves_the_connection_alone(self):
+    def test_colleague_login_leaves_a_working_connection_alone(self):
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         owner = _member(salon, "owner@p.it", owner=True)
         YourangConnection.objects.create(
             salon=salon, yourang_org_id="org-x", connected_by=owner,
-            status=YourangConnection.Status.ERROR, last_error="502 di ieri",
+            access_token_enc=crypto.encrypt("tok-titolare"),
+            refresh_token_enc=crypto.encrypt("ref-titolare"),
+            expires_at=timezone.now() + timedelta(hours=1),
+            last_error="Sincronizzazione parziale: x",
         )
-        session, background = self._login(
-            {"org_id": "org-x", "email": "collega@p.it", "email_verified": True, "name": "C"}
-        )
+        session, background = self._login("org-x", "collega@p.it", "C")
         self.assertEqual(session["salon"]["id"], salon.id)
         self.assertFalse(session["is_owner"])
         conn = YourangConnection.objects.get(salon=salon)
         self.assertEqual(conn.connected_by_id, owner.id)
-        self.assertEqual((conn.status, conn.last_error), ("error", "502 di ieri"))
+        self.assertEqual(crypto.decrypt(conn.refresh_token_enc), "ref-titolare")
+        self.assertEqual(conn.last_error, "Sincronizzazione parziale: x")
         background.assert_not_called()
 
+    def test_a_login_of_the_org_repairs_a_connection_that_cannot_work(self):
+        """Senza token (tutte, dopo la 0005 che riporta il flusso diretto) o in
+        errore: il primo accesso con Yourang dell'org la rimette in piedi."""
+        cases = {
+            "senza token": {},
+            "in errore": dict(
+                access_token_enc="x", status=YourangConnection.Status.ERROR,
+                last_error="502 di ieri",
+            ),
+        }
+        for i, (label, extra) in enumerate(cases.items()):
+            with self.subTest(label):
+                salon = Salon.objects.create(name=f"Salone {i}", slug=f"salone-{i}")
+                _member(salon, f"owner-{i}@p.it", owner=True)
+                YourangConnection.objects.create(salon=salon, yourang_org_id=f"org-{i}", **extra)
+                session, background = self._login(f"org-{i}", f"collega-{i}@p.it", "C")
+                self.assertEqual(session["salon"]["id"], salon.id)
+                conn = YourangConnection.objects.get(salon=salon)
+                self.assertEqual(conn.status, YourangConnection.Status.CONNECTED)
+                self.assertEqual(conn.last_error, "")
+                self.assertEqual(crypto.decrypt(conn.refresh_token_enc), f"refresh-org-{i}")
+                background.assert_called_once_with(conn.pk)
+
     def test_new_identity_gets_a_new_linked_salon(self):
-        session, background = self._login(
-            {"org_id": "org-new", "email": "new@p.it", "email_verified": True, "name": "Nuovo"}
-        )
+        session, background = self._login("org-new", "new@p.it", "Nuovo")
         conn = YourangConnection.objects.get(yourang_org_id="org-new")
         self.assertEqual(session["salon"]["id"], conn.salon_id)
         self.assertTrue(session["is_owner"])
+        self.assertTrue(conn.access_token_enc)
         background.assert_called_once_with(conn.pk)
 
 
-@override_settings(**PROXY)
-class ConcurrentFirstLoginTests(TestCase):
+class ConcurrentFirstLoginTests(_FlowCase):
     """18-15: due primi accessi della stessa org corrono su slug, email e vincolo
     dell'org. Chi perde non esce con un 500 né lascia un salone a metà: il suo
     giro torna indietro per intero e la risoluzione si rifà una volta."""
 
-    IDENTITY = {"org_id": "org-doppia", "email": "new@p.it", "email_verified": True,
-                "name": "Nuovo"}
+    TOKENS = _token_resp("org-doppia", "new@p.it", name="Nuovo")
 
     def _login_with(self, racing_enter):
         from apps.integrations import login
 
-        with mock.patch("apps.integrations.client.redeem_link_code", return_value=self.IDENTITY), \
+        with self.redeem(self.TOKENS), \
                 mock.patch.object(login, "_enter", side_effect=racing_enter), \
                 mock.patch("apps.integrations.sync._run_in_background"):
-            return login.login_with_link_code("code")
+            return login.login_with_yourang("code", "verifier")
 
     def _racing(self, error, *, times=1):
         from apps.integrations import login
@@ -384,6 +443,7 @@ class ConcurrentFirstLoginTests(TestCase):
                 self.assertEqual(User.objects.filter(email="new@p.it").count(), 1)
                 conn = YourangConnection.objects.get(yourang_org_id="org-doppia")
                 self.assertEqual(session["salon"]["id"], conn.salon_id)
+                self.assertTrue(conn.access_token_enc)
 
     def test_a_second_failure_is_not_retried_forever(self):
         racing_enter, calls = self._racing(IntegrityError("ancora"), times=2)
@@ -391,6 +451,17 @@ class ConcurrentFirstLoginTests(TestCase):
             self._login_with(racing_enter)
         self.assertEqual(calls["n"], 2)
         self.assertEqual(Salon.objects.count(), 0)
+
+    def test_a_conflict_that_persists_is_a_409_not_a_500(self):
+        from apps.integrations import login
+        from apps.integrations.connection import ORG_TAKEN, OrgConflict
+
+        state, nonce = self.start("login")
+        with self.redeem(self.TOKENS), \
+                mock.patch.object(login, "_enter", side_effect=OrgConflict(ORG_TAKEN)):
+            r = self.exchange({"code": "c", "state": state, "nonce": nonce})
+        self.assertEqual(r.status_code, 409, r.content)
+        self.assertEqual(r.json()["detail"], ORG_TAKEN)
 
 
 class StatusLastErrorTests(TestCase):
@@ -414,11 +485,11 @@ class StatusLastErrorTests(TestCase):
         self.assertTrue(body["connected"])
         self.assertEqual(body["last_error"], "Sincronizzazione parziale: x")
         conn.status = YourangConnection.Status.ERROR
-        conn.last_error = "proxy 502"
+        conn.last_error = "Yourang 502"
         conn.save()
         body = self._status()
         self.assertFalse(body["connected"])
-        self.assertEqual((body["status"], body["last_error"]), ("error", "proxy 502"))
+        self.assertEqual((body["status"], body["last_error"]), ("error", "Yourang 502"))
 
 
 class CronLastErrorTests(TestCase):
@@ -468,10 +539,10 @@ class InitialSyncTests(TestCase):
         self.assertEqual(self.conn.last_error, "Sincronizzazione parziale: a; b; c (+1 altri)")
 
     def test_a_crash_is_written_too(self):
-        with mock.patch("apps.integrations.sync.sync_clients", side_effect=RuntimeError("proxy giù")):
+        with mock.patch("apps.integrations.sync.sync_clients", side_effect=RuntimeError("Yourang giù")):
             sync.initial_sync(self.conn.pk)
         self.conn.refresh_from_db()
-        self.assertEqual(self.conn.last_error, "proxy giù")
+        self.assertEqual(self.conn.last_error, "Yourang giù")
         self.assertIsNone(self.conn.last_sync_at)
 
     def test_the_sync_stops_when_the_salon_is_disconnected_meanwhile(self):

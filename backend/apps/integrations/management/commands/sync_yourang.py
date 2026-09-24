@@ -22,7 +22,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # Anche i saloni in ERROR: quasi tutti gli errori qui sono passeggeri (un
-        # 502 del proxy, un timeout) e prima bastava uno di questi perché il
+        # 502 di Yourang, un timeout) e prima bastava uno di questi perché il
         # salone uscisse dal cron PER SEMPRE — nessun percorso lo riportava a
         # CONNECTED senza un OAuth rifatto a mano, e intanto i webhook
         # continuavano a funzionare, quindi nessuno si accorgeva che il backfill

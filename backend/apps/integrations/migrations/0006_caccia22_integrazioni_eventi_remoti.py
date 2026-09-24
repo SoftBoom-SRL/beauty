@@ -8,7 +8,8 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("agenda", "0010_undoentry"),
-        ("integrations", "0004_yourang_org_unique"),
+        # dopo la 0005 di main (ritorno ai token locali), già applicata in produzione
+        ("integrations", "0005_restore_local_yourang_tokens"),
     ]
 
     operations = [

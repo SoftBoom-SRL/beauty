@@ -34,7 +34,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ("catalog", "0004_service_description"),
         ("staff", "0001_initial"),
-        ("integrations", "0005_caccia22_integrazioni_eventi_remoti"),
+        ("integrations", "0006_caccia22_integrazioni_eventi_remoti"),
     ]
 
     operations = [

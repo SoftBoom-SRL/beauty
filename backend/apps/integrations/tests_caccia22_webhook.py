@@ -4,6 +4,9 @@ Un webhook contact.* riconcilia solo quel contatto (niente sync completa né
 push di ogni scheda), un giro di sync riusa un solo client httpx, e due sync
 che partono insieme non creano due cataloghi.
 
+Nati sul proxy, portati sul flusso diretto al merge con main (24/09): token
+del salone sulla connessione, segreto del webhook per salone.
+
     python manage.py test apps.integrations.tests_caccia22_webhook
 """
 
@@ -11,22 +14,40 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import timedelta
 from unittest import mock
 
 import httpx
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
-from apps.integrations import sync
+from apps.integrations import crypto, sync
 from apps.integrations.models import YourangConnection
 
+from .tests import TEST_KEY
+
 SECRET = "s3cret-22"
+API = "/api/external/v1"
+DIRECT = dict(YOURANG_ISSUER_URL="https://yourang.invalid", ENCRYPTION_KEY=TEST_KEY)
+
+
+def _connection(salon, org, **extra):
+    """Connessione del flusso diretto, con un token ancora valido (niente refresh)."""
+    return YourangConnection.objects.create(
+        salon=salon,
+        yourang_org_id=org,
+        access_token_enc=crypto.encrypt("tok"),
+        refresh_token_enc=crypto.encrypt("ref"),
+        expires_at=timezone.now() + timedelta(hours=1),
+        **extra,
+    )
 
 
 class FakeHttp:
-    """httpx.Client finto: registra (metodo, path) e risponde come il proxy."""
+    """httpx.Client finto: registra (metodo, path) e risponde come l'external API."""
 
     instances: list["FakeHttp"] = []
     contacts: dict = {}
@@ -38,7 +59,7 @@ class FakeHttp:
         FakeHttp.instances.append(self)
 
     def request(self, method, url, headers=None, timeout=None, **kwargs):
-        path = url.split("/api", 1)[1]
+        path = url.split(API, 1)[1]
         self.calls.append((method, path))
         status, data = 200, {}
         if method == "GET" and path.startswith("/contacts?"):
@@ -71,10 +92,7 @@ def _all_calls():
     return [call for http in FakeHttp.instances for call in http.calls]
 
 
-@override_settings(
-    YOURANG_PROXY_URL="https://proxy.invalid", YOURANG_PROXY_API_KEY="k",
-    YOURANG_PROXY_WEBHOOK_SECRET=SECRET,
-)
+@override_settings(**DIRECT)
 class ContactWebhookTests(TestCase):
     def setUp(self):
         FakeHttp.instances = []
@@ -84,7 +102,9 @@ class ContactWebhookTests(TestCase):
         }
         FakeHttp.missing_route = False
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-c")
+        self.conn = _connection(
+            self.salon, "org-c", webhook_secret_enc=crypto.encrypt(SECRET)
+        )
         for i in range(120):
             Client.objects.create(salon=self.salon, first_name=f"C{i}", phone=f"+3933310{i:05d}")
 
@@ -129,7 +149,7 @@ class ContactWebhookTests(TestCase):
         self.assertTrue(calls and all(method == "GET" for method, _ in calls), calls)
         self.assertTrue(Client.objects.filter(yourang_contact_id="c-1").exists())
 
-    def test_a_proxy_without_the_single_contact_route_falls_back_without_push(self):
+    def test_a_contact_the_api_does_not_return_falls_back_without_push(self):
         FakeHttp.missing_route = True
         self.assertEqual(self._hook("contact.updated").status_code, 200)
         calls = _all_calls()
@@ -144,15 +164,15 @@ class ContactWebhookTests(TestCase):
         self.assertEqual(r.status_code, 200)  # un 503 farebbe ritentare Yourang all'infinito
 
 
+@override_settings(**DIRECT)
 class PooledClientTests(TestCase):
     def setUp(self):
         FakeHttp.instances = []
         FakeHttp.contacts = {}
         FakeHttp.missing_route = False
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-p")
+        self.conn = _connection(self.salon, "org-p")
 
-    @override_settings(YOURANG_PROXY_URL="https://proxy.invalid", YOURANG_PROXY_API_KEY="k")
     def test_a_sync_run_reuses_one_http_client(self):
         for i in range(3):
             Client.objects.create(salon=self.salon, first_name=f"C{i}", phone=f"+39333000000{i}")
@@ -167,12 +187,12 @@ class PooledClientTests(TestCase):
         self.assertEqual(len(report.errors), 3)  # i 403 restano nel resoconto
 
 
-@override_settings(YOURANG_PROXY_URL="https://proxy.invalid", YOURANG_PROXY_API_KEY="k")
+@override_settings(**DIRECT)
 class CatalogueRaceTests(TestCase):
     def test_a_catalogue_created_meanwhile_is_reused(self):
         FakeHttp.instances = []
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        conn = YourangConnection.objects.create(salon=salon, yourang_org_id="org-k")
+        conn = _connection(salon, "org-k")
         cat = ServiceCategory.objects.create(salon=salon, name_it="Capelli")
         Service.objects.create(salon=salon, category=cat, name_it="Piega", duration_min=30, price=20)
         # l'altra sync (cron o prima sync in background) l'ha appena creato
@@ -181,6 +201,7 @@ class CatalogueRaceTests(TestCase):
             sync.sync_services(conn)
         calls = _all_calls()
         self.assertNotIn(("POST", "/catalogues"), calls)
+        self.assertIn(("POST", "/catalogues/items"), calls)  # la voce va nel catalogo trovato
         self.assertEqual(conn.catalogue_id, "cat-1")
         conn.refresh_from_db()
         self.assertEqual(conn.catalogue_id, "cat-1")

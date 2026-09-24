@@ -1,12 +1,11 @@
 // flow.js — lega il ritorno del popup Yourang al flusso avviato in QUESTA finestra.
 //
-// Il codice monouso che il proxy rimette nell'URL (?yr_link=) non dice chi ha
-// avviato il flusso: un link /oauth-popup/done?mode=connect&yr_link=… mandato da
-// un altro veniva riscattato con la sessione del titolare e ricollegava il salone
-// all'org dell'attaccante (con mode=login si entrava nel salone dell'attaccante).
-// All'avvio il backend conia uno state firmato (torna nell'URL) e un nonce, che
-// teniamo nel sessionStorage: è per scheda, quindi un link aperto altrove non lo
-// ha, e senza nonce l'exchange non parte (e il backend lo rifiuterebbe comunque).
+// Il codice che Yourang rimette nell'URL (?code&state) non dice in quale finestra
+// è stato avviato il flusso: il link di ritorno di un «Accedi con Yourang» fatto
+// da un altro, con la sua identità, apriva al destinatario il salone di chi
+// l'aveva mandato. All'avvio il backend restituisce anche un nonce, che teniamo
+// nel sessionStorage: è per scheda, quindi un link aperto altrove non lo ha, e
+// senza nonce l'exchange non parte (e il backend lo rifiuterebbe comunque).
 //
 // Tutte le funzioni accettano uno storage nullo: sessionStorage può mancare o
 // lanciare (cookie bloccati, navigazione privata su alcuni browser).
@@ -25,7 +24,9 @@ export function saveFlow(storage, mode, nonce) {
   }
 }
 
-/** Legge e CONSUMA il flusso avviato qui; null se manca o è di un altro mode. */
+/** Legge e CONSUMA il flusso avviato qui; null se manca o (con `mode`) è di un
+ *  altro mode. Senza `mode` vale quello salvato: l'URL di ritorno del flusso
+ *  OAuth diretto non lo porta. */
 export function takeFlow(storage, mode) {
   if (!storage) return null;
   let flow = null;
@@ -35,7 +36,7 @@ export function takeFlow(storage, mode) {
     flow = null;
   }
   try { storage.removeItem(FLOW_KEY); } catch { /* ignore */ }
-  if (!flow || flow.mode !== mode || typeof flow.nonce !== 'string' || !flow.nonce) return null;
+  if (!flow || (mode !== undefined && flow.mode !== mode) || typeof flow.nonce !== 'string' || !flow.nonce) return null;
   return flow;
 }
 

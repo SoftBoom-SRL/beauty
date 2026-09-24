@@ -1,15 +1,13 @@
-"""Login con Yourang: da un'identità Yourang a una sessione staff beauty.
+"""Login con Yourang: da un'identità Yourang (OAuth) a una sessione staff beauty.
 
-L'identità arriva dal proxy (riscatto del link code), non più da uno scambio
-OAuth locale: il portale non vede mai un token Yourang. La logica di
-risoluzione qui sotto è invariata — risolve o provisiona Salone + Utente +
-Membership a partire da `org` e dai claim identità, poi conia i token staff e
-(best-effort) sincronizza.
+Porta il pattern di food (`provisionOrLinkYourangUser`) su Django: risolve o
+provisiona Salone + Utente + Membership a partire dal claim `org` del token e
+dall'id_token OIDC, poi conia i token staff e (best-effort) collega+sincronizza.
 
 Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Yourang):
   A. `org` già mappata su un salone (login precedente / connect) → entra lì come
      membro (owner solo se il salone non ha ancora nessuno). La connessione non
-     si tocca: chi accede non la ridefinisce.
+     si ridefinisce: si rimette in piedi solo se è senza token o in errore.
   B. utente noto per email VERIFICATA, con saloni senza connessione:
      - è TITOLARE di uno solo di essi → lo adotta e lo collega all'org;
      - altrimenti (non titolare, o titolare di più d'uno) → entra nel primo
@@ -19,6 +17,7 @@ Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Youran
 
 import logging
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
@@ -27,11 +26,15 @@ from apps.core.models import Location, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
 from . import client as yc
+from . import crypto
 from .connection import OrgConflict, link_org
 from .models import YourangConnection
 from .sync import _split_name, schedule_initial_sync
 
 logger = logging.getLogger("youty.integrations")
+
+WEBHOOK_EVENT_TYPES = ["contact.*", "event.*"]
+
 
 def _unique_salon_slug(seed: str) -> str:
     base = slugify(seed)[:40] or "salone"
@@ -131,6 +134,21 @@ def _resolve_salon(org: str, email: str, email_verified: bool) -> tuple[Salon | 
     return None, None
 
 
+def _needs_repair(salon: Salon) -> bool:
+    """La connessione del salone è rimasta senza token o in errore.
+
+    Succede a tutti i saloni dopo il ritorno al flusso OAuth diretto (la 0005
+    riporta le colonne dei token vuote): il primo accesso con Yourang la
+    rimette in piedi, come faceva prima di ogni accesso.
+    """
+    conn = YourangConnection.objects.filter(salon=salon).first()
+    return (
+        conn is None
+        or not conn.access_token_enc
+        or conn.status != YourangConnection.Status.CONNECTED
+    )
+
+
 def _enter(org: str, email: str, email_verified: bool, name: str):
     """Risolve (o provisiona) salone, utente e membership; collega l'org se tocca.
 
@@ -143,8 +161,10 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
         salon = _provision_salon(user, name)
         link = True
     elif user is None:
-        # Caso A: org già collegata a questo salone, niente da ricollegare.
+        # Caso A: org già collegata a questo salone. Chi accede non ridefinisce
+        # la connessione, a meno che non vada rimessa in piedi.
         user = _get_or_create_user(email, name, email_verified)
+        link = _needs_repair(salon)
     else:
         adoptable = _adoptable_salon(_unlinked_memberships(user))
         link = adoptable is not None and adoptable.pk == salon.pk
@@ -155,26 +175,47 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
             is_owner=not Membership.objects.filter(salon=salon).exists(),
         )
 
-    # Nessun token da salvare: li custodisce il proxy. Nessuna registrazione
-    # webhook: il consenso provisiona l'endpoint (client+org) verso /hooks/<slug>.
     conn = link_org(salon, org, user) if link else None
     return _membership_for(salon, user), conn
 
 
-def login_with_link_code(code: str) -> dict:
-    identity = yc.redeem_link_code(code)
-    org = str(identity.get("org_id") or "")
+def attach_tokens(conn: YourangConnection, token_resp: dict, *, renew_webhook: bool = False) -> None:
+    """Token del flusso diretto sulla connessione e, se serve, il webhook.
+
+    Fuori dalla transazione del collegamento: registrare il webhook è una
+    chiamata a Yourang, e una rete lenta non deve tenere i lock del salone.
+    `renew_webhook`: registrarlo anche se c'è già un segreto (il connect lo fa
+    sempre, a una riconnessione il segreto di prima non vale più).
+    """
+    yc.store_tokens(conn, token_resp)
+    fields = ["access_token_enc", "refresh_token_enc", "expires_at", "scope", "updated_at"]
+    if settings.YOURANG_WEBHOOK_RECEIVER_URL and (renew_webhook or not conn.webhook_secret_enc):
+        try:
+            secret = yc.YourangClient(conn).register_webhook(
+                settings.YOURANG_WEBHOOK_RECEIVER_URL, WEBHOOK_EVENT_TYPES
+            )
+            conn.webhook_secret_enc = crypto.encrypt(secret)
+            fields.append("webhook_secret_enc")
+        except Exception:
+            logger.exception("Yourang webhook registration failed")
+    conn.save(update_fields=fields)
+
+
+def login_with_yourang(code: str, code_verifier: str) -> dict:
+    token_resp = yc.exchange_code(code, code_verifier)
+    org = yc.org_id_from_access_token(token_resp["access_token"])
     if not org:
         # Stesso controllo che fa già il connect (api.py): senza organizzazione
         # non c'è nulla da collegare, e proseguire significava provisionare un
         # salone nuovo e vuoto a OGNI accesso — più la riga di connessione
         # riscritta con yourang_org_id="", che spegne il routing dei webhook.
         raise ValueError("Identità Yourang senza organizzazione")
-    email = (identity.get("email") or "").strip()
+    idc = yc.claims_from_token(token_resp.get("id_token"))
+    email = (idc.get("email") or "").strip()
     if not email:
-        raise ValueError("Email non disponibile dall'identità Yourang")
-    email_verified = bool(identity.get("email_verified"))
-    name = (identity.get("name") or "").strip() or email.split("@")[0]
+        raise ValueError("Email non disponibile dal token Yourang")
+    email_verified = bool(idc.get("email_verified"))
+    name = (idc.get("name") or "").strip() or email.split("@")[0]
 
     # Tutto il primo accesso in una transazione. Due accessi simultanei della
     # stessa org (doppio clic, due dispositivi) correvano su slug del salone,
@@ -193,6 +234,7 @@ def login_with_link_code(code: str) -> dict:
             logger.info("Yourang login: accesso concorrente della stessa org, si riprova")
 
     if conn is not None:
+        attach_tokens(conn, token_resp)
         # La prima sync (migliaia di chiamate su un salone grande) parte fuori
         # dalla richiesta; il suo esito finisce su last_sync_at / last_error.
         schedule_initial_sync(conn)

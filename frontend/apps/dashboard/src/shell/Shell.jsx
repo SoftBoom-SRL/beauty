@@ -9,6 +9,7 @@ import { DkToast, DkDrawer } from '../ui/index.js';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
 import ChunkErrorBoundary from './ChunkErrorBoundary.jsx';
+import YourangReturn from './YourangReturn.jsx';
 
 const AnalystDrawer = lazy(() => import('../sections/insight/AnalystDrawer.jsx'));
 
@@ -59,7 +60,7 @@ export default function Shell() {
             </ChunkErrorBoundary>
           )}
           style={{
-            position: 'fixed', right: 22, bottom: 22, zIndex: 40,
+            position: 'fixed', right: 22, bottom: 74, zIndex: 40,
             width: 52, height: 52, borderRadius: '50%', border: 'none', cursor: 'pointer',
             background: 'linear-gradient(135deg, var(--clay), color-mix(in srgb, var(--clay) 60%, #7c6cf0))',
             color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -69,6 +70,10 @@ export default function Shell() {
           <Icon name="sparkle" size={22} />
         </button>
       )}
+
+      {/* ritorno a yourang: pill in basso a destra + telo a bolla.
+          Sta all'ancora del cerchio, per questo il FAB qui sopra è a bottom 74. */}
+      <YourangReturn />
 
       {/* global hosts */}
       <DkToast {...toastProps} />

@@ -171,7 +171,7 @@ class PlaceholderEligibilityTests(_EventCase):
         )
         self.assertFalse(placeholder.operators.exists())
         migration = importlib.import_module(
-            "apps.integrations.migrations.0006_caccia22_integrazioni_segnaposto_idoneo"
+            "apps.integrations.migrations.0007_caccia22_integrazioni_segnaposto_idoneo"
         )
         migration._placeholder_for_every_operator(django_apps, None)
         migration._placeholder_for_every_operator(django_apps, None)  # idempotente

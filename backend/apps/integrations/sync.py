@@ -313,8 +313,8 @@ def sync_contact(conn: YourangConnection, contact_id: str) -> SyncReport:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in (404, 405):
                 raise
-            # Contatto sparito nel frattempo, o proxy senza la rotta del
-            # singolo contatto: riconciliazione completa, ma senza push.
+            # Contatto sparito nel frattempo, o rotta del singolo contatto
+            # non disponibile: riconciliazione completa, ma senza push.
             return _sync_clients(conn, client, push=False)
     if not rc:
         return report

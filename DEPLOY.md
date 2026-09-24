@@ -122,10 +122,11 @@ DJANGO_SUPERUSER_PASSWORD=<password forte>
 YOURANG_API_URL=<endpoint a cui consegnare i messaggi>
 YOURANG_API_KEY=<token verso quell'endpoint>
 
-YOURANG_PROXY_URL=https://connect.yourang.ai
-YOURANG_PROXY_SLUG=beauty
-YOURANG_PROXY_API_KEY=<lo genera chi amministra il proxy>
-YOURANG_PROXY_WEBHOOK_SECRET=<idem, vedi §8>
+ENCRYPTION_KEY=<genera: openssl rand -hex 32>
+YOURANG_ISSUER_URL=https://api.yourang.ai
+YOURANG_CLIENT_ID=<dal provisioning Yourang>
+YOURANG_CLIENT_SECRET=<dal provisioning Yourang>
+YOURANG_WEBHOOK_RECEIVER_URL=https://beautyapi.yourang.ai/api/integrations/yourang/webhook
 ```
 
 ### Le prime tre fermano l'avvio (è voluto)
@@ -174,9 +175,10 @@ semplicemente non c'è.
 | `FRONTEND_ORIGIN` | È l'origine della **dashboard**, e ci si costruiscono sopra sia il ritorno del popup Yourang (`<FRONTEND_ORIGIN>/oauth-popup/done`) sia il `redirect_uri` di Stripe Connect (`<FRONTEND_ORIGIN>/stripe-connect/done`). Il default è `http://localhost:5173`: in produzione il popup tornerebbe su una pagina che non esiste. |
 | `CLIENT_APP_ORIGIN` | È l'origine dell'**app cliente**, e decide dove torna la cliente dopo aver pagato la caparra. Se manca si ripiega su `FRONTEND_ORIGIN`: il pagamento riesce e la cliente atterra sulla login del gestionale. |
 | `YOURANG_API_URL`<br>`YOURANG_API_KEY` | Sono l'indirizzo e la chiave a cui `flush_outbox` consegna i messaggi. Senza l'URL il comando si limita a **contare** i pendenti: gli OTP dell'app cliente restano in tabella e nessuna cliente riesce a entrare. Il job schedulato da solo non basta (vedi *Job schedulati*). |
-| `YOURANG_PROXY_URL`<br>`YOURANG_PROXY_API_KEY` | Servono entrambe: senza, ogni rotta OAuth risponde `503 Integrazione Yourang non configurata` — niente «Collega Yourang» dalle impostazioni e niente «login con Yourang» dalla pagina di login. |
-| `YOURANG_PROXY_SLUG` | Il nome del portale sul proxy, che entra nell'URL `<YOURANG_PROXY_URL>/v/<slug>`. Il default `beauty` è già quello giusto: si cambia solo se sul proxy il portale è registrato con un altro nome. |
-| `YOURANG_PROXY_WEBHOOK_SECRET` | Con questo il proxy firma i webhook in ingresso. È fail-closed: senza, `POST /api/integrations/yourang/webhook` rifiuta **tutto** con 401 e il sync resta fermo a quello iniziale. |
+| `YOURANG_ISSUER_URL`<br>`YOURANG_CLIENT_ID` | Servono entrambe: senza, ogni rotta OAuth risponde `503 Integrazione Yourang non configurata` — niente «Collega Yourang» dalle impostazioni e niente «login con Yourang» dalla pagina di login. |
+| `YOURANG_CLIENT_SECRET` | Autentica il backend sul token endpoint di Yourang, allo scambio del codice e a ogni rinnovo dei token. Senza, il consenso riesce ma lo scambio no: il popup risponde `502` («Scambio token con Yourang fallito» o «Login con Yourang fallito»). |
+| `ENCRYPTION_KEY` | Cifra a riposo (AES-256-GCM) i token di ogni salone e il segreto del suo webhook. 32 byte hex, `openssl rand -hex 32`. Senza, il collegamento si ferma con un errore. **Non va cambiata** una volta in uso: con una chiave nuova i token salvati non si leggono più e ogni salone va ricollegato. |
+| `YOURANG_WEBHOOK_RECEIVER_URL` | L'URL pubblico del webhook in ingresso, che il backend registra su Yourang a ogni collegamento. Senza, il collegamento riesce lo stesso ma Yourang non spinge niente: le prenotazioni fatte su Yourang non arrivano, e contatti e listino si allineano solo con `sync_yourang`. |
 
 Opzionali, da aggiungere quando servono:
 
@@ -222,11 +224,13 @@ può essere necessaria a seconda di dove sta il proxy.
 | `CORS_ALLOWED_ORIGIN_REGEXES` | vuota | Via di fuga se un giorno servisse un origin variabile: pattern separati da **spazio** (la virgola compare nei quantificatori regex). L'ancoraggio finale `$` viene aggiunto se manca. Con i tre domini fissi di oggi non serve. |
 | `SERVE_MEDIA` | `1` | A `0` Django smette di servire `/media/`: si mette solo quando i file passano da S3 o da un nginx dedicato, altrimenti logo e foto diventano 404. |
 
-> **Se stai aggiornando un deploy vecchio**, togli `ENCRYPTION_KEY`,
+> **Se stai aggiornando un deploy vecchio**, togli le `YOURANG_PROXY_*`: il
+> backend non le legge più. Servono invece `ENCRYPTION_KEY`,
 > `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`, `YOURANG_CLIENT_SECRET` e
-> `YOURANG_WEBHOOK_RECEIVER_URL`: il backend non le legge più. Il portale non
-> possiede credenziali Yourang e non custodisce token, quindi non ha niente da
-> cifrare a riposo — l'OAuth client è il proxy (vedi §8).
+> `YOURANG_WEBHOOK_RECEIVER_URL`: una versione di questo documento (dal 17 al
+> 23/09/2026) diceva di toglierle, perché l'OAuth client doveva diventare il
+> proxy `connect.yourang.ai`, che però non esiste ancora. Il portale è tornato a
+> essere lui il client OAuth di Yourang (vedi §8): se le avevi tolte, rimettile.
 
 `entrypoint.sh` esegue `migrate` e `collectstatic` a ogni avvio, e crea il superuser
 al primo (poi lo salta). Dopo il primo deploy **rimuovi `DJANGO_SUPERUSER_PASSWORD`**
@@ -255,11 +259,17 @@ se le lasci come env di runtime il container parte ma il bundle punta a localhos
 APP=dashboard
 VITE_API_URL=https://beautyapi.yourang.ai
 VITE_CLIENT_APP_URL=https://beautyclients.yourang.ai
+VITE_YOURANG_URL=https://app.yourang.ai
 ```
 
 `VITE_CLIENT_APP_URL` serve a *Impostazioni → Link pubblici*, dove la titolare
 copia i propri URL (app cliente e modulo contatti). La dashboard sta su un altro
 dominio e non può dedurlo. Se manca, quella sezione non compare.
+
+`VITE_YOURANG_URL` è la destinazione del pill «Torna a yourang» in basso a
+destra. Il fallback compilato è `http://localhost:3000`, che in produzione è un
+link morto: essendo inlinata a build time, se la dimentichi te ne accorgi solo
+cliccando. Il valore porta `?yr_sweep=1` da sé — non aggiungerlo qui.
 
 Il Dockerfile fallisce apposta se manca `VITE_API_URL`, così non ti ritrovi in
 produzione un frontend che chiama `http://localhost:8000`, **e se manca `APP`**:
@@ -362,43 +372,52 @@ può risultare detraibile per l'importo sbagliato al checkout.
 provisiona/collega il salone e conia la sessione staff) sia il "collega" dalle
 impostazioni, seguito dal primo sync di contatti e servizi.
 
-**Tutto passa dal proxy `connect.yourang.ai`**, ed è la cosa da tenere a mente
-leggendo il resto: il portale beauty **non è** un client OAuth di Yourang. Non ha
-`client_id` né `client_secret`, non vede mai un access token e non ha niente da
-cifrare a riposo. L'OAuth client è il proxy, uno per tutti i portali: custodisce i
-token di ogni organizzazione e li rinnova lui (Yourang ruota il refresh token a
-ogni uso e brucia l'intera famiglia se due refresh corrono insieme — un solo
-posto può farlo in sicurezza).
+Il portale beauty è **lui il client OAuth** di Yourang (OIDC con PKCE, come food
+e real_estate): custodisce i token di ogni salone, cifrati con `ENCRYPTION_KEY`, e
+li rinnova da sé con `YOURANG_CLIENT_SECRET`. Il passaggio al proxy
+`connect.yourang.ai` (YR-502, 17/09) è stato annullato il 23/09: il proxy non
+esiste ancora, e si rifarà quando ci sarà.
 
-Quello che il portale ha sono due segreti **verso il proxy**, che genera chi lo
-amministra (nel suo `deploy/.env.proxy`):
+Da fare **lato Yourang**, una volta sola:
 
-| Variabile qui | Nome lato proxy | A cosa serve |
-| --- | --- | --- |
-| `YOURANG_PROXY_API_KEY` | `PROXY_BEAUTY_API_KEY` | `Authorization: Bearer` sulle chiamate server-to-server verso `<YOURANG_PROXY_URL>/v/<slug>` (riscatto del link code e rotte external API del sync) |
-| `YOURANG_PROXY_WEBHOOK_SECRET` | `PROXY_BEAUTY_OUT_SECRET` | verifica la firma dei webhook che il proxy ci ri-emette |
+1. Provisionare il client OAuth e prendere `client_id` / `client_secret`.
+2. Whitelistare il redirect_uri **esatto**: `https://beauty.yourang.ai/oauth-popup/done`,
+   cioè `<FRONTEND_ORIGIN>/oauth-popup/done`. Se non combacia, l'authorization
+   server rifiuta la richiesta.
 
-Il flusso: la dashboard apre un popup, il backend risponde con l'URL di login sul
-proxy, il proxy gestisce consenso e PKCE e rimanda il browser su
-`<FRONTEND_ORIGIN>/oauth-popup/done?mode=…&yr_link=…`, il backend riscatta il
-codice monouso lato server. Quindi l'unica origine da far conoscere al proxy è
-`https://beauty.yourang.ai`: il suo controllo anti open-redirect confronta
-schema, host e porta del `return_to`.
+Gli endpoint si leggono dal documento di discovery
+(`<YOURANG_ISSUER_URL>/.well-known/openid-configuration`), non si ricostruiscono
+dall'issuer: l'issuer è `https://api.yourang.ai`, ma l'`authorization_endpoint`
+sta su `https://app.yourang.ai/oauth/authorize`. Gli scope richiesti sono quelli
+di `client.py::SCOPES` (`openid profile email offline_access contacts:read
+contacts:write events:read`).
 
-Il webhook in ingresso è `POST https://beautyapi.yourang.ai/api/integrations/yourang/webhook`,
-e non va registrato a mano: lo provisiona il consenso. È firmato HMAC-SHA256 su
-`{timestamp}.{body}` con `YOURANG_PROXY_WEBHOOK_SECRET` (header
-`X-Yourang-Signature: sha256=…` e `X-Yourang-Timestamp`, tolleranza 5 minuti), e
-la rotta è pubblica: senza il segreto configurato **rifiuta tutto**, che è il
-comportamento voluto ma è anche indistinguibile da "Yourang non manda niente".
+Il flusso: la dashboard apre un popup su `/oauth-popup/start`; il backend crea lo
+`state` (a database con il verifier PKCE, valido 10 minuti) e risponde con l'URL
+di autorizzazione e un `nonce`, che il popup tiene nel `sessionStorage` della sua
+finestra; Yourang rimanda il browser su
+`<FRONTEND_ORIGIN>/oauth-popup/done?code=…&state=…` e il popup chiede lo scambio
+con `code`, `state` e `nonce`. Senza il nonce giusto il backend risponde 400
+prima di toccare lo state: un link di ritorno aperto in un'altra finestra non
+fa entrare nessuno nel salone di chi l'ha mandato.
+
+Il webhook in ingresso è `POST https://beautyapi.yourang.ai/api/integrations/yourang/webhook`
+(`YOURANG_WEBHOOK_RECEIVER_URL`) e non va registrato a mano: il backend lo
+registra su Yourang a ogni collegamento e ne salva il segreto di firma, **uno per
+salone**, cifrato. La firma è HMAC-SHA256 su `{timestamp}.{body}` (header
+`X-Yourang-Signature: sha256=…` e `X-Yourang-Timestamp`, tolleranza 5 minuti). Un
+salone senza segreto — collegato senza `YOURANG_WEBHOOK_RECEIVER_URL`, o con la
+registrazione fallita — si vede rifiutare con 401 **tutti** i suoi webhook, che è
+indistinguibile da "Yourang non manda niente": si ricollega da *Impostazioni*.
 
 **Outbox** — i messaggi verso le clienti (OTP, conferme, promemoria) si accodano
 in `core_outboxevent` e li consegna `python manage.py flush_outbox`, che fa un
 POST su `YOURANG_API_URL`. Servono **due** cose perché una cliente riceva il suo
 codice: il job schedulato (vedi più sotto) **e** `YOURANG_API_URL` in ambiente.
 Manca una delle due e il sintomo è lo stesso, la coda che si allunga. Nota che
-`YOURANG_API_URL`/`YOURANG_API_KEY` non c'entrano con le `YOURANG_PROXY_*`: sono
-il canale di uscita dei messaggi, non l'integrazione OAuth.
+`YOURANG_API_URL`/`YOURANG_API_KEY` non c'entrano con `YOURANG_ISSUER_URL` e
+`YOURANG_CLIENT_*`: sono il canale di uscita dei messaggi, non l'integrazione
+OAuth.
 
 ## 9. Aggiornare un'installazione già in produzione
 
@@ -483,9 +502,10 @@ spiegazione nel §3, riquadro sotto *Storage persistente*.
 
 ### 9.3 Variabili da togliere e da controllare
 
-Togli `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`,
-`YOURANG_CLIENT_SECRET`, `YOURANG_WEBHOOK_RECEIVER_URL`: il backend non le legge
-più (§3). Controlla invece che `SECRET_KEY` sia lunga almeno 32 caratteri e che
+Togli le `YOURANG_PROXY_*`, che il backend non legge più, e controlla che ci
+siano `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`,
+`YOURANG_CLIENT_SECRET` e `YOURANG_WEBHOOK_RECEIVER_URL` (§3, riquadro in fondo
+alle variabili). Controlla poi che `SECRET_KEY` sia lunga almeno 32 caratteri e che
 `ALLOWED_HOSTS` non contenga `*`, altrimenti il primo avvio con il codice nuovo
 si ferma prima di gunicorn: è il comportamento voluto descritto nel §3.
 
@@ -519,8 +539,9 @@ Le migrazioni di questo aggiornamento sono tutte additive o di dati:
 sulle righe delle vendite già registrate), `marketing.0004` (vedi sopra),
 `marketing.0005` (accoda l'annullamento degli invii programmati già consegnati a
 Yourang che non corrispondono più a una campagna), `clients.0008` (vedi sopra),
-`integrations.0005` (tabella) e `integrations.0006` (collega i segnaposto
-Yourang alle operatrici). Dopo `migrate` il ritorno alla versione precedente
+`integrations.0006` (tabella) e `integrations.0007` (collega i segnaposto
+Yourang alle operatrici). `integrations.0005`, che rimette le colonne dei token
+del flusso diretto, è di main ed è in produzione dal 23/09. Dopo `migrate` il ritorno alla versione precedente
 non è sicuro: si va avanti, non indietro.
 
 Dopo il deploy:
@@ -537,6 +558,12 @@ Dopo il deploy:
   che avevano solo *marketing*.
 - Un popup «Collega Yourang» aperto prima del deploy e chiuso dopo risponde
   400: basta riprovare.
+- Yourang: dopo `integrations.0005` le connessioni non hanno token. Ogni salone
+  si ricollega una volta, da *Impostazioni → Collega Yourang* oppure
+  semplicemente accedendo con Yourang: il primo accesso dell'org rimette in
+  piedi una connessione senza token o in errore (token, webhook, prima sync).
+  Fino ad allora il cron scrive sulla connessione «Nessun refresh token:
+  riconnessione necessaria», e i webhook di quel salone rispondono 401.
 
 ## Deploy automatico
 
