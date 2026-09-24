@@ -16,6 +16,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from apps.sales.models import Payment
 
 from .codes import GIFT_CARD_CODE_LENGTH, mark_expired_if_past, not_expired_q, unique_code
 from .models import GiftCard
@@ -34,6 +35,19 @@ CLIENT_GIFT_CARD_MAX = Decimal("1000")
 CLIENT_GIFT_CARD_PER_DAY = 5
 
 _ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_places=2))
+
+
+def _require_payment_method(method: str) -> None:
+    """422 se il metodo d'incasso di una carta non è uno di quelli della cassa.
+
+    Passava qualunque stringa: una più lunga della colonna (20 caratteri)
+    arrivava al database e PostgreSQL rifiutava la riga, con un 500; una corta
+    ma inventata («bonifico») restava sulla carta mentre in cassa il pagamento
+    diventava «other». Vuoto vuol dire «non indicato», come prima: in cassa
+    resta «other» (vedi `record_gift_card_cashed`).
+    """
+    if method and method not in Payment.Method.values:
+        raise HttpError(422, "Metodo di pagamento non valido")
 
 
 def create_gift_card(
@@ -192,6 +206,8 @@ def sell_gift_card(
     actor=None,
 ) -> GiftCard:
     """Carta venduta dallo staff: pagata subito (con la sua vendita in cassa) o da pagare."""
+    if paid:
+        _require_payment_method(paid_method)
     # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
     # sua vendita è esattamente il buco che stiamo chiudendo.
     with transaction.atomic():
@@ -232,6 +248,7 @@ def sell_gift_card(
 
 def cash_gift_card(salon, card, *, method: str, actor=None) -> GiftCard:
     """Incasso al banco di una carta «da pagare» (comprata dall'app): pagata e in cassa."""
+    _require_payment_method(method)
     # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
     # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
     if mark_expired_if_past(card):
