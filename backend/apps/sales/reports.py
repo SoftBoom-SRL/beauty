@@ -11,6 +11,7 @@ from decimal import Decimal
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from ninja.errors import HttpError
 
 from common.money import CENT
 
@@ -72,6 +73,20 @@ def today_summary(salon) -> dict:
     }
 
 
+def _filter_day(raw: str):
+    """Giorno di un filtro dello storico; None se manca o non è nel formato YYYY-MM-DD.
+
+    Una data ben scritta ma inesistente («2026-02-30») fa sollevare ValueError
+    a `parse_date`: arrivava all'utente come 500. Ora è un 400, come nei KPI.
+    """
+    if not raw:
+        return None
+    try:
+        return parse_date(raw)
+    except ValueError:
+        raise HttpError(400, "Data non valida: usa il formato YYYY-MM-DD")
+
+
 def sales_history(salon, *, kind, date_from, date_to, q, client_id, operator_id, limit, offset) -> dict:
     """Storico vendite del salone, una pagina, con i KPI {revenue, count, items_count} sul filtro.
 
@@ -89,9 +104,9 @@ def sales_history(salon, *, kind, date_from, date_to, q, client_id, operator_id,
         qs = qs.filter(deposit_appointment__isnull=True)
         if kind:
             qs = qs.filter(kind=kind)
-    if date_from and (d := parse_date(date_from)):
+    if d := _filter_day(date_from):
         qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
+    if d := _filter_day(date_to):
         qs = qs.filter(created_at__date__lte=d)
     if q:
         qs = qs.filter(

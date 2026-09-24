@@ -293,12 +293,26 @@ def load_csv(request, data: LoadCsvIn):
 # ---- Movimenti ---------------------------------------------------------------
 
 
+def _filter_day(raw: str):
+    """Giorno di un filtro dei movimenti; None se manca o non è nel formato YYYY-MM-DD.
+
+    Una data ben scritta ma inesistente («2026-02-30») fa sollevare ValueError
+    a `parse_date`: arrivava all'utente come 500. Ora è un 400, come nei KPI.
+    """
+    if not raw:
+        return None
+    try:
+        return parse_date(raw)
+    except ValueError:
+        raise HttpError(400, "Data non valida: usa il formato YYYY-MM-DD")
+
+
 def _filter_movements(qs, kind: str, date_from: str, date_to: str):
     if kind:
         qs = qs.filter(kind=kind)
-    if date_from and (d := parse_date(date_from)):
+    if d := _filter_day(date_from):
         qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
+    if d := _filter_day(date_to):
         qs = qs.filter(created_at__date__lte=d)
     # Ordine univoco sotto la paginazione, come per i prodotti (09-10).
     return qs.order_by("-created_at", "-id")

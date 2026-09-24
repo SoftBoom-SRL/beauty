@@ -289,6 +289,20 @@ class StableOrderingTests(_InventorySetup):
         self.assertEqual(seen, ids)
 
 
+class MovementDateFilterTests(_InventorySetup):
+    """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
+    esiste, e `parse_date` solleva ValueError: lo storico dei movimenti
+    rispondeva 500."""
+
+    def test_an_impossible_date_is_a_400(self):
+        product = self._product("Shampoo")
+        for url in ("/api/inventory/movements", f"/api/inventory/products/{product.id}/movements"):
+            for param in ("date_from", "date_to"):
+                res = self.client.get(f"{url}?{param}=2026-02-30", **self.auth)
+                self.assertEqual(res.status_code, 400, (url, param))
+                self.assertEqual(res.json()["detail"], "Data non valida: usa il formato YYYY-MM-DD")
+
+
 class DeactivatedProductsTests(_InventorySetup):
     """15-05 (C8, verifica): «Disattiva» sul prodotto è reversibile dall'API."""
 
