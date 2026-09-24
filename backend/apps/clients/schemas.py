@@ -19,18 +19,38 @@ from pydantic import Field
 # ---- Etichette (ClientCategory) ---------------------------------------------
 
 
-class CategoryOut(Schema):
+# Il prefisso dell'app serve: django-ninja chiama i componenti OpenAPI con il
+# nome della classe, e le `CategoryIn`/`CategoryOut` di etichette, listino e
+# magazzino si sovrascrivevano. Ne restava una sola, e le etichette risultavano
+# documentate senza il limite del nome né il formato del colore (voce 24 dei
+# bug sospetti del 24/09).
+class ClientCategoryOut(Schema):
     id: int
     name: str
     color: str
     order: int
 
 
-class CategoryIn(Schema):
+class ClientCategoryIn(Schema):
     name: str = Field(max_length=60)
     # Colonna di 7 caratteri: solo #RRGGBB, «rgb(255,0,0)» non ci sta.
     color: str = Field("#6366F1", pattern=r"^#[0-9A-Fa-f]{6}$")
     order: int = Field(0, ge=0)
+
+
+class ClientCategoryCountOut(Schema):
+    """Schede attive con questa etichetta."""
+
+    id: int
+    count: int
+
+
+class ClientCountsOut(Schema):
+    """Schede attive del salone: `active` in tutto, `categories` per etichetta
+    (una voce per ogni etichetta del salone, anche a zero, nel loro ordine)."""
+
+    active: int
+    categories: list[ClientCategoryCountOut]
 
 
 # ---- Cliente ------------------------------------------------------------------
@@ -45,7 +65,7 @@ class ClientOut(Schema):
     email: str
     wa: bool
     lang: str
-    categories: list[CategoryOut]
+    categories: list[ClientCategoryOut]
     reliability: int
     origin: str
     gender: str = ""  # female | male | other | "" (non specificato)

@@ -150,6 +150,42 @@ class OperatorValidationTests(StaffApiTestCase):
         self.assertEqual(first.user_id, self.user.id)
 
 
+class ColumnLimitsTests(StaffApiTestCase):
+    """Bug sospetti del 24/09, voce 21: gli schemi di operatrice e assenza non
+    limitavano i testi che finiscono in colonne strette (nome e cognome 80,
+    ruolo 120, nota dell'assenza 255). Su PostgreSQL la riga veniva rifiutata:
+    500 invece di un errore che dice quale campo correggere."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_operator_texts_are_as_long_as_their_columns(self):
+        operator = Operator.objects.create(salon=self.salon, first_name="Anna", last_name="Bianchi")
+        for field, size in (("first_name", 80), ("last_name", 80), ("role_title", 120)):
+            res = self._send("post", "/api/staff/", self.operator_payload(**{field: "x" * (size + 1)}))
+            self.assertEqual(res.status_code, 422, field)
+            res = self._send("put", f"/api/staff/{operator.id}", {field: "x" * (size + 1)})
+            self.assertEqual(res.status_code, 422, field)
+        self.assertEqual(Operator.objects.count(), 1)
+        operator.refresh_from_db()
+        self.assertEqual((operator.first_name, operator.last_name, operator.role_title), ("Anna", "Bianchi", ""))
+        full = self.operator_payload(first_name="x" * 80, last_name="x" * 80, role_title="x" * 120)
+        self.assertEqual(self._send("post", "/api/staff/", full).status_code, 200)
+
+    def test_the_absence_note_is_as_long_as_its_column(self):
+        operator = Operator.objects.create(salon=self.salon, first_name="Anna", last_name="Bianchi")
+        body = {"date_from": "2026-08-10", "date_to": "2026-08-14", "type": "vacation", "note": "x" * 256}
+        url = f"/api/staff/{operator.id}/absences"
+        self.assertEqual(self._send("post", url, body).status_code, 422)
+        self.assertFalse(operator.absences.exists())
+        created = self._send("post", url, {**body, "note": "x" * 255})
+        self.assertEqual(created.status_code, 200, created.content)
+        res = self._send("put", f"{url}/{created.json()['id']}", body)
+        self.assertEqual(res.status_code, 422, res.content)
+
+
 class OperatorListQueryCountTests(StaffApiTestCase):
     """La lista operatrici è la pagina che il salone tiene aperta tutto il
     giorno: il numero di query non deve crescere con le operatrici."""

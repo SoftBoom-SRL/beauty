@@ -4,11 +4,18 @@ from typing import Optional
 from ninja import Schema
 from pydantic import Field
 
+from common.validation import MAX_POSITIVE_INT
+
 
 # ---- Categorie --------------------------------------------------------------
 
 
-class CategoryOut(Schema):
+# Il prefisso dell'app serve: django-ninja chiama i componenti OpenAPI con il
+# nome della classe, e le `CategoryIn`/`CategoryOut` di listino, etichette e
+# magazzino si sovrascrivevano. Ne restava una sola, e il listino risultava
+# documentato con `name` invece di `name_it` e `name_en` (voce 24 dei bug
+# sospetti del 24/09).
+class ServiceCategoryOut(Schema):
     id: int
     name_it: str
     name_en: str
@@ -16,7 +23,7 @@ class CategoryOut(Schema):
     order: int
 
 
-class CategoryIn(Schema):
+class ServiceCategoryIn(Schema):
     name_it: str
     name_en: str = ""
     # Assente = «non toccare il colore». Con il default a "#E0E7FF" bastava
@@ -51,8 +58,12 @@ class ServiceOut(Schema):
 
 class ServiceIn(Schema):
     category_id: int
-    name_it: str
-    name_en: str = ""
+    # Nomi lunghi quanto le colonne (120) e ordine dentro PositiveIntegerField:
+    # un nome più lungo su PostgreSQL e un ordine negativo anche su SQLite
+    # erano un 500 invece di un errore che dice quale campo correggere (bug
+    # sospetti del 24/09, voce 21).
+    name_it: str = Field(max_length=120)
+    name_en: str = Field("", max_length=120)
     description_it: str = Field("", max_length=600)
     description_en: str = Field("", max_length=600)
     duration_min: int = Field(..., ge=1, le=24 * 60)  # un servizio da zero minuti non esiste
@@ -61,7 +72,7 @@ class ServiceIn(Schema):
     product_cost: Decimal = Field(Decimal("0"), ge=0)
     supplier_cost: Decimal = Field(Decimal("0"), ge=0)
     active: bool = True
-    order: int = 0
+    order: int = Field(0, ge=0, le=MAX_POSITIVE_INT)
 
 
 # ---- Pacchetti ------------------------------------------------------------------

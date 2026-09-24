@@ -259,6 +259,14 @@ class ListSalesApiTests(TestCase):
         self.assertEqual(body["items"][0]["id"], self.sale_sofia.id)
         self.assertEqual(body["kpi"]["revenue"], "50.00")
 
+    def test_an_impossible_date_is_a_400(self):
+        """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
+        esiste, e `parse_date` solleva ValueError: lo storico rispondeva 500."""
+        for param in ("date_from", "date_to"):
+            resp = self.client.get(f"/api/sales/?{param}=2026-02-30", **self.auth)
+            self.assertEqual(resp.status_code, 400, param)
+            self.assertEqual(resp.json()["detail"], "Data non valida: usa il formato YYYY-MM-DD")
+
 
 class TenantIsolationTests(TestCase):
     """Le righe di vendita devono riferirsi a servizi, prodotti e operatrici del

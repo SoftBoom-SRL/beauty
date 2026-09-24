@@ -5,6 +5,9 @@ import { api } from '@youty/shared';
 
 export const clientsApi = {
   list: (params) => api.get('/api/clients/', { params }),
+  /* Schede attive in tutto e per etichetta, in una risposta: { active,
+   * categories: [{ id, count }] } (le card in cima alla sezione Clienti). */
+  counts: () => api.get('/api/clients/counts'),
   get: (id) => api.get(`/api/clients/${id}`),
   create: (body) => api.post('/api/clients/', body),
   update: (id, body) => api.put(`/api/clients/${id}`, body),

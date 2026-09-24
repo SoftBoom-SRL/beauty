@@ -22,13 +22,13 @@ from common.validation import MAX_POSITIVE_INT, validate_category_in
 
 from .models import Package, Service, ServiceCategory
 from .schemas import (
-    CategoryIn,
-    CategoryOut,
     PackageIn,
     PackageOut,
     PublicCategoryOut,
     PublicPackageOut,
     ReorderIn,
+    ServiceCategoryIn,
+    ServiceCategoryOut,
     ServiceIn,
     ServiceOut,
 )
@@ -55,13 +55,13 @@ PUBLIC_CATALOG_WINDOW_SECONDS = 300
 # ---- Categorie servizi -------------------------------------------------------
 
 
-@router.get("/categories", auth=staff_auth, response=list[CategoryOut])
+@router.get("/categories", auth=staff_auth, response=list[ServiceCategoryOut])
 def list_categories(request):
     return request.auth.salon.service_categories.all()
 
 
-@router.post("/categories", auth=staff_auth, response=CategoryOut)
-def create_category(request, data: CategoryIn):
+@router.post("/categories", auth=staff_auth, response=ServiceCategoryOut)
+def create_category(request, data: ServiceCategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
@@ -78,8 +78,8 @@ def create_category(request, data: CategoryIn):
     return category
 
 
-@router.put("/categories/{int:category_id}", auth=staff_auth, response=CategoryOut)
-def update_category(request, category_id: int, data: CategoryIn):
+@router.put("/categories/{int:category_id}", auth=staff_auth, response=ServiceCategoryOut)
+def update_category(request, category_id: int, data: ServiceCategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
@@ -123,7 +123,7 @@ def delete_category(request, category_id: int):
     return OkOut()
 
 
-@router.post("/categories/reorder", auth=staff_auth, response=list[CategoryOut])
+@router.post("/categories/reorder", auth=staff_auth, response=list[ServiceCategoryOut])
 def reorder_categories(request, data: ReorderIn):
     ctx = request.auth
     require_scope(ctx, "pricing")

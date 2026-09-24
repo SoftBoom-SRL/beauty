@@ -124,6 +124,29 @@ class OrderWorkflowTests(TestCase):
         self.assertEqual(self.l1.qty_ordered, Decimal("9"))
         self.assertFalse(PurchaseOrderLine.objects.filter(pk=self.l2.pk).exists())
 
+    def test_the_same_line_twice_is_a_400(self):
+        """Bug sospetti del 24/09, voce 25: ogni voce si leggeva per conto suo e
+        la stessa riga diventava due oggetti. Con la riga a 0 e poi a 3, la
+        prima voce la cancellava e la seconda provava a salvarla: Django
+        sollevava DatabaseError («Save with update_fields did not affect any
+        rows»), cioè un 500."""
+        from ..schemas import OrderLineUpdateIn, OrderUpdateIn
+
+        with self.assertRaises(HttpError) as caught:
+            update_order(
+                self.request,
+                self.order.id,
+                OrderUpdateIn(
+                    lines=[
+                        OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("0")),
+                        OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("3")),
+                    ]
+                ),
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.l1.refresh_from_db()
+        self.assertEqual(self.l1.qty_ordered, Decimal("4"))  # nulla è stato scritto
+
     def test_the_second_send_is_refused(self):
         from ..schemas import OrderSendIn
 

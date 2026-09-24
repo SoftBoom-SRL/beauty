@@ -72,6 +72,15 @@ def generate_draft_orders(salon, author=None):
 
 def update_draft_order(order, lines) -> None:
     """Nuove quantità per le righe di una bozza (0 o meno = riga tolta)."""
+    # La stessa riga due volte nel corpo diventava due oggetti letti per conto
+    # loro: con la riga a 0 e poi a 3 il primo la cancellava, il secondo
+    # provava a salvarla e Django sollevava DatabaseError («Save with
+    # update_fields did not affect any rows»), un 500. La dashboard toglie già
+    # i doppioni: succedeva con una richiesta scritta a mano (voce 25 dei bug
+    # sospetti del 24/09).
+    ids = [row.id for row in lines]
+    if len(ids) != len(set(ids)):
+        raise HttpError(400, "La stessa riga d'ordine compare più volte")
     # Tutto o niente: prima si risolvono TUTTE le righe, poi si scrive. Applicarle
     # una per una lasciava l'ordine a metà quando l'ultima riga era sconosciuta —
     # 404 al client, ma le quantità precedenti già cambiate a magazzino.

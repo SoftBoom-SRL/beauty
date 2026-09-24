@@ -18,8 +18,6 @@ from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 from .csv_load import load_rows
 from .models import STOCK_WARNING_FACTOR, Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
-    CategoryIn,
-    CategoryOut,
     LoadCsvIn,
     LoadCsvOut,
     MovementOut,
@@ -28,6 +26,8 @@ from .schemas import (
     OrderReceiveOut,
     OrderSendIn,
     OrderUpdateIn,
+    ProductCategoryIn,
+    ProductCategoryOut,
     ProductIn,
     ProductLoadIn,
     ProductOut,
@@ -293,12 +293,26 @@ def load_csv(request, data: LoadCsvIn):
 # ---- Movimenti ---------------------------------------------------------------
 
 
+def _filter_day(raw: str):
+    """Giorno di un filtro dei movimenti; None se manca o non è nel formato YYYY-MM-DD.
+
+    Una data ben scritta ma inesistente («2026-02-30») fa sollevare ValueError
+    a `parse_date`: arrivava all'utente come 500. Ora è un 400, come nei KPI.
+    """
+    if not raw:
+        return None
+    try:
+        return parse_date(raw)
+    except ValueError:
+        raise HttpError(400, "Data non valida: usa il formato YYYY-MM-DD")
+
+
 def _filter_movements(qs, kind: str, date_from: str, date_to: str):
     if kind:
         qs = qs.filter(kind=kind)
-    if date_from and (d := parse_date(date_from)):
+    if d := _filter_day(date_from):
         qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
+    if d := _filter_day(date_to):
         qs = qs.filter(created_at__date__lte=d)
     # Ordine univoco sotto la paginazione, come per i prodotti (09-10).
     return qs.order_by("-created_at", "-id")
@@ -398,13 +412,13 @@ def delete_supplier(request, supplier_id: int):
 # ---- Categorie prodotto ------------------------------------------------------
 
 
-@router.get("/categories", auth=staff_auth, response=list[CategoryOut])
+@router.get("/categories", auth=staff_auth, response=list[ProductCategoryOut])
 def list_categories(request):
     return ProductCategory.objects.filter(salon=request.auth.salon)
 
 
-@router.post("/categories", auth=staff_auth, response=CategoryOut)
-def create_category(request, data: CategoryIn):
+@router.post("/categories", auth=staff_auth, response=ProductCategoryOut)
+def create_category(request, data: ProductCategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
@@ -416,8 +430,8 @@ def create_category(request, data: CategoryIn):
     )
 
 
-@router.put("/categories/{int:category_id}", auth=staff_auth, response=CategoryOut)
-def update_category(request, category_id: int, data: CategoryIn):
+@router.put("/categories/{int:category_id}", auth=staff_auth, response=ProductCategoryOut)
+def update_category(request, category_id: int, data: ProductCategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     validate_category_in(data, max_order=MAX_CATEGORY_ORDER)

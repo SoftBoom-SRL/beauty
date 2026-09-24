@@ -101,6 +101,7 @@ const CASES = [
   [() => serviceCategoriesApi.reorder([3, 1, 2]), ['POST', '/api/catalog/categories/reorder', { body: { ids: [3, 1, 2] } }]],
   // clienti
   [() => clientsApi.list(P), ['GET', '/api/clients/', { params: P }]],
+  [() => clientsApi.counts(), ['GET', '/api/clients/counts']],
   [() => clientsApi.get(11), ['GET', '/api/clients/11']],
   [() => clientsApi.create(B), ['POST', '/api/clients/', { body: B }]],
   [() => clientsApi.update(11, B), ['PUT', '/api/clients/11', { body: B }]],
