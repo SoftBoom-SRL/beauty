@@ -3,7 +3,7 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput, salonTzOpts } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, NumInput, nameIn, salonTzOpts } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import { rebaseDraft } from '../../ui/rebase.js';
 import { useDash, useLive } from '../../ctx.jsx';
@@ -573,7 +573,7 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
     .filter((g) => g.items.length);
   const orphan = active.filter((s) => !(categories || []).some((c) => c.id === s.category_id) && match(s));
   if (orphan.length) groups.push({ cat: { id: 'none', name_it: t('Altro', 'Other'), name_en: 'Other', color: 'var(--muted-2)' }, items: orphan });
-  const catLabel = (c) => (lang === 'en' && c.name_en ? c.name_en : c.name_it);
+  const catLabel = (c) => nameIn(c, lang);
 
   const openCreate = (catId) => {
     setDraft({ name_it: q.trim(), category_id: catId ?? categories?.[0]?.id ?? null, duration_min: '45', price: '' });

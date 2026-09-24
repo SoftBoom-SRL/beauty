@@ -300,4 +300,4 @@ export function todayStatus(op, t, lang) {
   return { key: 'off', label: m[lang === 'en' ? 'en' : 'it'], color: m.c, bg: m.bg, hours: '' };
 }
 
-export function svcLabel(s, lang) { return lang === 'en' ? (s.name_en || s.name_it) : s.name_it; }
+export { nameIn as svcLabel } from '@youty/shared';

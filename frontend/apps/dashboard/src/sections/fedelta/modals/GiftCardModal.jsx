@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, todayStr, fmtEur, NumInput } from '@youty/shared';
+import { api, ApiError, Icon, todayStr, fmtEur, NumInput, nameIn } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
@@ -18,7 +18,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [service, setService] = useState(null); // servizio scelto dal catalogo (gift card a trattamento)
   const [svcQ, setSvcQ] = useState('');
   const [svcOpen, setSvcOpen] = useState(false);
-  const svcName = (s) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+  const svcName = (s) => nameIn(s, lang);
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcResults = svcQ.trim()
     ? activeServices.filter((s) => svcName(s).toLowerCase().includes(svcQ.trim().toLowerCase()))

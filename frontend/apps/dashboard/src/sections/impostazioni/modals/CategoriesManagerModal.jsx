@@ -8,7 +8,7 @@
 // «category.reordered» nel registro attività. Clienti e magazzino non ce
 // l'hanno e restano con una PUT per categoria.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, EmptyState } from '@youty/shared';
+import { api, Icon, EmptyState, nameIn } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import DkModal from '../../../ui/DkModal.jsx';
 import DkConfirm from '../../../ui/DkConfirm.jsx';
@@ -23,7 +23,7 @@ const KINDS = {
 };
 const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3F3F3', '#EFEFEF'].includes(c));
 const randColor = () => flatPalette[Math.floor(Math.random() * flatPalette.length)];
-const catName = (c, kind, lang) => (KINDS[kind].bilingual ? ((lang === 'en' && c.name_en) ? c.name_en : c.name_it) : c.name);
+const catName = (c, kind, lang) => (KINDS[kind].bilingual ? nameIn(c, lang) : c.name);
 
 // La scheda iniziale arriva come `kind` (Impostazioni, Servizi) o come `scope`
 // (la scheda cliente): valgono entrambe.

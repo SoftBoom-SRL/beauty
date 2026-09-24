@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, EmptyState } from '@youty/shared';
+import { api, ApiError, Icon, EmptyState, nameIn } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import LoyaltyEditModal from './modals/LoyaltyEditModal.jsx';
 import LoyaltyMembersDrawer from './LoyaltyMembersDrawer.jsx';
@@ -56,7 +56,7 @@ export default function LoyaltySub() {
 
   const serviceName = (id) => {
     const s = services.find((x) => x.id === id);
-    return s ? (lang === 'en' ? (s.name_en || s.name_it) : s.name_it) : null;
+    return s ? nameIn(s, lang) : null;
   };
 
   return (

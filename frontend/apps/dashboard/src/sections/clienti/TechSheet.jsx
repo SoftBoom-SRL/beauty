@@ -3,7 +3,7 @@
 // and the registry TechSheetModal. Prototype TECH_FIELDS mapped onto the
 // API's flat TechnicalSheet columns (see helpers.js).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, mediaUrl } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, mediaUrl, nameIn } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { TECH_FIELDS, dateTimeLabel, initialsOf, inputCss, sheetVal } from './helpers.js';
 
@@ -75,7 +75,7 @@ export function TechSheetCard({ sheet: initial, defaultOpen }) {
 export function TechSheetForm({ clientId, appointmentId = null, defaultCategory, onSaved, onCancel }) {
   const { t, lang, serviceCategories, fireToast } = useDash();
   const fields = TECH_FIELDS(t);
-  const catOptions = serviceCategories.map((sc) => (lang === 'en' && sc.name_en) ? sc.name_en : sc.name_it);
+  const catOptions = serviceCategories.map((sc) => nameIn(sc, lang));
   const [category, setCategory] = useState(defaultCategory || catOptions[0] || t('Generale', 'General'));
   const [values, setValues] = useState({});
   const [saving, setSaving] = useState(false);

@@ -36,7 +36,7 @@ export const methodLabel = (m, t) => {
 
 export const opName = (o) => (o ? [o.first_name, o.last_name].filter(Boolean).join(' ') : '');
 
-export const svcLabel = (s, lang) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+export { nameIn as svcLabel } from '@youty/shared';
 
 /** cart/checkout line value in euro, for display: the API rule computed in
  *  cents (see money.js lineCents). */

@@ -1,5 +1,5 @@
 // helpers.js — clienti section utilities (pure functions, no React).
-import { fmtTime, salonDateParts, todayStr } from '@youty/shared';
+import { fmtTime, nameIn, salonDateParts, todayStr } from '@youty/shared';
 import { composeReward } from '../fedelta/meta.js';
 
 /* Shared input style used across the section's forms (from the prototype). */
@@ -178,7 +178,7 @@ export function depositBadge(a) {
  *  «Premio: 10.00» (14-21, 07-16). */
 export function rewardLabel(p, services, lang) {
   const s = p.reward_type === 'free_service' ? (services || []).find((x) => x.id === p.reward_service_id) : null;
-  const name = s ? ((lang === 'en' && s.name_en) ? s.name_en : s.name_it) : '';
+  const name = s ? nameIn(s, lang) : '';
   return composeReward(p.reward_type, p.reward_value, name, lang);
 }
 
