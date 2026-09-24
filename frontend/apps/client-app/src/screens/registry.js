@@ -1,6 +1,6 @@
 // registry.js — view name → screen component.
 import Home from './Home.jsx';
-import Prenota from './Prenota.jsx';
+import Prenota from './prenota/index.jsx';
 import Prenotazioni from './Prenotazioni.jsx';
 import Wallet from './Wallet.jsx';
 import GiftCard from './GiftCard.jsx';

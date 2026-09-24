@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 import { isoAtMin, todayStr, toDateStr, addDays, parseISO } from '@youty/shared';
 import { button, deferred, findAll, loadModule, mount, settle, textOf } from './load.mjs';
+import { STEP } from '../src/screens/prenota/steps.js';
 
 const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'shared', 'src');
 const at = (f) => JSON.stringify(join(PKG, f));
@@ -56,7 +57,7 @@ export const SALON_SLUG = 'the-parlour';
 globalThis.document = { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
 globalThis.window = { addEventListener() {}, removeEventListener() {} };
 
-const { default: Prenota } = await loadModule('src/screens/Prenota.jsx', {
+const { default: Prenota } = await loadModule('src/screens/prenota/index.jsx', {
   shared: SHARED, react: true, jsx: true, ctx: CTX, stubs: ['DepositDue.jsx'],
 });
 
@@ -388,4 +389,12 @@ test('indietro: un passo alla volta fino alla scelta, poi la home', async () => 
     assert.deepEqual(titles, ['Conferma il numero', 'I tuoi dati', 'Conferma prenotazione', 'Scegli giorno e ora', 'Scegli il servizio', 'Prenota']);
     assert.deepEqual(views, [['home', undefined]]);
   } finally { s.unmount(); }
+});
+
+test('i passi hanno i numeri di sempre: «indietro» fa step - 1', () => {
+  assert.deepEqual({ ...STEP }, { CHOICE: -1, SERVICE: 0, TIME: 1, REVIEW: 2, DETAILS: 3, OTP: 4, DONE: 9 });
+  assert.ok(Object.isFrozen(STEP));
+  // la sequenza di «indietro», dal codice alla scelta
+  const chain = [STEP.OTP, STEP.DETAILS, STEP.REVIEW, STEP.TIME, STEP.SERVICE, STEP.CHOICE];
+  chain.slice(1).forEach((prev, i) => assert.equal(chain[i] - 1, prev));
 });
