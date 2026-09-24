@@ -10,6 +10,7 @@ import OrdiniSub from './OrdiniSub.jsx';
 import FornitoriSub from './FornitoriSub.jsx';
 import StoricoSub from './StoricoSub.jsx';
 import { productCategoriesApi, productsApi, suppliersApi } from '../../api/inventory.js';
+import SubTabs from '../../ui/SubTabs.jsx';
 
 export default function MagazzinoSection() {
   const { t, subTab, setSubTab, fireToast, hasScope } = useDash();
@@ -66,14 +67,8 @@ export default function MagazzinoSection() {
   return (
     <div className="dk-page" style={{ maxWidth: 1080 }}>
       {/* sub-tabs */}
-      <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 22 }}>
-        {tabs.map(([k, l]) => (
-          <button key={k} onClick={() => setSubTab(k)} style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', color: sub === k ? 'var(--ink)' : 'var(--muted)', background: 'transparent', border: 'none', borderBottom: '2px solid ' + (sub === k ? 'var(--clay)' : 'transparent'), marginBottom: -1, position: 'relative' }}>
-            {l}
-            {k === 'ordini' && lowCount > 0 && <span style={{ position: 'absolute', top: 6, right: -2, width: 7, height: 7, borderRadius: 99, background: STOCK_META.low.color }} />}
-          </button>
-        ))}
-      </div>
+      <SubTabs tabs={tabs} value={sub} onChange={setSubTab} tabStyle={{ position: 'relative' }}
+        extra={(k) => k === 'ordini' && lowCount > 0 && <span style={{ position: 'absolute', top: 6, right: -2, width: 7, height: 7, borderRadius: 99, background: STOCK_META.low.color }} />} />
 
       {allProds === null ? (
         /* boot skeleton for the whole section */

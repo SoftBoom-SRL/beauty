@@ -8,6 +8,8 @@ export { default as DkDrop } from './DkDrop.jsx';
 export { default as FilterMenu } from './FilterMenu.jsx';
 export { default as GroupedFilterMenu } from './GroupedFilterMenu.jsx';
 export { default as SearchToolbar } from './SearchToolbar.jsx';
+export { default as SubTabs } from './SubTabs.jsx';
+export { default as DrawerHead } from './DrawerHead.jsx';
 export { default as PaletteGrid } from './PaletteGrid.jsx';
 export { default as HexInput } from './HexInput.jsx';
 export { default as GenderPicker, GENDERS, genderLabel, genderGlyph } from './GenderPicker.jsx';

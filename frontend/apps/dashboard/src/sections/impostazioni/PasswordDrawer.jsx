@@ -3,8 +3,9 @@
 // invalida ogni altra sessione dell'utente: ci restituisce token nuovi che
 // applichiamo subito, altrimenti ci sloggheremmo da soli.
 import { useState } from 'react';
-import { staffAuth, Icon, toastApiError } from '@youty/shared';
+import { staffAuth, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss } from './lib.jsx';
 import { staffAccountApi } from '../../api/team.js';
@@ -60,13 +61,7 @@ export default function PasswordDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.15 }}>{t('Cambia password', 'Change password')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{session?.user?.email}</div>
-        </div>
-        <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose}><Icon name="x" size={18} /></button>
-      </div>
+      <DrawerHead onClose={onClose} title={t('Cambia password', 'Change password')} sub={session?.user?.email} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 30px' }}>
         <Field show={show} label={t('Password attuale', 'Current password')} value={cur} onChange={setCur} autoComplete="current-password" />

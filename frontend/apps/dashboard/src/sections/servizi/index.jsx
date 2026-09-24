@@ -8,6 +8,7 @@ import ServiziSub from './ServiziSub.jsx';
 import PacchettiSub from './PacchettiSub.jsx';
 import SvcEditModal from './SvcEditModal.jsx';
 import PkgEditModal from './PkgEditModal.jsx';
+import SubTabs from '../../ui/SubTabs.jsx';
 import { packagesApi, serviceCategoriesApi, servicesApi } from '../../api/catalog.js';
 import { staffApi } from '../../api/staff.js';
 
@@ -181,16 +182,7 @@ export default function ServiziSection() {
   return (
     <div className="dk-page" style={{ maxWidth: 1120 }}>
       {/* sub-tabs: Servizi / Pacchetti */}
-      <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 22 }}>
-        {tabs.map(([k, l]) => (
-          <button
-            key={k} onClick={() => setSubTab(k)}
-            style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', border: 'none', color: sub === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (sub === k ? 'var(--clay)' : 'transparent'), marginBottom: -1 }}
-          >
-            {l}
-          </button>
-        ))}
-      </div>
+      <SubTabs tabs={tabs} value={sub} onChange={setSubTab} />
 
       {sub === 'servizi' ? (
         <ServiziSub

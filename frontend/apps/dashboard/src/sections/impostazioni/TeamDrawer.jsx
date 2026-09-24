@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote, CopyField } from './lib.jsx';
@@ -97,15 +98,8 @@ export default function TeamDrawer({ onClose, onRoles }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 500 }}>{t('Membri del team', 'Team members')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
-            {members ? members.length + ' ' + t('membri · ruolo e accesso', 'members · role and access') : t('Ruolo e accesso', 'Role and access')}
-          </div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose}><Icon name="x" size={19} /></button>
-      </div>
+      <DrawerHead variant="team" onClose={onClose} title={t('Membri del team', 'Team members')}
+        sub={members ? members.length + ' ' + t('membri · ruolo e accesso', 'members · role and access') : t('Ruolo e accesso', 'Role and access')} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px' }}>
         {!canTeam ? (

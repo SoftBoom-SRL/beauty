@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { Icon, NumInput, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { LockNote } from './lib.jsx';
@@ -76,13 +77,8 @@ export default function PaymentsDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div className="dk-modalhead">
-        <div style={{ flex: 1 }}>
-          <div className="t-title" style={{ fontSize: 20 }}>{t('Pagamenti & caparre', 'Payments & deposits')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('Account Stripe del salone e scadenza della caparra', 'The salon Stripe account and the deposit deadline')}</div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose} aria-label={t('Chiudi', 'Close')} style={{ width: 36, height: 36 }}><Icon name="x" size={17} /></button>
-      </div>
+      <DrawerHead variant="modal" onClose={onClose} closeLabel={t('Chiudi', 'Close')} title={t('Pagamenti & caparre', 'Payments & deposits')}
+        sub={t('Account Stripe del salone e scadenza della caparra', 'The salon Stripe account and the deposit deadline')} />
       <div className="dk-modalbody" style={{ padding: '0 22px 22px' }}>
         {!isOwner && <div style={{ marginBottom: 14 }}><LockNote t={t} msg={t('Solo il titolare può collegare Stripe e cambiare la scadenza della caparra.', 'Only the owner can connect Stripe and change the deposit deadline.')} /></div>}
 

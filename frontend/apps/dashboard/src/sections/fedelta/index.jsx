@@ -1,6 +1,7 @@
 // fedelta/index.jsx — Promozioni section: Coupon / Fedeltà / Gift card sub-tabs.
 // Ported from prototype desktop-fedelta.jsx (DkFedelta) with real marketing API calls.
 import { useDash } from '../../ctx.jsx';
+import SubTabs from '../../ui/SubTabs.jsx';
 import CouponSub from './CouponSub.jsx';
 import LoyaltySub from './LoyaltySub.jsx';
 import GiftSub from './GiftSub.jsx';
@@ -16,14 +17,7 @@ export default function FedeltaSection() {
   ];
   return (
     <div className="dk-page" style={{ maxWidth: 1120 }}>
-      <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 22 }}>
-        {tabs.map(([k, l]) => (
-          <button key={k} onClick={() => setSubTab(k)}
-            style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', color: sub === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (sub === k ? 'var(--clay)' : 'transparent'), marginBottom: -1, background: 'transparent' }}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <SubTabs tabs={tabs} value={sub} onChange={setSubTab} />
       {sub === 'coupon' ? <CouponSub /> : sub === 'fedelta' ? <LoyaltySub /> : <GiftSub />}
     </div>
   );

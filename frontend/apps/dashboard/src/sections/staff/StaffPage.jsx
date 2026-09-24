@@ -12,6 +12,7 @@ import ShiftPattern from './ShiftPattern.jsx';
 import AbsenceCalendar from './AbsenceCalendar.jsx';
 import PerformancePanel from './PerformancePanel.jsx';
 import ServedClients from './ServedClients.jsx';
+import SubTabs from '../../ui/SubTabs.jsx';
 
 export default function StaffPage({ id, onBack }) {
   const { t, lang, services, serviceCategories, locations, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
@@ -75,22 +76,17 @@ export default function StaffPage({ id, onBack }) {
       </div>
 
       {/* sub-tabs */}
-      <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 22 }}>
-        {[
+      <SubTabs value={staffTab} onChange={setStaffTab} tabStyle={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        tabs={[
           ['anagrafica', t('Anagrafica', 'Profile')],
           ['turni', t('Turni e ferie', 'Shifts & time off')],
           ['performance', t('Performance', 'Performance')],
           ['clienti', t('Clienti serviti', 'Clients served')],
-        ].map(([k, l]) => {
+        ]}
+        extra={(k) => {
           const pending = (k === 'anagrafica' && basicsDirty) || (k === 'turni' && shiftsDirty);
-          return (
-            <button key={k} onClick={() => setStaffTab(k)} style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: staffTab === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (staffTab === k ? 'var(--clay)' : 'transparent'), marginBottom: -1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {l}
-              {pending && <span title={t('Modifiche non salvate', 'Unsaved changes')} style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--clay)' }} />}
-            </button>
-          );
-        })}
-      </div>
+          return pending && <span title={t('Modifiche non salvate', 'Unsaved changes')} style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--clay)' }} />;
+        }} />
 
       {/* ── ANAGRAFICA ── */}
       {staffTab === 'anagrafica' && (

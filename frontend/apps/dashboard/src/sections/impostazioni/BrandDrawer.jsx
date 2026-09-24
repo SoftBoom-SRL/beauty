@@ -5,6 +5,7 @@
 import { useRef, useState } from 'react';
 import { mediaUrl, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import { useDash } from '../../ctx.jsx';
 import PaletteGrid from '../../ui/PaletteGrid.jsx';
@@ -52,13 +53,8 @@ export default function BrandDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.15 }}>{t('Brand & app cliente', 'Brand & client app')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{salon?.name}{salon?.locations?.length ? ' · ' + (salon.locations.find((l) => l.is_default)?.name || salon.locations[0].name) : ''}</div>
-        </div>
-        <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose}><Icon name="x" size={18} /></button>
-      </div>
+      <DrawerHead onClose={onClose} title={t('Brand & app cliente', 'Brand & client app')}
+        sub={<>{salon?.name}{salon?.locations?.length ? ' · ' + (salon.locations.find((l) => l.is_default)?.name || salon.locations[0].name) : ''}</>} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 30px' }}>
         {!isOwner && (

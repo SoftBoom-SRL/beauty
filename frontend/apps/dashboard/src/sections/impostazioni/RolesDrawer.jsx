@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote } from './lib.jsx';
@@ -138,13 +139,8 @@ export default function RolesDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 500 }}>{t('Ruoli e permessi', 'Roles & permissions')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{t('Cosa può vedere e fare ogni ruolo', 'What each role can see and do')}</div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose}><Icon name="x" size={19} /></button>
-      </div>
+      <DrawerHead variant="team" onClose={onClose} title={t('Ruoli e permessi', 'Roles & permissions')}
+        sub={t('Cosa può vedere e fare ogni ruolo', 'What each role can see and do')} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px' }}>
         {!canTeam ? (
