@@ -9,10 +9,10 @@ import { MOVE_META, STOCK_META, UNIT_OPTIONS, eur0, fmtQty, fmtWhen, num, round2
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
 import { productsApi } from '../../api/inventory.js';
 import { useClickAway } from '../../hooks/useClickAway.js';
+import { CAT_SWATCHES } from '../../ui/palette.js';
 
-/* category colour: fallback + pastel presets offered in the picker */
+/* category colour: fallback + pastel presets offered in the picker (CAT_SWATCHES) */
 const CAT_FALLBACK = '#E0E7FF';
-const CAT_PRESETS = ['#FDE2E4', '#DBEAFE', '#DCFCE7', '#FEF3C7', '#FCE7F3', '#EDE9FE', '#E0E7FF', '#FEE2E2', '#E0F2FE', '#F1F5F9'];
 const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -68,7 +68,7 @@ function CatColorControl({ cat, onCatColor, t }) {
           placeholder={CAT_FALLBACK} spellCheck={false} maxLength={7}
           style={{ width: 100, border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13.5, fontFamily: 'var(--mono, ui-monospace, monospace)', padding: '9px 10px', background: 'var(--surface)', textTransform: 'uppercase' }} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {CAT_PRESETS.map((p) => {
+          {CAT_SWATCHES.map((p) => {
             const on = p.toLowerCase() === hex.toLowerCase();
             return (
               <button key={p} onClick={() => commit(p)} title={p}

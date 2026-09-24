@@ -5,8 +5,8 @@ import React, { useState, useEffect } from 'react';
 import { Icon, Avatar, Toggle, fmtEur, NumInput, nameIn } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { FRow, PriceBox, DurationInput, CategoryDot } from './parts.jsx';
+import { CAT_SWATCHES } from '../../ui/palette.js';
 
-const CAT_SWATCHES = ['#FDE2E4', '#DBEAFE', '#DCFCE7', '#FEF3C7', '#FCE7F3', '#EDE9FE', '#E0E7FF', '#FEE2E2', '#E0F2FE', '#F1F5F9'];
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
 

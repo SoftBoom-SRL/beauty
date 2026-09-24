@@ -7,8 +7,9 @@ import { Avatar, Icon, NumInput, nameIn, salonTzOpts, toastApiError, apiErrorTex
 import { HexInput } from '../../ui/index.js';
 import { rebaseDraft } from '../../ui/rebase.js';
 import { useDash, useLive } from '../../ctx.jsx';
+import { GD_PALETTE } from '../../ui/palette.js';
 import {
-  GD_PALETTE, HIDDEN, eur, inputCss, monthShort, opName, svcLabel,
+  HIDDEN, eur, inputCss, monthShort, opName, svcLabel,
   weeksFromShifts, shiftsFromWeeks,
   formFromDetail, changedOperatorFields, sameOperatorField, sameWeeks, perfStats,
 } from './lib.js';

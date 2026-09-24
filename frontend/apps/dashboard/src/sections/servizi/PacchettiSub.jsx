@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Icon, fmtEur, EmptyState, nameIn } from '@youty/shared';
 import { FilterMenu } from '../../ui/index.js';
-import { SearchToolbar } from './parts.jsx';
+import SearchToolbar from '../../ui/SearchToolbar.jsx';
 
 const svcName = nameIn;
 

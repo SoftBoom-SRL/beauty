@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import { Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
-import { GD_PALETTE, inputCss, svcLabel } from './lib.js';
+import { GD_PALETTE } from '../../ui/palette.js';
+import { inputCss, svcLabel } from './lib.js';
 import { staffApi } from '../../api/staff.js';
 
 export default function NewOperatorModal({ onClose, onCreated }) {

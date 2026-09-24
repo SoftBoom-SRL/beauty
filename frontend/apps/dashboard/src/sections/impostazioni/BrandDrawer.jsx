@@ -7,7 +7,8 @@ import { mediaUrl, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import { useDash } from '../../ctx.jsx';
-import { PaletteGrid, inputCss, LockNote } from './lib.jsx';
+import PaletteGrid from '../../ui/PaletteGrid.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 import { settingsApi } from '../../api/core.js';
 
 export default function BrandDrawer({ onClose }) {

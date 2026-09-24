@@ -1,11 +1,13 @@
 // DkCondRow.jsx — one "SE / IF" condition row of the automation builder.
 // Builds a rule of the API `conditions` JSON: { field, cmp, value } — fields and
 // operators come from GET /api/automations/events-catalog (bilingual labels).
-// NOTE for the integrator: this is a LOCAL copy of the prototype DkCondRow (the
-// impostazioni section keeps its own for deposit rules) — unify in a future refactor.
+// Stessa grafica della riga delle regole caparra (impostazioni/lib.jsx) ma un
+// altro modello: campi e operatori dal catalogo delle automazioni, etichette
+// cliente come testo; per questo le due righe restano separate. Il menu a
+// tendina è quello comune, ui/DkDrop.jsx.
 import React from 'react';
 import { Icon, NumInput } from '@youty/shared';
-import { DkDrop } from './controls.jsx';
+import DkDrop from '../../ui/DkDrop.jsx';
 import { fieldKind, catLabel } from './catalog.js';
 
 // compact symbols for the numeric comparators (prototype visual language);

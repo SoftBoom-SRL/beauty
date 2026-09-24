@@ -1,24 +1,11 @@
 // rules.js — logica pura delle regole caparra (campi, frase riassuntiva,
-// menu delle condizioni, importo). Sta fuori da lib.jsx perché si possa provare
-// con `node --test`; lib.jsx la riesporta.
+// importo). Sta fuori da lib.jsx perché si possa provare con `node --test`;
+// lib.jsx la riesporta. La voce mostrata dal menu di una condizione è
+// dropCurrent di ui/ (la usa anche il menu delle automazioni): la frase la usa
+// qui, e i test la importano da qui.
+import { dropCurrent } from '../../ui/dropCurrent.js';
 
-/** Valore salvato → voce da mostrare nel menu di una condizione.
- *  Un valore che non è fra le opzioni si mostra COME TALE («etichetta non
- *  trovata: A rischio»): prima compariva la prima opzione della lista, e una
- *  regola su un'etichetta rinominata o eliminata sembrava configurata su
- *  un'altra etichetta (15-07). `loose`: stesso testo senza badare a maiuscole e
- *  spazi, come confronta il server le etichette (`contains`). */
-export function dropCurrent(options, value, { missingLabel, loose = false } = {}) {
-  const list = options || [];
-  let option = list.find((o) => o.value === value);
-  if (!option && loose && typeof value === 'string') {
-    const k = value.trim().toLowerCase();
-    option = list.find((o) => typeof o.value === 'string' && o.value.trim().toLowerCase() === k);
-  }
-  if (option) return { label: option.label, missing: false, option };
-  if (value == null || value === '') return { label: '—', missing: false, option: null };
-  return { label: missingLabel ? missingLabel(value) : String(value), missing: true, option: null };
-}
+export { dropCurrent };
 
 /* ---------------- deposit-rule fields (dkDepositFields port, API facts) ---------------- */
 export function depositFields(clientCategories, t) {

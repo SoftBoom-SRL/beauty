@@ -4,7 +4,8 @@
 import React, { useState } from 'react';
 import { Icon, Toggle, fmtEur, fmtDur, EmptyState, nameIn } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
-import { CategoryDot, OperatorAvatarStack, SearchToolbar } from './parts.jsx';
+import SearchToolbar from '../../ui/SearchToolbar.jsx';
+import { CategoryDot, OperatorAvatarStack } from './parts.jsx';
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
 const svcName = nameIn;
