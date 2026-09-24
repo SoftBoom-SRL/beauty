@@ -6,9 +6,12 @@
 | [`SVILUPPO.md`](SVILUPPO.md) | Architettura e convenzioni: dove sta cosa, come si aggiunge una funzione, come si prova |
 | [`../DEPLOY.md`](../DEPLOY.md) | Produzione: servizi Coolify, variabili d'ambiente, job pianificati, controlli dopo il deploy |
 | [`../backend/SPEC.md`](../backend/SPEC.md) | Contratto delle API per app (endpoint, regole di dominio) |
+| [`../frontend/README.md`](../frontend/README.md) | Convenzioni del frontend: struttura, chiamate API, contesto, date e soldi, test |
 | [`manuale-flussi.html`](manuale-flussi.html) | Manuale funzionale dei flussi (riferimento di prodotto) |
 | [`prototipo/`](prototipo/) | Il prototipo originale, congelato |
 | [`superpowers/`](superpowers/) | Documenti di progetto di alcune funzioni (no-show e cancellazioni, web app cliente) |
+| [`storia/`](storia/) | Diari di lavoro chiusi (integrazione del frontend, luglio–settembre 2026) |
+| [`../tools/smoke/`](../tools/smoke/README.md) | Test di fumo nel browser: confronta due versioni schermata per schermata |
 
 ## Audit e cacce ai bug
 

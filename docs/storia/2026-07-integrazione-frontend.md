@@ -1,3 +1,13 @@
+> **Documento storico.** Diario dell'integrazione del frontend, dalla migrazione
+> del prototipo (luglio 2026) alle passate di settembre. I percorsi e i nomi citati
+> sono quelli di allora: dopo il refactoring del 24/09/2026 molti file sono stati
+> divisi (vedi [`../SVILUPPO.md`](../SVILUPPO.md) e
+> [`../../frontend/README.md`](../../frontend/README.md)). Dei «Refactor futuri»
+> elencati qui sotto, `DkDrop` è ora in `ui/` e lo zero come «€0» è
+> `fmtEurOrZero` / `fmtEurNoFree` di `@youty/shared`; i due `DkCondRow` restano
+> separati di proposito (le condizioni dell'automazione usano `op`, quelle delle
+> regole caparra `cmp`).
+
 # Integration notes — migrazione prototipo → Vite + API (luglio 2026)
 
 Stato: tutte le 12 sezioni (11 dashboard + app cliente) sono portate su Vite e collegate alle API reali.

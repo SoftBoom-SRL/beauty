@@ -3,9 +3,11 @@
 // ricarico quando cambia altrove, il segno «in lista d'attesa» e le modifiche
 // in coda (updateClient), una alla volta e solo con i campi che cambiano.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, toastApiError } from '@youty/shared';
+import { toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { clientsApi } from '../../api/clients.js';
+// la lista d'attesa è dell'agenda: il suo endpoint lo espone agendaApi
+import { getWaitlist } from '../agenda/agendaApi.js';
 
 /** → { c, setC, failed, onWaitlist, updateClient(patch, toast), toastErr } */
 export function useClientDetail(clientId, onChanged) {
@@ -42,7 +44,7 @@ export function useClientDetail(clientId, onChanged) {
   useEffect(() => {
     let dead = false;
     if (!hasScope('agenda')) return undefined;
-    api.get('/api/agenda/waitlist')
+    getWaitlist()
       .then((rows) => { if (!dead) setOnWaitlist((rows || []).some((w) => w.client_id === clientId)); })
       .catch(() => {});
     return () => { dead = true; };

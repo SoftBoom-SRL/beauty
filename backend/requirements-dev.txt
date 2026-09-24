@@ -3,3 +3,5 @@
 ruff==0.15.8
 # traceback leggibili dai test lanciati con --parallel
 tblib==3.2.2
+# orologio fermo del backend nel test di fumo nel browser (tools/smoke)
+time-machine==3.5.1
