@@ -1,9 +1,9 @@
-"""Caccia del 22/09 — comunicazioni programmate.
+"""Comunicazioni: destinatari e consenso marketing, programmazione, invio e annullamento.
 
-07-02 (modifica/eliminazione non fermavano l'invio già consegnato; le scadute
-non diventavano «inviate»), 07-03 (revoca del consenso dopo la
-programmazione), 07-14 (programmazione nel passato), 18-07 (save completo su
-copia vecchia).
+Caccia del 22/09 — comunicazioni programmate: 07-02 (modifica/eliminazione non
+fermavano l'invio già consegnato; le scadute non diventavano «inviate»), 07-03
+(revoca del consenso dopo la programmazione), 07-14 (programmazione nel
+passato), 18-07 (save completo su copia vecchia).
 """
 
 import json
@@ -20,6 +20,8 @@ from apps.core.models import OutboxEvent, Salon
 from common.auth import create_client_tokens, create_staff_tokens
 
 from ..models import Communication
+from ..services import send_communication
+from .base import _make_client
 
 SEND = "communication.send"
 CANCEL = "communication.cancel"
@@ -32,6 +34,204 @@ def _client(salon, first_name="Sofia", phone="+393331112233", lang="it"):
         salon=salon, first_name=first_name, last_name="Ricci", phone=phone, lang=lang,
         consents={"privacy": True, "marketing": True, "card_charge": False},
     )
+
+
+class CommunicationTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def test_send_resolves_labels_and_marketing_consent(self):
+        from apps.clients.models import ClientCategory  # lazy: app di un altro agente
+
+        category = ClientCategory.objects.create(
+            salon=self.salon, name="VIP", color="#F59E0B", order=0
+        )
+        with_consent = _make_client(self.salon, first_name="Sofia", phone="+393331112233")
+        without_consent = _make_client(
+            self.salon, first_name="Marta", phone="+393334445566", marketing=False
+        )
+        with_consent.categories.add(category)
+        without_consent.categories.add(category)
+
+        comm = Communication.objects.create(
+            salon=self.salon,
+            title="Promo estate",
+            body="Sconto 20% su tutti i trattamenti viso",
+            audience_type=Communication.AudienceType.LABELS,
+            audience=[category.id],
+        )
+        send_communication(comm)
+
+        comm.refresh_from_db()
+        self.assertEqual(comm.status, Communication.Status.SENT)
+        self.assertIsNotNone(comm.sent_at)
+
+        event = OutboxEvent.objects.get(salon=self.salon, event_type="communication.send")
+        self.assertEqual(event.payload["client_ids"], [with_consent.id])
+        self.assertEqual(event.payload["langs"], {str(with_consent.id): with_consent.lang})
+        self.assertNotIn("scheduled_at", event.payload)
+
+    def test_send_scheduled_emits_event_immediately(self):
+        client = _make_client(self.salon)
+        when = timezone.now() + timedelta(days=2)
+        comm = Communication.objects.create(
+            salon=self.salon,
+            title="Auguri",
+            body="Buone feste!",
+            audience_type=Communication.AudienceType.CLIENTS,
+            audience=[client.id],
+        )
+        send_communication(comm, scheduled_at=when)
+
+        comm.refresh_from_db()
+        self.assertEqual(comm.status, Communication.Status.SCHEDULED)
+        self.assertIsNone(comm.sent_at)
+
+        event = OutboxEvent.objects.get(salon=self.salon, event_type="communication.send")
+        self.assertEqual(event.payload["scheduled_at"], when.isoformat())
+        self.assertEqual(event.payload["client_ids"], [client.id])
+
+
+class MarketingConsentTests(TestCase):
+    """GDPR art. 7.3: il consenso dev'essere revocabile come è stato dato."""
+
+    def setUp(self):
+        from common.auth import create_client_tokens
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = _make_client(self.salon, marketing=True)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.client_obj)['access']}"
+        }
+
+    def _set(self, accepted):
+        return self.client.post(
+            "/api/marketing/client/marketing-consent",
+            data=json.dumps({"accepted": accepted}),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_revoking_excludes_the_client_from_the_next_send(self):
+        comm = Communication.objects.create(
+            salon=self.salon, title="Promo", body="…",
+            audience_type=Communication.AudienceType.CLIENTS,
+            audience=[self.client_obj.id],
+        )
+        self.assertEqual(self._set(False).status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertFalse(self.client_obj.consents["marketing"])
+        self.assertTrue(self.client_obj.consents["marketing_revoked_at"])
+
+        send_communication(comm)
+        event = OutboxEvent.objects.get(salon=self.salon, event_type="communication.send")
+        self.assertEqual(event.payload["client_ids"], [])
+
+    def test_the_consent_can_be_given_back(self):
+        self._set(False)
+        self.assertEqual(self._set(True).status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertTrue(self.client_obj.consents["marketing"])
+        self.assertNotIn("marketing_revoked_at", self.client_obj.consents)
+
+
+class CommunicationScheduleTests(TestCase):
+    """Una comunicazione programmata non si rinvia all'infinito, e modificarla o
+    eliminarla ferma l'invio in coda."""
+
+    def setUp(self):
+        from apps.accounts.models import Membership, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        self.auth = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        }
+        self.target = _make_client(self.salon)
+        self.comm = Communication.objects.create(
+            salon=self.salon, title="Promo estate", body="Sconto 20%",
+            audience_type=Communication.AudienceType.CLIENTS,
+            audience=[self.target.id],
+        )
+
+    def _send(self, body):
+        return self.client.post(
+            f"/api/marketing/communications/{self.comm.id}/send",
+            data=json.dumps(body), content_type="application/json", **self.auth,
+        )
+
+    def _pending(self):
+        # Gli invii annullati restano a registro come «superseded» (caccia del
+        # 22/09): qui contano solo quelli che possono ancora partire.
+        return OutboxEvent.objects.filter(
+            salon=self.salon, event_type="communication.send"
+        ).exclude(status=OutboxEvent.Status.SUPERSEDED).count()
+
+    def test_a_scheduled_communication_cannot_be_sent_again(self):
+        when = (timezone.now() + timedelta(days=2)).isoformat()
+        self.assertEqual(self._send({"scheduled_at": when}).status_code, 200)
+        self.assertEqual(self._pending(), 1)
+        # Ogni rinvio accodava un invio in più: la stessa promozione arrivava
+        # due, tre, dieci volte alla stessa cliente.
+        again = self._send({"scheduled_at": when})
+        self.assertEqual(again.status_code, 422, again.content)
+        self.assertEqual(self._pending(), 1)
+
+    def test_editing_a_scheduled_communication_cancels_the_queued_send(self):
+        when = (timezone.now() + timedelta(days=2)).isoformat()
+        self._send({"scheduled_at": when})
+        self.assertEqual(self._pending(), 1)
+
+        res = self.client.put(
+            f"/api/marketing/communications/{self.comm.id}",
+            data=json.dumps({
+                "title": "Promo autunno", "body": "Sconto 30%",
+                "audience_type": "clients", "audience": [self.target.id],
+            }),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(self._pending(), 0)  # il vecchio testo non parte più
+        self.comm.refresh_from_db()
+        self.assertEqual(self.comm.status, Communication.Status.DRAFT)
+        # e ora si può riprogrammare, una volta sola
+        self.assertEqual(self._send({"scheduled_at": when}).status_code, 200)
+        self.assertEqual(self._pending(), 1)
+
+    def test_deleting_a_communication_cancels_the_queued_send(self):
+        when = (timezone.now() + timedelta(days=2)).isoformat()
+        self._send({"scheduled_at": when})
+        res = self.client.delete(
+            f"/api/marketing/communications/{self.comm.id}", **self.auth
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(self._pending(), 0)
+
+    def test_send_now_wins_over_a_saved_schedule(self):
+        """`scheduled_at: null` esplicito = invia adesso, anche se a database
+        c'è una data: prima il None veniva rimpiazzato dalla data salvata e
+        «Invia subito» era impossibile via API."""
+        self.comm.scheduled_at = timezone.now() + timedelta(days=5)
+        self.comm.save(update_fields=["scheduled_at"])
+
+        res = self._send({"scheduled_at": None})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.comm.refresh_from_db()
+        self.assertEqual(self.comm.status, Communication.Status.SENT)
+
+    def test_an_invented_audience_type_is_refused(self):
+        """Un refuso su «labels» faceva leggere gli id etichetta come id cliente:
+        la promozione per le VIP partiva a due persone a caso."""
+        res = self.client.post(
+            "/api/marketing/communications",
+            data=json.dumps({
+                "title": "Promo", "body": "…",
+                "audience_type": "label", "audience": [1],
+            }),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 422, res.content)
 
 
 class _Base(TestCase):
