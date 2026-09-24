@@ -360,6 +360,37 @@ class LocationDefaultTests(TestCase):
         self.assertFalse(Location.objects.get(pk=first["id"]).is_default)
         self.assertTrue(Location.objects.get(pk=second["id"]).is_default)
 
+    def test_the_admin_keeps_a_single_default_too(self):
+        """Bug sospetti del 24/09, voce 29: anche da /admin/ la sede predefinita resta una.
+
+        L'API toglie il segno alle altre sedi, il salvataggio dell'admin no:
+        segnando «predefinita» una seconda sede ne restavano due, e l'app
+        clienti continuava a lavorare sulla più vecchia.
+        """
+        from apps.accounts.models import User
+
+        from ..services import default_location
+
+        Location.objects.create(salon=self.salon, name="Centro", address="Via Roma 1", is_default=True)
+        second = Location.objects.create(salon=self.salon, name="Nuova sede", address="Via Milano 2")
+        self.client.force_login(User.objects.create_superuser(email="root@x.it", password="pw-lunga-123"))
+
+        def defaults():
+            return list(Location.objects.filter(salon=self.salon, is_default=True).values_list("name", flat=True))
+
+        form = {"salon": self.salon.pk, "address": "", "phone": "", "is_default": "on"}
+        resp = self.client.post(
+            f"/admin/core/location/{second.pk}/change/",
+            {**form, "name": "Nuova sede", "address": "Via Milano 2"},
+        )
+        self.assertEqual(resp.status_code, 302, resp.content)
+        self.assertEqual(defaults(), ["Nuova sede"])
+        self.assertEqual(default_location(self.salon), second)
+        # Lo stesso per una sede nuova.
+        resp = self.client.post("/admin/core/location/add/", {**form, "name": "Terza sede"})
+        self.assertEqual(resp.status_code, 302, resp.content)
+        self.assertEqual(defaults(), ["Terza sede"])
+
 
 class SettingsAuditExtrasTests(TestCase):
     """Caparra con scadenza, motivazioni personalizzate e stato Stripe nelle impostazioni."""

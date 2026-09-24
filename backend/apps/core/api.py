@@ -28,7 +28,7 @@ from .schemas import (
     SettingsIn,
     SettingsOut,
 )
-from .services import default_location, get_salon_by_slug, log_activity
+from .services import default_location, get_salon_by_slug, log_activity, make_only_default_location
 from .validation import clean_settings_payload, deposit_rule_fields
 from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
@@ -168,18 +168,6 @@ def list_locations(request):
     return request.auth.salon.locations.all()
 
 
-def _make_only_default(salon, location) -> None:
-    """La sede predefinita è UNA: le altre vanno azzerate nella stessa transazione.
-
-    Chi legge fa `filter(is_default=True).first()`, che senza ordinamento
-    esplicito restituisce la più vecchia: marcandone una seconda, la scelta del
-    titolare veniva ignorata e dall'interfaccia non c'era modo di correggerla.
-    """
-    Location.objects.filter(salon=salon, is_default=True).exclude(pk=location.pk).update(
-        is_default=False
-    )
-
-
 @router.post("/locations", auth=staff_auth, response=LocationOut)
 def create_location(request, data: LocationIn):
     ctx = request.auth
@@ -187,7 +175,7 @@ def create_location(request, data: LocationIn):
     with transaction.atomic():
         location = Location.objects.create(salon=ctx.salon, **data.dict())
         if location.is_default:
-            _make_only_default(ctx.salon, location)
+            make_only_default_location(ctx.salon, location)
     return location
 
 
@@ -201,7 +189,7 @@ def update_location(request, location_id: int, data: LocationIn):
             setattr(loc, name, value)
         loc.save()
         if loc.is_default:
-            _make_only_default(ctx.salon, loc)
+            make_only_default_location(ctx.salon, loc)
     return loc
 
 
