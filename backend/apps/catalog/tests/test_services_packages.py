@@ -1,71 +1,30 @@
-"""Test essenziali: reorder categorie, pacchetto con items (ricreati a ogni
-update), endpoint pubblici (raggruppamento + filtro attivi + 404 salone).
+"""Servizi e pacchetti del listino: le righe del pacchetto (ricreate a ogni
+modifica, conservate se la modifica non le manda), il cambio di prezzo nel
+registro attività, la posa, la descrizione.
 
-Le view sono chiamate per lo più direttamente (bypassando l'HTTP layer): usano
-solo `request.auth`, quindi basta un `SimpleNamespace` con un `StaffContext`
-costruito a mano. `CatalogHttpSmokeTests` invece passa DAVVERO da /api/catalog/…:
-finché nessun test faceva una richiesta HTTP, un instradamento rotto sarebbe
-rimasto invisibile con la suite tutta verde.
+Caccia del 22/09:
+- 18-07: modificare un servizio o un pacchetto non riscrive `yourang_item_id`
+  scritto nel frattempo dalla sincronizzazione.
 """
 
+import json
 from decimal import Decimal
-from types import SimpleNamespace
+from unittest import mock
 
-from django.test import TestCase
-from ninja.errors import HttpError
+from apps.core.models import ActivityLog
 
-from apps.core.models import ActivityLog, Salon
-from common.auth import StaffContext
-
+from .. import api as catalog_api
 from ..api import (
     create_category,
     create_package,
     create_service,
-    public_packages,
     public_services,
-    reorder_categories,
-    update_category,
     update_package,
     update_service,
 )
 from ..models import Package, PackageItem, Service, ServiceCategory
-from ..schemas import CategoryIn, PackageIn, PackageItemIn, ReorderIn, ServiceIn
-
-
-def fake_request(auth=None):
-    """Richiesta finta: `META` serve al rate limit degli endpoint pubblici."""
-    return SimpleNamespace(auth=auth, META={"REMOTE_ADDR": "203.0.113.7"}, GET={})
-
-
-class CatalogTestCase(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"pricing"}, is_owner=False
-        )
-        self.request = fake_request(ctx)
-
-
-class ReorderCategoriesTests(CatalogTestCase):
-    def test_reorder_updates_order_field(self):
-        c1 = create_category(self.request, CategoryIn(name_it="Unghie"))
-        c2 = create_category(self.request, CategoryIn(name_it="Capelli"))
-        c3 = create_category(self.request, CategoryIn(name_it="Viso"))
-        self.assertEqual([c1.order, c2.order, c3.order], [0, 0, 0])
-
-        reorder_categories(self.request, ReorderIn(ids=[c3.id, c1.id, c2.id]))
-
-        c1.refresh_from_db()
-        c2.refresh_from_db()
-        c3.refresh_from_db()
-        self.assertEqual(c3.order, 0)
-        self.assertEqual(c1.order, 1)
-        self.assertEqual(c2.order, 2)
-
-    def test_reorder_ignores_unknown_ids(self):
-        c1 = create_category(self.request, CategoryIn(name_it="Unghie"))
-        result = list(reorder_categories(self.request, ReorderIn(ids=[999, c1.id])))
-        self.assertEqual([c.id for c in result], [c1.id])
+from ..schemas import CategoryIn, PackageIn, PackageItemIn, ServiceIn
+from .base import CatalogTestCase, _CatalogSetup
 
 
 class PackageWithItemsTests(CatalogTestCase):
@@ -208,57 +167,6 @@ class ServiceSoakMinTests(CatalogTestCase):
         self.assertEqual(service.soak_min, 20)
 
 
-class PublicEndpointsTests(CatalogTestCase):
-    def test_public_services_groups_by_category_and_hides_inactive(self):
-        cat_a = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie", order=1)
-        cat_b = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli", order=0)
-        Service.objects.create(
-            salon=self.salon, category=cat_a, name_it="Manicure", duration_min=30,
-            price=Decimal("20.00"), active=True,
-        )
-        Service.objects.create(
-            salon=self.salon, category=cat_a, name_it="Vecchio trattamento", duration_min=30,
-            price=Decimal("10.00"), active=False,
-        )
-        Service.objects.create(
-            salon=self.salon, category=cat_b, name_it="Piega", duration_min=40,
-            price=Decimal("25.00"), active=True,
-        )
-
-        result = public_services(fake_request(), self.salon.slug)
-
-        # ordinate per "order" della categoria: Capelli (0) prima di Unghie (1)
-        self.assertEqual([c["id"] for c in result], [cat_b.id, cat_a.id])
-        unghie = next(c for c in result if c["id"] == cat_a.id)
-        self.assertEqual(len(unghie["services"]), 1)
-        self.assertEqual(unghie["services"][0].name_it, "Manicure")
-
-    def test_public_services_unknown_salon_returns_404(self):
-        with self.assertRaises(HttpError) as exc:
-            public_services(fake_request(), "salone-inesistente")
-        self.assertEqual(exc.exception.status_code, 404)
-
-    def test_public_packages_hides_inactive_and_includes_items(self):
-        cat = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
-        service = Service.objects.create(
-            salon=self.salon, category=cat, name_it="Manicure", duration_min=30, price=Decimal("20.00")
-        )
-        active_pkg = Package.objects.create(salon=self.salon, name="Combo attivo", price=Decimal("40.00"), active=True)
-        PackageItem.objects.create(package=active_pkg, service=service, qty=1)
-        Package.objects.create(salon=self.salon, name="Combo disattivo", price=Decimal("40.00"), active=False)
-
-        result = public_packages(fake_request(), self.salon.slug)
-
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["name"], "Combo attivo")
-        self.assertEqual(result[0]["items"][0]["name_it"], "Manicure")
-
-    def test_public_packages_unknown_salon_returns_404(self):
-        with self.assertRaises(HttpError) as exc:
-            public_packages(fake_request(), "salone-inesistente")
-        self.assertEqual(exc.exception.status_code, 404)
-
-
 class PackageUpdateAtomicityTests(CatalogTestCase):
     """Un aggiornamento con un servizio inesistente non deve lasciare il
     pacchetto senza righe o con il prezzo già cambiato."""
@@ -311,50 +219,6 @@ class ServiceDescriptionTests(CatalogTestCase):
         self.assertEqual(service.description_en, "Full hand and nail care")
 
 
-class CategoryColorTests(CatalogTestCase):
-    """Rinominare una categoria non deve riportarne il colore a quello di fabbrica."""
-
-    def test_update_without_color_keeps_the_existing_one(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
-        update_category(self.request, category.id, CategoryIn(name_it="Mani", order=2))
-        category.refresh_from_db()
-        self.assertEqual(category.color, "#123456")
-        self.assertEqual(category.name_it, "Mani")
-        self.assertEqual(category.order, 2)
-
-    def test_update_with_color_changes_it(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
-        update_category(self.request, category.id, CategoryIn(name_it="Unghie", color="#00FF00"))
-        category.refresh_from_db()
-        self.assertEqual(category.color, "#00FF00")
-
-    def test_create_without_color_uses_the_default(self):
-        category = create_category(self.request, CategoryIn(name_it="Viso"))
-        self.assertEqual(category.color, "#E0E7FF")
-
-
-class CategoryValidationTests(CatalogTestCase):
-    """Colore e ordine fuori range sono errori della richiesta, non del database."""
-
-    def test_invalid_color_is_a_400(self):
-        with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name_it="Unghie", color="rosso"))
-        self.assertEqual(caught.exception.status_code, 400)
-
-    def test_negative_order_is_a_400(self):
-        with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name_it="Unghie", order=-1))
-        self.assertEqual(caught.exception.status_code, 400)
-
-    def test_update_with_invalid_color_is_a_400_and_changes_nothing(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie", color="#123456"))
-        with self.assertRaises(HttpError) as caught:
-            update_category(self.request, category.id, CategoryIn(name_it="X", color="#12"))
-        self.assertEqual(caught.exception.status_code, 400)
-        category.refresh_from_db()
-        self.assertEqual((category.name_it, category.color), ("Unghie", "#123456"))
-
-
 class PackageItemsPreservedTests(CatalogTestCase):
     """Un PUT che cambia solo il prezzo non deve svuotare il pacchetto."""
 
@@ -395,62 +259,44 @@ class PackageItemsPreservedTests(CatalogTestCase):
         self.assertEqual(Package.objects.get(pk=created["id"]).items.count(), 0)
 
 
-class CatalogHttpSmokeTests(TestCase):
-    """Una richiesta HTTP vera per router: senza, un endpoint irraggiungibile
-    (405 o 404 di instradamento) resta verde in una suite che chiama le view
-    come funzioni. Il riordino categorie era dato per rotto proprio così."""
+class YourangLinkSurvivesEditsTests(_CatalogSetup):
+    """18-07: la sincronizzazione collega la voce mentre il titolare modifica il prezzo."""
 
-    def setUp(self):
-        from apps.accounts.models import Membership, Role, User
-        from common.auth import create_staff_tokens
+    def _sync_links_meanwhile(self, model, item_id):
+        real = catalog_api.salon_get
 
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Listino", scopes=["pricing"])
-        Membership.objects.create(user=user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
+        def read_then_sync(m, ctx, pk, **kwargs):
+            obj = real(m, ctx, pk, **kwargs)
+            if m is model:
+                model.objects.filter(pk=obj.pk).update(yourang_item_id=item_id)
+            return obj
+
+        return mock.patch.object(catalog_api, "salon_get", side_effect=read_then_sync)
+
+    def test_editing_a_service_keeps_the_link_written_by_the_sync(self):
+        body = {
+            "category_id": self.cat.id, "name_it": "Colore", "duration_min": 60,
+            "soak_min": 40, "price": "65",
         }
-
-    def test_post_categories_reorder_is_routed_and_persists_the_order(self):
-        first = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
-        second = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
-        res = self.client.post(
-            "/api/catalog/categories/reorder",
-            data={"ids": [second.id, first.id]},
-            content_type="application/json",
-            **self.auth,
-        )
+        with self._sync_links_meanwhile(Service, "yr-123"):
+            res = self.client.put(
+                f"/api/catalog/services/{self.color.id}", data=json.dumps(body),
+                content_type="application/json", **self.auth,
+            )
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual([c["id"] for c in res.json()], [second.id, first.id])
-        first.refresh_from_db()
-        second.refresh_from_db()
-        self.assertEqual((second.order, first.order), (0, 1))
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.price, Decimal("65"))
+        self.assertEqual(self.color.yourang_item_id, "yr-123")
 
-    def test_categories_crud_round_trip_over_http(self):
-        created = self.client.post(
-            "/api/catalog/categories",
-            data={"name_it": "Viso", "color": "#ABCDEF"},
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(created.status_code, 200, created.content)
-        category_id = created.json()["id"]
-
-        renamed = self.client.put(
-            f"/api/catalog/categories/{category_id}",
-            data={"name_it": "Viso e collo"},
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(renamed.status_code, 200, renamed.content)
-        self.assertEqual(renamed.json()["color"], "#ABCDEF")  # colore non travolto
-
-        listing = self.client.get("/api/catalog/categories", **self.auth)
-        self.assertEqual(listing.status_code, 200, listing.content)
-        self.assertEqual([c["name_it"] for c in listing.json()], ["Viso e collo"])
-
-    def test_public_services_over_http_needs_no_auth(self):
-        res = self.client.get(f"/api/catalog/public/services?salon={self.salon.slug}")
+    def test_editing_a_package_keeps_the_link_written_by_the_sync(self):
+        package = Package.objects.create(salon=self.salon, name="Colore e piega", price=Decimal("80"))
+        with self._sync_links_meanwhile(Package, "yr-456"):
+            res = self.client.put(
+                f"/api/catalog/packages/{package.id}",
+                data=json.dumps({"name": "Colore e piega", "price": "85"}),
+                content_type="application/json", **self.auth,
+            )
         self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json(), [])
+        package.refresh_from_db()
+        self.assertEqual(package.price, Decimal("85"))
+        self.assertEqual(package.yourang_item_id, "yr-456")

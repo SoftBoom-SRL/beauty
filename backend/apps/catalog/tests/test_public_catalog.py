@@ -1,35 +1,68 @@
-"""Caccia del 22/09: catalogo.
+"""Listino pubblico, senza autenticazione: servizi raggruppati per categoria,
+solo gli attivi, pacchetti con le loro righe, 404 per un salone inesistente.
 
-- 09-07 (C4): il listino pubblico porta la posa (`soak_min`), anche nei pacchetti;
-- 18-07: modificare un servizio o un pacchetto non riscrive `yourang_item_id`
-  scritto nel frattempo dalla sincronizzazione.
+Caccia del 22/09:
+- 09-07 (C4): il listino pubblico porta la posa (`soak_min`), anche nei pacchetti.
 """
 
-import json
 from decimal import Decimal
-from unittest import mock
 
-from django.test import TestCase
+from ninja.errors import HttpError
 
-from apps.accounts.models import Membership, User
-from apps.core.models import Salon
-from common.auth import create_staff_tokens
-
-from .. import api as catalog_api
+from ..api import public_packages, public_services
 from ..models import Package, PackageItem, Service, ServiceCategory
+from .base import CatalogTestCase, _CatalogSetup, fake_request
 
 
-class _CatalogSetup(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.cat = ServiceCategory.objects.create(salon=self.salon, name_it="Colore")
-        self.color = Service.objects.create(
-            salon=self.salon, category=self.cat, name_it="Colore", duration_min=60,
-            soak_min=40, price=Decimal("60"),
+class PublicEndpointsTests(CatalogTestCase):
+    def test_public_services_groups_by_category_and_hides_inactive(self):
+        cat_a = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie", order=1)
+        cat_b = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli", order=0)
+        Service.objects.create(
+            salon=self.salon, category=cat_a, name_it="Manicure", duration_min=30,
+            price=Decimal("20.00"), active=True,
         )
-        owner = User.objects.create_user(email="titolare@parlour.it", password="x-Segreta-1")
-        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        Service.objects.create(
+            salon=self.salon, category=cat_a, name_it="Vecchio trattamento", duration_min=30,
+            price=Decimal("10.00"), active=False,
+        )
+        Service.objects.create(
+            salon=self.salon, category=cat_b, name_it="Piega", duration_min=40,
+            price=Decimal("25.00"), active=True,
+        )
+
+        result = public_services(fake_request(), self.salon.slug)
+
+        # ordinate per "order" della categoria: Capelli (0) prima di Unghie (1)
+        self.assertEqual([c["id"] for c in result], [cat_b.id, cat_a.id])
+        unghie = next(c for c in result if c["id"] == cat_a.id)
+        self.assertEqual(len(unghie["services"]), 1)
+        self.assertEqual(unghie["services"][0].name_it, "Manicure")
+
+    def test_public_services_unknown_salon_returns_404(self):
+        with self.assertRaises(HttpError) as exc:
+            public_services(fake_request(), "salone-inesistente")
+        self.assertEqual(exc.exception.status_code, 404)
+
+    def test_public_packages_hides_inactive_and_includes_items(self):
+        cat = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        service = Service.objects.create(
+            salon=self.salon, category=cat, name_it="Manicure", duration_min=30, price=Decimal("20.00")
+        )
+        active_pkg = Package.objects.create(salon=self.salon, name="Combo attivo", price=Decimal("40.00"), active=True)
+        PackageItem.objects.create(package=active_pkg, service=service, qty=1)
+        Package.objects.create(salon=self.salon, name="Combo disattivo", price=Decimal("40.00"), active=False)
+
+        result = public_packages(fake_request(), self.salon.slug)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["name"], "Combo attivo")
+        self.assertEqual(result[0]["items"][0]["name_it"], "Manicure")
+
+    def test_public_packages_unknown_salon_returns_404(self):
+        with self.assertRaises(HttpError) as exc:
+            public_packages(fake_request(), "salone-inesistente")
+        self.assertEqual(exc.exception.status_code, 404)
 
 
 class PublicSoakTests(_CatalogSetup):
@@ -47,46 +80,3 @@ class PublicSoakTests(_CatalogSetup):
         res = self.client.get(f"/api/catalog/public/packages?salon={self.salon.slug}")
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.json()[0]["items"][0]["soak_min"], 40)
-
-
-class YourangLinkSurvivesEditsTests(_CatalogSetup):
-    """18-07: la sincronizzazione collega la voce mentre il titolare modifica il prezzo."""
-
-    def _sync_links_meanwhile(self, model, item_id):
-        real = catalog_api.salon_get
-
-        def read_then_sync(m, ctx, pk, **kwargs):
-            obj = real(m, ctx, pk, **kwargs)
-            if m is model:
-                model.objects.filter(pk=obj.pk).update(yourang_item_id=item_id)
-            return obj
-
-        return mock.patch.object(catalog_api, "salon_get", side_effect=read_then_sync)
-
-    def test_editing_a_service_keeps_the_link_written_by_the_sync(self):
-        body = {
-            "category_id": self.cat.id, "name_it": "Colore", "duration_min": 60,
-            "soak_min": 40, "price": "65",
-        }
-        with self._sync_links_meanwhile(Service, "yr-123"):
-            res = self.client.put(
-                f"/api/catalog/services/{self.color.id}", data=json.dumps(body),
-                content_type="application/json", **self.auth,
-            )
-        self.assertEqual(res.status_code, 200, res.content)
-        self.color.refresh_from_db()
-        self.assertEqual(self.color.price, Decimal("65"))
-        self.assertEqual(self.color.yourang_item_id, "yr-123")
-
-    def test_editing_a_package_keeps_the_link_written_by_the_sync(self):
-        package = Package.objects.create(salon=self.salon, name="Colore e piega", price=Decimal("80"))
-        with self._sync_links_meanwhile(Package, "yr-456"):
-            res = self.client.put(
-                f"/api/catalog/packages/{package.id}",
-                data=json.dumps({"name": "Colore e piega", "price": "85"}),
-                content_type="application/json", **self.auth,
-            )
-        self.assertEqual(res.status_code, 200, res.content)
-        package.refresh_from_db()
-        self.assertEqual(package.price, Decimal("85"))
-        self.assertEqual(package.yourang_item_id, "yr-456")
