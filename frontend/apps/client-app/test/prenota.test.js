@@ -7,59 +7,14 @@
 // secondo tentativo dopo una risposta persa (16-08) e con le risposte degli
 // orari arrivate fuori ordine.
 import assert from 'node:assert/strict';
-import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 
 import { isoAtMin, todayStr, toDateStr, addDays, parseISO } from '@youty/shared';
-import { button, deferred, findAll, loadModule, mount, settle, textOf } from './load.mjs';
 import { STEP } from '../src/screens/prenota/steps.js';
+import { calls, fail, fakeCtx, loadScreen, lost, pending, reply, tap, text } from './fake-app.mjs';
+import { button, findAll, mount, settle, textOf } from './load.mjs';
 
-const PKG = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'shared', 'src');
-const at = (f) => JSON.stringify(join(PKG, f));
-
-/* ---- l'API finta: ogni chiamata aspetta la sua risposta ---- */
-const net = {
-  log: [],
-  call(method, path, args) {
-    const d = deferred();
-    this.log.push({ method, path, args, d });
-    return d.promise;
-  },
-};
-globalThis.__net = net;
-const SHARED = `
-import { ApiError } from ${at('apiErrors.js')};
-export * from ${at('format.js')};
-export * from ${at('labels.js')};
-export { isPlausiblePhone } from ${at('phone.js')};
-export { ApiError, apiErrorText, toastApiError } from ${at('apiErrors.js')};
-export function Icon() { return null; }
-Icon.stub = true;
-export function PhoneInput() { return null; }
-PhoneInput.stub = true;
-export const SALON_SLUG = 'the-parlour';
-const N = globalThis.__net;
-N.ApiError = ApiError;
-const call = (method) => (path, ...args) => N.call(method, path, args);
-export const api = { get: call('get'), post: call('post'), put: call('put'), del: call('del') };
-export const clientAuth = {
-  requestOtp: (...args) => N.call('requestOtp', null, args),
-  register: (...args) => N.call('register', null, args),
-  verifyOtp: (...args) => N.call('verifyOtp', null, args),
-};
-`;
-const CTX = `
-export const useApp = () => globalThis.__ctx;
-export const SALON_SLUG = 'the-parlour';
-`;
-// useTodayKey ascolta documento e finestra
-globalThis.document = { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
-globalThis.window = { addEventListener() {}, removeEventListener() {} };
-
-const { default: Prenota } = await loadModule('src/screens/prenota/index.jsx', {
-  shared: SHARED, react: true, jsx: true, ctx: CTX, stubs: ['DepositDue.jsx'],
-});
+const { default: Prenota } = await loadScreen('src/screens/prenota/index.jsx', ['DepositDue.jsx']);
 
 /* ---- dati del salone ---- */
 const CATS = [
@@ -76,41 +31,16 @@ const OPS = [
   { id: 5, first_name: 'Sole', last_name: 'Rossi', initials: 'SR', color: '#eee', service_ids: [10, 11] },
   { id: 6, first_name: 'Luna', last_name: 'Bianchi', initials: 'LB', color: '#ddd', service_ids: [20] },
 ];
-const BRAND = { name: 'The Parlour', phone: '+39 02 1234 5678', type: 'serif', cancelMinHours: 24 };
 const today = todayStr();
 const dayStr = (i) => toDateStr(addDays(parseISO(today), i));
 const slotAt = (day, min) => ({ start: isoAtMin(day, min), assignment: [] });
 
 /* ---- aiuti ---- */
 function setup(session = null) {
-  net.log.length = 0;
-  const toasts = [];
-  const views = [];
-  globalThis.__ctx = {
-    t: (it) => it, lang: 'it', brand: BRAND, session,
-    setView: (v, params) => views.push([v, params]),
-    fireToast: (o) => toasts.push(o),
-  };
+  const { toasts, views } = fakeCtx({ session });
   const s = mount(Prenota);
   return { s, toasts, views };
 }
-/** Le chiamate registrate finora, senza le Promise: [metodo, percorso, ...argomenti]. */
-const calls = () => net.log.map(({ method, path, args }) => [method, path, ...args]);
-const pending = (method, path) => net.log.filter((c) => c.method === method && c.path === path);
-async function reply(entry, data) { entry.d.resolve(data); await settle(); }
-async function fail(entry, status, message) { entry.d.reject(new net.ApiError(status, message)); await settle(); }
-async function lost(entry) { entry.d.reject(new TypeError('Failed to fetch')); await settle(); }
-/** Tocca un pulsante e ridisegna (anche dopo l'azione asincrona, se c'è).
- *  Un pulsante disabilitato nel browser non risponde: qui è un errore. */
-async function tap(s, label) {
-  const b = button(s.tree, label);
-  if (b.props.disabled) throw new Error(`«${label}» è disabilitato`);
-  const res = b.props.onClick();
-  s.render();
-  if (res && typeof res.then === 'function') { await settle(); s.render(); }
-  return res;
-}
-const text = (s) => textOf(s.tree);
 const input = (s, placeholder) => findAll(s.tree, (el) => el.type === 'input' && el.props.placeholder === placeholder)[0];
 function type(s, placeholder, value) { input(s, placeholder).props.onChange({ target: { value } }); s.render(); }
 const back = (s) => findAll(s.tree, (el) => el.type === 'button' && findAll(el, (x) => x.props?.name === 'chevL').length)[0];
@@ -176,7 +106,7 @@ test('senza sessione: servizio, orario, dati, codice via SMS, prenotazione', asy
     s.render();
     await tap(s, 'Invia codice');
     assert.match(text(s), /Controlla il numero di telefono/);
-    assert.equal(net.log.filter((c) => c.method === 'requestOtp').length, 0);
+    assert.equal(pending('requestOtp', null).length, 0);
     findAll(s.tree, (el) => el.type?.name === 'PhoneInput')[0].props.onChange(' 333 884 1120 ');
     s.render();
     button(s.tree, 'Invia codice').props.onClick();
