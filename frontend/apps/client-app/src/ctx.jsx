@@ -1,5 +1,5 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
-// Screen agents CONSUME this via useApp() — never edit it.
+// Gli schermi lo leggono con useApp().
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
@@ -101,7 +101,7 @@ export function AppProvider({ children }) {
   /* ---- toast ---- */
   const { fireToast, toastProps } = useToastHost();
 
-  /* ---- view routing (state-based, like the prototype) ---- */
+  /* ---- viste: stato in memoria, non URL (vedi shared/src/salon.js) ---- */
   const [view, setViewRaw] = useState('home');
   const [viewParams, setViewParams] = useState({});
   const setView = useCallback((v, params = {}) => {

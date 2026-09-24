@@ -2,12 +2,13 @@
 // chips; upcoming items expose sposta/annulla actions.
 // Data: GET /api/agenda/client/appointments.
 import React from 'react';
-import { Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import {
   ClientSubHead, Meta, DashedEmpty, DepositDue, useClientAppointments,
-  fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
+  fmtDayMed, apptServiceNames, errToast,
 } from './lib.jsx';
+import { apptMinutes } from '../lib/appointments.js';
 
 function StatusChip({ status, t }) {
   const m = statusMeta(status, t);
@@ -28,8 +29,8 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast, 
         <StatusChip status={appt.status} t={t} />
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
-        <Meta icon="calendar" text={fmtApptDate(appt.start, lang)} />
-        <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
+        <Meta icon="calendar" text={fmtDayMed(appt.start, lang)} />
+        <Meta icon="clock" text={fmtTime(appt.start) + ' · ' + fmtDur(apptMinutes(appt))} />
         {appt.operator?.name && <Meta icon="user" text={appt.operator.name} />}
       </div>
       {(appt.gifts || []).length > 0 && (

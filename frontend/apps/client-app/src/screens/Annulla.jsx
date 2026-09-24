@@ -2,12 +2,13 @@
 // POST /api/agenda/client/appointments/{id}/cancel. 400 policy errors are
 // surfaced inline + toast.
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, fmtDur, depositMeta } from '@youty/shared';
+import { ApiError, Icon, api, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, Meta, fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
+  ClientSubHead, Meta, fmtDayMed, apptServiceNames, errToast,
 } from './lib.jsx';
+import { apptMinutes } from '../lib/appointments.js';
 
 export default function Annulla() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -97,8 +98,8 @@ export default function Annulla() {
         <div className="card" style={{ padding: 16, marginBottom: 24, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           <div style={{ fontSize: 17, fontWeight: 700, lineHeight: 1.2 }}>{apptServiceNames(appt)}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 12 }}>
-            <Meta icon="calendar" text={fmtApptDate(appt.start, lang)} />
-            <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
+            <Meta icon="calendar" text={fmtDayMed(appt.start, lang)} />
+            <Meta icon="clock" text={fmtTime(appt.start) + ' · ' + fmtDur(apptMinutes(appt))} />
             {appt.operator?.name && <Meta icon="user" text={appt.operator.name} />}
           </div>
           {dm && (

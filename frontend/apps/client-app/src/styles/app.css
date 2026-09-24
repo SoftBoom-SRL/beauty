@@ -1,5 +1,5 @@
-/* app.css — client-app layout on top of the copied prototype styles.css.
-   Loaded AFTER styles.css so these :root overrides win. */
+/* app.css — client-app layout on top of the shared base stylesheet
+   (@youty/shared/styles/base.css). Loaded AFTER it so these :root overrides win. */
 
 :root {
   /* real device safe areas (the prototype hard-coded the iOS frame's 64/22px) */

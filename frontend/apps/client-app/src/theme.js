@@ -1,5 +1,5 @@
-// theme.js — white-label theming utils (ported from prototype app.jsx +
-// screen-cliente.jsx, plus the previously-missing onColor helper).
+// theme.js — il white-label dell'app cliente: dal colore del salone i toni
+// derivati, il colore leggibile sopra il brand e il font dei titoli.
 
 export function hex2rgb(h) {
   const n = parseInt(h.slice(1), 16);

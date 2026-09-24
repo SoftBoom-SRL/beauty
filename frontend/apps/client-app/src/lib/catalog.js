@@ -9,7 +9,7 @@ export function svcLangName(obj, lang) {
   return obj ? nameIn(obj, lang) : '';
 }
 
-/** Category icon heuristic (prototype BK_CAT_ICON keyed nail/hair/viso/extra). */
+/** Icona della categoria dal nome: unghie, capelli, viso, il resto. */
 export function catIcon(name = '') {
   const n = String(name).toLowerCase();
   if (/(unghi|nail|mani|pedic)/.test(n)) return 'sparkle';

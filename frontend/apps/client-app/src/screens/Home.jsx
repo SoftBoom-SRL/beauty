@@ -2,13 +2,14 @@
 // status/deposit chips + actions, empty-state variant, salon footer.
 // Data: GET /api/agenda/client/appointments → upcoming[0].
 import React from 'react';
-import { Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  Meta, useClientAppointments, relLabel, fmtApptDate, apptTime, apptDur,
+  Meta, useClientAppointments, relLabel, fmtDayMed,
   apptServiceNames, mapsUrl, downloadIcs, errToast, DepositDue,
 } from './lib.jsx';
+import { apptMinutes } from '../lib/appointments.js';
 
 /* cover with monogram (prototype Cover, data from brand) */
 function Cover({ brand, t }) {
@@ -77,7 +78,7 @@ export default function Home() {
     );
   }
 
-  /* ---- HOME LOGGATA (comportamento attuale) ---- */
+  /* ---- HOME LOGGATA ---- */
   return <HomeLogged />;
 }
 
@@ -127,8 +128,8 @@ function HomeLogged() {
               {/* details */}
               <div style={{ fontFamily: 'var(--sans)', fontSize: 17, fontWeight: 700, lineHeight: 1.2 }}>{apptServiceNames(next)}</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 12 }}>
-                <Meta icon="calendar" text={fmtApptDate(next.start, lang)} />
-                <Meta icon="clock" text={apptTime(next.start) + ' · ' + fmtDur(apptDur(next), lang)} />
+                <Meta icon="calendar" text={fmtDayMed(next.start, lang)} />
+                <Meta icon="clock" text={fmtTime(next.start) + ' · ' + fmtDur(apptMinutes(next))} />
                 {next.operator?.name && <Meta icon="user" text={next.operator.name} />}
               </div>
               {/* caparra da versare: l'orario resta bloccato solo fino alla scadenza */}

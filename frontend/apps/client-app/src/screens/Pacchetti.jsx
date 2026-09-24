@@ -1,5 +1,5 @@
 // Pacchetti.jsx — public packages with included services + price and the
-// phone-only booking CTA (as prototype).
+// phone-only booking CTA.
 // Data: GET /api/catalog/public/packages (+ public services to compute the
 // original price → discount badge). Il numero per il `tel:` arriva dal branding
 // pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.

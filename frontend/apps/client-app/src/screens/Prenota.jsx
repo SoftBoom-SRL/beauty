@@ -1,4 +1,4 @@
-// Prenota.jsx — booking wizard (core flow), ported from prototype ClientBooking.
+// Prenota.jsx — booking wizard (core flow).
 // Steps: -1 choice (single/pacchetti) → 0 service picker (public catalog)
 //        → 1 day+time (GET /api/agenda/client/availability) + stylist picker
 //        (GET /api/staff/public/operators) → 2 review
@@ -316,7 +316,7 @@ export default function Prenota() {
         <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--brand-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {svcs.map((sv) => svcLangName(sv, lang)).join(' + ')}
         </div>
-        <div className="t-sm" style={{ color: 'var(--brand-ink)', opacity: 0.72 }}>{fmtDur(dur, lang)} · {fmtEur(price, lang)}</div>
+        <div className="t-sm" style={{ color: 'var(--brand-ink)', opacity: 0.72 }}>{fmtDur(dur)} · {fmtEur(price, lang)}</div>
       </div>
     </div>
   );
@@ -445,7 +445,7 @@ export default function Prenota() {
                           </div>
                         )}
                         <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(svcMinutes(sv), lang)}</span>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(svcMinutes(sv))}</span>
                           {giftFor(sv.id) && (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
                               <Icon name="gift" size={12} color="var(--brand-ink)" />
@@ -698,7 +698,7 @@ export default function Prenota() {
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             <DetailRow icon="calendar" label={t('Quando', 'When')} value={slot ? fmtDayMed(slot.start, lang) + ' · ' + timeLabel(minutesOfDay(slot.start)) : '—'} />
-            <DetailRow icon="clock" label={t('Durata', 'Duration')} value={fmtDur(dur, lang)} />
+            <DetailRow icon="clock" label={t('Durata', 'Duration')} value={fmtDur(dur)} />
             <DetailRow icon="user" label={t('Operatrice', 'Stylist')} value={selectedOperator ? `${selectedOperator.first_name} ${selectedOperator.last_name}` : t('Prima disponibile', 'First available')} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--hair)' }}>

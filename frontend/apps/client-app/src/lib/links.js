@@ -3,7 +3,7 @@
 // Logica pura (downloadIcs tocca il DOM solo quando la si chiama): la caricano
 // anche i test con `node --test`.
 import { parseISO } from '@youty/shared';
-import { apptDur, apptServiceNames } from './appointments.js';
+import { apptMinutes, apptServiceNames } from './appointments.js';
 
 /** Google Maps directions link searching the salon by name. */
 export function mapsUrl(brand) {
@@ -18,7 +18,7 @@ export function icsDataUrl(appt, brandName) {
   const pad = (n) => String(n).padStart(2, '0');
   const fmt = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
   const start = parseISO(appt.start);
-  const end = appt.end ? parseISO(appt.end) : new Date(start.getTime() + apptDur(appt) * 60000);
+  const end = appt.end ? parseISO(appt.end) : new Date(start.getTime() + apptMinutes(appt) * 60000);
   const summary = (apptServiceNames(appt) || 'Appuntamento') + (brandName ? ' — ' + brandName : '');
   const ics = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//youty//client-app//IT', 'BEGIN:VEVENT',

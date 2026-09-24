@@ -1,9 +1,8 @@
 // appointments.js — regole sulle visite della cliente: caparra, durata, «è la
 // stessa prenotazione?» e le etichette degli elenchi.
 // Logica pura, senza React: la caricano anche i test con `node --test`.
-import { parseISO, timeLabel, minutesOfDay } from '@youty/shared';
+import { parseISO } from '@youty/shared';
 import { svcMinutes } from './catalog.js';
-import { fmtDayMed } from './dates.js';
 
 /** Scadenza della caparra da versare, in ms (null se non c'è). */
 export function depositDueMs(appt) {
@@ -43,18 +42,7 @@ export function sameBooking(appt, startIso, serviceIds) {
   return sortedIds(booked) === sortedIds(serviceIds || []);
 }
 
-/** "Gio 14 nov 2026" full date + time meta for lists. */
-export function fmtApptDate(iso, lang) {
-  return fmtDayMed(iso, lang);
-}
-
-export function apptTime(iso) { return timeLabel(minutesOfDay(iso)); }
-
-/** Durata di un appuntamento dell'elenco: lavoro + posa (vedi apptMinutes). */
-export function apptDur(appt) {
-  return apptMinutes(appt);
-}
-
+/** I servizi di un appuntamento dell'elenco, «Taglio + Piega». */
 export function apptServiceNames(appt) {
   return (appt.services || []).map((s) => s.name).join(' + ');
 }

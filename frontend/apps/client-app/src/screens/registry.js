@@ -1,5 +1,4 @@
-// registry.js — view name → screen component. OWNED BY THE APP SHELL.
-// Screen agents implement their own screen file; they never edit this registry.
+// registry.js — view name → screen component.
 import Home from './Home.jsx';
 import Prenota from './Prenota.jsx';
 import Prenotazioni from './Prenotazioni.jsx';

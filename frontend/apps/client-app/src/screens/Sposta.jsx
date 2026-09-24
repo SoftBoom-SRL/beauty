@@ -5,13 +5,14 @@
 // Il 400 del preavviso minimo (ore configurabili per salone) si mostra
 // inline (banner) + toast, con il testo che arriva dal server.
 import React from 'react';
-import { ApiError, Icon, api, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, api, fmtDur, fmtTime, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
   ClientSubHead, Meta, StickyCta, nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr,
-  fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
+  apptServiceNames, errToast,
 } from './lib.jsx';
+import { apptMinutes } from '../lib/appointments.js';
 
 export default function Sposta() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -142,8 +143,8 @@ export default function Sposta() {
         <div style={{ padding: '12px 14px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--brand-ink)' }}>{apptServiceNames(appt)}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', marginTop: 6 }}>
-            <Meta icon="calendar" text={fmtApptDate(appt.start, lang)} />
-            <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
+            <Meta icon="calendar" text={fmtDayMed(appt.start, lang)} />
+            <Meta icon="clock" text={fmtTime(appt.start) + ' · ' + fmtDur(apptMinutes(appt))} />
           </div>
         </div>
 

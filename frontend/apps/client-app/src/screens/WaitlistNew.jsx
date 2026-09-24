@@ -1,7 +1,8 @@
 // WaitlistNew.jsx — join the waiting list: service picker (public catalog) +
 // time preference (any/morning/afternoon/weekend/exact days+time).
 // POST /api/agenda/client/waitlist {service_id, preference, exact_days, exact_time}.
-// NOTE: no stylist picker — no public/client operators endpoint (API gap).
+// Niente scelta dell'operatrice: la richiesta non manda `operator_id` e vale
+// per chiunque si liberi (il campo c'è, e /api/staff/public/operators pure).
 import React from 'react';
 import { Icon, api, fmtEur, fmtDur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
@@ -79,7 +80,7 @@ export default function WaitlistNew() {
                       style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderRadius: 'var(--r-md)', textAlign: 'left', border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand-tint)' : 'var(--paper-0)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{svcLangName(sv, lang)}</div>
-                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(svcMinutes(sv), lang)} · {fmtEur(Number(sv.price), lang)}</div>
+                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(svcMinutes(sv))} · {fmtEur(Number(sv.price), lang)}</div>
                       </div>
                       {on && <Icon name="check" size={18} color="var(--brand)" stroke={2.4} />}
                     </button>
