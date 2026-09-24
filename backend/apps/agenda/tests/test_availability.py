@@ -300,7 +300,8 @@ class BugHuntAgendaTests(AgendaTestBase):
         )
 
     def test_the_items_parameter_is_validated_instead_of_crashing(self):
-        from ..api import MAX_ITEMS_PER_REQUEST, _parse_items_param
+        from ..api.params import _parse_items_param
+        from ..schemas import MAX_ITEMS_PER_REQUEST
 
         for raw in (
             '[{"service_id": "non-un-numero"}]',
