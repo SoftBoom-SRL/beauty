@@ -20,7 +20,7 @@ from ..api import create_category, reorder_categories, update_category
 from ..models import ServiceCategory
 from ..schemas import ReorderIn, ServiceCategoryIn
 from ..services import set_category_order
-from .base import CatalogTestCase
+from .base import CatalogTestCase, _CatalogSetup
 
 
 class ReorderCategoriesTests(CatalogTestCase):
@@ -214,3 +214,22 @@ class CategoryOpenApiTests(TestCase):
         out = post["responses"][200]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
         self.assertEqual(set(components[body]["properties"]), {"name_it", "name_en", "color", "order"})
         self.assertEqual(set(components[out]["properties"]), {"id", "name_it", "name_en", "color", "order"})
+
+
+class CategoryNameLimitsTests(_CatalogSetup):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09: i nomi della
+    categoria (colonne da 120 caratteri) non avevano limite nello schema, e su
+    PostgreSQL uno più lungo era un 500 invece di un errore sul campo."""
+
+    def test_the_names_are_as_long_as_their_columns(self):
+        for field in ("name_it", "name_en"):
+            body = {"name_it": "Viso", field: "x" * 121}
+            res = self.client.post("/api/catalog/categories", data=body, content_type="application/json", **self.auth)
+            self.assertEqual(res.status_code, 422, field)
+            res = self.client.put(f"/api/catalog/categories/{self.cat.id}", data=body, content_type="application/json", **self.auth)
+            self.assertEqual(res.status_code, 422, field)
+        self.cat.refresh_from_db()
+        self.assertEqual(self.cat.name_it, "Colore")
+        body = {"name_it": "x" * 120, "name_en": "x" * 120}
+        res = self.client.post("/api/catalog/categories", data=body, content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)

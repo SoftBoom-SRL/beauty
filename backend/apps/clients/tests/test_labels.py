@@ -320,3 +320,25 @@ class LabelCountsTests(TestCase):
         with self.assertNumQueries(2):
             body = client_counts(request)
         self.assertEqual(len(body["categories"]), 13)
+
+
+class LabelOrderLimitTests(TestCase):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09: l'ordine
+    dell'etichetta aveva il minimo nello schema ma non il massimo della colonna
+    (PositiveIntegerField), e su PostgreSQL un valore più grande era un 500."""
+
+    def test_the_order_stays_within_the_column(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        _, auth = _staff_http(salon, ["clients"])
+        label = ClientCategory.objects.create(salon=salon, name="Nuova")
+
+        def send(method, url, body):
+            return getattr(self.client, method)(url, data=body, content_type="application/json", **auth)
+
+        self.assertEqual(send("post", "/api/clients/categories", {"name": "VIP", "order": 2147483648}).status_code, 422)
+        res = send("put", f"/api/clients/categories/{label.id}", {"name": "Nuova", "order": 2147483648})
+        self.assertEqual(res.status_code, 422, res.content)
+        label.refresh_from_db()
+        self.assertEqual(label.order, 0)
+        res = send("post", "/api/clients/categories", {"name": "VIP", "order": 2147483647})
+        self.assertEqual(res.status_code, 200, res.content)

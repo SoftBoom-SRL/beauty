@@ -352,6 +352,51 @@ class ColumnLimitsTests(_InventorySetup):
         self.assertEqual(res.status_code, 422, res.content)
 
 
+class MoreColumnLimitsTests(_InventorySetup):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09, per i campi che la
+    scheda non elencava: nome della categoria (120), causale di carico e
+    scarico (255), importi e quantità del prodotto (numeric(10,2): oltre i
+    cento milioni, anche in negativo, PostgreSQL rifiuta la riga)."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_the_category_name_is_as_long_as_its_column(self):
+        category = ProductCategory.objects.create(salon=self.salon, name="Tinte")
+        self.assertEqual(self._send("post", "/api/inventory/categories", {"name": "x" * 121}).status_code, 422)
+        res = self._send("put", f"/api/inventory/categories/{category.id}", {"name": "x" * 121})
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(self._send("post", "/api/inventory/categories", {"name": "x" * 120}).status_code, 200)
+        category.refresh_from_db()
+        self.assertEqual(category.name, "Tinte")
+
+    def test_the_movement_reason_is_as_long_as_its_column(self):
+        gel = self._product("Gel", stock_qty=Decimal("5"))
+        res = self.client.post(
+            f"/api/inventory/products/{gel.id}/load", data={"qty": "2", "reason": "x" * 256}, **self.auth
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        unload = {"qty": "1", "kind": "adjustment", "reason": "x" * 256}
+        res = self._send("post", f"/api/inventory/products/{gel.id}/unload", unload)
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(StockMovement.objects.exists())
+        res = self._send("post", f"/api/inventory/products/{gel.id}/unload", {**unload, "reason": "x" * 255})
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_product_amounts_and_quantities_stay_within_the_column(self):
+        base = {"name": "Shampoo", "supplier_id": self.sup_a.id}
+        fields = ("package_qty", "purchase_price", "sale_price", "min_threshold", "reorder_qty")
+        for field in fields:
+            for value in ("100000000.00", "-100000000.00"):
+                res = self._send("post", "/api/inventory/products", {**base, field: value})
+                self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Product.objects.exists())
+        res = self._send("post", "/api/inventory/products", {**base, **{field: "99999999.99" for field in fields}})
+        self.assertEqual(res.status_code, 200, res.content)
+
+
 class MovementDateFilterTests(_InventorySetup):
     """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
     esiste, e `parse_date` solleva ValueError: lo storico dei movimenti

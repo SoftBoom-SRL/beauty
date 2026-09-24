@@ -15,6 +15,8 @@ from typing import Literal, Optional
 from ninja import Schema
 from pydantic import Field
 
+from common.validation import MAX_POSITIVE_INT
+
 
 # ---- Etichette (ClientCategory) ---------------------------------------------
 
@@ -35,7 +37,7 @@ class ClientCategoryIn(Schema):
     name: str = Field(max_length=60)
     # Colonna di 7 caratteri: solo #RRGGBB, «rgb(255,0,0)» non ci sta.
     color: str = Field("#6366F1", pattern=r"^#[0-9A-Fa-f]{6}$")
-    order: int = Field(0, ge=0)
+    order: int = Field(0, ge=0, le=MAX_POSITIVE_INT)  # PositiveIntegerField
 
 
 class ClientCategoryCountOut(Schema):

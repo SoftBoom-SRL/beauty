@@ -6,6 +6,7 @@ from ninja import Schema
 from pydantic import Field
 
 from common.media import signed_media_url
+from common.money import MAX_MONEY
 from common.permissions import has_scope
 
 
@@ -49,7 +50,7 @@ class SupplierOut(Schema):
 # le altre due risultavano documentate con i suoi campi (voce 24 dei bug
 # sospetti del 24/09).
 class ProductCategoryIn(Schema):
-    name: str
+    name: str = Field(max_length=120)  # come la colonna: più lungo, su PostgreSQL era un 500
     order: int = 0
     color: Optional[str] = None
 
@@ -68,21 +69,24 @@ class ProductIn(Schema):
     # Come per i fornitori, testi lunghi quanto le colonne (voce 21). Sconto e
     # aliquota IVA sono percentuali in colonne senza segno: un -5 violava il
     # vincolo ≥ 0 anche su SQLite (500), un 40000 usciva dallo smallint di
-    # PostgreSQL, un 150 finiva in archivio.
+    # PostgreSQL, un 150 finiva in archivio. Importi e quantità stanno in colonne
+    # numeric(10,2): oltre i cento milioni, anche in negativo, PostgreSQL rifiuta
+    # la riga. Il minimo è quello della colonna: vietare i negativi (oggi si
+    # salvano) sarebbe un'altra scelta.
     name: str = Field(max_length=160)
     sku: str = Field("", max_length=60)
     brand: str = Field("", max_length=120)
     category_id: Optional[int] = None
     usage: str = "retail"
     package_unit: str = Field("", max_length=20)
-    package_qty: Decimal = Decimal("1")
+    package_qty: Decimal = Field(Decimal("1"), ge=-MAX_MONEY, le=MAX_MONEY)
     supplier_id: int
-    purchase_price: Decimal = Decimal("0")
+    purchase_price: Decimal = Field(Decimal("0"), ge=-MAX_MONEY, le=MAX_MONEY)
     purchase_discount_pct: int = Field(0, ge=0, le=100)
-    sale_price: Decimal = Decimal("0")
+    sale_price: Decimal = Field(Decimal("0"), ge=-MAX_MONEY, le=MAX_MONEY)
     vat_rate: int = Field(22, ge=0, le=100)
-    min_threshold: Decimal = Decimal("0")
-    reorder_qty: Decimal = Decimal("0")
+    min_threshold: Decimal = Field(Decimal("0"), ge=-MAX_MONEY, le=MAX_MONEY)
+    reorder_qty: Decimal = Field(Decimal("0"), ge=-MAX_MONEY, le=MAX_MONEY)
     active: bool = True
 
 
@@ -121,13 +125,13 @@ class ProductLoadIn(Schema):
     """Body form-data del carico (l'eventuale fattura viaggia come file)."""
 
     qty: Decimal
-    reason: str = ""
+    reason: str = Field("", max_length=255)  # come la colonna del movimento
 
 
 class ProductUnloadIn(Schema):
     qty: Decimal
     kind: str  # internal_use / adjustment / transfer
-    reason: str = ""
+    reason: str = Field("", max_length=255)  # come la colonna del movimento
     operator_id: Optional[int] = None
 
 
@@ -253,7 +257,8 @@ class OrderOut(Schema):
 
 class OrderLineUpdateIn(Schema):
     id: int
-    qty_ordered: Decimal
+    # numeric(10,2): più grande, su PostgreSQL era un 500. Zero o meno toglie la riga.
+    qty_ordered: Decimal = Field(le=MAX_MONEY)
 
 
 class OrderUpdateIn(Schema):
@@ -266,7 +271,8 @@ class OrderSendIn(Schema):
 
 class OrderReceiveLineIn(Schema):
     id: int
-    qty_received: Decimal
+    # numeric(10,2), come la quantità ordinata; sotto zero risponde receive_order (422).
+    qty_received: Decimal = Field(le=MAX_MONEY)
 
 
 class OrderReceiveIn(Schema):
