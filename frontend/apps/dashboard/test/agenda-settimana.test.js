@@ -3,7 +3,7 @@
 // 12-14 / 12-15 / 12-18 (secondo dito, rotella, Esc durante il trascinamento),
 // 12-21 (sotto-colonne di tutte le sedi), 13-08 (clic su un blocco con la
 // prenotazione aperta). Bug sospetti del 24/09/2026: n. 48 (pinch e
-// ⌘-rotella).
+// ⌘-rotella), n. 50 (clic per prenotare).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -234,4 +234,25 @@ test('in settimana pinch e ⌘/ctrl + rotella zoomano la griglia, anche dopo il 
   assert.equal(wheel.length, 1, 'la griglia nuova ascolta la rotella');
   pinch();
   assert.equal(onZoom.calls.length, 2);
+});
+
+test('in settimana il clic per prenotare apre la fascia sotto il puntatore, come in vista giorno', async () => {
+  const g = setup();
+  globalThis.__dash.settings = { slot_interval_min: 30 };   // fasce da mezz'ora
+  await loadWeek(g, W1);
+  // giovedì alle 10:50: la griglia parte dalle 08:00, a 160 px dall'alto
+  const y = 160 + (10 * 60 + 50 - 8 * 60) * PXM;
+  const el = (left, width) => ({ getBoundingClientRect: () => rect(left, 160, width, 12 * 60 * PXM), closest: () => null });
+  const thu = find(g.root(), (x) => x.props?.['data-daycol'] === 3);
+  // clic sul fondo del giorno, dove cade la sotto-colonna di Giulia (x 466–526) …
+  const day = el(406, 120);
+  thu.props.onClick({ target: day, currentTarget: day, clientX: 500, clientY: y });
+  // … e sulla sotto-colonna di Anna (x 406–466)
+  const anna = find(thu, (x) => x.props?.['data-subcol'] === '' && x.props['data-op'] === 1);
+  const sub = el(406, 60);
+  anna.props.onClick({ target: sub, currentTarget: sub, clientX: 430, clientY: y });
+  assert.deepEqual(g.cb.onNewAppt.calls.map(([p]) => [p.operatorId, p.start]), [
+    [2, isoAtMin(W1[3], 10 * 60 + 30)],
+    [1, isoAtMin(W1[3], 10 * 60 + 30)],
+  ], 'le 10:30, la fascia cliccata (arrotondando si apriva alle 11:00)');
 });

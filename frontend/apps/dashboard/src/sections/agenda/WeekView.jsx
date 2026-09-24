@@ -245,10 +245,14 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     lastOpen.current = { at: now, key };
     onNewAppt && onNewAppt({ operatorId: opId || undefined, start: isoAtMin(dayIso, minutes), date: dayIso });
   };
+  /* La fascia sotto il puntatore, come in vista giorno (onColumnClick di
+   * DayGrid). Arrotondava: con fasce da 30 minuti un clic alle 10:50 apriva la
+   * prenotazione alle 11:00 in settimana e alle 10:30 in giorno (bug sospetti
+   * del 24/09, n. 50). */
   const minutesFrom = (clientY, el) => {
     const rect = el.getBoundingClientRect();
     const raw = G0 + (clientY - rect.top) / pxm;
-    return Math.max(G0, Math.min(G1 - step, Math.round(raw / step) * step));
+    return Math.max(G0, Math.min(G1 - step, Math.floor(raw / step) * step));
   };
 
   function onEmptyClick(e, opId, date) {
