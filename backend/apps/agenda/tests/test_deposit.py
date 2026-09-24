@@ -11,7 +11,7 @@ from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
-from common.testing import aware
+from common.testing import aware, bearer, post_json
 
 from ..models import Appointment, AppointmentService
 from ..services.appointments import create_appointment
@@ -473,6 +473,45 @@ class DepositDownToZeroTests(AgendaTestBase):
             self.appointment, paid.id, _aware(self.day + dt.timedelta(days=1), 10),
         ))
         self._assert_no_deposit_left(closed)
+
+    def test_a_row_left_required_at_zero_is_not_released(self):
+        """Seguito della voce 5: le righe rimaste «richiesta» a 0 € da prima della correzione."""
+        from ..services.deposit_holds import process_deposit_holds
+
+        Appointment.objects.filter(pk=self.appointment.pk).update(deposit_amount=Decimal("0.00"))
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 0)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
+
+    def test_going_back_asks_for_it_again_with_a_new_deadline(self):
+        """Seguito della voce 5: «Indietro» la rimetteva «richiesta» senza
+        scadenza, e senza sollecito né rilascio automatico."""
+        from apps.accounts.models import Membership, Role, User
+
+        from ..services.appointments import edit_appointment
+        from ..services.deposit_holds import process_deposit_holds
+
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Banco", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        consult = self.appointment.items.get(service=self.consult)
+        with self._windows(self.windows):
+            edit_appointment(
+                self.appointment,
+                items=[{"id": consult.id, "service_id": self.consult.id, "operator_id": self.op1.id}],
+                actor=user,
+            )
+            res = post_json(self.client, "/api/agenda/undo", {}, **bearer(user, self.salon))
+        self.assertEqual(res.status_code, 200, res.content)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertEqual(appointment.deposit_amount, Decimal("10.00"))
+        self.assertIsNotNone(appointment.deposit_due_at)
+        # il termine riparte da adesso, e allo scadere il posto si libera
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 1)
 
 
 class RefundConcurrencyTests(AgendaTestBase):
@@ -995,6 +1034,30 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         self.assertEqual(moved.deposit_due_at, due)
         appointment.refresh_from_db()
         self.assertEqual(appointment.deposit_due_at, due)
+
+    def test_detaching_the_first_service_moves_the_deadline_with_the_start(self):
+        """Seguito della voce 4: staccando il primo servizio la visita comincia
+        dopo, e la scadenza tagliata sull'inizio lo segue."""
+        from ..services.appointments import split_appointment
+
+        self._settings(hold=48 * 60)
+        tomorrow = timezone.localdate() + dt.timedelta(days=1)
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            with patch("apps.clients.services.client_facts", return_value={}):
+                appointment = create_appointment(
+                    self.salon, self.client_obj,
+                    [
+                        {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                        {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                    ],
+                    _aware(tomorrow, 10), via="dashboard",
+                )
+            self.assertEqual(appointment.deposit_due_at, _aware(tomorrow, 10))
+            first = appointment.items.order_by("order").first()
+            original, _created = split_appointment(appointment, first.id, _aware(self.day, 15))
+        original.refresh_from_db()
+        self.assertEqual(original.start, _aware(tomorrow, 11))
+        self.assertEqual(original.deposit_due_at, _aware(tomorrow, 11))
 
     def test_a_visit_moved_earlier_gets_the_deadline_cut_on_the_new_start(self):
         from ..services.deposit_holds import process_deposit_holds

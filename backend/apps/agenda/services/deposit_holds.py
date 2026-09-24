@@ -95,6 +95,31 @@ def _effective_deposit_due(appointment: Appointment, hold: int):
     return min(hold_until, appointment.start)
 
 
+def realign_deposit_due(appointment: Appointment) -> bool:
+    """La scadenza della caparra segue l'inizio attuale della visita, con la regola del rilascio.
+
+    Per chi cambia l'inizio (spostamento, stacco del primo servizio, «torna
+    indietro»): la scadenza non supera mai l'inizio, e restava quella di
+    prima finché `process_deposit_holds` non la riallineava, cioè alla lettura
+    dopo dell'agenda o col cron, quando il messaggio del gesto era già
+    composto con la scadenza sbagliata. Cambia solo l'istanza: ritorna True se
+    `deposit_due_at` è cambiata, e chi chiama la aggiunge ai campi che scrive.
+    """
+    if (
+        appointment.deposit_status != Appointment.DepositStatus.REQUIRED
+        or appointment.deposit_due_at is None
+    ):
+        return False
+    hold, _ = _hold_settings(appointment.salon)
+    if hold <= 0:
+        return False
+    due = _effective_deposit_due(appointment, hold)
+    if due == appointment.deposit_due_at:
+        return False
+    appointment.deposit_due_at = due
+    return True
+
+
 @transaction.atomic
 def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor=None) -> Appointment:
     """La caparra è stata incassata in salone (contanti o POS al banco).
@@ -197,11 +222,16 @@ def process_deposit_holds(salon, *, now=None) -> dict:
     result = {"reminded": 0, "released": 0}
     if hold <= 0:
         return result
+    # Una caparra «richiesta» a 0 € non c'è: le righe rimaste così da prima che
+    # l'azzeramento la portasse a «nessuna» (vedi deposits.shrink_deposit_to_total)
+    # si liberavano allo scadere, con «posto liberato, caparra non versata» alla
+    # cliente, e prendevano anche il sollecito.
     pending = (
         Appointment.objects.filter(
             salon=salon,
             status=Appointment.Status.CONFIRMED,
             deposit_status=Appointment.DepositStatus.REQUIRED,
+            deposit_amount__gt=0,
             deposit_due_at__isnull=False,
         )
         .select_related("client", "salon")

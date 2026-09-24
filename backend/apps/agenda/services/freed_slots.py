@@ -121,16 +121,18 @@ def _next_minute():
     return rounded if rounded == now else rounded + dt.timedelta(minutes=1)
 
 
-def _emit_freed_slot(appointment: Appointment, operator_id, start, end, *, since=None):
+def _emit_freed_slot(appointment: Appointment, operator_id, start, end, *, since=None, services_before=()):
     """Accoda (trattenuto) `slot.freed` per un pezzo di agenda liberato.
 
     Compatibili: voci attive per un servizio della visita, con quell'operatrice
     o nessuna, e un servizio che nel pezzo ci sta (posa compresa). Con `since`
     solo chi si è messa in lista dopo quell'istante; se non c'è nessuno non
-    parte niente.
+    parte niente. `services_before` sono i servizi che la visita aveva prima
+    del gesto: togliendo o staccando la piega, chi aspettava proprio una piega
+    restava fuori dai match, perché la visita non l'aveva più.
     """
     minutes = int((end - start).total_seconds() // 60)
-    service_ids = {item.service_id for item in appointment.items.all()}
+    service_ids = {item.service_id for item in appointment.items.all()} | set(services_before)
     matching = (
         WaitlistEntry.objects.filter(
             salon=appointment.salon,
@@ -192,13 +194,15 @@ def _slot_knowledge(appointment: Appointment, before: dict) -> tuple[dict, objec
 
 
 def _sync_freed_slots(
-    appointment: Appointment, before: dict, after: dict, knowledge: tuple | None = None
+    appointment: Appointment, before: dict, after: dict, knowledge: tuple | None = None, *, services_before=()
 ) -> None:
     """Allinea gli annunci `slot.freed` trattenuti a ciò che si è liberato davvero.
 
     `before`/`after`: orari occupati dall'appuntamento prima e dopo il gesto
     (`after` vuoto se è stato annullato o è sparito); `knowledge` è
-    `_slot_knowledge`, chiesto prima di emettere il messaggio del gesto. Un
+    `_slot_knowledge`, chiesto prima di emettere il messaggio del gesto;
+    `services_before`, i servizi della visita prima del gesto, entrano nei
+    match degli annunci nuovi (vedi `_emit_freed_slot`). Un
     annuncio trattenuto
     resta finché il suo orario non torna occupato — prima il gesto successivo
     lo sostituiva con la posizione intermedia, e l'orario davvero liberato non
@@ -238,12 +242,18 @@ def _sync_freed_slots(
         if same is not None:
             kept.add(same.id)
         else:
-            _emit_freed_slot(appointment, *piece, since=since)
+            _emit_freed_slot(appointment, *piece, since=since, services_before=services_before)
     supersede_events([e for e in held if e.id not in kept])
 
 
 def emit_with_freed_slots(
-    appointment: Appointment, event_type: str, payload: dict | None = None, *, before: dict, after: dict
+    appointment: Appointment,
+    event_type: str,
+    payload: dict | None = None,
+    *,
+    before: dict,
+    after: dict,
+    services_before=(),
 ):
     """Il messaggio di un gesto alla cliente, poi gli annunci alla lista d'attesa.
 
@@ -251,12 +261,13 @@ def emit_with_freed_slots(
     va chiesto PRIMA di emettere il messaggio del gesto, perché col ritardo
     spento quel messaggio è «già consegnato» un istante dopo e diventerebbe ciò
     che la cliente sa. `before`/`after` sono gli orari occupati
-    dall'appuntamento prima e dopo il gesto ({} se si è liberato del tutto).
-    Ritorna l'evento del gesto, come `emit_appointment_event`.
+    dall'appuntamento prima e dopo il gesto ({} se si è liberato del tutto);
+    `services_before` i servizi che aveva prima, quando il gesto ne toglie
+    (modifica, stacco). Ritorna l'evento del gesto, come `emit_appointment_event`.
     """
     knowledge = _slot_knowledge(appointment, before)
     event = emit_appointment_event(appointment, event_type, payload)
-    _sync_freed_slots(appointment, before, after, knowledge)
+    _sync_freed_slots(appointment, before, after, knowledge, services_before=services_before)
     return event
 
 
