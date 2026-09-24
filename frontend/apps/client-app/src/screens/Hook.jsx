@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import { Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { sendHook } from '../api/client.js';
-import { headFont } from '../theme.js';
+import { BrandHero } from '../components/BrandHero.jsx';
 
 export default function Hook() {
   const { t, lang, brand } = useApp();
@@ -50,19 +50,8 @@ export default function Hook() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       {/* hero col brand del salone */}
-      <div style={{ background: 'var(--brand)', padding: 'calc(var(--safe-top) + 34px) 24px 30px' }}>
-        <div style={{ width: 62, height: 62, borderRadius: 99, background: 'var(--brand-on)', display: 'grid', placeItems: 'center', overflow: 'hidden', marginBottom: 14, boxShadow: '0 4px 14px rgba(0,0,0,0.18)' }}>
-          {brand.logo
-            ? <img src={brand.logo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <span style={{ fontFamily: 'var(--serif)', fontSize: 28, fontStyle: 'italic', color: 'var(--brand)', lineHeight: 1 }}>{brand.name.charAt(0)}</span>}
-        </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: brand.type === 'serif' ? 500 : 800, color: 'var(--brand-on)', lineHeight: 1.05 }}>{brand.name}</div>
-        <div style={{ color: 'var(--brand-on)', opacity: 0.75, fontSize: 13, fontWeight: 600, marginTop: 6 }}>
-          {done
-            ? t('Grazie!', 'Thank you!')
-            : t('Lascia i tuoi contatti', 'Leave your contact details')}
-        </div>
-      </div>
+      <BrandHero brand={brand}
+        subtitle={done ? t('Grazie!', 'Thank you!') : t('Lascia i tuoi contatti', 'Leave your contact details')} />
 
       <div style={{ padding: '26px 24px 40px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {done ? (

@@ -8,16 +8,20 @@ import { ApiError, Icon, PhoneInput, clientAuth, fmtEur, fmtDur, isPlausiblePhon
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
-import { svcLangName, catIcon, nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast } from './lib.jsx';
+import { svcLangName, catIcon, nextDays, fmtDayMed, toDateStr, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DayStrip } from '../components/DayStrip.jsx';
 import { DetailRow } from '../components/DetailRow.jsx';
+import { SlotPicker } from '../components/SlotPicker.jsx';
 import { StickyCta } from '../components/StickyCta.jsx';
+import { SuccessScreen } from '../components/SuccessScreen.jsx';
 import { DepositDue } from '../components/DepositDue.jsx';
 import { usePublicOperators, usePublicServices } from '../hooks/usePublicCatalog.js';
 import { useTodayKey } from '../hooks/useTodayKey.js';
 import { giftServiceCards } from '../lib/wallet.js';
 import { sameBooking } from '../lib/appointments.js';
 import { svcMinutes } from '../lib/catalog.js';
+import { toastSlotTaken } from '../lib/errors.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 
@@ -30,6 +34,25 @@ function StepBar({ i, t }) {
         ))}
       </div>
       <div className="t-meta" style={{ color: 'var(--brand-ink)' }}>{t('Passo', 'Step')} {i + 1} {t('di', 'of')} 3 · {t(STEP_INFO[i][0], STEP_INFO[i][1])}</div>
+    </div>
+  );
+}
+
+/* recap chip on later steps. Fuori dal render: definito lì dentro era un
+ * componente nuovo a ogni render, rifatto da capo ogni volta. */
+function SummaryChip({ svcs, dur, price, lang }) {
+  const s = svcs[0];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)', marginBottom: 18 }}>
+      <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--paper-0)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+        <Icon name={catIcon(s?.catName)} size={19} color="var(--brand-ink)" />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--brand-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {svcs.map((sv) => svcLangName(sv, lang)).join(' + ')}
+        </div>
+        <div className="t-sm" style={{ color: 'var(--brand-ink)', opacity: 0.72 }}>{fmtDur(dur)} · {fmtEur(price, lang)}</div>
+      </div>
     </div>
   );
 }
@@ -185,7 +208,7 @@ export default function Prenota() {
       setStep(9);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
+        toastSlotTaken(fireToast, t);
         setStep(1);
         loadSlots(dayIdx);
       } else {
@@ -274,7 +297,7 @@ export default function Prenota() {
       setStep(9);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
+        toastSlotTaken(fireToast, t);
         setStep(1); loadSlots(dayIdx);
       } else {
         errToast(err, fireToast, t);
@@ -307,35 +330,14 @@ export default function Prenota() {
     <ClientSubHead brand={brand} title={title} onBack={step <= -1 ? () => setView('home') : () => setStep(step - 1)} />
   );
 
-  /* recap chip on later steps */
-  const SummaryChip = () => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)', marginBottom: 18 }}>
-      <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--paper-0)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-        <Icon name={catIcon(s?.catName)} size={19} color="var(--brand-ink)" />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--brand-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {svcs.map((sv) => svcLangName(sv, lang)).join(' + ')}
-        </div>
-        <div className="t-sm" style={{ color: 'var(--brand-ink)', opacity: 0.72 }}>{fmtDur(dur)} · {fmtEur(price, lang)}</div>
-      </div>
-    </div>
-  );
-
   /* ============ SUCCESS ============ */
   if (step === 9 && booked) {
     const dep = Number(booked.deposit_amount || 0);
     const depRequired = booked.deposit_status === 'required' && dep > 0;
     return (
-      <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, textAlign: 'center' }}>
-        <div className="pop-in" style={{ width: 86, height: 86, borderRadius: 99, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', marginBottom: 20 }}>
-          <Icon name="check" size={44} color="var(--brand)" stroke={2.2} />
-        </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 26, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{t('Fatto!', 'All set!')}</div>
-        <div className="t-body" style={{ color: 'var(--muted)', marginTop: 8, maxWidth: 280 }}>
-          {t(`Appuntamento confermato per ${fmtDayMed(booked.start, lang)} alle ${timeLabel(minutesOfDay(booked.start))}. Ti abbiamo inviato la conferma su WhatsApp 💫`,
-            `Appointment confirmed for ${fmtDayMed(booked.start, lang)} at ${timeLabel(minutesOfDay(booked.start))}. We've sent your confirmation on WhatsApp 💫`)}
-        </div>
+      <SuccessScreen brand={brand} title={t('Fatto!', 'All set!')}
+        text={t(`Appuntamento confermato per ${fmtDayMed(booked.start, lang)} alle ${timeLabel(minutesOfDay(booked.start))}. Ti abbiamo inviato la conferma su WhatsApp 💫`,
+          `Appointment confirmed for ${fmtDayMed(booked.start, lang)} at ${timeLabel(minutesOfDay(booked.start))}. We've sent your confirmation on WhatsApp 💫`)}>
         {depRequired && (
           <div style={{ maxWidth: 340, width: '100%', textAlign: 'left' }}>
             <div style={{ display: 'flex', gap: 12, padding: 15, background: 'var(--brand-tint)', borderRadius: 'var(--r-md)', marginTop: 18 }}>
@@ -355,7 +357,7 @@ export default function Prenota() {
           </div>
         )}
         <button className="btn btn--brand press" style={{ marginTop: 26 }} onClick={() => setView('home')}>{t('Torna alla home', 'Back to home')}</button>
-      </div>
+      </SuccessScreen>
     );
   }
 
@@ -478,28 +480,12 @@ export default function Prenota() {
 
   /* ============ STEP 1: day + time ============ */
   if (step === 1) {
-    const free = slots || [];
-    const morning = free.filter((sl) => minutesOfDay(sl.start) < 720);
-    const afternoon = free.filter((sl) => minutesOfDay(sl.start) >= 720);
-    const TimeGrid = ({ list }) => (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(76px, 1fr))', gap: 9 }}>
-        {list.map((sl) => {
-          const on = slot?.start === sl.start;
-          return (
-            <button key={sl.start} className="press tabnum" onClick={() => setSlot(sl)}
-              style={{ padding: '13px 0', borderRadius: 12, fontWeight: 700, fontSize: 14.5, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)' }}>
-              {timeLabel(minutesOfDay(sl.start))}
-            </button>
-          );
-        })}
-      </div>
-    );
     return (
       <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
         {head(t('Scegli giorno e ora', 'Choose day & time'))}
         <StepBar i={1} t={t} />
         <div style={{ padding: '0 22px' }}>
-          <SummaryChip />
+          <SummaryChip svcs={svcs} dur={dur} price={price} lang={lang} />
           {/* Nessuna operatrice copre l'intera selezione: si prenota comunque,
             * ma la visita viene divisa. Senza questa riga la cliente vedeva
             * solo sparire il selettore. */}
@@ -538,40 +524,9 @@ export default function Prenota() {
             </div>
           )}
           {/* day strip — next 14 days */}
-          <div className="scroll" style={{ display: 'flex', gap: 9, overflowX: 'auto', paddingBottom: 6, marginBottom: 20, marginInline: -2, paddingInline: 2 }}>
-            {days.map((d, i) => {
-              const on = i === dayIdx;
-              const { wd, num } = dayStripLabel(d, lang);
-              return (
-                <button key={i} className="press" onClick={() => setDayIdx(i)}
-                  style={{ flexShrink: 0, minWidth: 62, padding: '9px 14px', borderRadius: 14, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, opacity: on ? 0.85 : 0.6 }}>{wd}</span>
-                  <span className="tabnum" style={{ fontSize: 15, fontWeight: 800 }}>{num}</span>
-                </button>
-              );
-            })}
-          </div>
+          <DayStrip days={days} dayIdx={dayIdx} onPick={setDayIdx} lang={lang} />
 
-          {slots === null ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(76px, 1fr))', gap: 9 }}>
-              {Array.from({ length: 9 }).map((_, i) => <div key={i} className="skel" style={{ height: 46, borderRadius: 12 }} />)}
-            </div>
-          ) : free.length ? (
-            <React.Fragment>
-              {morning.length > 0 && (
-                <div style={{ marginBottom: afternoon.length ? 18 : 0 }}>
-                  <div className="t-meta" style={{ marginBottom: 10 }}>{t('Mattina', 'Morning')}</div>
-                  <TimeGrid list={morning} />
-                </div>
-              )}
-              {afternoon.length > 0 && (
-                <div>
-                  <div className="t-meta" style={{ marginBottom: 10 }}>{t('Pomeriggio', 'Afternoon')}</div>
-                  <TimeGrid list={afternoon} />
-                </div>
-              )}
-            </React.Fragment>
-          ) : (
+          <SlotPicker slots={slots} slot={slot} onPick={setSlot} t={t} empty={(
             <div style={{ padding: '28px 16px', borderRadius: 'var(--r-md)', border: '1px dashed var(--hair)', textAlign: 'center' }}>
               <Icon name="clock" size={26} color="var(--muted-2)" />
               <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 8, marginBottom: 14 }}>
@@ -582,7 +537,7 @@ export default function Prenota() {
                 <Icon name="clock" size={15} color="var(--brand-ink)" />{t('Vai alla lista d’attesa', 'Go to waiting list')}
               </button>
             </div>
-          )}
+          )} />
         </div>
         <div style={{ flex: 1 }} />
         <StickyCta>

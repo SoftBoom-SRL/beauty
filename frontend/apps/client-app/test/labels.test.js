@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { ApiError, setSalonTz } from '@youty/shared';
 import { apptServiceNames } from '../src/lib/appointments.js';
 import { catIcon, svcLangName } from '../src/lib/catalog.js';
-import { errToast } from '../src/lib/errors.js';
+import { errToast, toastSlotTaken } from '../src/lib/errors.js';
 import { couponLabel, couponOrigin, fmtExpiry } from '../src/lib/wallet.js';
 import { prefLabel, WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../src/lib/waitlist.js';
 
@@ -111,5 +111,15 @@ test('errore dell\'API: il messaggio del server, altrimenti «Errore di rete»',
     { msg: 'Preavviso minimo non rispettato', icon: 'alert' },
     { msg: 'Errore di rete', icon: 'alert' },
     { msg: 'Network error', icon: 'alert' },
+  ]);
+});
+
+test('orario appena preso (409): lo stesso toast in Prenota e Sposta', () => {
+  const calls = [];
+  toastSlotTaken((o) => calls.push(o), tIt);
+  toastSlotTaken((o) => calls.push(o), tEn);
+  assert.deepEqual(calls, [
+    { msg: 'Questo orario è appena stato preso: scegline un altro.', icon: 'alert' },
+    { msg: 'That time was just taken: pick another.', icon: 'alert' },
   ]);
 });

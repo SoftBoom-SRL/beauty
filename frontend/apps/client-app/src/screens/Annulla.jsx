@@ -5,10 +5,11 @@ import React from 'react';
 import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { cancelAppointment } from '../api/client.js';
-import { headFont } from '../theme.js';
 import { fmtDayMed, apptServiceNames, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { Meta } from '../components/Meta.jsx';
+import { MissingAppt } from '../components/MissingAppt.jsx';
+import { SuccessScreen } from '../components/SuccessScreen.jsx';
 import { apptMinutes } from '../lib/appointments.js';
 
 export default function Annulla() {
@@ -20,28 +21,18 @@ export default function Annulla() {
 
   if (!appt) {
     return (
-      <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, textAlign: 'center' }}>
-        <div className="t-body" style={{ color: 'var(--muted)', marginBottom: 18 }}>
-          {t('Seleziona prima l’appuntamento da annullare.', 'First pick the appointment to cancel.')}
-        </div>
-        <button className="btn btn--brand press" onClick={() => setView('prenotazioni')}>{t('Le tue prenotazioni', 'Your bookings')}</button>
-      </div>
+      <MissingAppt t={t} onBookings={() => setView('prenotazioni')}
+        text={t('Seleziona prima l’appuntamento da annullare.', 'First pick the appointment to cancel.')} />
     );
   }
 
   if (done) {
     return (
-      <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, textAlign: 'center' }}>
-        <div className="pop-in" style={{ width: 86, height: 86, borderRadius: 99, background: 'var(--paper-2)', display: 'grid', placeItems: 'center', marginBottom: 20 }}>
-          <Icon name="check" size={44} color="var(--muted)" stroke={2.2} />
-        </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 26, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{t('Appuntamento annullato', 'Appointment cancelled')}</div>
-        <div className="t-body" style={{ color: 'var(--muted)', marginTop: 8, maxWidth: 280 }}>
-          {t('Ci dispiace non vederti! Prenota quando vuoi, ti aspettiamo 💫', 'Sorry to miss you! Book again anytime, we’ll be here 💫')}
-        </div>
+      <SuccessScreen brand={brand} muted title={t('Appuntamento annullato', 'Appointment cancelled')}
+        text={t('Ci dispiace non vederti! Prenota quando vuoi, ti aspettiamo 💫', 'Sorry to miss you! Book again anytime, we’ll be here 💫')}>
         <button className="btn btn--brand press" style={{ marginTop: 26 }} onClick={() => setView('prenota')}>{t('Prenota di nuovo', 'Book again')}</button>
         <button className="press" style={{ marginTop: 12, fontSize: 14, fontWeight: 600, color: 'var(--muted)' }} onClick={() => setView('home')}>{t('Torna alla home', 'Back to home')}</button>
-      </div>
+      </SuccessScreen>
     );
   }
 
