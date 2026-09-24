@@ -6,16 +6,17 @@ Riferimento funzionale: `../docs/manuale-flussi.html`. Salone demo: The Parlour 
 **WhatsApp e l'esecuzione delle automazioni sono delegate alla piattaforma esterna Yourang**:
 il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.services.emit_event`.
 
-## 0. Regole per gli agenti implementatori
+## 0. Come è fatta un'app
 
-- Implementa SOLO la tua app in `apps/<nome>/`. Non toccare file fuori dalla tua directory.
-- File richiesti: `__init__.py`, `apps.py` (AppConfig con `name="apps.<nome>"`), `models.py`,
-  `admin.py`, `schemas.py`, `api.py` (espone `router = Router(tags=["<nome>"])`),
-  `services.py` (se c'è logica), `tests.py` (django.test.TestCase, test essenziali).
-- NIENTE migrazioni (le genera l'integratore). Non eseguire `manage.py` (ambiente non pronto).
-- FK verso altre app SEMPRE come stringa: `models.ForeignKey("clients.Client", ...)`.
-- Leggi prima: `common/` (auth, permissions, conditions, utils) e `apps/core/` (stile di riferimento).
-- Ambiguità → scegli l'opzione più semplice e segnalala nel report finale.
+Ogni app in `apps/<nome>/` ha gli stessi strati: `models.py`, `schemas.py`,
+gli endpoint in `api.py` (o in un package `api/` con un modulo per risorsa, che
+espone lo stesso `router`), la logica in `services.py` e nei moduli fratelli per
+argomento, i test nel package `tests/` (`base.py` + `test_<argomento>.py`).
+Le FK verso altre app sono stringhe (`models.ForeignKey("clients.Client", ...)`).
+La mappa dei moduli di ogni app e le ricette (endpoint, campo, evento, test) sono
+in [`../docs/SVILUPPO.md`](../docs/SVILUPPO.md). Le sezioni qui sotto descrivono il
+contratto: modelli, regole di dominio ed endpoint di ciascuna app, con il modulo
+in cui vivono le funzioni principali.
 
 ## 1. Convenzioni globali
 
@@ -65,24 +66,27 @@ il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.ser
 - **Condizioni E/O** (deposito, automazioni): JSON `{"op":"and|or","rules":[{"field","cmp","value"}]}`,
   valutate con `common.conditions.evaluate(conditions, facts)`;
   facts standard da `apps.clients.services.client_facts(client)`.
-- **Import cross-app nei servizi**: import lazy dentro la funzione se rischia cicli.
+- **Import cross-app**: i modelli in testa al modulo; le funzioni di altre app che i
+  test sostituiscono con `mock.patch` si importano dentro la funzione, così si cercano a
+  ogni chiamata (e la patch va sul modulo che le chiama).
 - **Codici**: `common.utils.human_code(n)`.
 
-## 2. Mount (già cablato in config/api.py — non modificare)
+## 2. Mount (config/api.py)
 
-| App | Prefisso | Agente |
-|---|---|---|
-| accounts | /api/auth | fable |
-| core | /api/core | (fatta) |
-| clients | /api/clients | sonnet |
-| staff | /api/staff | sonnet |
-| catalog | /api/catalog | sonnet |
-| agenda | /api/agenda | fable |
-| sales | /api/sales | fable |
-| inventory | /api/inventory | fable |
-| marketing | /api/marketing | fable |
-| automations | /api/automations | sonnet |
-| insights | /api/insights | sonnet |
+| App | Prefisso |
+|---|---|
+| accounts | /api/auth |
+| core | /api/core |
+| clients | /api/clients |
+| staff | /api/staff |
+| catalog | /api/catalog |
+| agenda | /api/agenda |
+| sales | /api/sales |
+| inventory | /api/inventory |
+| marketing | /api/marketing |
+| automations | /api/automations |
+| insights | /api/insights |
+| integrations | /api/integrations |
 
 ---
 
@@ -187,12 +191,12 @@ finestre lavorabili in minuti per quella data = turno del weekday
 
 **Endpoint** (/api/staff)
 - GET `/` → operatrici attive con stato di oggi: {on_shift: bool, windows:[["09:00","13:00"]…],
-  absence_type|null}, month_revenue (somma SaleLine dell'operatrice nel mese, lazy),
-  today_clients (n. appuntamenti di oggi, lazy).
+  absence_type|null}, month_revenue (somma SaleLine dell'operatrice nel mese),
+  today_clients (n. appuntamenti di oggi): i KPI stanno in `staff/stats.py`.
 - CRUD operatrici (scope team, log). PUT `/{id}/shifts` {shifts:[{week_index,weekday,start_min,end_min,break_start_min?,break_end_min?}]} → sostituzione integrale del pattern (scope team).
 - CRUD `/{id}/absences` (scope team).
-- GET `/{id}/performance?months=6` → serie mensile {month, revenue, sales_count} da SaleLine (lazy).
-- GET `/{id}/clients?q=` → clienti serviti (da appuntamenti passati, lazy) + storico vendite.
+- GET `/{id}/performance?months=6` → serie mensile {month, revenue, sales_count} da SaleLine (`stats.performance_series`).
+- GET `/{id}/clients?q=` → clienti serviti (da appuntamenti passati, `stats.served_clients`) + storico vendite.
 
 **Tests**: shift_windows (turno normale, pausa, assenza, cycle_weeks=2).
 
@@ -332,19 +336,22 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - `Payment`: sale FK related_name="payments", method cash/card/other/gift_card,
   amount Decimal, gift_card FK null (usata come pagamento).
 
-**services.py**
+**Servizi**
 - `finalize_sale(...)` core condiviso checkout/POS, in transazione:
   calcola amounts; total = Σ amounts; per gift_card in pagamento →
-  `marketing.services.redeem_gift_card(salon, code, amount)` (lazy);
+  `marketing.gift_cards.redeem_gift_card(salon, code, amount)` (import nella funzione);
   valida Σ payments == total − deposit_deducted (tolleranza 0.01, altrimenti 422
   "I pagamenti non corrispondono al totale"); crea Sale/lines/payments;
-  righe product (anche is_gift) → `inventory.services.deduct_stock_for_sale(sale)` (lazy);
-  righe gift_card vendute → `marketing.services.create_gift_card(...)` (lazy);
-  `marketing.services.accrue_loyalty(sale)` (lazy); log `sale.created`.
+  righe product (anche is_gift) → `inventory.services.deduct_stock_for_sale(sale)`;
+  righe gift_card vendute → `marketing.gift_cards.create_gift_card(...)`;
+  `marketing.loyalty.accrue_loyalty(sale)`; log `sale.created`.
 - Stripe (`stripe_service.py`): `_client()` → HttpError(503, "Stripe non configurato") se
   manca STRIPE_SECRET_KEY; `ensure_customer(client)`, `create_setup_intent(client)`,
-  `create_deposit_intent(appointment)`, `charge_full_amount(appointment)` (off-session sul
-  payment method salvato; richiede consents.card_charge → altrimenti 400).
+  link di pagamento della caparra, rimborsi, `charge_full_amount(appointment)` (off-session sul
+  payment method salvato; richiede consents.card_charge → altrimenti 400). È il gateway:
+  tutte e sole le chiamate a Stripe. Gli eventi in arrivo da Stripe li gestisce
+  `stripe_webhooks.py`, la chiusura del conto `checkout.py`, la caparra vista dalla cassa
+  `deposits.py`, riepilogo e storico `reports.py`.
 
 **Endpoint staff** (/api/sales)
 - POST `/checkout/{appointment_id}` (scope sales)
@@ -398,12 +405,13 @@ deposito detratto; today-summary.
   sent_method blank, sent_at null, created_at. `PurchaseOrderLine`: order FK
   related_name="lines", product FK, qty_ordered Decimal, qty_received Decimal default 0.
 
-**services.py** — INTEGRITÀ: ogni variazione di stock passa da `apply_movement`.
+**Servizi** — INTEGRITÀ: ogni variazione di stock passa da `apply_movement`.
 - `apply_movement(product, kind, qty, *, reason="", sale=None, order=None, author=None, invoice=None)`:
   transazione + `select_for_update` sul prodotto; vieta stock negativo per gli scarichi
   (HttpError 422 "Giacenza insufficiente"); crea movimento e aggiorna stock_qty con F().
 - `deduct_stock_for_sale(sale)`: per ogni riga product → apply_movement(kind=sale, qty=−qty).
-- `generate_draft_orders(salon, author)`: prodotti attivi sotto soglia senza riga in ordini
+- `orders.generate_draft_orders(salon, author)` (ordini ai fornitori in `orders.py`, carico da
+  CSV in `csv_load.py`): prodotti attivi sotto soglia senza riga in ordini
   draft/sent → bozze raggruppate per fornitore, qty = reorder_qty (o soglia−stock se 0).
 
 **Endpoint** (/api/inventory) — scritture scope inventory, log su tutto
@@ -451,19 +459,21 @@ per fornitore; receive con discrepanza → partial.
   (category ids o client ids), status draft/scheduled/sent default draft,
   scheduled_at null, sent_at null, created_at.
 
-**services.py**
-- `create_gift_card(salon, value, *, buyer_client=None, recipient_name="", paid=False,
+**Servizi**
+Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loyalty.py`,
+`communications.py`, `consent.py`, `wallet.py`.
+- `gift_cards.create_gift_card(salon, value, *, buyer_client=None, recipient_name="", paid=False,
   paid_method="", sold_by=None, sale=None)` → GiftCard (usata anche da sales).
-- `redeem_gift_card(salon, code, amount)`: select_for_update; attiva, non scaduta,
+- `gift_cards.redeem_gift_card(salon, code, amount)`: select_for_update; attiva, non scaduta,
   balance ≥ amount (altrimenti HttpError 422 con messaggio); scala balance,
   status redeemed se 0; ritorna la card. Log `giftcard.redeemed`.
-- `accrue_loyalty(sale)`: se sale.client None → no-op. Per ogni programma attivo:
+- `loyalty.accrue_loyalty(sale)`: se sale.client None → no-op. Per ogni programma attivo:
   account esistente o auto-creato se enrollment=auto; accrue per earn_metric
   (per_euro: floor(total×ratio); per_visit: ratio; per_service: ratio×n righe servizio);
   se points ≥ threshold → scala threshold + crea Coupon origin=loyalty
   (percent se discount_pct, altrimenti amount con value=reward_value) +
   emit `loyalty.reward` {client, program, coupon_code} + log.
-- `validate_coupon(salon, code, client=None)` → coupon attivo non scaduto
+- `coupons.validate_coupon(salon, code, client=None)` → coupon attivo non scaduto
   (e del cliente se client-bound), altrimenti HttpError 404/422.
 
 **Endpoint staff** (/api/marketing) — scritture scope marketing, log
@@ -530,7 +540,7 @@ origin=loyalty, validate_coupon scaduto, send communication → outbox event.
 
 Nessun modello. Tutti gli endpoint: `require_owner(ctx)`.
 Periodi: `period=month|quarter|year` (+ opzionale `date=` ancora, default oggi) →
-helper `period_range(period, date)` → (start, end).
+helper `periods.period_range(period, date)` → (start, end).
 
 **Endpoint** (/api/insights)
 - GET `/kpis?period=` → {
@@ -580,9 +590,3 @@ del salone cifrati sulla connessione, segreto del webhook per salone.
   `contact.*` con `resource_id` riconcilia solo quel contatto. Gli annullamenti
   arrivati DA Yourang non vengono rimandati a Yourang come
   `appointment.cancelled`.
-
-## 13. Note per l'integratore (non per gli agenti)
-
-Dopo il merge: `makemigrations` per tutte le app in ordine, `migrate`, `check`,
-`test`; comando `seed_demo` in core/management/commands (salone The Parlour, ruoli default,
-operatrici/servizi/clienti dal prototipo data.jsx); comando `flush_outbox` stub.
