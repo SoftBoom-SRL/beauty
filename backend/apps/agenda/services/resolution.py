@@ -41,6 +41,21 @@ class ChainStep(NamedTuple):
     soak_min: int
 
 
+class ResolvedItem(NamedTuple):
+    """Una voce confermata: il servizio, chi lo fa e ciò che si scrive sulla sua riga.
+
+    Per una prenotazione nuova durata, posa e prezzo sono quelli del listino; in
+    modifica le righe già sulla visita tengono quelli concordati con la cliente
+    (vedi `resolve_items_edit`).
+    """
+
+    service: object
+    operator: object
+    duration_min: int
+    soak_min: int
+    price: object
+
+
 def _pick_operator(
     requested,
     eligible,
@@ -189,7 +204,7 @@ def resolve_items(
     - 404 servizio inesistente, 400 operatrice non idonea o nessuna abilitata,
     - 409 "Orario non più disponibile" se lo slot non è libero.
 
-    Ritorna [(service, operator), ...] nell'ordine richiesto.
+    Ritorna le voci (`ResolvedItem`, col listino di oggi) nell'ordine richiesto.
     """
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
@@ -213,7 +228,10 @@ def resolve_items(
         exclude_appointment_id=exclude_appointment_id, ignore_client_id=ignore_client_id,
         force=force, allow_soak=allow_soak,
     )
-    return list(zip(services, chosen))
+    return [
+        ResolvedItem(service, operator, service.duration_min, service.soak_min, service.price)
+        for service, operator in zip(services, chosen)
+    ]
 
 
 def resolve_items_edit(
@@ -269,7 +287,7 @@ def resolve_items_edit(
     taglio prenotato a 35 lo faceva costare 40, senza che nessuno l'avesse
     deciso. Solo le voci nuove (senza `id`) prendono prezzo e posa dal listino.
 
-    Ritorna [(service, operator, duration_min, soak_min, price), ...].
+    Ritorna le voci (`ResolvedItem`) nell'ordine richiesto.
     """
     keep = set(keep_service_ids or ())
 
@@ -330,7 +348,7 @@ def resolve_items_edit(
         force=force, allow_soak=True,
     )
     return [
-        (service, operator, duration_min, soak, price)
+        ResolvedItem(service, operator, duration_min, soak, price)
         for (service, duration_min, soak, price), operator in zip(agreed, chosen)
     ]
 

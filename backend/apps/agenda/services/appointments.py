@@ -22,39 +22,30 @@ from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_to
 from .freed_slots import _appointment_spans, _chain_spans, _slot_knowledge, _sync_freed_slots
 from .locking import _lock_and_reload, lock_salon
 from .messages import _event_payload, emit_appointment_event
-from .resolution import _reject_soak_overlap, _validate_segments, resolve_items, resolve_items_edit
+from .resolution import (
+    ResolvedItem,
+    _reject_soak_overlap,
+    _validate_segments,
+    resolve_items,
+    resolve_items_edit,
+)
 
 
-def snapshot_items(appointment: Appointment, resolved: list[tuple]) -> None:
-    """Crea gli AppointmentService con snapshot durata/posa/prezzo dal listino."""
-    for index, (service, operator) in enumerate(resolved):
-        AppointmentService.objects.create(
-            appointment=appointment,
-            service=service,
-            operator=operator,
-            duration_min=service.duration_min,
-            soak_min=service.soak_min,
-            price=service.price,
-            order=index,
-        )
+def _write_items(appointment: Appointment, rows: list[ResolvedItem]) -> None:
+    """Crea gli AppointmentService della visita: uno snapshot per voce, `order` = posizione.
 
-
-def snapshot_items_edit(appointment: Appointment, resolved: list[tuple]) -> None:
-    """Riscrive gli AppointmentService da resolve_items_edit.
-
-    Le tuple sono (service, operator, duration_min, soak_min, price): durata,
-    posa e prezzo arrivano già decisi da resolve_items_edit, che per le voci
-    esistenti conserva lo snapshot concordato con la cliente e per quelle nuove
-    prende il listino. `order` = posizione nella catena.
+    Durata, posa e prezzo arrivano già decisi (`ResolvedItem`): il listino per
+    una prenotazione nuova, e in modifica lo snapshot concordato con la cliente
+    per le voci esistenti e il listino per quelle nuove (`resolve_items_edit`).
     """
-    for index, (service, operator, duration_min, soak_min, price) in enumerate(resolved):
+    for index, row in enumerate(rows):
         AppointmentService.objects.create(
             appointment=appointment,
-            service=service,
-            operator=operator,
-            duration_min=duration_min,
-            soak_min=soak_min,
-            price=price,
+            service=row.service,
+            operator=row.operator,
+            duration_min=row.duration_min,
+            soak_min=row.soak_min,
+            price=row.price,
             order=index,
         )
 
@@ -115,12 +106,12 @@ def create_appointment(
         resolved = resolve_items(salon, items, start, force=True, **kwargs)
         forced = True
 
-    total_price = sum((service.price for service, _ in resolved), start=Decimal("0"))
+    total_price = sum((row.price for row in resolved), start=Decimal("0"))
     if start <= now:
         deposit = Decimal("0.00")
     else:
         covered = gift_covered_amount(
-            salon, client, [(service, service.price) for service, _ in resolved]
+            salon, client, [(row.service, row.price) for row in resolved]
         )
         deposit = compute_deposit(salon, client, max(total_price - covered, Decimal("0")))
 
@@ -128,7 +119,7 @@ def create_appointment(
         salon=salon,
         location=location,
         client=client,
-        operator=resolved[0][1],  # operatrice principale = quella del primo servizio
+        operator=resolved[0].operator,  # operatrice principale = quella del primo servizio
         start=start,
         flexible=flexible,
         note=note,
@@ -141,7 +132,7 @@ def create_appointment(
             else Appointment.DepositStatus.NONE
         ),
     )
-    snapshot_items(appointment, resolved)
+    _write_items(appointment, resolved)
     schedule_deposit_hold(appointment)
 
     log_activity(
@@ -253,8 +244,8 @@ def edit_appointment(
             appointment.forced = True
             changed.append("forced")
         appointment.items.all().delete()
-        snapshot_items_edit(appointment, resolved)
-        appointment.operator = resolved[0][1]
+        _write_items(appointment, resolved)
+        appointment.operator = resolved[0].operator
         changed.append("operator")
     appointment.save(update_fields=changed)
     if items is not None:
@@ -514,15 +505,7 @@ def split_appointment(
         deposit_amount=Decimal("0.00"),
         deposit_status=Appointment.DepositStatus.NONE,
     )
-    AppointmentService.objects.create(
-        appointment=created,
-        service=service,
-        operator=target,
-        duration_min=duration_min,
-        soak_min=soak_min,
-        price=price,
-        order=0,
-    )
+    _write_items(created, [ResolvedItem(service, target, duration_min, soak_min, price)])
 
     if not force:
         # il servizio staccato non deve finire sopra nulla — ma i servizi della
