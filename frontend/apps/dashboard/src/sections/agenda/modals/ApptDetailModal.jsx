@@ -1,11 +1,11 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
+import { api, ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin } from '../lib.js';
+import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin } from '../lib.js';
 import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
@@ -166,7 +166,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       onMutate?.(apptRef.current);
     } catch (err) {
       if (err instanceof ApiError && err.status === 503) fireToast({ msg: t('Pagamenti online non configurati: collega Stripe in Impostazioni → Pagamenti', 'Online payments not configured: connect Stripe in Settings → Payments'), icon: 'alert' });
-      else toastErr(err, t, fireToast);
+      else toastApiError(err, fireToast, t);
     } finally { if (alive.current) setLinkBusy(false); }
   }
   /* Caparra incassata al banco (contanti o POS del salone). Senza questo,
@@ -181,7 +181,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       if (alive.current) adopt(res);
       fireToast({ msg: t('Caparra incassata e registrata in cassa', 'Deposit cashed and recorded in the till'), icon: 'check' });
       onMutate?.(res);
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { if (alive.current) setLinkBusy(false); }
   }
 
@@ -303,7 +303,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       onMutate?.(res);
     } catch (err) {
       if (alive.current) setTimeDraft(null);
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
     } finally { if (alive.current) setMovingBusy(false); }
   }
 
@@ -322,7 +322,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       if (res.date) onShowDate?.(res.date);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
-      else toastErr(err, t, fireToast);
+      else toastApiError(err, fireToast, t);
     } finally {
       if (alive.current) reload();
       onMutate?.();
@@ -340,7 +340,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     setMargin(null);
     api.get(`/api/agenda/appointments/${appt.id}/margin`)
       .then((m) => { if (on) setMargin(m); })
-      .catch((err) => { if (on) { toastErr(err, t, fireToast); setShowMargin(false); } });
+      .catch((err) => { if (on) { toastApiError(err, fireToast, t); setShowMargin(false); } });
     return () => { on = false; };
   }, [showMargin, marginKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -404,7 +404,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const activeServices = (services || []).filter((s) => s.active !== false);
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
   const eligibleOps = (serviceId) => operators.filter((op) => (op.service_ids || []).includes(serviceId));
-  const svcDisplayName = (it) => { const s = svcOf(it.service_id); return s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : (it.name || it.service_name || ''); };
+  const svcDisplayName = (it) => { const s = svcOf(it.service_id); return s ? nameIn(s, lang) : (it.name || it.service_name || ''); };
   const itemsDirty = itemsSig(editItems) !== itemsSig(appt.items);
   const editTotal = editItems.reduce((s, it) => s + Number(it.price || 0), 0);
   /* Orario di ogni riga: i servizi sono in fila dall'inizio della visita, posa
@@ -443,7 +443,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     const eligible = eligibleOps(sid);
     const mine = eligible.some((op) => op.id === appt.operator_id) ? appt.operator_id : (eligible[0]?.id ?? null);
     const key = 'e' + (itemSeq.current++);
-    setEditItems((l) => [...l, { key, id: undefined, service_id: sid, operator_id: mine, duration_min: s?.duration_min ?? 30, soak_min: s?.soak_min || 0, price: Number(s?.price) || 0, name: s ? (lang === 'en' && s.name_en ? s.name_en : s.name_it) : '' }]);
+    setEditItems((l) => [...l, { key, id: undefined, service_id: sid, operator_id: mine, duration_min: s?.duration_min ?? 30, soak_min: s?.soak_min || 0, price: Number(s?.price) || 0, name: s ? nameIn(s, lang) : '' }]);
     setJustAdded(key);
   };
   const removeServiceItem = (key) => setEditItems((l) => l.filter((x) => x.key !== key));
@@ -588,7 +588,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       if (err instanceof ApiError && err.status === 412) {
         if (alive.current) reload();
         fireToast({ msg: err.message, icon: 'alert' });
-      } else toastErr(err, t, fireToast);
+      } else toastApiError(err, fireToast, t);
       return false;
     } finally { if (alive.current) setSavingItems(false); }
   }
@@ -612,7 +612,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       await api.post(`/api/agenda/appointments/${apptRef.current.id}/${action}`, body || {});
       fireToast({ msg: toastMsg, icon });
       return true;
-    } catch (err) { toastErr(err, t, fireToast); return false; }
+    } catch (err) { toastApiError(err, fireToast, t); return false; }
     finally { if (alive.current) setBusy(false); }
   }
 
@@ -1005,7 +1005,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                       if (alive.current) adopt(res);
                       fireToast({ msg: t('Caparra segnata come rimborsata', 'Deposit marked as refunded'), icon: 'check' });
                       onMutate?.(res);
-                    } catch (err) { toastErr(err, t, fireToast); }
+                    } catch (err) { toastApiError(err, fireToast, t); }
                     finally { if (alive.current) setBusy(false); }
                   }}>
                   <Icon name="check" size={14} />{t('Segna rimborsata', 'Mark refunded')}
@@ -1242,7 +1242,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                         {activeServices.map((s) => (
                           <button key={s.id} onClick={() => { addServiceItem(s.id); setAddingSvc(false); }}
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `2px solid color-mix(in srgb, ${catColor(s.category_id)} 50%, transparent)`, background: `color-mix(in srgb, ${catColor(s.category_id)} 26%, var(--surface))`, color: 'var(--ink)' }}>
-                            {lang === 'en' && s.name_en ? s.name_en : s.name_it}
+                            {nameIn(s, lang)}
                             <Icon name="plus" size={12} color="var(--ink-2)" />
                           </button>
                         ))}
@@ -1318,7 +1318,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
           fireToast({ msg: t(`Le ${timeLabel(minutesOfDay(cur))} non sono più libere: scegli un altro orario`, `${timeLabel(minutesOfDay(cur))} is no longer free: pick another time`), icon: 'alert' });
         }
       })
-      .catch((err) => { if (on) { setSlots([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (on) { setSlots([]); toastApiError(err, fireToast, t); } });
     return () => { on = false; };
   }, [date, version, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1361,7 +1361,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
       onMutate?.(res);
       if (alive.current) onDone();
     } catch (err) {
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }   // `busy` è del pannello, che può essere ancora aperto
   }
   const applyManual = () => {

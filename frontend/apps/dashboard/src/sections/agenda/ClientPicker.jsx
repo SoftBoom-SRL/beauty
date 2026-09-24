@@ -10,7 +10,7 @@
 // anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
 // chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
+import { api, ApiError, apiErrorText, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { initialsOf } from './lib.js';
 import { GenderPicker } from '../../ui/index.js';
@@ -110,7 +110,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       if (e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
         setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
       }
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 
@@ -122,7 +122,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       fireToast({ msg: t(`Scheda di ${c.full_name} riattivata`, `${c.full_name}'s profile reactivated`), icon: 'check' });
       pick(c);
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 

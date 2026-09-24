@@ -6,11 +6,11 @@
 // servizio, orario: se l'orario richiesto non è disponibile, spiega PERCHÉ e
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
+import { api, ApiError, toastApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { toastErr, fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
+import { fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { copyText, nextSelection, usableCode, usableGiftCards } from './rules.js';
 
@@ -165,7 +165,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         }
         quietDrop.current = false;
       })
-      .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (alive) { setSlots([]); toastApiError(err, fireToast, t); } });
     return () => { alive = false; };
   }, [availKey, req?.startMin, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -294,7 +294,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       onCreated?.(res);
       if (alive.current) onClose?.();
     } catch (err) {
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
     } finally { if (alive.current) setSaving(false); }
   }
 

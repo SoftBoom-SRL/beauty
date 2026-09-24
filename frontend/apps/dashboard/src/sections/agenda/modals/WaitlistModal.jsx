@@ -2,10 +2,10 @@
 // "Contattato" → POST /waitlist/{id}/contacted, "Proponi" → newappt prefill.
 // NOTE: entries are created by clients from the app — no staff add-form (API is client-only).
 import { useEffect, useState } from 'react';
-import { api, Avatar, Icon, fmtDateIt, toDateStr } from '@youty/shared';
+import { api, toastApiError, Avatar, Icon, fmtDateIt, toDateStr } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { initialsOf, prefLabel, toastErr, wlDaysWaiting } from '../lib.js';
+import { initialsOf, prefLabel, wlDaysWaiting } from '../lib.js';
 
 export default function WaitlistModal({ onClose }) {
   const { t, fireToast, openModal, hasScope } = useDash();
@@ -17,7 +17,7 @@ export default function WaitlistModal({ onClose }) {
     let alive = true;
     api.get('/api/agenda/waitlist')
       .then((rows) => { if (alive) setList(rows); })
-      .catch((err) => { if (alive) { setList([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (alive) { setList([]); toastApiError(err, fireToast, t); } });
     return () => { alive = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -28,7 +28,7 @@ export default function WaitlistModal({ onClose }) {
       const res = await api.post(`/api/agenda/waitlist/${w.id}/contacted`);
       setList((l) => l.map((x) => (x.id === w.id ? res : x)));
       fireToast({ msg: t(`${w.client_name.split(' ')[0]} segnata come contattata`, `${w.client_name.split(' ')[0]} marked as contacted`), icon: 'whatsapp' });
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setBusyId(null); }
   }
 

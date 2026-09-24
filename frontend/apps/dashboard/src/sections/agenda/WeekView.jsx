@@ -9,11 +9,11 @@
 // che segue il cursore. Il 409 del server («occupato / fuori turno») apre un popover
 // di conferma che ripete la POST con `force: true`, come nella vista giorno.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, ApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
+import { api, ApiError, toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
-  DK_START, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
+  DK_START, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
   GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue, weekGridRange,
 } from './lib.js';
 
@@ -74,7 +74,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       })
       .catch((err) => {
         if (my !== weekSeq.current) return;
-        toastErr(err, t, fireToast);
+        toastApiError(err, fireToast, t);
         setDays((cur) => cur ?? []);   // mai uno scheletro senza fine
       });
   }, [t, fireToast]);
@@ -91,7 +91,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     setDays(null);
     api.get('/api/agenda/week', weekParams(weekStart, locationId))
       .then((rows) => { if (my === weekSeq.current) setDays(rows); })
-      .catch((err) => { if (my === weekSeq.current) { setDays([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (my === weekSeq.current) { setDays([]); toastApiError(err, fireToast, t); } });
   }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
   // smontaggio: le risposte in volo non scrivono più niente
   useEffect(() => () => { weekSeq.current++; }, []);
@@ -352,7 +352,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try {
       const res = await api.post('/api/agenda/undo', {});
       fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     await refetchWeek();
   }
 
@@ -389,7 +389,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       }
       setPending(null);        // il blocco torna al suo posto
       await refetchWeek();
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
     } finally {
       setPending(null);
     }
@@ -407,7 +407,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       // la settimana di allora anche dopo averne sfogliata un'altra.
       if (onOpenAppt) onOpenAppt(full, () => refetchWeekRef.current());
       else openModal('apptdetail', { appointment: full, onMutate: () => refetchWeekRef.current(), onShowDate });
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   }
 
   const openAt = (dayIso, minutes, opId) => {

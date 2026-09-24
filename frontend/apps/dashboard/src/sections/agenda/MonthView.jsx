@@ -3,9 +3,9 @@
 // mini-barre per operatrice, primi appuntamenti; il popover al passaggio del mouse
 // mostra il resto. In testa il riepilogo del mese e il filtro operatrice locale.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
+import { api, toastApiError, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, fmtMoney, toastErr, opDisplay, AGENDA_LIVE_RE } from './lib.js';
+import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, fmtMoney, opDisplay, AGENDA_LIVE_RE } from './lib.js';
 import {
   monthGrid, filterDay, monthSummary, loadRatio, loadTone, LOAD_TONES, LOAD_WARN, LOAD_FULL,
   statusCounts, sortByStart, operatorRows, dayLabel, pctLabel, EMPTY_DAY,
@@ -39,7 +39,7 @@ export default function MonthView({ anchor, onOpenDay }) {
       .catch((err) => {
         if (my !== seq.current) return;
         if (!silent) { setData([]); setError(true); }
-        toastErr(err, uiRef.current.t, uiRef.current.fireToast);
+        toastApiError(err, uiRef.current.fireToast, uiRef.current.t);
       });
   }, [grid.start, grid.end, locationId]);
 

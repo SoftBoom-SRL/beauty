@@ -3,10 +3,12 @@
 // Logica pura: la caricano anche i test con `node --test`.
 import { parseISO, toDateStr } from '@youty/shared';
 
-export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
-export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-export const DOW_IT = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
-export const DOW_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+/* Nomi dei mesi (0 = gennaio) e dei giorni (0 = lunedì, come l'API): le
+ * tabelle condivise di @youty/shared, con i nomi che l'agenda usa da sempre.
+ * Sono congelate: qui si leggono e basta. */
+export {
+  MONTHS_LONG_IT as MONTHS_IT, MONTHS_LONG_EN as MONTHS_EN, WEEKDAYS_SHORT_IT as DOW_IT, WEEKDAYS_SHORT_EN as DOW_EN,
+} from '@youty/shared';
 
 /** "HH:MM" → minutes of day (shift windows come as [["09:00","13:00"], ...]) */
 export function hmToMin(hm) {

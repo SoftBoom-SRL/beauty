@@ -1,10 +1,10 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtDateIt, minutesOfDay, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { api, ApiError, toastApiError, Avatar, Icon, fmtDateIt, minutesOfDay, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
-  isoAtMin, mondayOf, addMonths, toastErr, firstName, opDisplay,
+  isoAtMin, mondayOf, addMonths, firstName, opDisplay,
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
   moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
@@ -151,7 +151,7 @@ export default function AgendaSection() {
     setDayData(null);
     api.get('/api/agenda/day', { params: { date, location_id: locationId } })
       .then((rows) => { if (my === daySeq.current) setDayData(rows); })
-      .catch((err) => { if (my === daySeq.current) { setDayData([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (my === daySeq.current) { setDayData([]); toastApiError(err, fireToast, t); } });
   }, [date, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
 
@@ -331,7 +331,7 @@ export default function AgendaSection() {
       fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
-      else toastErr(err, t, fireToast);
+      else toastApiError(err, fireToast, t);
     } finally {
       undoingRef.current = false;
       setUndoing(false);
@@ -445,7 +445,7 @@ export default function AgendaSection() {
         return await moveAppt(a, startMin, opId, { ...opts, force: true });
       }
       if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
-      else toastErr(err, t, fireToast);
+      else toastApiError(err, fireToast, t);
       await fetchDay().catch(() => {}); // revert to server truth
       return false;
     } finally { setPending(null); }
@@ -489,7 +489,7 @@ export default function AgendaSection() {
         await splitItem(appt, item, startMin, opId, { ...opts, force: true });
         return;
       }
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
       await fetchDay().catch(() => {});
     } finally { setPending(null); }
   };
@@ -555,7 +555,7 @@ export default function AgendaSection() {
         await moveApptToDate(a, iso, startMin, { force: true });
         return;
       }
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
       refetchAll();
     }
   };
@@ -599,7 +599,7 @@ export default function AgendaSection() {
       // preme «ripristina» ha già deciso, e la barra di conferma era l'ennesima
       // finestra da chiudere.
       if (err instanceof ApiError && err.status === 409 && !force) { restoreReleased(a, true); return; }
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
     }
   };
 
@@ -617,7 +617,7 @@ export default function AgendaSection() {
         });
       } else fetchUndo();   // la pila di «torna indietro» segue ogni gesto
       await fetchDay();
-    } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
+    } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
 
@@ -628,7 +628,7 @@ export default function AgendaSection() {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
       await fetchDay();
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
-    } catch (err) { toastErr(err, t, fireToast); await fetchDay().catch(() => {}); }
+    } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
 
@@ -639,7 +639,7 @@ export default function AgendaSection() {
       // `undoAfter` rilegge anche la pila di «torna indietro»
       fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: undoAfter(mark) });
       await fetchDay();
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   // #1 — resize del bordo inferiore di un blocco = nuova durata di QUEL servizio.
@@ -678,7 +678,7 @@ export default function AgendaSection() {
         await resizeItem(appt, item, newDur, { force: true });
         return;
       }
-      toastErr(err, t, fireToast);
+      toastApiError(err, fireToast, t);
       await fetchDay().catch(() => {});
     }
   };
@@ -694,7 +694,7 @@ export default function AgendaSection() {
       });
       await fetchDay();
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
-    } catch (err) { toastErr(err, t, fireToast); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   /* ---- toolbar helpers ---- */
