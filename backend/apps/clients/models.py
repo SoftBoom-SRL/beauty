@@ -9,6 +9,10 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+# In testa e non dentro `save`: common.phone importa i modelli solo dentro
+# `find_client_by_phone`, quindi non c'è ciclo.
+from common.phone import phone_key as compute_phone_key
+
 
 def default_consents() -> dict:
     return {"privacy": False, "marketing": False, "card_charge": False}
@@ -93,8 +97,6 @@ class Client(models.Model):
     yourang_contact_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
 
     def save(self, *args, **kwargs):
-        from common.phone import phone_key as compute_phone_key  # lazy: evita cicli
-
         update_fields = kwargs.get("update_fields")
         # Un salvataggio che non tocca il telefono non tocca la chiave. Prima
         # la ricalcolava sempre: una scheda con la chiave scritta dal vecchio

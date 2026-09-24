@@ -11,6 +11,7 @@ from django.db import transaction
 from django.db.models import F
 from ninja.errors import HttpError
 
+from apps.core.models import Salon
 from apps.core.services import log_activity
 
 from .models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement
@@ -27,8 +28,6 @@ def _lock_salon(salon) -> None:
     righe legate al salone fa al COMMIT — deadlock, e un 500 a una delle due.
     Fra loro queste chiamate restano serializzate.
     """
-    from apps.core.models import Salon  # lazy: core non dipende da inventory
-
     list(
         Salon.objects.select_for_update(no_key=True)
         .filter(pk=salon.pk)

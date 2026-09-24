@@ -22,7 +22,7 @@ from ninja.files import UploadedFile
 from ninja.pagination import LimitOffsetPagination, paginate
 
 from apps.agenda.schemas import AppointmentOut
-from apps.core.models import SalonSettings
+from apps.core.models import DepositRule, SalonSettings
 from apps.core.services import emit_event, get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
@@ -115,16 +115,12 @@ def _rules_citing_label(salon, name: str) -> tuple[list, list]:
     Le condizioni salvano il NOME dell'etichetta (è quello che confronta
     `client_facts`, ed è quello che le automazioni mandano a Yourang).
     """
-    from apps.core.models import DepositRule  # lazy: come le altre letture cross-app
-
     rules = [
         r for r in DepositRule.objects.filter(salon=salon)
         if any(_cites_label(rule, name) for rule in _label_rules(r.conditions))
     ]
-    try:
-        from apps.automations.models import Automation  # lazy
-    except ImportError:
-        return rules, []
+    from apps.automations.models import Automation  # lazy
+
     automations = [
         a for a in Automation.objects.filter(salon=salon)
         if any(_cites_label(rule, name) for rule in _label_rules(a.conditions))
@@ -156,19 +152,16 @@ def _rename_label_in_conditions(salon, old: str, new: str) -> tuple[int, int]:
         rule.conditions = _renamed(rule.conditions, old, new)
         rule.save(update_fields=["conditions", "updated_at"])
     if automations:
-        try:
-            # lazy: la definizione e la chiave sono loro
-            from apps.automations.api import _definition, automation_event_key
-        except ImportError:
-            _definition = None
+        # lazy: la definizione e la chiave sono loro
+        from apps.automations.api import _definition, automation_event_key
+
         for automation in automations:
             automation.conditions = _renamed(automation.conditions, old, new)
             automation.save(update_fields=["conditions", "updated_at"])
-            if _definition is not None:
-                emit_event(
-                    salon, "automation.updated", _definition(automation),
-                    coalesce_key=automation_event_key(automation.id),
-                )
+            emit_event(
+                salon, "automation.updated", _definition(automation),
+                coalesce_key=automation_event_key(automation.id),
+            )
     return len(rules), len(automations)
 
 

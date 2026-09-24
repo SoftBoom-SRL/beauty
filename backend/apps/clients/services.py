@@ -2,8 +2,8 @@
 
 `client_facts` è il dizionario standard usato da `common.conditions.evaluate`
 per le regole E/O (deposito in core.DepositRule, filtri delle automazioni).
-sales/agenda potrebbero non essere ancora pronte: ogni lettura cross-app è
-importata pigramente e degrada a 0/[] senza sollevare eccezioni.
+Le letture da sales e agenda importano i loro modelli pigramente, dentro le
+funzioni: clients non importa le altre app di dominio a livello di modulo.
 """
 
 import datetime as dt
@@ -12,6 +12,7 @@ import unicodedata
 from decimal import Decimal
 
 from django.db import DataError, IntegrityError, transaction
+from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -35,19 +36,11 @@ def client_stats(client: Client) -> dict:
     numeri (`client_facts`): «Prima visita» (visite < 1) smetteva di chiedere
     la caparra dopo la prima caparra pagata, a chi in salone non era ancora
     venuta. Le due vendite restano nella cassa e nello storico; qui no.
-
-    Import lazy di `apps.sales`/`apps.agenda`: se le app non sono ancora
-    installate/pronte ritorna semplicemente gli zeri di default.
     """
+    from apps.agenda.models import Appointment  # lazy
+    from apps.sales.models import Sale  # lazy
+
     stats = {"visits": 0, "total_spent": Decimal("0"), "last_visit": None}
-    try:
-        from apps.agenda.models import Appointment  # lazy: evita cicli e app non ancora pronte
-        from apps.sales.models import Sale  # lazy: evita cicli e app non ancora pronte
-    except ImportError:
-        return stats
-
-    from django.db.models import Count, F, Max, Q, Sum
-
     billed = (
         Sale.objects.filter(client=client)
         # La vendita-caparra è l'anticipo di un conto che, al checkout, la
@@ -90,7 +83,7 @@ def client_stats(client: Client) -> dict:
 def client_facts(client: Client) -> dict:
     """Facts standard per `common.conditions.evaluate` (regole deposito, automazioni).
 
-    Campi mancanti (app sales/agenda non pronte, nessun dato) → 0/[].
+    Nessun dato → 0/[].
     """
     stats = client_stats(client)
     facts = {
@@ -105,10 +98,7 @@ def client_facts(client: Client) -> dict:
         "deposit_always": client.deposit_always,
     }
 
-    try:
-        from apps.agenda.models import Appointment  # lazy: evita cicli e app non ancora pronte
-    except ImportError:
-        return facts
+    from apps.agenda.models import Appointment  # lazy
 
     facts["noshow_count"] = Appointment.objects.filter(
         client=client, status="no_show"
