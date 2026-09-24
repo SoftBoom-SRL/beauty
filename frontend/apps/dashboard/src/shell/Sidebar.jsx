@@ -1,7 +1,8 @@
 // Sidebar.jsx — logo, main/manage nav with inline sub-tabs, location switcher.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
+import { useClickAway } from '../hooks/useClickAway.js';
 
 export default function Sidebar({ collapsed, onToggleCollapse }) {
   const { t, tab, setTab, subTab } = useDash();
@@ -87,12 +88,8 @@ function LocationSwitcher() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useClickAway(ref, open, close);
 
   if (!salon) return null;
   const monogram = (salon.name || '?').charAt(0).toUpperCase();

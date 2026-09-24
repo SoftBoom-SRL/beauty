@@ -37,7 +37,7 @@ export const depositRulesApi = {
   remove: (id) => api.del(`/api/core/deposit-rules/${id}`),
 };
 
-/* Registro attività e feed live (il feed di ctx.jsx): `feed` è il polling
+/* Registro attività e feed live (app/liveFeed.js): `feed` è il polling
  * con `after` (cursore), lo stream SSE si apre con un ticket monouso. */
 export const activityApi = {
   list: (params) => api.get('/api/core/activity', { params }),

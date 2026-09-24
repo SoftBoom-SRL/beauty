@@ -1,13 +1,14 @@
 // ProductDrawer.jsx — unified product card: create/edit form + movement log + quick load/unload.
 // Ported from the prototype's ProductDrawer (which superseded ProdEditModal); mock state →
 // POST/PUT /api/inventory/products, movements from GET /products/{id}/movements.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { fmtEur, Icon, toastApiError, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
 import { MOVE_META, STOCK_META, UNIT_OPTIONS, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
 import { productsApi } from '../../api/inventory.js';
+import { useClickAway } from '../../hooks/useClickAway.js';
 
 /* category colour: fallback + pastel presets offered in the picker */
 const CAT_FALLBACK = '#E0E7FF';
@@ -90,16 +91,10 @@ function SupplierPicker({ suppliers, value, onChange, canWrite, t }) {
   const boxRef = useRef(null);
   const selected = suppliers.find((s) => s.id === value) || null;
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
-    // Esc con la tendina aperta chiude la tendina e basta: preventDefault()
-    // dice alla pila dei livelli (ui/layers.js) di non chiudere la scheda.
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); setOpen(false); } };
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
-  }, [open]);
+  // Esc con la tendina aperta chiude la tendina e basta: preventDefault()
+  // dice alla pila dei livelli (ui/layers.js) di non chiudere la scheda.
+  const close = useCallback(() => setOpen(false), []);
+  useClickAway(boxRef, open, close, { escape: true });
 
   if (selected) {
     return (

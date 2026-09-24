@@ -10,6 +10,8 @@ import { CatChip, RelBadge } from './components.jsx';
 import { initialsOf, relRange, daysToBirthday, reactivationRequests } from './helpers.js';
 import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
 import { clientsApi } from '../../api/clients.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
+import { useOnModalClosed } from '../../hooks/useOnModalClosed.js';
 
 const PAGE = 50;
 
@@ -29,11 +31,7 @@ export default function ClientiSection() {
   useLive(/^client\.(created|updated|deleted|imported)$|^client_category\./, bump);
 
   /* debounce the shared topbar search before hitting the API */
-  const [q, setQ] = useState(search);
-  useEffect(() => {
-    const tm = setTimeout(() => setQ(search), 250);
-    return () => clearTimeout(tm);
-  }, [search]);
+  const q = useDebounced(search, 250);
 
   const listParams = useMemo(() => ({
     q: q.trim() || undefined,
@@ -111,12 +109,7 @@ export default function ClientiSection() {
 
   /* ---- refetch after globally-hosted clienti modals close (topbar "Nuova",
    * bulk import) — mutations happen inside the modal components. ---- */
-  const prevModal = useRef(null);
-  useEffect(() => {
-    const prev = prevModal.current;
-    prevModal.current = modal;
-    if (prev && !modal && ['newclient', 'bulkimport'].includes(prev.name)) bump();
-  }, [modal, bump]);
+  useOnModalClosed(modal, ['newclient', 'bulkimport'], bump);
 
   const segOpts = [
     ['all', t('Tutti', 'All')],

@@ -3,8 +3,9 @@
 // copies of prototype components also needed by the impostazioni section (deposit
 // rules). A future refactor should unify them in dashboard ui/ — kept local per
 // section-ownership rules.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
+import { useClickAway } from '../../hooks/useClickAway.js';
 
 /* ---- small generic dropdown (field / operator pickers) — prototype port ----
  * Un valore salvato che non è fra le opzioni (l'etichetta rinominata o
@@ -111,12 +112,8 @@ export function MiniMetric({ label, value, sub, wide }) {
 export function DkEventMenu({ value, onChange, events, icons, t, lang }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return;
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useClickAway(ref, open, close);
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button className="dk-btn dk-btn--soft" style={{ height: 38, fontSize: 13.5 }} onClick={() => setOpen((o) => !o)}><Icon name="edit" size={15} />{t('Cambia', 'Change')}</button>

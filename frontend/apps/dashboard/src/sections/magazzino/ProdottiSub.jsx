@@ -6,12 +6,13 @@ import { EmptyState, fmtEur, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { STOCK_META, USAGE_META, eur0, fmtQty, num, unitCost } from './lib.js';
-import { MiniMetric, Pager, SearchToolbar, SkelRows, useDebounced } from './bits.jsx';
+import { MiniMetric, Pager, SearchToolbar, SkelRows } from './bits.jsx';
 import ProductDrawer from './ProductDrawer.jsx';
 import AdjModal from './AdjModal.jsx';
 import RestockModal from './RestockModal.jsx';
 import ScaricoManualeModal from './ScaricoManualeModal.jsx';
 import { productCategoriesApi, productsApi } from '../../api/inventory.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
 
 const PAGE = 30;
 

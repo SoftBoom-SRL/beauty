@@ -10,6 +10,7 @@ import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
 import { clientsApi } from '../../../api/clients.js';
+import { useOnModalClosed } from '../../../hooks/useOnModalClosed.js';
 
 export default function StoricoTab({ c }) {
   const { t, lang, fireToast, hasScope, openModal, modal } = useDash();
@@ -28,8 +29,7 @@ export default function StoricoTab({ c }) {
   // `deposit.`: una caparra pagata o rimborsata altrove cambia l'etichetta della visita
   useLive(/^(appointment|sale|visit|deposit|client\.note|client\.sheet)/, () => load());
   // la scheda tecnica si crea in un modale del registro: al suo chiudersi ricarico
-  const [prevModal, setPrevModal] = useState(modal);
-  useEffect(() => { if (prevModal && !modal && prevModal.name === 'techsheet') load(); setPrevModal(modal); }, [modal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useOnModalClosed(modal, ['techsheet'], load);
 
   if (hist == null) {
     return <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>{[...Array(3)].map((_, i) => <div key={i} className="skel" style={{ height: 96, borderRadius: 14 }} />)}</div>;

@@ -9,6 +9,7 @@ import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote } from './lib.jsx';
 import { logDateLabel, salonDaysAgo } from './dates.js';
 import { activityApi } from '../../api/core.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
 
 const PAGE = 50;
 
@@ -55,7 +56,6 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const canLog = hasScope('activity_log');
 
   const [q, setQ] = useState('');
-  const [qDeb, setQDeb] = useState('');
   const [filt, setFilt] = useState('');            // type prefix, '' = all
   const [period, setPeriod] = useState(initialPeriod || 'all');
   // periodi contati dal giorno del salone, come il filtro «Oggi» sul server
@@ -66,7 +66,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // debounce search
-  useEffect(() => { const h = setTimeout(() => setQDeb(q), 300); return () => clearTimeout(h); }, [q]);
+  const qDeb = useDebounced(q, 300);
 
   const dateRange = useCallback(() => {
     const today = todayStr();

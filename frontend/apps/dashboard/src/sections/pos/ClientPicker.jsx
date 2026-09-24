@@ -1,7 +1,8 @@
 // ClientPicker — optional client for a walk-in sale. Debounced search on GET /api/clients/?q=.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar, Icon } from '@youty/shared';
 import { clientsApi } from '../../api/clients.js';
+import { useClickAway } from '../../hooks/useClickAway.js';
 
 const initialsOf = (c) => ((c.first_name?.[0] || '') + (c.last_name?.[0] || '')).toUpperCase() || '?';
 
@@ -23,12 +24,8 @@ export default function ClientPicker({ value, onChange, t }) {
     return () => { dead = true; clearTimeout(tm); };
   }, [query, open]);
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useClickAway(boxRef, open, close);
 
   if (value) {
     return (

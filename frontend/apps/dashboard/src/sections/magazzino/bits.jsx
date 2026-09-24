@@ -1,16 +1,5 @@
 // bits.jsx — small UI pieces shared by the Magazzino sub-tabs (ported from the prototype).
-import { useEffect, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
-
-/** debounce a changing value (used for the server-side q filter) */
-export function useDebounced(value, ms = 300) {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return v;
-}
 
 export function MiniMetric({ label, value, wide, onClick, active }) {
   return (

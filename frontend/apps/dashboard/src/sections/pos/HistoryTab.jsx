@@ -6,6 +6,7 @@ import { useDash } from '../../ctx.jsx';
 import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
 import { lineGrossCents, saleLineLabel } from './history.js';
 import { salesApi } from '../../api/sales.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
 
 const LIMIT = 50;
 
@@ -14,15 +15,11 @@ export default function HistoryTab() {
 
   /* ---- filters ---- */
   const [q, setQ] = useState('');
-  const [qDeb, setQDeb] = useState('');
   const [kind, setKind] = useState('');
   const [opId, setOpId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  useEffect(() => {
-    const tm = setTimeout(() => setQDeb(q), 300);
-    return () => clearTimeout(tm);
-  }, [q]);
+  const qDeb = useDebounced(q, 300);
 
   /* ---- data ---- */
   const [data, setData] = useState(null);   // { count, kpi } of the current filter set
