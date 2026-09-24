@@ -7,11 +7,12 @@ from django.utils import timezone
 
 from apps.core.models import Location
 from common.auth import create_staff_tokens
+from common.testing import aware, bearer
 
 from .. import services as S
 from ..models import AppointmentService, Pause
 from ..services import create_appointment
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware
+from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
 class AgendaDayLocationTests(AgendaTestBase):
@@ -57,7 +58,7 @@ class RangeAndGiftTests(AgendaTestBase):
         user = User.objects.create_user(email="range@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        return bearer(user, self.salon)
 
     def test_range_reports_capacity_booking_and_revenue(self):
         from apps.staff.models import WeeklyShift
@@ -121,9 +122,7 @@ class ReadEndpointsTests(AgendaTestBase):
         self.user = User.objects.create_user(email="mag@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Magazzino", scopes=["inventory"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
+        self.auth = bearer(self.user, self.salon)
 
     def test_reading_the_agenda_needs_the_agenda_permission(self):
         # Tutti i ruoli predefiniti (Manager, Front desk, Operatrice) hanno

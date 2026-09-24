@@ -8,11 +8,12 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import Location, Salon, SalonSettings
+from common.testing import aware, client_bearer
 
 from .. import services as S
 from ..models import Appointment, AppointmentService, Pause
 from ..services import create_appointment, get_free_slots
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware, hm
+from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
 class GetFreeSlotsTests(AgendaTestBase):
@@ -433,10 +434,7 @@ class AvailabilityMatchesBookingTests(AgendaTestBase):
     """Quello che la ricerca propone, la conferma deve accettarlo."""
 
     def setUp(self):
-        from common.auth import create_client_tokens
-
-        tokens = create_client_tokens(self.client_obj)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = client_bearer(self.client_obj)
 
     def _slots(self, path, params, **extra):
         response = self.client.get(path, params, **extra)

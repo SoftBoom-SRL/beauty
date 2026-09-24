@@ -1,19 +1,18 @@
 """Modifica della visita (PUT): durate, servizi, operatrici delle righe, copie vecchie."""
 
 import datetime as dt
-import json
 from decimal import Decimal
 
 from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent
-from common.auth import create_staff_tokens
+from common.testing import aware, bearer, put_json
 
 from .. import services as S
 from ..models import Appointment
 from ..services import cancel_appointment, create_appointment
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware
+from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
 class AppointmentEditApiTests(AgendaTestBase):
@@ -29,18 +28,12 @@ class AppointmentEditApiTests(AgendaTestBase):
         Membership.objects.create(
             user=self.user, salon=self.salon, role=role, is_owner=True
         )
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
         # finestra ampia per op1: le durate di listino entrano comodamente
         self.mapping = {self.op1.id: [(8 * 60, 20 * 60)]}
 
     def _put(self, path, payload):
-        return self.client.put(
-            path,
-            data=json.dumps(payload),
-            content_type="application/json",
-            **self.auth,
-        )
+        return put_json(self.client, path, payload, **self.auth)
 
     def _make(self, items, start_hour=10, windows=None):
         with self._windows(windows or self.mapping):

@@ -10,10 +10,11 @@ from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
+from common.testing import aware
 
 from ..models import Appointment, AppointmentService
 from ..services import compute_deposit, create_appointment, get_free_slots
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware
+from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
 class ComputeDepositTests(AgendaTestBase):

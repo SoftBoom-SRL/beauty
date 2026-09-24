@@ -5,12 +5,11 @@ descrivono il comportamento giusto: prima delle correzioni fallivano.
 """
 
 import datetime as dt
-import json
 
 from django.utils import timezone
 
 from apps.core.models import ActivityLog, OutboxEvent
-from common.auth import create_staff_tokens
+from common.testing import bearer, client_bearer, post_json
 
 from ..models import WaitlistEntry
 from ..services import cancel_appointment, create_appointment
@@ -22,25 +21,15 @@ class WaitlistTests(AgendaTestBase):
 
     def setUp(self):
         from apps.accounts.models import Membership, Role, User
-        from common.auth import create_client_tokens
 
-        self.client_auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.client_obj)['access']}"
-        }
+        self.client_auth = client_bearer(self.client_obj)
         user = User.objects.create_user(email="desk@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        self.staff_auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
+        self.staff_auth = bearer(user, self.salon)
 
     def _subscribe(self, body):
-        return self.client.post(
-            "/api/agenda/client/waitlist",
-            data=json.dumps(body),
-            content_type="application/json",
-            **self.client_auth,
-        )
+        return post_json(self.client, "/api/agenda/client/waitlist", body, **self.client_auth)
 
     def test_subscribe_list_and_leave(self):
         res = self._subscribe({"service_id": self.svc60.id, "preference": "morning"})

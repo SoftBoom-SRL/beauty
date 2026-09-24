@@ -12,7 +12,6 @@ Due saloni di prova, per due modi di trattare i turni:
 """
 
 import datetime as dt
-import json
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -21,17 +20,22 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.core.models import OutboxEvent, Salon, SalonSettings
-from common.auth import create_client_tokens, create_staff_tokens
+from common.testing import aware, bearer, client_bearer, post_json, put_json
 
 from .. import services as S
 from ..models import Appointment, AppointmentService
 from ..services import create_appointment
 
+# Turno di 24 ore per `_windows`, nei test dove i turni non c'entrano.
 WIDE = [(0, 24 * 60)]
 
+# È `aware` di common.testing, col nome che usano da sempre i test scritti su
+# AgendaTestBase.
+_aware = aware
 
-def _aware(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
-    return timezone.make_aware(dt.datetime.combine(day, dt.time(hour, minute)))
+
+def hm(iso):
+    return f"{timezone.localtime(dt.datetime.fromisoformat(iso)):%H:%M}"
 
 
 class AgendaTestBase(TestCase):
@@ -96,13 +100,9 @@ class AgendaTestBase(TestCase):
             salon=self.salon, defaults={"automation_delay_seconds": 0}
         )
 
-
-def aware(day, hour, minute=0):
-    return timezone.make_aware(dt.datetime.combine(day, dt.time(hour, minute)))
-
-
-def hm(iso):
-    return f"{timezone.localtime(dt.datetime.fromisoformat(iso)):%H:%M}"
+    def _undo(self, body=None):
+        """«Torna indietro» chiesto con l'header staff che il setUp mette in `self.auth`."""
+        return post_json(self.client, "/api/agenda/undo", body or {}, **self.auth)
 
 
 class RealShiftsTestBase(TestCase):
@@ -176,16 +176,16 @@ class RealShiftsTestBase(TestCase):
             user = User.objects.create_user(email=email, password="x" * 12)
             role = Role.objects.create(salon=self.salon, name=f"Ruolo {email}", scopes=list(scopes))
             Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        return bearer(user, self.salon)
 
     def client_auth(self, client=None):
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(client or self.anna)['access']}"}
+        return client_bearer(client or self.anna)
 
     def post(self, url, body, auth):
-        return self.client.post(url, data=json.dumps(body), content_type="application/json", **auth)
+        return post_json(self.client, url, body, **auth)
 
     def put(self, url, body, auth):
-        return self.client.put(url, data=json.dumps(body), content_type="application/json", **auth)
+        return put_json(self.client, url, body, **auth)
 
     def slots(self, items, day=None, **kwargs):
         return S.get_free_slots(self.salon, day or self.day, items, **kwargs)
@@ -198,9 +198,7 @@ class MessagesTestBase(AgendaTestBase):
         self.user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
+        self.auth = bearer(self.user, self.salon)
         windows = self._windows({self.op1.id: WIDE, self.op2.id: WIDE})
         windows.start()
         self.addCleanup(windows.stop)
@@ -230,8 +228,3 @@ class MessagesTestBase(AgendaTestBase):
             (e.payload["operator_id"], parse_datetime(e.payload["start"]), e.payload["duration_min"])
             for e in self._pending("slot:")
         ]
-
-    def _undo(self):
-        return self.client.post(
-            "/api/agenda/undo", data=json.dumps({}), content_type="application/json", **self.auth
-        )

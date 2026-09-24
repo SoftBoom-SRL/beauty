@@ -5,7 +5,6 @@ descrivono il comportamento giusto: prima delle correzioni fallivano.
 """
 
 import datetime as dt
-import json
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -13,7 +12,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.core.models import DepositRule, OutboxEvent
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..models import Appointment, Pause, UndoEntry, WaitlistEntry
 from ..services import (
@@ -25,9 +24,7 @@ from ..services import (
     move_appointment,
     split_appointment,
 )
-from .base import AgendaTestBase, MessagesTestBase, _aware
-
-WIDE = [(0, 24 * 60)]
+from .base import WIDE, AgendaTestBase, MessagesTestBase, _aware
 
 
 class UndoTests(AgendaTestBase):
@@ -39,9 +36,7 @@ class UndoTests(AgendaTestBase):
         self.role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         self.user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
         Membership.objects.create(user=self.user, salon=self.salon, role=self.role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
+        self.auth = bearer(self.user, self.salon)
 
     def _other_staff(self):
         from apps.accounts.models import Membership, User
@@ -55,14 +50,6 @@ class UndoTests(AgendaTestBase):
             self.salon, self.client_obj,
             [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
             _aware(self.day, hour), via="dashboard", actor=actor or self.user,
-        )
-
-    def _undo(self, body=None):
-        return self.client.post(
-            "/api/agenda/undo",
-            data=json.dumps(body or {}),
-            content_type="application/json",
-            **self.auth,
         )
 
     def test_a_wrong_move_goes_back_where_it_was(self):
@@ -318,9 +305,7 @@ class UndoTestBase(AgendaTestBase):
         self.user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
+        self.auth = bearer(self.user, self.salon)
         windows = self._windows({self.op1.id: WIDE, self.op2.id: WIDE})
         windows.start()
         self.addCleanup(windows.stop)
@@ -331,11 +316,6 @@ class UndoTestBase(AgendaTestBase):
             items or [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
             start or _aware(self.day, 10), via=via,
             actor=self.user if actor == "me" else actor, **kwargs,
-        )
-
-    def _undo(self):
-        return self.client.post(
-            "/api/agenda/undo", data=json.dumps({}), content_type="application/json", **self.auth
         )
 
     def _other_client(self):

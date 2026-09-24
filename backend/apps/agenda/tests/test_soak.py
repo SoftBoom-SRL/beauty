@@ -11,11 +11,12 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import SalonSettings
+from common.testing import aware
 
 from .. import services as S
 from ..models import Appointment, AppointmentService
 from ..services import create_appointment, get_free_slots, move_appointment
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware, hm
+from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
 class SoakTimeTests(AgendaTestBase):

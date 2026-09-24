@@ -9,11 +9,12 @@ from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
+from common.testing import aware, bearer
 
 from .. import services as S
 from ..models import Appointment, Pause
 from ..services import cancel_appointment, create_appointment, move_appointment
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware, hm
+from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
 class MoveWholeVisitToAnotherOperatorTests(AgendaTestBase):
@@ -257,7 +258,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
         user = User.objects.create_user(email="hunt21@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        return bearer(user, self.salon)
 
     def _visit(self, items, hour=10, **fields):
         with self._windows({self.op1.id: [(0, 24 * 60)], self.op2.id: [(0, 24 * 60)]}):

@@ -9,11 +9,11 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent
-from common.auth import create_staff_tokens
+from common.testing import aware, bearer, client_bearer, post_json
 
 from ..models import Appointment, Pause
 from ..services import create_appointment, move_appointment
-from .base import AgendaTestBase, RealShiftsTestBase, _aware, aware
+from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 STAFF_ONLY_FIELDS = ("note", "forced", "created_via", "cancel_reason", "client", "location_id")
 
@@ -156,16 +156,13 @@ class ClientBookingApiTests(AgendaTestBase):
     l'appuntamento che si sta spostando."""
 
     def setUp(self):
-        from common.auth import create_client_tokens
-
-        tokens = create_client_tokens(self.client_obj)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = client_bearer(self.client_obj)
         windows = self._windows({self.op1.id: [(9 * 60, 18 * 60)], self.op2.id: [(9 * 60, 18 * 60)]})
         windows.start()
         self.addCleanup(windows.stop)
 
     def _post(self, url, body):
-        return self.client.post(url, data=json.dumps(body), content_type="application/json", **self.auth)
+        return post_json(self.client, url, body, **self.auth)
 
     def _availability(self, items, **extra):
         params = {"date": self.day.isoformat(), "items": json.dumps(items), **extra}
@@ -286,7 +283,7 @@ class ForcedBookingTests(AgendaTestBase):
         user = User.objects.create_user(email="force@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        return bearer(user, self.salon)
 
     def test_force_creates_outside_shift_and_over_other_bookings(self):
         auth = self._staff()
@@ -354,14 +351,10 @@ class RequestValidationTests(AgendaTestBase):
         user = User.objects.create_user(email="val@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
+        self.auth = bearer(user, self.salon)
 
     def _post(self, path, body):
-        return self.client.post(
-            path, data=json.dumps(body), content_type="application/json", **self.auth
-        )
+        return post_json(self.client, path, body, **self.auth)
 
     def test_a_start_without_timezone_is_refused(self):
         res = self._post(
