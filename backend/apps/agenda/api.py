@@ -14,11 +14,12 @@ from django.utils.dateparse import parse_date
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Location, Salon
-from apps.core.services import default_location
+from apps.core.models import Location
+from apps.core.services import default_location, get_salon_by_slug
 from common import ratelimit
 from common.auth import client_auth, staff_auth
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from . import undo as undo_log
@@ -49,7 +50,6 @@ from .schemas import (
     DepositCashedIn,
     MarginOut,
     MoveIn,
-    OkOut,
     PauseIn,
     PauseOut,
     ReasonIn,
@@ -876,16 +876,10 @@ PUBLIC_AVAILABILITY_WINDOW_SECONDS = 3600
 def public_availability(request, salon: str, date: str, items: str):
     """Disponibilità pubblica (no auth): solo orari liberi, salone per slug."""
     parsed = _parse_items_param(items)
-    try:
-        s = Salon.objects.get(slug=salon)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
-    if not ratelimit.hit(
-        f"public-avail:{s.id}:{ratelimit.client_ip(request)}",
-        PUBLIC_AVAILABILITY_MAX_PER_WINDOW,
-        PUBLIC_AVAILABILITY_WINDOW_SECONDS,
-    ):
-        raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
+    s = get_salon_by_slug(salon)
+    ratelimit.enforce_public(
+        request, s, "avail", PUBLIC_AVAILABILITY_MAX_PER_WINDOW, PUBLIC_AVAILABILITY_WINDOW_SECONDS
+    )
     # Stessa sede della prenotazione: cercando su tutte e prenotando sulla
     # predefinita, l'app mostrava orari che poi rifiutava con un 409.
     return availability_services.smart_slots(

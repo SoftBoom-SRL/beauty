@@ -336,10 +336,6 @@ class MarginOut(Schema):
     margin_pct: Decimal
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 class UndoIn(Schema):
     # Nessun id = l'ultima azione annullabile di chi sta chiedendo.
     entry_id: Optional[int] = None
