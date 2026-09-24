@@ -18,7 +18,7 @@ from common.testing import bearer, post_json
 from ..api import import_clients
 from ..models import Client, ClientNote
 from ..schemas import ImportIn, ImportRowIn
-from ..services import import_rows
+from ..importer import import_rows
 from .base import ClientsTestCase
 
 

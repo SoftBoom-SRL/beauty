@@ -30,6 +30,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from .fields import client_payload, stamped_consents
+from .importer import import_rows
 from .models import (
     Client,
     ClientCategory,
@@ -56,7 +57,7 @@ from .schemas import (
     TechnicalSheetOut,
 )
 from .search import search_filter
-from .services import client_stats, import_rows
+from .services import client_stats
 
 logger = logging.getLogger("youty.clients")
 router = Router(tags=["clients"])
