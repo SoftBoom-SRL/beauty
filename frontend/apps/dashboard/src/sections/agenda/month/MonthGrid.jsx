@@ -71,8 +71,10 @@ function DayCell({ iso, day, inMonth, isToday, isWeekend, t, lang, showRevenue, 
         )}
       </div>
 
-      {/* barra di occupazione della giornata */}
-      {ratio != null && <Bar ratio={ratio} color={tone.color} height={5} />}
+      {/* barra di occupazione della giornata, in una riga sua: Bar si allarga
+          con flex: 1, e figlia diretta della cella (una colonna) cresceva in
+          ALTEZZA — nei giorni senza appuntamenti diventava un blocco grigio */}
+      {ratio != null && <div style={{ display: 'flex' }}><Bar ratio={ratio} color={tone.color} height={5} /></div>}
 
       {/* conteggio, incasso, pallini di stato */}
       {day.count > 0 && (

@@ -57,12 +57,14 @@ export function useMemo(fn, deps) {
   return v;
 }
 export const Fragment = 'Fragment';
+// memo senza memoria: qui ogni render ridisegna comunque tutto (MonthGrid)
+export const memo = (c) => c;
 export function createElement(type, props, ...children) {
   const p = { ...(props || {}) };
   if (children.length) p.children = children.length === 1 ? children[0] : children;
   return { type, props: p, key: p.key ?? null };
 }
-export default { createElement, Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo };
+export default { createElement, Fragment, memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo };
 `;
 
 /* Il runtime JSX «automatico», lo stesso del build di Vite: i componenti non
