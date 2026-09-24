@@ -20,7 +20,7 @@ from common.auth import (
     staff_auth,
 )
 from common import ratelimit
-from common.permissions import SCOPES, require_scope
+from common.permissions import require_scope
 from common.phone import canonical_phone, find_client_by_phone
 from common.schemas import OkOut
 from common.utils import salon_get
@@ -47,7 +47,15 @@ from .schemas import (
     StaffLoginIn,
 )
 from .services import issue_otp, verify_otp
-from .sessions import find_membership, first_membership, session_payload, tv_matches, user_out
+from .sessions import find_membership, first_membership, session_payload, tv_matches
+from .team import (
+    can_grant,
+    invitation_out,
+    member_out,
+    require_can_touch_role,
+    require_grantable,
+    validate_scopes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +63,6 @@ router = Router(tags=["accounts"])
 
 
 # ---- Helpers -----------------------------------------------------------------
-
-
-def _role_out(role) -> dict | None:
-    if role is None:
-        return None
-    return {
-        "id": role.id,
-        "name": role.name,
-        "scopes": role.scopes or [],
-        "is_system": role.is_system,
-    }
 
 
 def _active_client_by_phone(salon, phone: str):
@@ -123,12 +120,6 @@ def _notify_archived_client(salon, client) -> None:
         "Riattivala se vuoi che entri.",
         payload={"client_id": client.id},
     )
-
-
-def _validate_scopes(scopes: list[str]) -> None:
-    for scope in scopes:
-        if scope not in SCOPES:
-            raise HttpError(400, f"Scope non valido: {scope}")
 
 
 # ---- Staff: login e sessione -------------------------------------------------
@@ -356,49 +347,6 @@ def staff_change_password(request, data: PasswordChangeIn):
 # ---- Staff: membri del team ----------------------------------------------------
 
 
-def _member_out(membership) -> dict:
-    return {
-        "id": membership.id,
-        "user": user_out(membership.user),
-        "role": _role_out(membership.role),
-        "is_owner": membership.is_owner,
-    }
-
-
-def _require_grantable(ctx, scopes) -> None:
-    """Nessuno regala permessi che non ha.
-
-    Lo scope `team` serve a gestire il personale, non a diventare titolari: chi
-    l'aveva poteva creare un ruolo con tutti e nove i permessi e assegnarselo,
-    ottenendo al primo rinnovo incassi, listino, magazzino e analisi che il
-    titolare gli aveva negato. Il titolare resta esente: i permessi sono suoi
-    per definizione.
-    """
-    if ctx.is_owner:
-        return
-    missing = sorted(s for s in (scopes or []) if s not in ctx.scopes)
-    if missing:
-        raise HttpError(
-            403,
-            "Non puoi assegnare permessi che non hai: " + ", ".join(missing),
-        )
-
-
-def _require_can_touch_role(ctx, role) -> None:
-    """Un ruolo si modifica o si elimina solo se non è più potente di chi lo tocca.
-
-    Senza questo, chi ha il solo `team` poteva riscrivere il ruolo del collega
-    responsabile magazzino: non gli dava permessi nuovi, ma gli lasciava
-    togliere a chiunque quelli che aveva.
-    """
-    _require_grantable(ctx, role.scopes or [])
-
-
-def _can_grant(ctx, role) -> bool:
-    """Vero se chi chiama potrebbe assegnare `role` (stessa regola di `_require_grantable`)."""
-    return ctx.is_owner or all(s in ctx.scopes for s in (role.scopes or []))
-
-
 @router.get("/members", auth=staff_auth, response=list[MemberOut])
 def list_members(request):
     ctx = request.auth
@@ -408,7 +356,7 @@ def list_members(request):
         .select_related("user", "role")
         .order_by("id")
     )
-    return [_member_out(m) for m in memberships]
+    return [member_out(m) for m in memberships]
 
 
 @router.post("/members/{int:member_id}/role", auth=staff_auth, response=MemberOut)
@@ -430,9 +378,9 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         # perdeva cassa, magazzino e listino — mentre rimuoverla dal team era
         # già vietato (10-05, 15-02).
         if membership.role is not None:
-            _require_can_touch_role(ctx, membership.role)
+            require_can_touch_role(ctx, membership.role)
     if role is not None:
-        _require_grantable(ctx, role.scopes or [])
+        require_grantable(ctx, role.scopes or [])
     membership.role = role
     membership.save(update_fields=["role"])
     log_activity(
@@ -443,7 +391,7 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         actor=ctx.user,
         payload={"membership_id": membership.id, "role_id": role.id if role else None},
     )
-    return _member_out(membership)
+    return member_out(membership)
 
 
 @router.delete("/members/{int:member_id}", auth=staff_auth, response=OkOut)
@@ -456,7 +404,7 @@ def remove_member(request, member_id: int):
     # Chi non è titolare non fa piazza pulita dei colleghi con più permessi di
     # lui: toglierebbe al salone accessi che non era autorizzato a concedere.
     if membership.role is not None:
-        _require_can_touch_role(ctx, membership.role)
+        require_can_touch_role(ctx, membership.role)
     email = membership.user.email
     membership.delete()
     log_activity(
@@ -483,8 +431,8 @@ def list_roles(request):
 def create_role(request, data: RoleIn):
     ctx = request.auth
     require_scope(ctx, "team")
-    _validate_scopes(data.scopes)
-    _require_grantable(ctx, data.scopes)
+    validate_scopes(data.scopes)
+    require_grantable(ctx, data.scopes)
     if Role.objects.filter(salon=ctx.salon, name=data.name).exists():
         raise HttpError(400, "Esiste già un ruolo con questo nome")
     role = Role.objects.create(salon=ctx.salon, name=data.name, scopes=data.scopes)
@@ -502,16 +450,16 @@ def create_role(request, data: RoleIn):
 def update_role(request, role_id: int, data: RoleIn):
     ctx = request.auth
     require_scope(ctx, "team")
-    _validate_scopes(data.scopes)
+    validate_scopes(data.scopes)
     role = salon_get(Role, ctx, role_id)
-    _require_can_touch_role(ctx, role)
+    require_can_touch_role(ctx, role)
     # La dashboard li presenta come «permessi non modificabili» a tutti, il
     # titolare compreso, ma l'API li riscriveva: con una chiamata diretta chi
     # aveva team+agenda+clienti toglieva l'agenda al ruolo «Operatrice» e a
     # tutte le operatrici insieme (15-10). Come per l'eliminazione, qui no.
     if role.is_system:
         raise HttpError(400, "I ruoli di sistema non sono modificabili")
-    _require_grantable(ctx, data.scopes)
+    require_grantable(ctx, data.scopes)
     if Role.objects.filter(salon=ctx.salon, name=data.name).exclude(id=role.id).exists():
         raise HttpError(400, "Esiste già un ruolo con questo nome")
     role.name = data.name
@@ -532,7 +480,7 @@ def delete_role(request, role_id: int):
     ctx = request.auth
     require_scope(ctx, "team")
     role = salon_get(Role, ctx, role_id)
-    _require_can_touch_role(ctx, role)
+    require_can_touch_role(ctx, role)
     if role.is_system:
         raise HttpError(400, "I ruoli di sistema non sono eliminabili")
     name = role.name
@@ -542,18 +490,6 @@ def delete_role(request, role_id: int):
 
 
 # ---- Staff: inviti ---------------------------------------------------------------
-
-
-def _invitation_out(invitation, *, with_token: bool) -> dict:
-    return {
-        "id": invitation.id,
-        "email": invitation.email,
-        "role": _role_out(invitation.role),
-        "token": invitation.token if with_token else None,
-        "status": invitation.status,
-        "expires_at": invitation.expires_at,
-        "created_at": invitation.created_at,
-    }
 
 
 @router.get("/invitations", auth=staff_auth, response=list[InvitationOut])
@@ -573,12 +509,12 @@ def list_invitations(request):
     require_scope(ctx, "team")
     now = timezone.now()
     return [
-        _invitation_out(
+        invitation_out(
             invitation,
             with_token=(
                 invitation.status == Invitation.Status.PENDING
                 and invitation.expires_at > now
-                and _can_grant(ctx, invitation.role)
+                and can_grant(ctx, invitation.role)
             ),
         )
         for invitation in Invitation.objects.filter(salon=ctx.salon).select_related("role")
@@ -592,7 +528,7 @@ def create_invitation(request, data: InvitationIn):
     role = salon_get(Role, ctx, data.role_id)
     # L'invito è l'altra strada per fabbricarsi permessi: chi invita sceglie
     # l'email, quindi l'account che nasce è suo a tutti gli effetti.
-    _require_grantable(ctx, role.scopes or [])
+    require_grantable(ctx, role.scopes or [])
     email = data.email.strip().lower()
     if Membership.objects.filter(salon=ctx.salon, user__email__iexact=email).exists():
         raise HttpError(400, "L'utente fa già parte del team")
@@ -615,8 +551,8 @@ def create_invitation(request, data: InvitationIn):
         actor=ctx.user,
         payload={"invitation_id": invitation.id, "role_id": role.id},
     )
-    # Chi l'ha appena creato ha superato `_require_grantable`: il codice è suo.
-    return _invitation_out(invitation, with_token=True)
+    # Chi l'ha appena creato ha superato `require_grantable`: il codice è suo.
+    return invitation_out(invitation, with_token=True)
 
 
 @router.post("/invitations/accept", response=StaffAuthOut)
