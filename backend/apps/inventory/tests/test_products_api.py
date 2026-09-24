@@ -34,7 +34,7 @@ class InventoryApiTests(TestCase):
     """Endpoint-level: colore delle categorie e operatrice sullo scarico.
 
     Le view sono chiamate direttamente con uno `StaffContext` costruito a mano
-    (stesso pattern di apps.catalog.tests): usano solo `request.auth`.
+    (stesso pattern di apps.catalog.tests.base): usano solo `request.auth`.
     """
 
     def setUp(self):
