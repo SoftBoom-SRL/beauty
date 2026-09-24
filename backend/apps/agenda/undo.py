@@ -181,6 +181,24 @@ def record(
     return entry
 
 
+def record_appointment_change(
+    appointment: Appointment, *, kind: str, label: str, actor=None, before: dict
+) -> UndoEntry | None:
+    """`record` per un gesto che ha cambiato UN appuntamento esistente.
+
+    `before` è la sua istantanea presa prima del gesto (`appointment_snapshot`);
+    quella di dopo si prende qui, dallo stato appena scritto.
+    """
+    return record(
+        appointment.salon,
+        kind=kind,
+        label=label,
+        actor=actor,
+        before={"appointments": [before]},
+        after={"appointments": [appointment_snapshot(appointment)]},
+    )
+
+
 def stack(salon, actor) -> list[UndoEntry]:
     """I gesti che `actor` può ancora annullare, dal più recente."""
     if actor is None or not getattr(actor, "pk", None):

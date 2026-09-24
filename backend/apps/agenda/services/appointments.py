@@ -261,13 +261,12 @@ def edit_appointment(
     # Cambiando i servizi cambia anche l'ora di fine: senza questo evento il
     # promemoria alla cliente continuava a riportare la durata vecchia.
     emit_appointment_event(appointment, "appointment.updated")
-    undo_log.record(
-        appointment.salon,
+    undo_log.record_appointment_change(
+        appointment,
         kind=UndoEntry.Kind.EDIT,
         label=f"Modifica dell'appuntamento di {appointment.client.full_name}",
         actor=actor,
-        before={"appointments": [before]},
-        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        before=before,
     )
     return appointment
 
@@ -402,13 +401,12 @@ def move_appointment(
         before=before_spans,
         after=_appointment_spans(appointment),
     )
-    undo_log.record(
-        appointment.salon,
+    undo_log.record_appointment_change(
+        appointment,
         kind=UndoEntry.Kind.MOVE,
         label=f"Spostamento dell'appuntamento di {appointment.client.full_name}",
         actor=actor,
-        before={"appointments": [before]},
-        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        before=before,
     )
     return appointment
 

@@ -41,13 +41,12 @@ def check_in(appointment: Appointment, *, actor=None) -> Appointment:
         payload={"appointment_id": appointment.id},
     )
     emit_appointment_event(appointment, "appointment.checked_in")
-    undo_log.record(
-        appointment.salon,
+    undo_log.record_appointment_change(
+        appointment,
         kind=UndoEntry.Kind.STATUS,
         label=f"Check-in di {appointment.client.full_name}",
         actor=actor,
-        before={"appointments": [before]},
-        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        before=before,
     )
     return appointment
 
@@ -65,13 +64,12 @@ def start_appointment(appointment: Appointment, *, actor=None) -> Appointment:
         actor=actor,
         payload={"appointment_id": appointment.id},
     )
-    undo_log.record(
-        appointment.salon,
+    undo_log.record_appointment_change(
+        appointment,
         kind=UndoEntry.Kind.STATUS,
         label=f"Inizio trattamento di {appointment.client.full_name}",
         actor=actor,
-        before={"appointments": [before]},
-        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        before=before,
     )
     return appointment
 
@@ -111,13 +109,12 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason},
         before=_appointment_spans(appointment), after={},
     )
-    undo_log.record(
-        appointment.salon,
+    undo_log.record_appointment_change(
+        appointment,
         kind=UndoEntry.Kind.NO_SHOW,
         label=f"No-show di {appointment.client.full_name}",
         actor=actor,
-        before={"appointments": [before]},
-        after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+        before=before,
     )
     return appointment
 
@@ -210,13 +207,12 @@ def cancel_appointment(
         # postazione: chi sta al banco non deve poter rimettere in agenda una
         # visita che la cliente ha disdetto (vedi `undoable`).
         if (not by_client) if undoable is None else undoable:
-            undo_log.record(
-                appointment.salon,
+            undo_log.record_appointment_change(
+                appointment,
                 kind=UndoEntry.Kind.CANCEL,
                 label=f"Annullamento dell'appuntamento di {appointment.client.full_name}",
                 actor=actor,
-                before={"appointments": [before]},
-                after={"appointments": [undo_log.appointment_snapshot(appointment)]},
+                before=before,
             )
     if appointment.deposit_status == Appointment.DepositStatus.REFUND_DUE:
         settle_deposit_refund(appointment, actor=actor)
