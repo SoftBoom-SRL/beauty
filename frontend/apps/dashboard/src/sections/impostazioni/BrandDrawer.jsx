@@ -3,11 +3,12 @@
 // polite lock state for non-owners. No logo-delete endpoint: "remove" only
 // clears the locally selected file before saving.
 import { useRef, useState } from 'react';
-import { api, mediaUrl, Icon, toastApiError } from '@youty/shared';
+import { mediaUrl, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import { useDash } from '../../ctx.jsx';
 import { PaletteGrid, inputCss, LockNote } from './lib.jsx';
+import { settingsApi } from '../../api/core.js';
 
 export default function BrandDrawer({ onClose }) {
   const { t, session, salon, settings, reload, fireToast } = useDash();
@@ -35,8 +36,8 @@ export default function BrandDrawer({ onClose }) {
     if (saving) return;
     setSaving(true);
     try {
-      if (file) await api.postForm('/api/core/settings/logo', { logo: file });
-      await api.put('/api/core/settings', { brand_color: color, privacy_policy_url: privacyUrl.trim() });
+      if (file) await settingsApi.uploadLogo(file);
+      await settingsApi.update({ brand_color: color, privacy_policy_url: privacyUrl.trim() });
       await reload.salon();
       fireToast({ msg: t('Brand salvato', 'Brand saved'), icon: 'check' });
       onClose();

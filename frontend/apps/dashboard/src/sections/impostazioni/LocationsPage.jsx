@@ -2,11 +2,12 @@
 // Reads: any staff. Writes: owner-only (lock state otherwise).
 // Deleting the only location → 400 from the API, surfaced as toast.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, PhoneInput, toastApiError } from '@youty/shared';
+import { Icon, PhoneInput, toastApiError } from '@youty/shared';
 import DkModal from '../../ui/DkModal.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote } from './lib.jsx';
+import { locationsApi } from '../../api/core.js';
 
 export default function LocationsPage({ onBack }) {
   const { t, lang, session, reload, fireToast } = useDash();
@@ -16,7 +17,7 @@ export default function LocationsPage({ onBack }) {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    try { setList(await api.get('/api/core/locations')); }
+    try { setList(await locationsApi.list()); }
     catch (err) { toastApiError(err, fireToast, t); setList([]); }
   }, [fireToast, t]);
   useEffect(() => { load(); }, [load]);
@@ -27,8 +28,8 @@ export default function LocationsPage({ onBack }) {
     if (!payload.name) return;
     setSaving(true);
     try {
-      if (edit.id) await api.put(`/api/core/locations/${edit.id}`, payload);
-      else await api.post('/api/core/locations', payload);
+      if (edit.id) await locationsApi.update(edit.id, payload);
+      else await locationsApi.create(payload);
       await Promise.all([load(), reload.salon()]);
       setEdit(null);
       fireToast({ msg: t('Sede salvata', 'Location saved'), icon: 'check' });
@@ -45,7 +46,7 @@ export default function LocationsPage({ onBack }) {
     if (!target || deleting) return;
     setDeleting(true);
     try {
-      await api.del(`/api/core/locations/${target.id}`);
+      await locationsApi.remove(target.id);
       await Promise.all([load(), reload.salon()]);
       setEdit(null);
       setConfirmDel(null);

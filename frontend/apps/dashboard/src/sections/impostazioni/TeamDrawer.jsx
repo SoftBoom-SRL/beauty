@@ -4,11 +4,12 @@
 // so the invite token is displayed with a copy button only.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
+import { Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote, CopyField } from './lib.jsx';
+import { invitationsApi, membersApi, rolesApi } from '../../api/team.js';
 
 const initialsOf = (name, email) => {
   const src = (name || '').trim() || (email || '');
@@ -43,9 +44,9 @@ export default function TeamDrawer({ onClose, onRoles }) {
   const load = useCallback(async () => {
     try {
       const [m, r, i] = await Promise.all([
-        api.get('/api/auth/members'),
-        api.get('/api/auth/roles'),
-        api.get('/api/auth/invitations'),
+        membersApi.list(),
+        rolesApi.list(),
+        invitationsApi.list(),
       ]);
       setMembers(m); setRoles(r); setInvitations(i);
       setInv((f) => ({ ...f, role_id: f.role_id ?? (r[0]?.id ?? null) }));
@@ -55,7 +56,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
 
   const setRole = async (memberId, roleId) => {
     try {
-      const upd = await api.post(`/api/auth/members/${memberId}/role`, { role_id: roleId });
+      const upd = await membersApi.setRole(memberId, { role_id: roleId });
       setMembers((l) => l.map((m) => (m.id === memberId ? upd : m)));
       fireToast({ msg: t('Ruolo aggiornato', 'Role updated'), icon: 'check' });
     } catch (err) { toastApiError(err, fireToast, t); }
@@ -70,7 +71,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
     if (!m || removing) return;
     setRemoving(true);
     try {
-      await api.del(`/api/auth/members/${m.id}`);
+      await membersApi.remove(m.id);
       setMembers((l) => l.filter((x) => x.id !== m.id));
       fireToast({ msg: t('Membro rimosso', 'Member removed'), icon: 'x' });
       setConfirmRemove(null);
@@ -83,7 +84,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
     if (!email || !inv.role_id || sending) return;
     setSending(true);
     try {
-      const created = await api.post('/api/auth/invitations', { email, role_id: inv.role_id });
+      const created = await invitationsApi.create({ email, role_id: inv.role_id });
       setInvitations((l) => [created, ...(l || [])]);
       setInviting(false);
       setInv({ email: '', role_id: roles[0]?.id ?? null });

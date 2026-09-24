@@ -3,10 +3,11 @@
 // invalida ogni altra sessione dell'utente: ci restituisce token nuovi che
 // applichiamo subito, altrimenti ci sloggheremmo da soli.
 import { useState } from 'react';
-import { api, staffAuth, Icon, toastApiError } from '@youty/shared';
+import { staffAuth, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss } from './lib.jsx';
+import { staffAccountApi } from '../../api/team.js';
 
 const MIN_LEN = 8;
 
@@ -46,7 +47,7 @@ export default function PasswordDrawer({ onClose }) {
     if (!canSave) return;
     setSaving(true);
     try {
-      const data = await api.post('/api/auth/staff/password', {
+      const data = await staffAccountApi.changePassword({
         current_password: cur,
         new_password: next,
       });

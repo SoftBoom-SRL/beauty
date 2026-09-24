@@ -4,10 +4,11 @@
 // The prototype's per-author filter has no API param → dropped (q searches the summary).
 // Scope 'activity_log' (owner bypasses).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Icon, todayStr, toastApiError } from '@youty/shared';
+import { Icon, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote } from './lib.jsx';
 import { logDateLabel, salonDaysAgo } from './dates.js';
+import { activityApi } from '../../api/core.js';
 
 const PAGE = 50;
 
@@ -83,7 +84,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
     if (offset === 0) setItems(null); else setLoadingMore(true);
     try {
       const params = { limit: PAGE, offset, ...(filt ? { type: filt } : {}), ...(qDeb ? { q: qDeb } : {}), ...dateRange() };
-      const res = await api.get('/api/core/activity', { params });
+      const res = await activityApi.list(params);
       if (mySeq !== seq.current) return;
       setCount(res.count);
       setItems((prev) => (offset === 0 ? res.items : [...(prev || []), ...res.items]));

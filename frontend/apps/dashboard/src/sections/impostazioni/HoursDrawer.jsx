@@ -3,11 +3,12 @@
 // "oggi"), app cliente (testo generato dal server) e impostazioni.
 // Solo il titolare scrive; gli altri vedono in sola lettura.
 import { useState } from 'react';
-import { api, Icon, Toggle, toastApiError } from '@youty/shared';
+import { Icon, Toggle, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';
 import { inputCss, LockNote } from './lib.jsx';
 import { dayLabel } from './hours.js';
+import { settingsApi } from '../../api/core.js';
 
 export { dayLabel, todayRanges } from './hours.js';
 
@@ -44,7 +45,7 @@ export default function HoursDrawer({ onClose }) {
     if (problems.length) { setErr(problems[0]); return; }
     setSaving(true); setErr('');
     try {
-      await api.put('/api/core/settings', { opening_hours_week: Object.fromEntries(Object.entries(week).map(([d, r]) => [String(d), r])) });
+      await settingsApi.update({ opening_hours_week: Object.fromEntries(Object.entries(week).map(([d, r]) => [String(d), r])) });
       await reload.salon();
       fireToast({ msg: t('Orari di apertura salvati', 'Opening hours saved'), icon: 'check' });
       onClose();

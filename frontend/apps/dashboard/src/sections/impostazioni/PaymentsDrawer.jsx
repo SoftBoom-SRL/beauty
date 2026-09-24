@@ -4,11 +4,13 @@
 // caparra non è arrivata, e quando parte il sollecito. Le regole di CHI paga
 // la caparra restano in Prenotazioni & ottimizzazione → Regole deposito.
 import { useEffect, useState } from 'react';
-import { api, Icon, NumInput, toastApiError } from '@youty/shared';
+import { Icon, NumInput, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { LockNote } from './lib.jsx';
+import { settingsApi } from '../../api/core.js';
+import { stripeConnectApi } from '../../api/sales.js';
 
 const HOLD_PRESETS = [0, 15, 20, 30, 60, 120];
 
@@ -24,7 +26,7 @@ export default function PaymentsDrawer({ onClose }) {
   // pagate dal link finivano sull'account della piattaforma. Ora si chiede.
   const [confirmOff, setConfirmOff] = useState(false);
 
-  const loadStripe = () => api.get('/api/sales/stripe/connect/status').then(setStripe).catch(() => setStripe(null));
+  const loadStripe = () => stripeConnectApi.status().then(setStripe).catch(() => setStripe(null));
   useEffect(() => { loadStripe(); }, []);
 
   // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il code
@@ -46,7 +48,7 @@ export default function PaymentsDrawer({ onClose }) {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.del('/api/sales/stripe/connect');
+      const res = await stripeConnectApi.disconnect();
       setStripe(res);
       setConfirmOff(false);
       reload.salon().catch(() => {});
@@ -60,7 +62,7 @@ export default function PaymentsDrawer({ onClose }) {
     if (hold > 0 && reminder >= hold) { fireToast({ msg: t('Il sollecito deve precedere la scadenza', 'The reminder must come before the deadline'), icon: 'alert' }); return; }
     setSaving(true);
     try {
-      await api.put('/api/core/settings', { deposit_hold_minutes: hold, deposit_reminder_minutes: hold > 0 ? reminder : 0 });
+      await settingsApi.update({ deposit_hold_minutes: hold, deposit_reminder_minutes: hold > 0 ? reminder : 0 });
       await reload.salon();
       fireToast({ msg: t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
       onClose();

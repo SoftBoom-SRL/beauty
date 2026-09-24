@@ -4,7 +4,8 @@
 // Stessa origine dell'opener: `api` porta il Bearer dello staff e il
 // postMessage punta a window.location.origin (come OAuthPopup per Yourang).
 import { useEffect, useState } from 'react';
-import { api, useT } from '@youty/shared';
+import { useT } from '@youty/shared';
+import { stripeConnectApi } from '../api/sales.js';
 
 export default function StripeConnectPopup({ path }) {
   const { t } = useT();
@@ -16,7 +17,7 @@ export default function StripeConnectPopup({ path }) {
     (async () => {
       try {
         if (path === '/stripe-connect/start') {
-          const res = await api.post('/api/sales/stripe/connect/start', {});
+          const res = await stripeConnectApi.start();
           window.location.replace(res.url);
           return;
         }
@@ -26,7 +27,7 @@ export default function StripeConnectPopup({ path }) {
         const code = params.get('code');
         const state = params.get('state');
         if (!code || !state) throw new Error('missing code/state');
-        await api.post('/api/sales/stripe/connect/callback', { code, state });
+        await stripeConnectApi.callback({ code, state });
         notify({ type: 'stripe-connect', ok: true });
         window.close();
       } catch (e) {

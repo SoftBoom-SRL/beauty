@@ -8,18 +8,21 @@
 // «category.reordered» nel registro attività. Clienti e magazzino non ce
 // l'hanno e restano con una PUT per categoria.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
+import { Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import DkModal from '../../../ui/DkModal.jsx';
 import DkConfirm from '../../../ui/DkConfirm.jsx';
 import HexInput from '../../../ui/HexInput.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { GD_PALETTE, PaletteGrid, inputCss, LockNote } from '../lib.jsx';
+import { serviceCategoriesApi } from '../../../api/catalog.js';
+import { clientCategoriesApi, clientsApi } from '../../../api/clients.js';
+import { productCategoriesApi, productsApi } from '../../../api/inventory.js';
 
 const KINDS = {
-  clienti: { base: '/api/clients/categories', scope: 'clients', hasColor: true, bilingual: false },
-  servizi: { base: '/api/catalog/categories', scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
-  magazzino: { base: '/api/inventory/categories', scope: 'inventory', hasColor: false, bilingual: false },
+  clienti: { endpoints: clientCategoriesApi, scope: 'clients', hasColor: true, bilingual: false },
+  servizi: { endpoints: serviceCategoriesApi, scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
+  magazzino: { endpoints: productCategoriesApi, scope: 'inventory', hasColor: false, bilingual: false },
 };
 const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3F3F3', '#EFEFEF'].includes(c));
 const randColor = () => flatPalette[Math.floor(Math.random() * flatPalette.length)];
@@ -41,7 +44,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
   const setList = (k, v) => setLists((s) => ({ ...s, [k]: v }));
 
   const load = useCallback(async (k) => {
-    try { const res = await api.get(KINDS[k].base); setLists((s) => ({ ...s, [k]: res })); }
+    try { const res = await KINDS[k].endpoints.list(); setLists((s) => ({ ...s, [k]: res })); }
     catch (err) { toastApiError(err, fireToast, t); setLists((s) => ({ ...s, [k]: [] })); }
   }, [fireToast, t]);
   useEffect(() => { if (lists[kind] === null) load(kind); }, [kind, lists, load]);
@@ -65,11 +68,11 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     try {
       let renamed = false;
       if (d._new) {
-        const created = await api.post(cfg.base, { ...payloadOf(d), order: (list || []).length });
+        const created = await cfg.endpoints.create({ ...payloadOf(d), order: (list || []).length });
         setList(kind, [...(list || []), created]);
       } else {
         const before = (list || []).find((c) => c.id === d.id);
-        const upd = await api.put(`${cfg.base}/${d.id}`, { ...payloadOf(d), order: d.order ?? 0 });
+        const upd = await cfg.endpoints.update(d.id, { ...payloadOf(d), order: d.order ?? 0 });
         setList(kind, list.map((c) => (c.id === d.id ? upd : c)));
         renamed = kind === 'clienti' && !!before && before.name !== upd.name;
       }
@@ -98,8 +101,8 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     setConfirmDel({ cat, kind: k, count: null });
     let count;
     try {
-      if (k === 'clienti') count = (await api.get('/api/clients/', { params: { category_id: cat.id, limit: 1 } }))?.count;
-      else if (k === 'magazzino') count = (await api.get('/api/inventory/products', { params: { category_id: cat.id, include_inactive: true, limit: 1 } }))?.count;
+      if (k === 'clienti') count = (await clientsApi.list({ category_id: cat.id, limit: 1 }))?.count;
+      else if (k === 'magazzino') count = (await productsApi.list({ category_id: cat.id, include_inactive: true, limit: 1 }))?.count;
       else count = (services || []).filter((sv) => sv.category_id === cat.id).length;
     } catch { count = undefined; }
     setConfirmDel((c) => (c && c.cat.id === cat.id ? { ...c, count: Number.isFinite(count) ? count : -1 } : c));
@@ -109,7 +112,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     if (!c || deleting) return;
     setDeleting(true);
     try {
-      await api.del(`${KINDS[c.kind].base}/${c.cat.id}`);
+      await KINDS[c.kind].endpoints.remove(c.cat.id);
       setList(c.kind, (lists[c.kind] || []).filter((x) => x.id !== c.cat.id));
       syncCtx(c.kind);
       setEdit(null);
@@ -153,10 +156,10 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
       if (cfg.reorder) {
         // una sola chiamata: con una PUT per categoria il riordino non era
         // atomico e, se una falliva a metà, l'ordine tornava indietro da solo
-        await api.post(`${cfg.base}/reorder`, { ids: next.map((c) => c.id) });
+        await cfg.endpoints.reorder(next.map((c) => c.id));
       } else {
         const body = (c) => (kind === 'clienti' ? { name: c.name, color: c.color } : { name: c.name });
-        await Promise.all(next.map((c, i) => api.put(`${cfg.base}/${c.id}`, { ...body(c), order: i })));
+        await Promise.all(next.map((c, i) => cfg.endpoints.update(c.id, { ...body(c), order: i })));
       }
       await load(kind);
       syncCtx(kind);

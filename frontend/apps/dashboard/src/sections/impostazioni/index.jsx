@@ -4,7 +4,7 @@
 // Categories open the global 'catsmgr' modal. Consumes deepLink 'log-today'.
 // Commissioni & Notifiche have no API backing → informational rows (fase 2 / Yourang).
 import { useEffect, useState } from 'react';
-import { Icon, api, fmtDateIt, fmtTime } from '@youty/shared';
+import { Icon, fmtDateIt, fmtTime } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import BookingsOptimPage from './BookingsOptimPage.jsx';
 import ActivityLogPage from './ActivityLogPage.jsx';
@@ -17,6 +17,8 @@ import PasswordDrawer from './PasswordDrawer.jsx';
 import PaymentsDrawer from './PaymentsDrawer.jsx';
 import ReasonsDrawer from './ReasonsDrawer.jsx';
 import { CopyField } from './lib.jsx';
+import { outboxApi } from '../../api/core.js';
+import { yourangApi } from '../../api/integrations.js';
 
 /* Host dell'app cliente: la dashboard non può dedurlo (è un altro dominio),
  * arriva come build variable. Se manca, la sezione dei link non compare invece
@@ -79,9 +81,9 @@ export default function ImpostazioniSection() {
   // Yourang connection status + handshake from the OAuth popup.
   useEffect(() => {
     if (!isOwner) return undefined;
-    const load = () => api.get('/api/integrations/yourang/status').then(setYourang).catch(() => setYourang(null));
+    const load = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
     load();
-    api.get('/api/core/outbox/status').then(setOutbox).catch(() => setOutbox(null));
+    outboxApi.status().then(setOutbox).catch(() => setOutbox(null));
     const onMsg = (e) => {
       if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
       if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
@@ -99,7 +101,7 @@ export default function ImpostazioniSection() {
   useEffect(() => {
     if (!isOwner || !firstSyncRunning) return undefined;
     const timer = setInterval(() => {
-      api.get('/api/integrations/yourang/status').then(setYourang).catch(() => {});
+      yourangApi.status().then(setYourang).catch(() => {});
     }, 15000);
     return () => clearInterval(timer);
   }, [isOwner, firstSyncRunning]);
