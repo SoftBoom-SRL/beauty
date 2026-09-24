@@ -2,61 +2,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from django.utils import timezone
 from ninja import Schema
 
+from .codes import code_for, effective_status
 
-class OkOut(Schema):
-    ok: bool = True
-
-
-# ---- Codici al portatore e scadenza ------------------------------------------
-
-# Chi conosce il codice di una gift card o di un coupon lo spende in cassa: è
-# denaro al portatore. Le letture restano aperte a tutto lo staff (l'agenda
-# mostra i regali, la scheda cliente il portafoglio), ma il codice intero lo
-# vede solo chi lavora con quegli strumenti — marketing o cassa — come si fa
-# già con i webhook_token delle automazioni. Prima un'operatrice con la sola
-# agenda sfogliava codici e saldi di tutte le carte pagate del salone.
-CODE_SCOPES = frozenset({"marketing", "sales"})
-CODE_MASK = "••••"
-
-
-def codes_hidden(auth) -> bool:
-    """True se chi guarda è staff senza marketing né cassa.
-
-    Il contesto della cliente (app) non ha scope: vede solo le proprie carte e
-    il codice le serve per spenderle.
-    """
-    scopes = getattr(auth, "scopes", None)
-    if scopes is None:
-        return False
-    return not (getattr(auth, "is_owner", False) or CODE_SCOPES & set(scopes))
-
-
-def mask_code(code: str) -> str:
-    code = code or ""
-    return CODE_MASK + code[-4:] if len(code) > 4 else CODE_MASK
-
-
-def _code_for(obj, context) -> str:
-    request = (context or {}).get("request")
-    if request is not None and codes_hidden(getattr(request, "auth", None)):
-        return mask_code(obj.code)
-    return obj.code
-
-
-def effective_status(obj) -> str:
-    """Lo stato come lo vede chi legge: attivo ma oltre la scadenza = scaduto.
-
-    EXPIRED a database lo scrive solo un tentativo di riscatto, quindi una carta
-    scaduta la settimana scorsa risultava «attiva» negli elenchi dello staff (e
-    la nuova prenotazione la prometteva come regalo) mentre il filtro «Scadute»
-    non la trovava. Coupon e gift card hanno gli stessi valori di stato.
-    """
-    if obj.status == "active" and obj.expires_at and obj.expires_at < timezone.now():
-        return "expired"
-    return obj.status
+# compat refactoring: rimuovere dopo l'integrazione — l'agenda (agenda/api.py,
+# `_codes_hidden` e `_mask_code`) importa ancora da qui la regola dei codici,
+# che ora sta in codes.py.
+from .codes import codes_hidden, mask_code  # noqa: F401
 
 
 # ---- Coupon ------------------------------------------------------------------
@@ -85,7 +38,7 @@ class CouponOut(Schema):
 
     @staticmethod
     def resolve_code(obj, context):
-        return _code_for(obj, context)
+        return code_for(obj, context)
 
     @staticmethod
     def resolve_status(obj):
@@ -136,7 +89,7 @@ class GiftCardOut(Schema):
 
     @staticmethod
     def resolve_code(obj, context):
-        return _code_for(obj, context)
+        return code_for(obj, context)
 
     @staticmethod
     def resolve_status(obj):

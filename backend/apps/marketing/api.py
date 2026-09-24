@@ -16,8 +16,10 @@ from common import ratelimit
 from common.auth import client_auth, staff_auth
 from common.money import CENT, MAX_MONEY
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
+from .codes import COUPON_CODE_LENGTH, codes_hidden, status_q, unique_code
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
     ClientGiftCardIn,
@@ -36,9 +38,7 @@ from .schemas import (
     LoyaltyProgramOut,
     MarketingConsentIn,
     MarkPaidIn,
-    OkOut,
     WalletOut,
-    codes_hidden,
 )
 from .services import (
     cancel_pending_send,
@@ -46,7 +46,6 @@ from .services import (
     marketing_consent_changed,
     send_communication,
     settle_due_communications,
-    unique_code,
 )
 
 router = Router(tags=["marketing"])
@@ -76,27 +75,6 @@ def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
     return value
 
 
-def _status_q(model, status: str) -> Q:
-    """Filtro di stato di coupon e gift card con la scadenza letta adesso (C21).
-
-    EXPIRED a database lo scrive solo un tentativo di riscatto: con il filtro
-    secco su `status` una carta scaduta la settimana scorsa stava fra le
-    «attive» — la nuova prenotazione la prometteva come regalo e la cassa poi
-    la rifiutava — e «Scadute» non la trovava. Stessa regola dell'uscita
-    (schemas.effective_status).
-    """
-    now = timezone.now()
-    if status == model.Status.ACTIVE:
-        return Q(status=model.Status.ACTIVE) & (
-            Q(expires_at__isnull=True) | Q(expires_at__gte=now)
-        )
-    if status == model.Status.EXPIRED:
-        return Q(status=model.Status.EXPIRED) | Q(
-            status=model.Status.ACTIVE, expires_at__lt=now
-        )
-    return Q(status=status)
-
-
 # ---- Coupon ------------------------------------------------------------------
 
 
@@ -114,7 +92,7 @@ def list_coupons(
     if origin:
         qs = qs.filter(origin=origin)
     if status:
-        qs = qs.filter(_status_q(Coupon, status))
+        qs = qs.filter(status_q(Coupon, status))
     if q:
         match = Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
         # A chi vede i codici mascherati la ricerca per codice direbbe comunque
@@ -139,7 +117,7 @@ def create_coupon(request, data: CouponIn):
     coupon = Coupon.objects.create(
         salon=ctx.salon,
         client=client,
-        code=unique_code(Coupon, ctx.salon, 8),
+        code=unique_code(Coupon, ctx.salon, COUPON_CODE_LENGTH),
         kind=data.kind,
         value=value,
         origin=Coupon.Origin.MANUAL,
@@ -260,7 +238,7 @@ def list_gift_cards(
         "buyer_client", "gift_service"
     )
     if status:
-        qs = qs.filter(_status_q(GiftCard, status))
+        qs = qs.filter(status_q(GiftCard, status))
     if payment_status:
         qs = qs.filter(payment_status=payment_status)
     if q:

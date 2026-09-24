@@ -17,8 +17,8 @@ from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity, supersede_events
 from common.money import CENT
-from common.utils import human_code
 
+from .codes import COUPON_CODE_LENGTH, GIFT_CARD_CODE_LENGTH, unique_code
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 
 # Sentinella per distinguere «non ho passato scheduled_at» da «l'ho passato a
@@ -26,14 +26,6 @@ from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProg
 # non si poteva più forzare in invio immediato (il None veniva rimpiazzato dalla
 # data salvata a database).
 _UNSET = object()
-
-
-def unique_code(model, salon, length: int) -> str:
-    """Codice human_code unico per salone (coupon 8, gift card 12)."""
-    while True:
-        code = human_code(length)
-        if not model.objects.filter(salon=salon, code=code).exists():
-            return code
 
 
 # ---- Gift card ---------------------------------------------------------------
@@ -66,7 +58,7 @@ def create_gift_card(
         raise HttpError(422, "Valore della gift card non valido")
     card = GiftCard.objects.create(
         salon=salon,
-        code=unique_code(GiftCard, salon, 12),
+        code=unique_code(GiftCard, salon, GIFT_CARD_CODE_LENGTH),
         initial_value=value,
         balance=value,
         gift_service=gift_service,
@@ -189,7 +181,7 @@ def _issue_reward(program, client):
         coupon = Coupon.objects.create(
             salon=salon,
             client=client,
-            code=unique_code(Coupon, salon, 8),
+            code=unique_code(Coupon, salon, COUPON_CODE_LENGTH),
             kind=kind,
             value=value,
             origin=Coupon.Origin.LOYALTY,
