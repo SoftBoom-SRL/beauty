@@ -259,6 +259,32 @@ class PackageItemsPreservedTests(CatalogTestCase):
         self.assertEqual(Package.objects.get(pk=created["id"]).items.count(), 0)
 
 
+class ServiceColumnLimitsTests(_CatalogSetup):
+    """Bug sospetti del 24/09, voce 21: `ServiceIn` non limitava i nomi (colonne
+    da 120 caratteri) né l'ordine (PositiveIntegerField). Un nome più lungo su
+    PostgreSQL e un ordine negativo anche su SQLite erano un 500 invece di un
+    errore che dice quale campo correggere."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_names_and_order_stay_within_their_columns(self):
+        base = {"category_id": self.cat.id, "name_it": "Piega", "duration_min": 30, "price": "25.00"}
+        refused = [("name_it", "x" * 121), ("name_en", "x" * 121), ("order", -1), ("order", 2147483648)]
+        for field, value in refused:
+            body = {**base, field: value}
+            res = self._send("post", "/api/catalog/services", body)
+            self.assertEqual(res.status_code, 422, (field, value))
+            res = self._send("put", f"/api/catalog/services/{self.color.id}", body)
+            self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Service.objects.filter(name_it="Piega").exists())
+        at_the_limit = {**base, "name_it": "x" * 120, "name_en": "x" * 120, "order": 2147483647}
+        res = self._send("post", "/api/catalog/services", at_the_limit)
+        self.assertEqual(res.status_code, 200, res.content)
+
+
 class YourangLinkSurvivesEditsTests(_CatalogSetup):
     """18-07: la sincronizzazione collega la voce mentre il titolare modifica il prezzo."""
 

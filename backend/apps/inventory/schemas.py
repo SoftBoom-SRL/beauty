@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from ninja import Schema
+from pydantic import Field
 
 from common.media import signed_media_url
 from common.permissions import has_scope
@@ -12,13 +13,18 @@ from common.permissions import has_scope
 
 
 class SupplierIn(Schema):
-    name: str
-    email: str = ""
-    phone: str = ""
+    # Testi lunghi al massimo quanto la colonna che li accoglie. Senza limite una
+    # partita IVA come «IT01234567890 sede di Milano» arrivava intatta a
+    # PostgreSQL, che rifiutava la riga: 500 invece di un errore che dice quale
+    # campo correggere (bug sospetti del 24/09, voce 21). `order_method` lo
+    # controlla l'endpoint contro le scelte del modello (400).
+    name: str = Field(max_length=120)
+    email: str = Field("", max_length=254)
+    phone: str = Field("", max_length=40)
     order_method: str = "email"
-    address: str = ""
-    vat_number: str = ""
-    sdi_pec: str = ""
+    address: str = Field("", max_length=255)
+    vat_number: str = Field("", max_length=20)
+    sdi_pec: str = Field("", max_length=120)
     notes: str = ""
 
 
@@ -54,18 +60,22 @@ class CategoryOut(Schema):
 
 
 class ProductIn(Schema):
-    name: str
-    sku: str = ""
-    brand: str = ""
+    # Come per i fornitori, testi lunghi quanto le colonne (voce 21). Sconto e
+    # aliquota IVA sono percentuali in colonne senza segno: un -5 violava il
+    # vincolo ≥ 0 anche su SQLite (500), un 40000 usciva dallo smallint di
+    # PostgreSQL, un 150 finiva in archivio.
+    name: str = Field(max_length=160)
+    sku: str = Field("", max_length=60)
+    brand: str = Field("", max_length=120)
     category_id: Optional[int] = None
     usage: str = "retail"
-    package_unit: str = ""
+    package_unit: str = Field("", max_length=20)
     package_qty: Decimal = Decimal("1")
     supplier_id: int
     purchase_price: Decimal = Decimal("0")
-    purchase_discount_pct: int = 0
+    purchase_discount_pct: int = Field(0, ge=0, le=100)
     sale_price: Decimal = Decimal("0")
-    vat_rate: int = 22
+    vat_rate: int = Field(22, ge=0, le=100)
     min_threshold: Decimal = Decimal("0")
     reorder_qty: Decimal = Decimal("0")
     active: bool = True

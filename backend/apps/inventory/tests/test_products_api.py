@@ -289,6 +289,51 @@ class StableOrderingTests(_InventorySetup):
         self.assertEqual(seen, ids)
 
 
+class ColumnLimitsTests(_InventorySetup):
+    """Bug sospetti del 24/09, voce 21: gli schemi di fornitore e prodotto non
+    limitavano i campi che finiscono in colonne strette. Una partita IVA come
+    «IT01234567890 sede di Milano» (oltre 20 caratteri) su PostgreSQL faceva
+    rifiutare la riga, e uno sconto negativo violava il vincolo ≥ 0 anche su
+    SQLite: 500 invece di un errore che dice quale campo correggere."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_supplier_texts_are_as_long_as_their_columns(self):
+        supplier = Supplier.objects.create(salon=self.salon, name="Alfaparf")
+        limits = {"name": 120, "email": 254, "phone": 40, "address": 255, "vat_number": 20, "sdi_pec": 120}
+        for field, size in limits.items():
+            body = {"name": "Wella", field: "x" * (size + 1)}
+            self.assertEqual(self._send("post", "/api/inventory/suppliers", body).status_code, 422, field)
+            res = self._send("put", f"/api/inventory/suppliers/{supplier.id}", body)
+            self.assertEqual(res.status_code, 422, field)
+        self.assertFalse(Supplier.objects.filter(name="Wella").exists())
+        full = {field: "x" * size for field, size in limits.items()}
+        self.assertEqual(self._send("post", "/api/inventory/suppliers", full).status_code, 200)
+
+    def test_product_fields_stay_within_their_columns(self):
+        base = {"name": "Shampoo", "supplier_id": self.sup_a.id}
+        refused = [
+            ("name", "x" * 161), ("sku", "x" * 61), ("brand", "x" * 121), ("package_unit", "x" * 21),
+            ("purchase_discount_pct", -5), ("purchase_discount_pct", 101),
+            ("vat_rate", -1), ("vat_rate", 101), ("vat_rate", 40000),
+        ]
+        for field, value in refused:
+            res = self._send("post", "/api/inventory/products", {**base, field: value})
+            self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Product.objects.exists())
+        at_the_limit = {
+            **base, "name": "x" * 160, "sku": "x" * 60, "brand": "x" * 120, "package_unit": "x" * 20,
+            "purchase_discount_pct": 100, "vat_rate": 100,
+        }
+        created = self._send("post", "/api/inventory/products", at_the_limit)
+        self.assertEqual(created.status_code, 200, created.content)
+        res = self._send("put", f"/api/inventory/products/{created.json()['id']}", {**base, "vat_rate": 101})
+        self.assertEqual(res.status_code, 422, res.content)
+
+
 class MovementDateFilterTests(_InventorySetup):
     """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
     esiste, e `parse_date` solleva ValueError: lo storico dei movimenti
