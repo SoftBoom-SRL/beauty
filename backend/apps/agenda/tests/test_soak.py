@@ -72,7 +72,7 @@ class SoakTimeTests(AgendaTestBase):
         return appt
 
     def test_booking_soak_service_spans_active_plus_soak(self):
-        from ..api import _item_out
+        from ..presenters import _item_out
 
         with self._windows(self.wide):
             appt = create_appointment(

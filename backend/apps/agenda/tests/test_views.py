@@ -308,7 +308,7 @@ class GiftCodesInTheAgendaTests(RealShiftsTestBase):
         self.assertEqual(set(owner.values()), {self.card.code})
 
     def test_the_client_sees_her_own_code(self):
-        from ..api import _client_appointment_out, gift_index
+        from ..presenters import _client_appointment_out, gift_index
 
         out = _client_appointment_out(self.visit, gift_index(self.salon, [self.anna.id]))
         self.assertEqual(out["gifts"][0]["code"], self.card.code)
@@ -325,7 +325,7 @@ class GiftFromNameTests(RealShiftsTestBase):
     def test_only_a_card_bought_by_someone_else_is_a_gift(self):
         from apps.marketing.services import create_gift_card
 
-        from ..api import _appointment_out
+        from ..presenters import _appointment_out
 
         appt = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
         own = create_gift_card(self.salon, Decimal("30.00"), gift_service=self.cut30,

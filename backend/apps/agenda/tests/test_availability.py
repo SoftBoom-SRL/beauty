@@ -322,7 +322,7 @@ class BugHuntAgendaTests(AgendaTestBase):
         scheda: non deve comparire come regalo di chi l'ha pagata."""
         from apps.marketing.models import GiftCard
 
-        from ..api import gift_index
+        from ..presenters import gift_index
 
         GiftCard.objects.create(
             salon=self.salon, code="GC-REGALO-01",
@@ -349,7 +349,7 @@ class BugHuntAgendaTests(AgendaTestBase):
         la carta compariva ancora fra i regali, e la cassa poi la rifiutava."""
         from apps.marketing.models import GiftCard
 
-        from ..api import gift_index
+        from ..presenters import gift_index
 
         card = GiftCard.objects.create(
             salon=self.salon, code="GC-SCADUTA-1",
