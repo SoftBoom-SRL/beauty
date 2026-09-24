@@ -21,6 +21,7 @@ from unittest import mock
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import jwt
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
@@ -184,6 +185,53 @@ class ConnectStateTests(_FlowCase):
         register.assert_called_once_with(RECEIVER, ["contact.*", "event.*"])
         self.assertEqual(crypto.decrypt(conn.webhook_secret_enc), "whsec-1")
         background.assert_called_once_with(conn.pk)  # la sync non gira nella richiesta
+
+
+class FlowStartTests(_FlowCase):
+    """Bug sospetti del 24/09, voce 16: l'avvio del flusso non lascia righe orfane.
+
+    Lo state si salvava prima di chiedere a Yourang il documento di discovery:
+    con Yourang irraggiungibile l'errore di rete arrivava all'utente come un
+    500, e la riga restava a database. Le righe dei flussi mai conclusi (popup
+    chiuso, errore) si cancellavano solo allo scambio, cioè mai.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.auth = bearer(_member(self.salon, "owner@p.it", owner=True), self.salon)
+
+    def test_yourang_unreachable_is_a_503_and_leaves_no_state(self):
+        def down(url, **kwargs):
+            raise httpx.ConnectError("Yourang giù")
+
+        def bad_gateway(url, **kwargs):
+            return httpx.Response(502, request=httpx.Request("GET", url))
+
+        for failure in (down, bad_gateway):
+            for url, headers in (
+                ("/api/integrations/yourang/oauth/login/start", {}),
+                ("/api/integrations/yourang/oauth/start", self.auth),
+            ):
+                # Il documento di discovery non è in memoria: si chiede a Yourang.
+                with self.subTest(failure=failure.__name__, url=url), \
+                        mock.patch.dict("apps.integrations.client._discovery_cache", clear=True), \
+                        mock.patch("apps.integrations.client.httpx.get", side_effect=failure) as get:
+                    r = self.client.get(url, **headers)
+                    self.assertEqual(r.status_code, 503, r.content)
+                    self.assertEqual(r.json()["detail"], "Yourang non risponde: riprova tra qualche minuto")
+                    get.assert_called_once()
+        self.assertFalse(YourangOAuthState.objects.exists())
+
+    def test_expired_states_go_away_when_a_new_flow_starts(self):
+        from apps.integrations.oauth import STATE_TTL_SECONDS
+
+        now = timezone.now()
+        for state, age in (("scaduto", STATE_TTL_SECONDS + 60), ("in-corso", STATE_TTL_SECONDS - 60)):
+            YourangOAuthState.objects.create(state=state, code_verifier="v")
+            YourangOAuthState.objects.filter(state=state).update(created_at=now - timedelta(seconds=age))
+        new, _ = self.start("login")
+        # Quello in corso resta: chi l'ha avviato può ancora concluderlo.
+        self.assertEqual(set(YourangOAuthState.objects.values_list("state", flat=True)), {"in-corso", new})
 
 
 class OrgChangeTests(_FlowCase):

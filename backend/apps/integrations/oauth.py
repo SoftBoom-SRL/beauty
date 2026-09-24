@@ -7,14 +7,19 @@ parte che decide se il codice che torna da Yourang è davvero di chi ha
 avviato il flusso, e da quale flusso viene.
 """
 
+import logging
 import secrets
+from datetime import timedelta
 
+import httpx
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 from ninja.errors import HttpError
 
 from . import client as yc
 from .models import YourangOAuthState
+
+logger = logging.getLogger("youty.integrations")
 
 # Secondi di validità di uno state avviato e non ancora scambiato.
 STATE_TTL_SECONDS = 600
@@ -47,11 +52,24 @@ def window_nonce(state: str) -> str:
 def start_flow(salon=None, user=None) -> dict:
     verifier, challenge = yc.make_pkce()
     state = secrets.token_urlsafe(24)
+    # L'URL si costruisce PRIMA di salvare lo state: chiede a Yourang il
+    # documento di discovery, se non è già in memoria. Salvato prima, con
+    # Yourang irraggiungibile l'errore di rete arrivava all'utente come un 500
+    # e la riga di un flusso che non poteva partire restava a database.
+    try:
+        authorize_url = yc.build_authorize_url(state, challenge, nonce=secrets.token_urlsafe(16))
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("Yourang: discovery non riuscita, flusso OAuth non avviato: %s", exc)
+        raise HttpError(503, "Yourang non risponde: riprova tra qualche minuto") from exc
+    # Le righe dei flussi mai conclusi (popup chiuso, errore) si cancellavano
+    # solo allo scambio, cioè mai, e la tabella cresceva senza fine. Quelle
+    # scadute, che lo scambio rifiuterebbe comunque, si tolgono qui: ogni avvio
+    # pulisce, senza un job in più.
+    YourangOAuthState.objects.filter(
+        created_at__lt=timezone.now() - timedelta(seconds=STATE_TTL_SECONDS)
+    ).delete()
     YourangOAuthState.objects.create(state=state, code_verifier=verifier, salon=salon, user=user)
-    return {
-        "authorize_url": yc.build_authorize_url(state, challenge, nonce=secrets.token_urlsafe(16)),
-        "nonce": window_nonce(state),
-    }
+    return {"authorize_url": authorize_url, "nonce": window_nonce(state)}
 
 
 def consume_state(data) -> tuple:
