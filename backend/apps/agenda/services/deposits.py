@@ -181,30 +181,62 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
     appointment.deposit_amount = total
     appointment.save(update_fields=["deposit_amount", "updated_at"])
     if appointment.deposit_payment_link or appointment.deposit_checkout_session_id:
-        appointment_id = appointment.pk
-
-        def renew_link():
-            # Dopo il commit e fuori dal lock: si parla con Stripe, e il link
-            # nuovo deve leggere la caparra già ridotta.
-            from apps.sales.stripe_service import ensure_deposit_link  # lazy
-
-            fresh = (
-                Appointment.objects.select_related("salon", "salon__settings", "client")
-                .filter(pk=appointment_id)
-                .first()
-            )
-            if fresh is None:
-                return
-            try:
-                ensure_deposit_link(fresh, resend=True, actor=actor, reason="amount_changed")
-            except Exception:  # noqa: BLE001 — la modifica è salva, il link si rimanda a mano
-                logger.exception("Link caparra non rifatto dopo la riduzione (appuntamento %s)", appointment_id)
-
-        transaction.on_commit(renew_link)
+        # Il link nuovo deve leggere la caparra già ridotta.
+        renew_deposit_link_after_commit(
+            appointment.pk,
+            actor=actor,
+            log_message="Link caparra non rifatto dopo la riduzione (appuntamento %s)",
+        )
     return excess
 
 
-def _close_deposit_link_after_commit(appointment: Appointment) -> None:
+def send_deposit_link(appointment: Appointment) -> None:
+    """Se la caparra è richiesta e i pagamenti online sono attivi, prepara il link
+    di pagamento (e lo accoda alla cliente). Mai bloccante per la prenotazione."""
+    if appointment.deposit_status != Appointment.DepositStatus.REQUIRED:
+        return
+    try:
+        from apps.sales.stripe_service import ensure_deposit_link  # lazy
+
+        ensure_deposit_link(appointment)
+    except Exception:  # pragma: no cover - dipende da Stripe
+        logger.exception("Link caparra non creato per l'appuntamento %s", appointment.id)
+
+
+def renew_deposit_link_after_commit(
+    appointment_id: int, *, actor=None, log_message: str, warn: bool = False
+) -> None:
+    """Rifà e rimanda il link della caparra con l'importo attuale, a transazione conclusa.
+
+    Dopo il commit e fuori dal lock: si parla con Stripe, e si rilegge
+    l'appuntamento per partire dall'importo appena scritto. Un errore non
+    annulla il gesto, già salvato (il link si rimanda dalla scheda): finisce
+    nel registro con `log_message` (%s = l'appuntamento), come errore o, con
+    `warn`, come avviso.
+    """
+
+    def renew():
+        from apps.sales.stripe_service import ensure_deposit_link  # lazy
+
+        fresh = (
+            Appointment.objects.select_related("salon", "salon__settings", "client")
+            .filter(pk=appointment_id)
+            .first()
+        )
+        if fresh is None:
+            return
+        try:
+            ensure_deposit_link(fresh, resend=True, actor=actor, reason="amount_changed")
+        except Exception:  # noqa: BLE001 — il gesto è salvo, il link si rimanda a mano
+            if warn:
+                logger.warning(log_message, appointment_id, exc_info=True)
+            else:
+                logger.exception(log_message, appointment_id)
+
+    transaction.on_commit(renew)
+
+
+def close_deposit_link_after_commit(appointment: Appointment) -> None:
     """Chiude su Stripe la sessione del link caparra, a transazione chiusa.
 
     Il link restava pagabile dopo l'annullamento, il rilascio per caparra non

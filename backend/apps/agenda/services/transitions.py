@@ -11,7 +11,7 @@ from apps.core.services import log_activity
 
 from .. import undo as undo_log
 from ..models import Appointment, UndoEntry
-from .deposits import _close_deposit_link_after_commit
+from .deposits import close_deposit_link_after_commit
 from .freed_slots import _appointment_spans, emit_with_freed_slots
 from .locking import _lock_and_reload
 from .messages import _event_payload, _withdraw_deposit_messages, emit_appointment_event
@@ -205,7 +205,7 @@ def cancel_appointment(
             # Il link della caparra non ha più niente da incassare: quello non
             # ancora partito non parte, quello già inviato si chiude su Stripe.
             _withdraw_deposit_messages(appointment)
-            _close_deposit_link_after_commit(appointment)
+            close_deposit_link_after_commit(appointment)
         emit_with_freed_slots(
             appointment,
             "appointment.cancelled",

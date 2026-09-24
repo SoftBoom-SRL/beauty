@@ -4,7 +4,6 @@ disponibilità — sia per la dashboard staff sia per la web app cliente (/clien
 
 import datetime as dt
 import json
-import logging
 from collections import Counter, defaultdict
 from decimal import Decimal
 
@@ -60,7 +59,6 @@ from .services import availability as availability_services
 from .services import deposit_holds, deposits, locking, occupancy, refunds, transitions
 
 router = Router(tags=["agenda"])
-logger = logging.getLogger("youty.agenda")
 
 
 # ---- Helper ------------------------------------------------------------------
@@ -238,19 +236,6 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
         "gifts": _gifts_out(appointment, gifts_by_client, _codes_hidden(viewer)),
         "updated_at": appointment.updated_at,
     }
-
-
-def _maybe_deposit_link(appointment) -> None:
-    """Se la caparra è richiesta e i pagamenti online sono attivi, prepara il link
-    di pagamento (e lo accoda alla cliente). Mai bloccante per la prenotazione."""
-    if appointment.deposit_status != Appointment.DepositStatus.REQUIRED:
-        return
-    try:
-        from apps.sales.stripe_service import ensure_deposit_link  # lazy
-
-        ensure_deposit_link(appointment)
-    except Exception:  # pragma: no cover - dipende da Stripe
-        logger.exception("Link caparra non creato per l'appuntamento %s", appointment.id)
 
 
 def _pause_label(action: str, pause) -> str:
@@ -603,7 +588,7 @@ def create_appointment(request, data: AppointmentCreateIn):
         force=data.force,
         client_overlap_ok=True,
     )
-    _maybe_deposit_link(appointment)
+    deposits.send_deposit_link(appointment)
     return _appointment_out(appointment, viewer=ctx)
 
 
@@ -679,7 +664,7 @@ def restore_appointment(request, appointment_id: int, data: RestoreIn):
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
     appointment = deposit_holds.restore_released(appointment, actor=ctx.user, force=data.force)
-    _maybe_deposit_link(appointment)
+    deposits.send_deposit_link(appointment)
     return _appointment_out(appointment, viewer=ctx)
 
 
@@ -1249,7 +1234,7 @@ def client_create_appointment(request, data: ClientAppointmentCreateIn):
         allow_past=False,
         allow_soak=False,
     )
-    _maybe_deposit_link(appointment)
+    deposits.send_deposit_link(appointment)
     return _client_appointment_out(appointment, gift_index(ctx.salon, [ctx.client.id]))
 
 

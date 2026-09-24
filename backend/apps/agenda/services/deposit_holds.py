@@ -16,7 +16,7 @@ from ninja.errors import HttpError
 from apps.core.services import emit_event, log_activity
 
 from ..models import Appointment
-from .deposits import _close_deposit_link_after_commit
+from .deposits import close_deposit_link_after_commit
 from .freed_slots import _appointment_spans, _sync_freed_slots, emit_with_freed_slots
 from .locking import _lock_and_reload, _lock_row, lock_salon
 from .messages import _event_payload, _withdraw_deposit_messages, appointment_event_key, emit_appointment_event
@@ -181,7 +181,7 @@ def release_for_unpaid_deposit(appointment: Appointment) -> Appointment:
     )
     _withdraw_deposit_messages(appointment)
     emit_with_freed_slots(appointment, "appointment.released_unpaid", before=before_spans, after={})
-    _close_deposit_link_after_commit(appointment)
+    close_deposit_link_after_commit(appointment)
     return appointment
 
 
