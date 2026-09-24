@@ -42,7 +42,9 @@ echo "→ backend Django su http://localhost:8000  (admin: /admin  · docs API: 
 ( cd "$BACKEND" && exec .venv/bin/python manage.py runserver 8000 ) &
 pids+=($!)
 
-echo "→ dashboard staff su http://localhost:5173  (login sole@theparlour.it / theparlour)"
+# Il seed non ha una password fissa: la sceglie a caso e la stampa una volta, o
+# usa quella data con `manage.py seed_demo --reset --password …`.
+echo "→ dashboard staff su http://localhost:5173  (login sole@theparlour.it, password del seed_demo)"
 ( cd "$FRONTEND" && exec npm run dev:dashboard --silent ) &
 pids+=($!)
 

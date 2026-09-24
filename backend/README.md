@@ -1,7 +1,7 @@
 # youty backend
 
 Backend Django unico per la **dashboard gestionale** e la **web app cliente** (yourang).
-Riferimento funzionale: `../yourang - Manuale flussi.doc` · Architettura e contratto: `SPEC.md`.
+Riferimento funzionale: `../docs/manuale-flussi.html` · Architettura e contratto: `SPEC.md`.
 
 ## Stack
 

@@ -669,5 +669,5 @@ mancante (`configured: false`) dal job che non gira (coda che si allunga).
 - `/media/` è servito da Django (`config/urls.py`). Va benissimo per logo e foto di
   un salone; se un giorno il volume di upload cresce, sposta i media su S3 e metti
   `SERVE_MEDIA=0`.
-- I `.jsx` nella root del repo sono il prototipo Babel-standalone originale: non
-  fanno parte del deploy, il codice vivo è sotto `frontend/`.
+- `docs/prototipo/` è il prototipo Babel-standalone originale: non fa parte del
+  deploy, il codice vivo è sotto `frontend/`.
