@@ -3,8 +3,10 @@
 Convenzioni interne:
 - tutti i calcoli di disponibilità lavorano in MINUTI DA MEZZANOTTE del giorno
   richiesto, nel fuso del salone (settings.TIME_ZONE);
-- gli import verso staff/clients/catalog sono lazy (le app sono sviluppate in
-  parallelo e si evita ogni rischio di ciclo);
+- le funzioni di staff/clients/sales si importano dentro la funzione che le
+  usa, a ogni chiamata: i test le sostituiscono nel loro modulo
+  (`apps.staff.services.shift_windows`, `apps.clients.services.client_facts`,
+  `apps.sales.stripe_service.*`), e sales a sua volta importa l'agenda;
 - le finestre lavorabili arrivano da `staff.services.shift_windows(operator, date)`
   -> list[tuple[int, int]] (minuti), già al netto di pause pranzo e assenze.
 """
@@ -1455,8 +1457,7 @@ def emit_appointment_event(appointment: Appointment, event_type: str, payload: d
         _hold(keep, delay)
         keep.save(update_fields=["event_type", "payload", "next_attempt_at", "due_at"])
         return keep
-    if delay <= 0:
-        return emit_event(salon, event_type, payload, coalesce_key=key)
+    # Con il ritardo spento (delay <= 0) `emit_event` non trattiene niente.
     return emit_event(salon, event_type, payload, delay_seconds=delay, coalesce_key=key)
 
 
@@ -1469,9 +1470,7 @@ def suppress_slot_events(salon, appointment_id) -> int:
     return supersede_events(list(held_events(salon, slot_event_key(appointment_id), lock=True)))
 
 
-def revert_held_events(
-    appointment: Appointment, *, fallback_event: str = "", previous_spans: dict | None = None
-) -> None:
+def revert_held_events(appointment: Appointment, *, fallback_event: str, previous_spans: dict) -> None:
     """Rimette a posto i messaggi dopo un «torna indietro» (vedi `undo.perform`).
 
     Lo stato ripristinato si confronta con quello che la cliente sa (l'ultimo
@@ -1486,10 +1485,11 @@ def revert_held_events(
       `old_start` l'orario che conosceva, o `updated`.
     Senza nessuna storia a cui confrontarsi (importato da Yourang, messaggi già
     cancellati) si fa come prima: via i trattenuti, e se non ce n'erano parte
-    `fallback_event`.
+    `fallback_event` ("" = niente: check-in e inizio trattamento restano in
+    salone).
 
     `previous_spans` (orari occupati prima del ripristino) allinea anche gli
-    annunci alla lista d'attesa; senza, quelli trattenuti spariscono e basta.
+    annunci alla lista d'attesa.
     """
     salon = appointment.salon
     held = [
@@ -1497,7 +1497,7 @@ def revert_held_events(
         if e.event_type in _CLIENT_EVENTS
     ]
     active = appointment.status not in Appointment.INACTIVE_STATUSES
-    knowledge = _slot_knowledge(appointment, previous_spans) if previous_spans is not None else None
+    knowledge = _slot_knowledge(appointment, previous_spans)
     if not active:
         supersede_events(held)
     else:
@@ -1521,16 +1521,12 @@ def revert_held_events(
             supersede_events(held)
         else:
             emit_appointment_event(appointment, fallback_event)
-    if previous_spans is None:
-        # Lo slot non si è più liberato: alla lista d'attesa non si dice nulla.
-        suppress_slot_events(salon, appointment.id)
-    else:
-        _sync_freed_slots(
-            appointment,
-            previous_spans,
-            _appointment_spans(appointment) if active else {},
-            knowledge,
-        )
+    _sync_freed_slots(
+        appointment,
+        previous_spans,
+        _appointment_spans(appointment) if active else {},
+        knowledge,
+    )
 
 
 def _rectify(appointment: Appointment, held: list, wanted: str | None, payload: dict) -> None:
@@ -2156,6 +2152,11 @@ def move_appointment(
             target_operators.append(item.operator)
 
     if not force:
+        # Verifica anche che la permanenza della cliente, posa finale compresa,
+        # stia dentro l'apertura del centro (la fascia in cui la visita
+        # comincia): il controllo c'era solo in creazione, e spostando si
+        # potevano portare i 60' di posa di un colore mezz'ora dopo la serranda
+        # abbassata (anche dall'app cliente).
         _validate_segments(
             appointment.salon,
             new_start,
@@ -2180,19 +2181,6 @@ def move_appointment(
                     for item, op in zip(items, target_operators)
                 ],
             )
-        # La permanenza della cliente, posa finale compresa, deve stare dentro
-        # l'apertura del centro: il controllo c'era solo in creazione, e
-        # spostando si potevano portare i 60' di posa di un colore mezz'ora
-        # dopo la serranda abbassata (anche dall'app cliente).
-        local_start = timezone.localtime(new_start)
-        _ensure_within_opening(
-            appointment.salon,
-            local_start.date(),
-            local_start.hour * 60
-            + local_start.minute
-            + sum(item.duration_min + item.soak_min for item in items),
-            force=False,
-        )
     else:
         appointment.forced = True
 
@@ -2749,11 +2737,9 @@ def _refunds_committed_cents(refunds: dict) -> int:
 
 def _sync_refund_moves(appointment: Appointment) -> None:
     """Il rimborso esce dalla cassa del giorno in cui avviene (vedi sales.DepositRefund)."""
-    from apps.sales import services as sales_services  # lazy
+    from apps.sales.services import sync_deposit_refunds  # lazy
 
-    sync = getattr(sales_services, "sync_deposit_refunds", None)
-    if sync is not None:
-        sync(appointment)
+    sync_deposit_refunds(appointment)
 
 
 @transaction.atomic
@@ -3060,16 +3046,9 @@ def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor
     appointment.save(update_fields=["deposit_status", "updated_at"])
     clear_deposit_hold(appointment)
 
-    from apps.sales import services as sales_services  # lazy
+    from apps.sales.services import record_deposit_cashed  # lazy
 
-    record = getattr(sales_services, "record_deposit_cashed", None)
-    if record is not None:
-        record(appointment.salon, appointment, method=method, actor=actor)
-    else:  # pragma: no cover - la registrazione in cassa vive in sales
-        logger.warning(
-            "Caparra dell'appuntamento %s segnata pagata senza registrazione in cassa",
-            appointment.id,
-        )
+    record_deposit_cashed(appointment.salon, appointment, method=method, actor=actor)
 
     log_activity(
         appointment.salon,
@@ -3092,7 +3071,7 @@ def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor
 
 
 @transaction.atomic
-def release_for_unpaid_deposit(appointment: Appointment, *, actor=None) -> Appointment:
+def release_for_unpaid_deposit(appointment: Appointment) -> Appointment:
     """Libera lo slot di un appuntamento la cui caparra non è arrivata in tempo.
 
     Lo stato diventa «annullato» ma resta la traccia (`auto_released`): compare

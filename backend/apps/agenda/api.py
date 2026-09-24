@@ -159,34 +159,21 @@ def gift_index(salon, client_ids) -> dict[int, list]:
 # chi lavora con quegli strumenti — marketing o cassa (chi fa il conto li usa
 # per scalare il regalo) — come negli elenchi del marketing; per gli altri
 # restano le ultime quattro cifre. Prima un'operatrice con la sola agenda li
-# leggeva tutti dalle viste giorno, settimana e mese.
-_CODE_SCOPES = frozenset({"marketing", "sales"})
-_CODE_MASK = "••••"
+# leggeva tutti dalle viste giorno, settimana e mese. La regola e la maschera
+# sono quelle del marketing (`codes_hidden`, `mask_code`).
 
 
 def _codes_hidden(viewer) -> bool:
     """Vero se chi guarda è staff senza marketing né cassa (la cliente vede i suoi)."""
-    try:
-        from apps.marketing.schemas import codes_hidden  # lazy: regola del marketing
-    except ImportError:
-        codes_hidden = None
-    if codes_hidden is not None:
-        return bool(codes_hidden(viewer))
-    scopes = getattr(viewer, "scopes", None)
-    if scopes is None:
-        return False
-    return not (getattr(viewer, "is_owner", False) or _CODE_SCOPES & set(scopes))
+    from apps.marketing.schemas import codes_hidden  # lazy: regola del marketing
+
+    return bool(codes_hidden(viewer))
 
 
 def _mask_code(code: str) -> str:
-    try:
-        from apps.marketing.schemas import mask_code  # lazy: stessa maschera del marketing
-    except ImportError:
-        mask_code = None
-    if mask_code is not None:
-        return mask_code(code)
-    code = code or ""
-    return _CODE_MASK + code[-4:] if len(code) > 4 else _CODE_MASK
+    from apps.marketing.schemas import mask_code  # lazy: stessa maschera del marketing
+
+    return mask_code(code)
 
 
 def _gifts_out(appointment, gifts_by_client, hide_codes: bool = False) -> list[dict]:
@@ -389,7 +376,7 @@ def agenda_day(request, date: str, location_id: int = None):
                 "id": operator.id,
                 "name": _operator_name(operator),
                 "color": operator.color,
-                "role_title": getattr(operator, "role_title", ""),
+                "role_title": operator.role_title,
                 "inactive": not operator.active,
             },
             "windows": [
