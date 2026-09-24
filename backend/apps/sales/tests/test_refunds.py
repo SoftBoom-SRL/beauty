@@ -1,4 +1,7 @@
-"""Caccia del 22/09 — una caparra restituita esce dalla cassa (02-11, 05-04, 08-17, C23)."""
+"""Rimborsi della caparra: lo stato segue Stripe, e il denaro restituito esce dalla cassa.
+
+Caccia del 22/09 — una caparra restituita esce dalla cassa (02-11, 05-04, 08-17, C23).
+"""
 
 import datetime as dt
 import json
@@ -15,8 +18,103 @@ from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
-from .models import DepositRefund, Sale
-from .services import record_deposit_cashed, today_summary
+from ..models import DepositRefund, Sale
+from ..services import record_deposit_cashed, today_summary
+
+
+class DepositRefundStateTests(TestCase):
+    """Lo stato della caparra deve seguire quello che Stripe dice davvero.
+
+    Un rimborso parziale marcava l'intera caparra come rimborsata (la quota
+    ancora trattenuta spariva dal conto al checkout) e un rimborso ancora
+    «pending» veniva dichiarato avvenuto.
+    """
+
+    def setUp(self):
+        from django.utils import timezone
+
+        from apps.agenda.models import Appointment, AppointmentService
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.staff.models import Operator
+
+        self.Appointment = Appointment
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Colore",
+            duration_min=60, price=Decimal("100.00"),
+        )
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=operator,
+            start=timezone.now() + timezone.timedelta(days=2),
+            deposit_status="paid", deposit_amount=Decimal("30.00"),
+            deposit_payment_intent_id="pi_dep",
+        )
+        AppointmentService.objects.create(
+            appointment=self.appointment, service=service, operator=operator,
+            duration_min=60, price=Decimal("100.00"),
+        )
+
+    def _refunded(self, payload, event_type="charge.refunded"):
+        from ..api import _charge_refunded
+
+        _charge_refunded(payload, event_type)
+        self.appointment.refresh_from_db()
+
+    def test_a_partial_refund_leaves_the_rest_deductible(self):
+        self._refunded(
+            {"payment_intent": "pi_dep", "amount": 3000, "amount_refunded": 1000, "refunded": False}
+        )
+        self.assertEqual(self.appointment.deposit_status, "paid")
+        self.assertEqual(self.appointment.deposit_refunded_amount, Decimal("10.00"))
+        # Al checkout si detraggono i 20 € ancora in cassa, non i 30 iniziali.
+        self.assertEqual(self.appointment.deposit_credit, Decimal("20.00"))
+
+    def test_a_full_refund_marks_the_deposit_refunded(self):
+        self._refunded(
+            {"payment_intent": "pi_dep", "amount": 3000, "amount_refunded": 3000, "refunded": True}
+        )
+        self.assertEqual(self.appointment.deposit_status, "refunded")
+        self.assertEqual(self.appointment.deposit_credit, Decimal("0.00"))
+
+    def test_a_pending_refund_is_not_a_refund_yet(self):
+        self._refunded(
+            {"id": "re_1", "payment_intent": "pi_dep", "amount": 3000, "status": "pending"},
+            "refund.created",
+        )
+        self.assertEqual(self.appointment.deposit_status, "refunding")
+        self.assertEqual(self.appointment.deposit_refunded_amount, Decimal("0.00"))
+
+        # Stripe conferma più tardi con lo stesso id: ora sì.
+        self._refunded(
+            {"id": "re_1", "payment_intent": "pi_dep", "amount": 3000, "status": "succeeded"},
+            "refund.updated",
+        )
+        self.assertEqual(self.appointment.deposit_status, "refunded")
+        self.assertEqual(self.appointment.deposit_refunded_amount, Decimal("30.00"))
+
+    def test_a_failed_refund_puts_the_money_back_in_the_till(self):
+        self._refunded(
+            {"id": "re_2", "payment_intent": "pi_dep", "amount": 3000, "status": "pending"},
+            "refund.created",
+        )
+        self._refunded(
+            {"id": "re_2", "payment_intent": "pi_dep", "amount": 3000, "status": "failed"},
+            "refund.failed",
+        )
+        self.assertEqual(self.appointment.deposit_status, "paid")
+        self.assertEqual(self.appointment.deposit_credit, Decimal("30.00"))
+
+    def test_the_same_refund_twice_counts_once(self):
+        payload = {"id": "re_3", "payment_intent": "pi_dep", "amount": 1000, "status": "succeeded"}
+        self._refunded(payload, "refund.created")
+        self._refunded(payload, "refund.updated")
+        self.assertEqual(self.appointment.deposit_refunded_amount, Decimal("10.00"))
+        self.assertEqual(self.appointment.deposit_status, "paid")
 
 
 class RefundLeavesTheTillTests(TestCase):
@@ -74,7 +172,7 @@ class RefundLeavesTheTillTests(TestCase):
     def test_a_deposit_refunded_on_stripe_leaves_the_till(self):
         from apps.agenda.services import cancel_appointment
 
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         appointment = self._appointment(deposit="30.00", price="100.00")
         _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, {

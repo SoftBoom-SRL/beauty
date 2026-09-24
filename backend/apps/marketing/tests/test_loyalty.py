@@ -1,5 +1,6 @@
-"""Caccia del 22/09 — fedeltà: timbri, visite, premi spesi, iscrizione staff.
+"""Programmi fedeltà: accredito di punti e timbri, premi, iscrizione, validazione del programma.
 
+Caccia del 22/09 — fedeltà: timbri, visite, premi spesi, iscrizione staff.
 07-01/14-01 (timbri per euro), 05-19/07-08 (gift card come visita), 07-09
 (premio speso che fa punti), 07-10 (servizio omaggio a 0 €), 07-13 (iscrizione
 «Su richiesta»), 07-06/14-06 (pagine stabili dei conti).
@@ -8,29 +9,329 @@
 import json
 from decimal import Decimal
 from importlib import import_module
+from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
-from apps.core.models import ActivityLog, Salon
+from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
-from .models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
-from .services import accrue_loyalty, create_gift_card
+from ..models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
+from ..services import accrue_loyalty, create_gift_card
+from .base import OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 
-def _client(salon, first_name="Sofia", phone="+393331112233"):
-    from apps.clients.models import Client
+class LoyaltyTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = _make_client(self.salon)
+        self.program = LoyaltyProgram.objects.create(
+            salon=self.salon,
+            name="Punti Parlour",
+            type=LoyaltyProgram.Type.POINTS,
+            earn_metric=LoyaltyProgram.EarnMetric.PER_EURO,
+            earn_ratio=Decimal("1"),
+            reward_type=LoyaltyProgram.RewardType.COUPON_AMOUNT,
+            reward_value=Decimal("10"),
+            threshold=80,
+            enrollment=LoyaltyProgram.Enrollment.AUTO,
+        )
 
-    return Client.objects.create(
-        salon=salon, first_name=first_name, last_name="Ricci", phone=phone,
-        consents={"privacy": True, "marketing": True, "card_charge": False},
-    )
+    def _sale(self, total, client=None):
+        from apps.sales.models import Sale  # lazy: app di un altro agente
+
+        return Sale.objects.create(
+            salon=self.salon, kind="pos", client=client, total=Decimal(total)
+        )
+
+    def test_accrue_threshold_creates_loyalty_coupon(self):
+        accrue_loyalty(self._sale("100", client=self.client_obj))
+
+        account = LoyaltyAccount.objects.get(program=self.program, client=self.client_obj)
+        self.assertEqual(account.points, 20)  # 100 accreditati − 80 di soglia
+
+        coupon = Coupon.objects.get(salon=self.salon, origin=Coupon.Origin.LOYALTY)
+        self.assertEqual(coupon.client_id, self.client_obj.id)
+        self.assertEqual(coupon.kind, Coupon.Kind.AMOUNT)
+        self.assertEqual(coupon.value, Decimal("10"))
+        self.assertEqual(len(coupon.code), 8)
+
+        event = OutboxEvent.objects.get(salon=self.salon, event_type="loyalty.reward")
+        self.assertEqual(event.payload["coupon_code"], coupon.code)
+
+    def test_accrue_below_threshold_no_coupon(self):
+        accrue_loyalty(self._sale("30", client=self.client_obj))
+        account = LoyaltyAccount.objects.get(program=self.program, client=self.client_obj)
+        self.assertEqual(account.points, 30)
+        self.assertFalse(Coupon.objects.exists())
+
+    def test_accrue_noop_without_client(self):
+        accrue_loyalty(self._sale("100", client=None))
+        self.assertFalse(LoyaltyAccount.objects.exists())
+        self.assertFalse(Coupon.objects.exists())
+
+    def test_no_auto_enroll_when_enrollment_request(self):
+        self.program.enrollment = LoyaltyProgram.Enrollment.REQUEST
+        self.program.save(update_fields=["enrollment"])
+        accrue_loyalty(self._sale("100", client=self.client_obj))
+        self.assertFalse(LoyaltyAccount.objects.exists())
 
 
-class _Base(TestCase):
+class LoyaltyRewardIssueTests(TestCase):
+    """Ogni tipo di premio offerto dall'interfaccia deve essere emettibile.
+
+    Il «servizio omaggio» diventava un coupon da 0 €, senza traccia del servizio:
+    la cliente raggiungeva la soglia, perdeva i punti e riceveva un buono che non
+    scontava niente.
+    """
+
+    def setUp(self):
+        from apps.catalog.models import Service, ServiceCategory
+        from apps.clients.models import Client
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
+        )
+        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
+        self.service = Service.objects.create(
+            salon=self.salon, category=category, name_it="Manicure",
+            duration_min=30, price=Decimal("30.00"),
+        )
+
+    def _sell(self):
+        from apps.sales.services import finalize_sale
+
+        return finalize_sale(
+            self.salon,
+            kind="pos",
+            client=self.client_obj,
+            blocks=[{"lines": [
+                {"line_type": "service", "service_id": self.service.id,
+                 "unit_price": "30.00", "qty": 1},
+            ]}],
+            payments=[{"method": "cash", "amount": "30.00"}],
+        )
+
+    def _program(self, **fields):
+        return LoyaltyProgram.objects.create(
+            salon=self.salon, name="Fedeltà", threshold=1,
+            earn_metric="per_visit", earn_ratio=1, **fields,
+        )
+
+    def test_a_free_service_reward_issues_a_card_for_that_service(self):
+        self._program(reward_type="free_service", reward_service=self.service, reward_value=0)
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.gift_service_id, self.service.id)
+        self.assertEqual(card.initial_value, Decimal("30.00"))
+        self.assertEqual(card.balance, Decimal("30.00"))
+        self.assertEqual(card.recipient_client_id, self.client_obj.id)
+        # Pagata: è un premio, non una carta venduta da incassare.
+        self.assertEqual(card.payment_status, GiftCard.PaymentStatus.PAID)
+        self.assertFalse(Coupon.objects.filter(salon=self.salon).exists())
+
+    def test_a_reward_card_is_not_written_down_as_money_taken(self):
+        """Le carte premio nascono pagate — è così che il banco le riscatta —
+        ma nessuno ha versato quel denaro: il registro attività riportava
+        «Incasso gift card €30,00 (loyalty)» per un incasso mai avvenuto."""
+        from apps.core.models import ActivityLog
+
+        self._program(reward_type="free_service", reward_service=self.service, reward_value=0)
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.payment_status, GiftCard.PaymentStatus.PAID)
+        self.assertFalse(
+            ActivityLog.objects.filter(salon=self.salon, type="giftcard.paid").exists()
+        )
+        # l'emissione resta tracciata, come premio
+        self.assertTrue(
+            ActivityLog.objects.filter(salon=self.salon, type="giftcard.created").exists()
+        )
+        reward = ActivityLog.objects.get(salon=self.salon, type="loyalty.reward")
+        self.assertIn(card.code, reward.summary)
+
+    def test_a_gift_card_sold_at_the_till_is_still_written_down_as_money_taken(self):
+        from apps.core.models import ActivityLog
+        from apps.marketing.services import create_gift_card
+
+        create_gift_card(self.salon, Decimal("40.00"), paid=True, paid_method="cash")
+        taken = ActivityLog.objects.get(salon=self.salon, type="giftcard.paid")
+        self.assertIn("Incasso gift card", taken.summary)
+
+    def test_a_gift_card_reward_issues_a_card_of_that_value(self):
+        self._program(reward_type="gift_card", reward_value=Decimal("20.00"))
+        self._sell()
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(card.initial_value, Decimal("20.00"))
+        self.assertIsNone(card.gift_service_id)
+
+    def test_a_coupon_reward_still_issues_a_coupon(self):
+        self._program(reward_type="coupon_amount", reward_value=Decimal("15.00"))
+        self._sell()
+        coupon = Coupon.objects.get(salon=self.salon)
+        self.assertEqual(coupon.kind, Coupon.Kind.AMOUNT)
+        self.assertEqual(coupon.value, Decimal("15.00"))
+
+    def test_a_reward_that_cannot_be_issued_does_not_burn_the_points(self):
+        program = self._program(reward_type="free_service", reward_service=None, reward_value=0)
+        self._sell()
+        self.assertFalse(GiftCard.objects.filter(salon=self.salon).exists())
+        self.assertFalse(Coupon.objects.filter(salon=self.salon).exists())
+        account = LoyaltyAccount.objects.get(program=program, client=self.client_obj)
+        self.assertEqual(account.points, 1)  # il punto resta alla cliente
+
+    def test_the_api_refuses_a_reward_the_till_cannot_honour(self):
+        from apps.accounts.models import Membership, User
+
+        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        token = create_staff_tokens(user, self.salon)["access"]
+        response = self.client.post(
+            "/api/marketing/loyalty-programs",
+            json.dumps({
+                "name": "Prodotto omaggio", "threshold": 5,
+                "reward_type": "free_product", "reward_value": "0",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+        self.assertEqual(response.status_code, 422, response.content)
+
+    def test_a_single_sale_cannot_issue_an_unbounded_number_of_rewards(self):
+        """Tetto ai premi per vendita.
+
+        Con 100 punti per euro e soglia 1, un incasso da 30 € valeva 3.000 premi:
+        novemila insert e tremila messaggi WhatsApp mentre la cassiera aspettava.
+        Ora se ne emettono al massimo MAX_REWARDS_PER_SALE e i punti avanzati
+        restano alla cliente — non si perde niente, arriveranno dopo.
+        """
+        from ..services import MAX_REWARDS_PER_SALE
+
+        program = self._program(
+            reward_type="coupon_amount", reward_value=Decimal("5.00"),
+        )
+        program.earn_metric = "per_euro"
+        program.earn_ratio = Decimal("100")
+        program.save(update_fields=["earn_metric", "earn_ratio"])
+        self._sell()  # 30 € -> 3000 punti, soglia 1
+
+        self.assertEqual(Coupon.objects.filter(salon=self.salon).count(), MAX_REWARDS_PER_SALE)
+        account = LoyaltyAccount.objects.get(program=program, client=self.client_obj)
+        self.assertEqual(account.points, 3000 - MAX_REWARDS_PER_SALE)
+
+
+class LoyaltyConcurrencyTests(TestCase):
+    """Il saldo punti si legge e si scrive sotto lock, e l'iscrizione non fa
+    esplodere la vendita quando esiste già."""
+
+    def setUp(self):
+        from apps.clients.models import Client
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112233"
+        )
+        self.program = LoyaltyProgram.objects.create(
+            salon=self.salon, name="Punti", threshold=100,
+            earn_metric=LoyaltyProgram.EarnMetric.PER_EURO, earn_ratio=Decimal("1"),
+            reward_type=LoyaltyProgram.RewardType.COUPON_AMOUNT, reward_value=Decimal("10"),
+        )
+
+    def _sale(self, total):
+        from apps.sales.models import Sale
+
+        return Sale.objects.create(
+            salon=self.salon, kind="pos", client=self.client_obj, total=Decimal(total)
+        )
+
+    def test_points_are_incremented_in_sql_not_overwritten(self):
+        """L'incremento è un UPDATE con F(): una scrittura concorrente avvenuta
+        nel frattempo non viene cancellata dal nostro save."""
+        accrue_loyalty(self._sale("10"))
+        account = LoyaltyAccount.objects.get(program=self.program, client=self.client_obj)
+        self.assertEqual(account.points, 10)
+
+        # Qualcun altro accredita 50 punti dopo che la nostra vendita è nata.
+        LoyaltyAccount.objects.filter(pk=account.pk).update(points=60)
+        accrue_loyalty(self._sale("10"))
+        account.refresh_from_db()
+        self.assertEqual(account.points, 70)  # 60 + 10, non 20
+
+    def test_enrollment_race_does_not_kill_the_sale(self):
+        """Se il conto nasce fra la lettura e la creazione, la vendita prosegue.
+
+        Prima era una create secca: l'IntegrityError sulla unique arrivava dentro
+        l'atomic di finalize_sale e la cassiera si vedeva annullare lo scontrino.
+        """
+        from django.db.models.query import QuerySet
+
+        original_first = QuerySet.first
+        raced = {"done": False}
+
+        def fake_first(qs):
+            # La prima lettura del conto non lo trova; nel frattempo un'altra
+            # cassa lo crea. Con la create secca di prima, l'insert successivo
+            # sbatteva sulla unique e portava giù l'intero scontrino.
+            if qs.model is LoyaltyAccount and not raced["done"]:
+                raced["done"] = True
+                LoyaltyAccount.objects.create(program=self.program, client=self.client_obj)
+                return None
+            return original_first(qs)
+
+        with patch.object(QuerySet, "first", fake_first):
+            accrue_loyalty(self._sale("25"))
+
+        self.assertTrue(raced["done"])
+        account = LoyaltyAccount.objects.get(program=self.program, client=self.client_obj)
+        self.assertEqual(account.points, 25)
+        self.assertEqual(
+            LoyaltyAccount.objects.filter(program=self.program, client=self.client_obj).count(), 1
+        )
+
+
+class LoyaltyProgramValidationTests(OwnerTestBase):
+    """I campi del programma fedeltà arrivavano a database senza controlli."""
+
+    def _post(self, **fields):
+        payload = {
+            "name": "Fedeltà", "threshold": 10,
+            "reward_type": "coupon_amount", "reward_value": "10",
+        }
+        payload.update(fields)
+        return self.client.post(
+            "/api/marketing/loyalty-programs",
+            json.dumps(payload),
+            content_type="application/json",
+            **self.auth,
+        )
+
+    def test_a_valid_program_is_still_accepted(self):
+        self.assertEqual(self._post().status_code, 200)
+
+    def test_typos_and_out_of_scale_numbers_are_refused(self):
+        # "per_euro " con lo spazio cadeva nel ramo «per servizio» senza dire niente
+        self.assertEqual(self._post(earn_metric="per_euro ").status_code, 422)
+        self.assertEqual(self._post(type="livelli").status_code, 422)
+        # enrollment sbagliato = nessuna iscrizione automatica, punti fermi in silenzio
+        self.assertEqual(self._post(enrollment="automatica").status_code, 422)
+        # soglia 0 = punti che non diventano mai un premio
+        self.assertEqual(self._post(threshold=0).status_code, 422)
+        self.assertEqual(self._post(threshold=-1).status_code, 422)
+        self.assertEqual(self._post(earn_ratio="1000000").status_code, 422)
+        self.assertEqual(self._post(earn_ratio="0").status_code, 422)
+        self.assertEqual(self._post(points_expiry_months=99999).status_code, 422)
+        self.assertEqual(self._post(color="rosso").status_code, 422)
+        self.assertEqual(
+            self._post(reward_type="discount_pct", reward_value="500").status_code, 422
+        )
+        self.assertFalse(LoyaltyProgram.objects.filter(salon=self.salon).exists())
+
+
+class _Base(StaffRequestsMixin, TestCase):
     def setUp(self):
         from apps.accounts.models import Membership, User
         from apps.catalog.models import Service, ServiceCategory
@@ -48,22 +349,6 @@ class _Base(TestCase):
         self.manicure = Service.objects.create(
             salon=self.salon, category=category, name_it="Manicure",
             duration_min=30, price=Decimal("30.00"),
-        )
-
-    def _auth(self, user):
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
-
-    def _staff(self, email, scopes):
-        from apps.accounts.models import Membership, Role, User
-
-        user = User.objects.create_user(email=email, password="segretissima")
-        role = Role.objects.create(salon=self.salon, name=email, scopes=scopes)
-        Membership.objects.create(user=user, salon=self.salon, role=role)
-        return self._auth(user)
-
-    def _post(self, url, body, auth=None):
-        return self.client.post(
-            url, data=json.dumps(body), content_type="application/json", **(auth or self.auth)
         )
 
     def _program(self, **fields):
