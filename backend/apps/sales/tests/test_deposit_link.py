@@ -1,27 +1,32 @@
-"""Caccia del 22/09 — vita del link caparra, account Stripe e pagamenti anomali.
+"""Link caparra (Checkout Stripe), Stripe Connect del titolare e vita del link.
 
-05-12 (account della caparra), 05-10 (durata del link), 05-11 (scadenza senza
-link), 02-06/05-07 (link vecchio dopo la riduzione, pagamento in eccesso),
-02-07/03-02/05-08/18-01 (pagamento di un appuntamento che non c'è più).
-Libreria stripe vera, finto solo l'HTTP (vedi tests_caccia22_stripe).
+Caccia del 22/09 — vita del link caparra e account Stripe: 05-12 (account della
+caparra), 05-10 (durata del link), 05-11 (scadenza senza link), 02-06/05-07
+(link vecchio dopo la riduzione, pagamento in eccesso), 11-19 (ritorno della
+cliente senza CLIENT_APP_ORIGIN). Libreria stripe vera, finto solo l'HTTP
+(vedi tests_caccia22_stripe).
 """
 
 import datetime as dt
+import importlib
 import json
+import os
 import time
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.agenda.models import Appointment
-from apps.core.models import ActivityLog, DepositRule, OutboxEvent, SalonSettings
-from common.auth import create_client_tokens
+from apps.clients.models import Client
+from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
+from apps.staff.models import Operator
+from common.auth import create_client_tokens, create_staff_tokens
 
 from ..models import Sale
-from .test_stripe_library import StripeTestBase, event_payload
+from .base import StripeTestBase, _refund, event_payload
 
 
 def _session(session_id, *, expires_in=3600, **extra):
@@ -35,8 +40,159 @@ def _session(session_id, *, expires_in=3600, **extra):
     }
 
 
-def _refund(refund_id, amount, intent, status="succeeded"):
-    return {"id": refund_id, "object": "refund", "amount": amount, "status": status, "payment_intent": intent}
+class DepositLinkAndConnectTests(TestCase):
+    """Link caparra (Checkout Stripe) e Stripe Connect del titolare."""
+
+    def setUp(self):
+        from django.utils import timezone
+
+        from apps.accounts.models import Membership, Role, User
+        from apps.agenda.models import Appointment
+        from apps.core.models import SalonSettings
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        SalonSettings.objects.create(salon=self.salon, deposit_hold_minutes=60)
+        self.salon = Salon.objects.get(pk=self.salon.pk)
+        owner = User.objects.create_user(email="owner@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        staff = User.objects.create_user(email="staff@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Front", scopes=["sales"])
+        Membership.objects.create(user=staff, salon=self.salon, role=role)
+        self.staff_auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(staff, self.salon)['access']}"}
+        self.client_obj = Client.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222", email="sofia@example.com")
+        operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="B")
+        self.appointment = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=operator,
+            start=timezone.now() + timezone.timedelta(days=2),
+            deposit_status="required", deposit_amount=Decimal("15.00"),
+            deposit_due_at=timezone.now() + timezone.timedelta(minutes=60),
+        )
+
+    @override_settings(STRIPE_SECRET_KEY="")
+    def test_link_without_stripe_is_503_and_booking_flow_is_unaffected(self):
+        from .. import stripe_service
+
+        res = self.client.post(f"/api/sales/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **self.staff_auth)
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(stripe_service.ensure_deposit_link(self.appointment), "")
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_x", CLIENT_APP_ORIGIN="https://app.example.com")
+    def test_link_is_created_stored_and_queued_for_the_client(self):
+        sessions = [
+            {"url": "https://checkout.stripe.com/c/pay/cs_1"},
+            {"url": "https://checkout.stripe.com/c/pay/cs_2"},
+        ]
+        with patch("stripe.checkout.Session.create", side_effect=sessions) as create:
+            res = self.client.post(f"/api/sales/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **self.staff_auth)
+            self.assertEqual(res.status_code, 200, res.content)
+            self.assertEqual(res.json()["url"], "https://checkout.stripe.com/c/pay/cs_1")
+            # Secondo invio = sollecito: la sessione porta la stessa scadenza
+            # della caparra, quindi rispedire la vecchia manderebbe la cliente su
+            # una pagina già chiusa da Stripe. Se ne crea una nuova.
+            res = self.client.post(f"/api/sales/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **self.staff_auth)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["url"], "https://checkout.stripe.com/c/pay/cs_2")
+        self.assertEqual(create.call_count, 2)
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["mode"], "payment")
+        self.assertEqual(kwargs["line_items"][0]["price_data"]["unit_amount"], 1500)
+        self.assertEqual(kwargs["payment_intent_data"]["metadata"]["kind"], "deposit")
+        self.assertTrue(kwargs["success_url"].startswith("https://app.example.com/the-parlour?deposit=paid"))
+        self.assertIn("expires_at", kwargs)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_payment_link, "https://checkout.stripe.com/c/pay/cs_2")
+        self.assertEqual(OutboxEvent.objects.filter(event_type="deposit.payment_link").count(), 2)
+        # partono DOPO i messaggi dell'appuntamento ancora trattenuti (stessa chiave)
+        self.assertEqual(
+            set(OutboxEvent.objects.filter(event_type="deposit.payment_link").values_list("coalesce_key", flat=True)),
+            {f"appointment:{self.appointment.id}"},
+        )
+        # anche la cliente può chiederlo dall'app
+        from common.auth import create_client_tokens
+
+        client_auth = {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.client_obj)['access']}"}
+        res = self.client.post(f"/api/sales/client/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **client_auth)
+        self.assertEqual(res.status_code, 200, res.content)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_test")
+    def test_checkout_completed_marks_deposit_paid_and_stops_the_hold(self):
+        event = {
+            "type": "checkout.session.completed",
+            "data": {"object": {
+                "id": "cs_1", "payment_status": "paid", "payment_intent": "pi_from_checkout", "amount_total": 1500,
+                "metadata": {"appointment_id": str(self.appointment.id), "kind": "deposit"},
+            }},
+        }
+        import json as _json
+
+        with patch("stripe.Webhook.construct_event", return_value=event):
+            res = self.client.post("/api/sales/stripe/webhook", data=_json.dumps(event), content_type="application/json", HTTP_STRIPE_SIGNATURE="t=1,v1=x")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_status, "paid")
+        self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_from_checkout")
+        self.assertIsNone(self.appointment.deposit_due_at)
+        self.assertEqual(
+            OutboxEvent.objects.get(event_type="deposit.paid").coalesce_key,
+            f"appointment:{self.appointment.id}",
+        )
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_CONNECT_CLIENT_ID="ca_test", FRONTEND_ORIGIN="https://beauty.example.com")
+    def test_connect_start_callback_and_disconnect(self):
+        from urllib.parse import parse_qs, urlparse
+
+        res = self.client.get("/api/sales/stripe/connect/status", **self.auth)
+        self.assertEqual(res.json(), {**res.json(), "available": True, "connected": False, "payments_enabled": True})
+        res = self.client.post("/api/sales/stripe/connect/start", data="{}", content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        url = urlparse(res.json()["url"])
+        self.assertEqual(url.netloc, "connect.stripe.com")
+        query = parse_qs(url.query)
+        self.assertEqual(query["client_id"], ["ca_test"])
+        self.assertEqual(query["redirect_uri"], ["https://beauty.example.com/stripe-connect/done"])
+        state = query["state"][0]
+        # solo il titolare
+        res = self.client.post("/api/sales/stripe/connect/start", data="{}", content_type="application/json", **self.staff_auth)
+        self.assertEqual(res.status_code, 403)
+        # callback con lo state firmato
+        import json as _json
+
+        with patch("stripe.OAuth.token", return_value={"stripe_user_id": "acct_123"}):
+            res = self.client.post("/api/sales/stripe/connect/callback", data=_json.dumps({"code": "ac_x", "state": state}), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(res.json()["connected"])
+        self.assertEqual(res.json()["account_id"], "acct_123")
+        # le chiamate Stripe successive vanno sull'account collegato
+        from .. import stripe_service
+
+        self.appointment.salon = Salon.objects.get(pk=self.salon.pk)
+        with patch("stripe.checkout.Session.create", return_value={"url": "https://checkout.stripe.com/c/pay/cs_2"}) as create:
+            stripe_service.ensure_deposit_link(self.appointment)
+        self.assertEqual(create.call_args.kwargs["stripe_account"], "acct_123")
+        # state manomesso
+        res = self.client.post("/api/sales/stripe/connect/callback", data=_json.dumps({"code": "ac_x", "state": state + "x"}), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 400)
+        with patch("stripe.OAuth.deauthorize", return_value={}):
+            res = self.client.delete("/api/sales/stripe/connect", **self.auth)
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["connected"])
+
+    def test_today_summary_separates_gift_card_money(self):
+        from ..models import Payment, Sale, SaleLine
+        from ..services import today_summary
+
+        sale = Sale.objects.create(salon=self.salon, kind=Sale.Kind.POS, total=Decimal("80.00"))
+        SaleLine.objects.create(sale=sale, line_type="service", qty=1, unit_price=Decimal("50.00"), amount=Decimal("50.00"))
+        SaleLine.objects.create(sale=sale, line_type="gift_card", qty=1, unit_price=Decimal("30.00"), amount=Decimal("30.00"))
+        Payment.objects.create(sale=sale, method="gift_card", amount=Decimal("50.00"))
+        Payment.objects.create(sale=sale, method="cash", amount=Decimal("30.00"))
+        summary = today_summary(self.salon)
+        self.assertEqual(summary["total"], Decimal("80.00"))
+        self.assertEqual(summary["gift_card_sold"], Decimal("30.00"))
+        self.assertEqual(summary["gift_card_redeemed"], Decimal("50.00"))
+        self.assertEqual(summary["cash_in"], Decimal("30.00"))
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
@@ -419,38 +575,27 @@ class AmountChangeTests(StripeTestBase):
         self.assertEqual(self.appointment.deposit_credit, Decimal("30.00"))
 
 
-@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
-class OrphanPaymentTests(StripeTestBase):
-    """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
+class ClientAppOriginTests(TestCase):
+    """11-19: senza CLIENT_APP_ORIGIN la cliente torna su FRONTEND_ORIGIN, non su localhost."""
 
-    def _ghost_event(self, event_type="payment_intent.succeeded", *, account="", event_id="evt_1"):
-        metadata = {"appointment_id": "999999", "salon_id": str(self.salon.id), "kind": "deposit"}
-        if event_type == "payment_intent.succeeded":
-            obj = {"id": "pi_ghost", "object": "payment_intent", "amount": 2000, "amount_received": 2000,
-                   "metadata": metadata}
-        else:
-            obj = {"id": "cs_ghost", "object": "checkout.session", "payment_status": "paid",
-                   "payment_intent": "pi_ghost", "amount_total": 2000, "metadata": metadata}
-        return event_payload(event_type, obj, account=account, event_id=event_id)
+    def test_the_default_falls_back_to_the_dashboard_origin(self):
+        import config.settings as settings_module
 
-    def test_the_payment_is_refunded_and_written_down(self):
-        http = self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
-        self.assertEqual(self.post_event(self._ghost_event()).status_code, 200)
-        self.assertEqual(http.calls_to("/v1/refunds")[0]["data"]["payment_intent"], "pi_ghost")
-        log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
-        self.assertEqual(log.payload["refund_id"], "re_ghost")
-        self.assertEqual(log.payload["appointment_id"], "999999")
-        self.assertEqual(Sale.objects.count(), 0)
+        from ..stripe_service import _deposit_return_urls
 
-    def test_intent_and_session_events_refund_and_log_once(self):
-        http = self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
-        self.post_event(self._ghost_event())
-        self.post_event(self._ghost_event("checkout.session.completed", event_id="evt_2"))
-        self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
-        self.assertEqual(ActivityLog.objects.filter(type="deposit.orphan_payment").count(), 1)
+        env = {k: v for k, v in os.environ.items() if k != "CLIENT_APP_ORIGIN"}
+        with patch.dict(os.environ, env, clear=True):
+            default = importlib.reload(settings_module).CLIENT_APP_ORIGIN
+        importlib.reload(settings_module)  # ripristina il modulo com'era
+        self.assertEqual(default, "")
 
-    def test_an_event_from_a_foreign_account_is_left_alone(self):
-        http = self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
-        self.assertEqual(self.post_event(self._ghost_event(account="acct_estraneo")).status_code, 200)
-        self.assertEqual(http.calls_to("/v1/refunds"), [])
-        self.assertFalse(ActivityLog.objects.filter(type="deposit.orphan_payment").exists())
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        client = Client.objects.create(salon=salon, first_name="Sofia", last_name="Ricci", phone="+393331112222")
+        operator = Operator.objects.create(salon=salon, first_name="Giulia", last_name="Bianchi")
+        appointment = Appointment.objects.create(
+            salon=salon, client=client, operator=operator, start=timezone.now() + timezone.timedelta(days=1),
+        )
+        with override_settings(CLIENT_APP_ORIGIN=default, FRONTEND_ORIGIN="https://beauty.example.com"):
+            success, cancel = _deposit_return_urls(appointment)
+        self.assertTrue(success.startswith("https://beauty.example.com/the-parlour?deposit=paid"))
+        self.assertTrue(cancel.startswith("https://beauty.example.com/the-parlour?deposit=cancelled"))

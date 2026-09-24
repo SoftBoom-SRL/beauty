@@ -16,7 +16,7 @@ from apps.agenda.models import Appointment
 from apps.clients.models import Client
 from apps.core.models import SalonSettings
 
-from .test_stripe_library import StripeTestBase, event_payload
+from .base import StripeTestBase, event_payload
 
 _real_select_for_update = QuerySet.select_for_update
 
