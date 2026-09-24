@@ -27,6 +27,8 @@ SEND = "communication.send"
 CANCEL = "communication.cancel"
 
 
+# Come `_client` di base.py, ma con la lingua della cliente: le comunicazioni
+# la passano a Yourang (`langs` nell'invio, `lang` nel consenso).
 def _client(salon, first_name="Sofia", phone="+393331112233", lang="it"):
     from apps.clients.models import Client
 

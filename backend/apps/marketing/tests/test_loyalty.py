@@ -21,16 +21,7 @@ from common.auth import create_staff_tokens
 
 from ..models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from ..services import accrue_loyalty, create_gift_card
-from .base import _make_client
-
-
-def _client(salon, first_name="Sofia", phone="+393331112233"):
-    from apps.clients.models import Client
-
-    return Client.objects.create(
-        salon=salon, first_name=first_name, last_name="Ricci", phone=phone,
-        consents={"privacy": True, "marketing": True, "card_charge": False},
-    )
+from .base import OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 
 class LoyaltyTests(TestCase):
@@ -302,18 +293,8 @@ class LoyaltyConcurrencyTests(TestCase):
         )
 
 
-class LoyaltyProgramValidationTests(TestCase):
+class LoyaltyProgramValidationTests(OwnerTestBase):
     """I campi del programma fedeltà arrivavano a database senza controlli."""
-
-    def setUp(self):
-        from apps.accounts.models import Membership, User
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
-        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
 
     def _post(self, **fields):
         payload = {
@@ -350,7 +331,7 @@ class LoyaltyProgramValidationTests(TestCase):
         self.assertFalse(LoyaltyProgram.objects.filter(salon=self.salon).exists())
 
 
-class _Base(TestCase):
+class _Base(StaffRequestsMixin, TestCase):
     def setUp(self):
         from apps.accounts.models import Membership, User
         from apps.catalog.models import Service, ServiceCategory
@@ -368,22 +349,6 @@ class _Base(TestCase):
         self.manicure = Service.objects.create(
             salon=self.salon, category=category, name_it="Manicure",
             duration_min=30, price=Decimal("30.00"),
-        )
-
-    def _auth(self, user):
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
-
-    def _staff(self, email, scopes):
-        from apps.accounts.models import Membership, Role, User
-
-        user = User.objects.create_user(email=email, password="segretissima")
-        role = Role.objects.create(salon=self.salon, name=email, scopes=scopes)
-        Membership.objects.create(user=user, salon=self.salon, role=role)
-        return self._auth(user)
-
-    def _post(self, url, body, auth=None):
-        return self.client.post(
-            url, data=json.dumps(body), content_type="application/json", **(auth or self.auth)
         )
 
     def _program(self, **fields):

@@ -16,10 +16,11 @@ from ninja.errors import HttpError
 
 from apps.core.models import Salon
 from common.auth import create_client_tokens, create_staff_tokens
+from common.testing import client_bearer, post_json
 
 from ..models import Coupon, GiftCard
 from ..services import create_gift_card, redeem_gift_card
-from .base import GiftCardTestBase, _client, _make_client
+from .base import GiftCardTestBase, OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 
 class GiftCardTests(TestCase):
@@ -135,7 +136,7 @@ class GiftCardServiceApiTests(TestCase):
         self.assertEqual(resp.status_code, 404, resp.content)
 
 
-class GiftCardFlowTests(TestCase):
+class GiftCardFlowTests(StaffRequestsMixin, TestCase):
     """Flusso completo del regalo: chi la compra, chi riceve il credito, dove si
     vede (portafoglio cliente, agenda, scheda) e come entra nei conteggi."""
 
@@ -157,13 +158,8 @@ class GiftCardFlowTests(TestCase):
         self.operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="B")
         self.operator.services.add(self.service)
 
-    def _post(self, url, body, auth=None):
-        return self.client.post(url, data=json.dumps(body), content_type="application/json", **(auth or self.auth))
-
     def _client_auth(self, client_obj):
-        from common.auth import create_client_tokens
-
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(client_obj)['access']}"}
+        return client_bearer(client_obj)
 
     def test_gifted_treatment_reaches_the_recipient_end_to_end(self):
         # 1) il salone vende una gift card «a trattamento», pagata subito
@@ -286,23 +282,11 @@ class GiftCardFlowTests(TestCase):
         self.assertEqual(GiftCard.objects.get(code=code).balance, Decimal("0.00"))
 
 
-class GiftCardCashInTests(TestCase):
+class GiftCardCashInTests(OwnerTestBase):
     """Una gift card venduta «pagata subito» deve entrare in cassa."""
 
-    def setUp(self):
-        from apps.accounts.models import Membership, User
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
-        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
-
     def _post(self, url, body):
-        return self.client.post(
-            url, data=json.dumps(body), content_type="application/json", **self.auth
-        )
+        return post_json(self.client, url, body, **self.auth)
 
     def test_selling_a_card_already_paid_records_the_sale(self):
         from apps.sales.models import Payment, Sale, SaleLine

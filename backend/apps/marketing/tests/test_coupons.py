@@ -17,7 +17,7 @@ from common.auth import create_staff_tokens
 
 from ..models import Coupon
 from ..services import create_gift_card, mark_coupon_redeemed, validate_coupon
-from .base import GiftCardTestBase, _make_client
+from .base import GiftCardTestBase, OwnerTestBase, _make_client
 
 
 class CouponTests(TestCase):
@@ -147,17 +147,7 @@ class ClientIdFilterApiTests(TestCase):
         self.assertEqual(items[0]["points"], 40)
 
 
-class CouponApiTests(TestCase):
-    def setUp(self):
-        from apps.accounts.models import Membership, User
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
-        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
-
+class CouponApiTests(OwnerTestBase):
     def _create(self, **fields):
         payload = {"kind": "amount", "value": "10"}
         payload.update(fields)
