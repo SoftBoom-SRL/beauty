@@ -19,8 +19,8 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
-from .models import Appointment, AppointmentService, Pause, WaitlistEntry
-from .services import (
+from ..models import Appointment, AppointmentService, Pause, WaitlistEntry
+from ..services import (
     cancel_appointment,
     compute_deposit,
     create_appointment,
@@ -282,7 +282,7 @@ class SoakTimeTests(AgendaTestBase):
         return appt
 
     def test_booking_soak_service_spans_active_plus_soak(self):
-        from .api import _item_out
+        from ..api import _item_out
 
         with self._windows(self.wide):
             appt = create_appointment(
@@ -627,7 +627,7 @@ class CancelAppointmentTests(AgendaTestBase):
 
     def test_mark_deposit_refunded_also_writes_how_much_came_back(self):
         # La scheda diceva «Caparra 15 · Rimborsato 0 · Stato: rimborsata».
-        from .services import mark_deposit_refunded
+        from ..services import mark_deposit_refunded
 
         appointment = self._make(timezone.now() + dt.timedelta(hours=72))
         cancel_appointment(appointment)
@@ -664,7 +664,7 @@ class CancelAppointmentTests(AgendaTestBase):
         )
 
     def test_mark_deposit_refunded_manually(self):
-        from .services import mark_deposit_refunded
+        from ..services import mark_deposit_refunded
 
         appointment = self._make(timezone.now() + dt.timedelta(hours=72))
         cancel_appointment(appointment)
@@ -1367,7 +1367,7 @@ class MoveWholeVisitToAnotherOperatorTests(AgendaTestBase):
 
 class SplitAppointmentTests(AgendaTestBase):
     def test_split_moves_one_service_to_its_own_appointment(self):
-        from .services import split_appointment
+        from ..services import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             appointment = create_appointment(
@@ -1387,7 +1387,7 @@ class SplitAppointmentTests(AgendaTestBase):
         self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="appointment.split").exists())
 
     def test_split_refuses_single_service_and_busy_slot(self):
-        from .services import split_appointment
+        from ..services import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             single = create_appointment(
@@ -1450,7 +1450,7 @@ class DepositHoldTests(AgendaTestBase):
             appointment = self._book()
         self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
         self.assertIsNone(appointment.deposit_due_at)
-        from .services import process_deposit_holds
+        from ..services import process_deposit_holds
 
         result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=3))
         self.assertEqual(result["released"], 0)
@@ -1468,7 +1468,7 @@ class DepositHoldTests(AgendaTestBase):
             salon=self.salon, client=self.client_obj, operator=self.op1, start=start,
             deposit_status=Appointment.DepositStatus.REQUIRED, deposit_amount=Decimal("10.00"),
         )
-        from .services import process_deposit_holds, schedule_deposit_hold
+        from ..services import process_deposit_holds, schedule_deposit_hold
 
         schedule_deposit_hold(appointment)
         self.assertEqual(appointment.deposit_due_at, start)
@@ -1498,7 +1498,7 @@ class DepositHoldTests(AgendaTestBase):
         appointment.refresh_from_db()
         self.assertIsNone(appointment.deposit_due_at)
         # e il termine non la tocca più
-        from .services import process_deposit_holds
+        from ..services import process_deposit_holds
 
         self.assertEqual(
             process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=2))["released"],
@@ -1517,7 +1517,7 @@ class DepositHoldTests(AgendaTestBase):
         self.assertEqual(res.status_code, 400, res.content)
 
     def test_reminder_then_release_with_trace_and_restore(self):
-        from .services import process_deposit_holds, released_appointments, restore_released
+        from ..services import process_deposit_holds, released_appointments, restore_released
 
         appointment = self._book()
         now = timezone.now()
@@ -1552,7 +1552,7 @@ class DepositHoldTests(AgendaTestBase):
         self.assertIsNotNone(appointment.deposit_due_at)
 
     def test_paid_deposit_is_never_released(self):
-        from .services import process_deposit_holds
+        from ..services import process_deposit_holds
 
         appointment = self._book()
         appointment.deposit_status = Appointment.DepositStatus.PAID
@@ -1566,7 +1566,7 @@ class DepositHoldTests(AgendaTestBase):
     def test_released_list_and_restore_api(self):
         from apps.accounts.models import Membership, Role, User
 
-        from .services import process_deposit_holds
+        from ..services import process_deposit_holds
 
         user = User.objects.create_user(email="rail@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
@@ -1591,7 +1591,7 @@ class SmartSlotsTests(AgendaTestBase):
     def test_recommended_flags_and_client_filtering(self):
         from common.auth import create_client_tokens
 
-        from .services import smart_slots
+        from ..services import smart_slots
 
         SalonSettings.objects.create(salon=self.salon, agenda_fill="max_revenue")
         salon = Salon.objects.get(pk=self.salon.pk)
@@ -1631,7 +1631,7 @@ class SmartSlotsTests(AgendaTestBase):
         self.assertEqual(len(smart_slots(Salon.objects.get(pk=self.salon.pk), slots)), len(slots))
 
     def test_falls_back_to_all_when_nothing_is_recommended(self):
-        from .services import smart_slots
+        from ..services import smart_slots
 
         self.assertEqual(smart_slots(self.salon, [{"start": "x", "assignment": [], "recommended": False}]), [{"start": "x", "assignment": [], "recommended": False}])
 
@@ -1703,7 +1703,7 @@ class SplitCollisionTests(AgendaTestBase):
     restano nella visita, né con altre clienti quando la catena residua scala."""
 
     def test_detached_service_cannot_overlap_the_services_that_stay(self):
-        from .services import split_appointment
+        from ..services import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             appointment = create_appointment(
@@ -1730,7 +1730,7 @@ class SplitCollisionTests(AgendaTestBase):
         """
         from apps.clients.models import Client
 
-        from .services import split_appointment
+        from ..services import split_appointment
 
         other = Client.objects.create(salon=self.salon, first_name="Altra", last_name="Cliente", phone="+390000000009")
         self.op2.services.add(self.svc30)
@@ -1766,7 +1766,7 @@ class SplitCollisionTests(AgendaTestBase):
         cliente di op2 (caccia ai bug del 22/09, 02-02 e 12-01)."""
         from apps.clients.models import Client
 
-        from .services import split_appointment
+        from ..services import split_appointment
 
         other = Client.objects.create(salon=self.salon, first_name="Terza", last_name="Cliente", phone="+390000000008")
         self.op2.services.add(self.svc30)
@@ -1806,7 +1806,7 @@ class BugHuntAgendaTests(AgendaTestBase):
 
     def test_the_client_app_cannot_move_an_appointment_into_the_past(self):
         """Prenotare nel passato era già vietato; spostarci un appuntamento no."""
-        from .services import move_appointment
+        from ..services import move_appointment
 
         with self._windows({self.op1.id: [(0, 24 * 60)]}):
             appointment = create_appointment(
@@ -1823,7 +1823,7 @@ class BugHuntAgendaTests(AgendaTestBase):
             self.assertEqual(moved.start, past)
 
     def test_an_appointment_that_runs_past_midnight_still_blocks_the_next_day(self):
-        from .services import _busy_map
+        from ..services import _busy_map
 
         with self._windows({self.op1.id: [(0, 24 * 60)]}):
             create_appointment(
@@ -1840,7 +1840,7 @@ class BugHuntAgendaTests(AgendaTestBase):
         )
 
     def test_the_items_parameter_is_validated_instead_of_crashing(self):
-        from .api import MAX_ITEMS_PER_REQUEST, _parse_items_param
+        from ..api import MAX_ITEMS_PER_REQUEST, _parse_items_param
 
         for raw in (
             '[{"service_id": "non-un-numero"}]',
@@ -1862,7 +1862,7 @@ class BugHuntAgendaTests(AgendaTestBase):
         scheda: non deve comparire come regalo di chi l'ha pagata."""
         from apps.marketing.models import GiftCard
 
-        from .api import gift_index
+        from ..api import gift_index
 
         GiftCard.objects.create(
             salon=self.salon, code="GC-REGALO-01",
@@ -1889,7 +1889,7 @@ class BugHuntAgendaTests(AgendaTestBase):
         la carta compariva ancora fra i regali, e la cassa poi la rifiutava."""
         from apps.marketing.models import GiftCard
 
-        from .api import gift_index
+        from ..api import gift_index
 
         card = GiftCard.objects.create(
             salon=self.salon, code="GC-SCADUTA-1",
@@ -1910,7 +1910,7 @@ class BugHuntAgendaTests(AgendaTestBase):
     def test_a_service_cannot_end_its_soak_after_closing_time(self):
         from apps.catalog.models import Service
 
-        from .services import resolve_items
+        from ..services import resolve_items
 
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"opening_hours_week": {
@@ -1946,7 +1946,7 @@ class SmartSlotMultiOperatorTests(AgendaTestBase):
     def test_a_split_visit_does_not_recommend_a_time_that_fragments_a_colleagues_day(self):
         from apps.clients.models import Client
 
-        from .services import _slot_is_recommended
+        from ..services import _slot_is_recommended
 
         other = Client.objects.create(
             salon=self.salon, first_name="Altra", last_name="Cliente", phone="+390000000021"
@@ -1995,7 +1995,7 @@ class ConcurrentTransitionTests(AgendaTestBase):
         return appointment
 
     def test_a_move_on_a_stale_copy_cannot_undo_a_cancellation(self):
-        from .services import cancel_appointment, move_appointment
+        from ..services import cancel_appointment, move_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)  # copia letta prima
@@ -2009,7 +2009,7 @@ class ConcurrentTransitionTests(AgendaTestBase):
         self.assertEqual(appointment.status, Appointment.Status.CANCELLED)
 
     def test_a_move_does_not_overwrite_a_deposit_paid_meanwhile(self):
-        from .services import move_appointment
+        from ..services import move_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)
@@ -2024,7 +2024,7 @@ class ConcurrentTransitionTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_amount, Decimal("20.00"))
 
     def test_check_in_is_refused_on_an_appointment_cancelled_meanwhile(self):
-        from .services import cancel_appointment, check_in
+        from ..services import cancel_appointment, check_in
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)
@@ -2283,7 +2283,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
     # ---- B24 -------------------------------------------------------------
 
     def test_a_manual_refund_writes_the_amount_it_gave_back(self):
-        from .services import mark_deposit_refunded
+        from ..services import mark_deposit_refunded
 
         appointment = self._visit(
             [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
@@ -2300,7 +2300,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
         self.assertTrue(entry["manual"])
 
     def test_a_manual_refund_after_a_partial_one_only_covers_the_rest(self):
-        from .services import mark_deposit_refunded, record_deposit_refund
+        from ..services import mark_deposit_refunded, record_deposit_refund
 
         appointment = self._visit(
             [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
@@ -2324,7 +2324,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
     # ---- Pause a cavallo della mezzanotte --------------------------------
 
     def test_a_break_that_runs_past_midnight_still_blocks_the_next_day(self):
-        from .services import _busy_map
+        from ..services import _busy_map
 
         Pause.objects.create(
             salon=self.salon, operator=self.op1,
@@ -2348,7 +2348,7 @@ class StaleCopyEditTests(AgendaTestBase):
         )
 
     def test_editing_a_note_cannot_resurrect_an_appointment_cancelled_meanwhile(self):
-        from .services import edit_appointment
+        from ..services import edit_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)  # copia entrata con la richiesta
@@ -2362,7 +2362,7 @@ class StaleCopyEditTests(AgendaTestBase):
         self.assertEqual(appointment.cancel_reason, "chiuso per lutto")
 
     def test_editing_a_note_does_not_undo_a_deposit_paid_meanwhile(self):
-        from .services import edit_appointment
+        from ..services import edit_appointment
 
         appointment = self._appointment(
             deposit_status=Appointment.DepositStatus.REQUIRED,
@@ -2386,7 +2386,7 @@ class StaleCopyEditTests(AgendaTestBase):
 
     def test_editing_the_services_keeps_the_price_agreed_with_the_client(self):
         """Il listino può cambiare: la visita vale quello che valeva quando è stata presa."""
-        from .services import create_appointment, edit_appointment
+        from ..services import create_appointment, edit_appointment
 
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = create_appointment(
@@ -2419,7 +2419,7 @@ class StaleCopyEditTests(AgendaTestBase):
         self.svc60.save(update_fields=["price", "soak_min"])
 
     def test_a_service_added_now_takes_todays_price(self):
-        from .services import create_appointment, edit_appointment
+        from ..services import create_appointment, edit_appointment
 
         self._no_automation_delay()
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
@@ -2462,7 +2462,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         return appointment
 
     def test_detaching_a_service_brings_the_deposit_down_to_the_new_total(self):
-        from .services import split_appointment
+        from ..services import split_appointment
 
         appointment = self._paid_visit(Decimal("60.00"))  # totale 80, caparra 60
         first = appointment.items.order_by("order").first()  # il servizio da 50
@@ -2482,7 +2482,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         self.assertEqual(created.deposit_amount, Decimal("0.00"))
 
     def test_removing_a_service_brings_the_deposit_down_to_the_new_total(self):
-        from .services import edit_appointment
+        from ..services import edit_appointment
 
         appointment = self._paid_visit(Decimal("60.00"))
         first = appointment.items.order_by("order").first()
@@ -2500,7 +2500,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         )
 
     def test_a_deposit_that_still_fits_is_left_alone(self):
-        from .services import edit_appointment
+        from ..services import edit_appointment
 
         appointment = self._paid_visit(Decimal("20.00"))
         first = appointment.items.order_by("order").first()
@@ -2520,7 +2520,7 @@ class RefundConcurrencyTests(AgendaTestBase):
     """I rimborsi parziali si sommano, non si sovrascrivono."""
 
     def test_two_partial_refunds_add_up(self):
-        from .services import record_deposit_refund
+        from ..services import record_deposit_refund
 
         appointment = Appointment.objects.create(
             salon=self.salon, client=self.client_obj, operator=self.op1,
@@ -2561,7 +2561,7 @@ class RestoreReleasedTests(AgendaTestBase):
         return appointment
 
     def test_the_second_restore_click_is_refused(self):
-        from .services import restore_released
+        from ..services import restore_released
 
         appointment = self._released()
         stale = Appointment.objects.get(pk=appointment.pk)  # la seconda operatrice
@@ -2574,7 +2574,7 @@ class RestoreReleasedTests(AgendaTestBase):
         self.assertEqual(OutboxEvent.objects.filter(event_type="appointment.created").count(), 1)
 
     def test_restoring_drops_the_expired_payment_link(self):
-        from .services import restore_released
+        from ..services import restore_released
 
         appointment = self._released()
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
@@ -2585,7 +2585,7 @@ class RestoreReleasedTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_checkout_session_id, "cs_old")
 
     def test_restoring_does_not_overwrite_a_refund_arrived_meanwhile(self):
-        from .services import restore_released
+        from ..services import restore_released
 
         appointment = self._released()
         stale = Appointment.objects.get(pk=appointment.pk)
@@ -2639,7 +2639,7 @@ class ClosingTimeOnEveryPathTests(AgendaTestBase):
         self.assertEqual(timezone.localtime(appointment.start).hour, 10)
 
     def test_stretching_a_service_cannot_push_it_past_closing_time(self):
-        from .services import edit_appointment
+        from ..services import edit_appointment
 
         appointment = self._appointment(17)
         item = appointment.items.get()
@@ -3207,7 +3207,7 @@ class AutomationDelayTests(AgendaTestBase):
 
     def test_the_hold_does_not_stretch_forever(self):
         """Chi continua a ritoccare non rimanda il messaggio all'infinito."""
-        from .services import MAX_HOLD_FACTOR
+        from ..services import MAX_HOLD_FACTOR
 
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"automation_delay_seconds": 30}
@@ -3339,7 +3339,7 @@ class UndoTests(AgendaTestBase):
         self.assertEqual(appointment.cancel_reason, "")
 
     def test_undo_puts_back_the_services_of_a_detached_one(self):
-        from .services import split_appointment
+        from ..services import split_appointment
 
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = create_appointment(
@@ -3391,7 +3391,7 @@ class UndoTests(AgendaTestBase):
         self.assertEqual(appointment.start, _aware(self.day, 18))
 
     def test_too_late_to_go_back(self):
-        from .models import UndoEntry
+        from ..models import UndoEntry
 
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = self._book()

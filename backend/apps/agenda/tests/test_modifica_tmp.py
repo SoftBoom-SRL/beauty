@@ -5,9 +5,9 @@ import datetime as dt
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from . import services as S
-from .models import Appointment
-from .tests_caccia22_disponibilita import Caccia22Base, aware
+from .. import services as S
+from ..models import Appointment
+from .test_disponibilita_tmp import Caccia22Base, aware
 
 
 class EditBase(Caccia22Base):

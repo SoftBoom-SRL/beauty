@@ -15,8 +15,8 @@ from ninja.errors import HttpError
 from apps.core.models import Location, Salon, SalonSettings
 from common.auth import create_client_tokens, create_staff_tokens
 
-from . import services as S
-from .models import Appointment, AppointmentService
+from .. import services as S
+from ..models import Appointment, AppointmentService
 
 
 def aware(day, hour, minute=0):

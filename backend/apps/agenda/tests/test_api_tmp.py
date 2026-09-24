@@ -10,9 +10,9 @@ from django.utils import timezone
 
 from apps.core.models import DepositRule, Location, OutboxEvent
 
-from . import services as S
-from .models import Appointment, AppointmentService, Pause
-from .tests_caccia22_disponibilita import Caccia22Base, aware
+from .. import services as S
+from ..models import Appointment, AppointmentService, Pause
+from .test_disponibilita_tmp import Caccia22Base, aware
 
 STAFF_ONLY_FIELDS = ("note", "forced", "created_via", "cancel_reason", "client", "location_id")
 
@@ -308,7 +308,7 @@ class GiftCodesInTheAgendaTests(Caccia22Base):
         self.assertEqual(set(owner.values()), {self.card.code})
 
     def test_the_client_sees_her_own_code(self):
-        from .api import _client_appointment_out, gift_index
+        from ..api import _client_appointment_out, gift_index
 
         out = _client_appointment_out(self.visit, gift_index(self.salon, [self.anna.id]))
         self.assertEqual(out["gifts"][0]["code"], self.card.code)
@@ -325,7 +325,7 @@ class GiftFromNameTests(Caccia22Base):
     def test_only_a_card_bought_by_someone_else_is_a_gift(self):
         from apps.marketing.services import create_gift_card
 
-        from .api import _appointment_out
+        from ..api import _appointment_out
 
         appt = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
         own = create_gift_card(self.salon, Decimal("30.00"), gift_service=self.cut30,
@@ -363,7 +363,7 @@ class StaffRecordsClientCancellationTests(Caccia22Base):
     def test_a_late_cancellation_by_the_client_keeps_the_deposit(self):
         from apps.core.models import ActivityLog
 
-        from .models import UndoEntry
+        from ..models import UndoEntry
 
         appointment = self._paid(hours_ahead=3)
         res = self._cancel(appointment, by_client=True)

@@ -13,8 +13,8 @@ from django.utils import timezone
 from apps.core.models import DepositRule, OutboxEvent
 from common.auth import create_staff_tokens
 
-from .models import Appointment, UndoEntry
-from .services import (
+from ..models import Appointment, UndoEntry
+from ..services import (
     cancel_appointment,
     create_appointment,
     edit_appointment,
@@ -22,7 +22,7 @@ from .services import (
     move_appointment,
     split_appointment,
 )
-from .tests import AgendaTestBase, _aware
+from .test_agenda_legacy import AgendaTestBase, _aware
 
 WIDE = [(0, 24 * 60)]
 

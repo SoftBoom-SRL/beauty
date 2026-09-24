@@ -13,8 +13,8 @@ from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent, Salon
 
-from .models import Appointment, UndoEntry
-from .services import (
+from ..models import Appointment, UndoEntry
+from ..services import (
     _lock_and_reload,
     check_in,
     create_appointment,
@@ -23,7 +23,7 @@ from .services import (
     move_appointment,
     start_appointment,
 )
-from .tests import AgendaTestBase, _aware
+from .test_agenda_legacy import AgendaTestBase, _aware
 
 
 class _StaffMixin:

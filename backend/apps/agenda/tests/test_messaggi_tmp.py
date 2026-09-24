@@ -17,8 +17,8 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import DepositRule, OutboxEvent, SalonSettings
 from common.auth import create_staff_tokens
 
-from .models import Appointment, WaitlistEntry
-from .services import (
+from ..models import Appointment, WaitlistEntry
+from ..services import (
     appointment_event_key,
     cancel_appointment,
     check_in,
@@ -27,7 +27,7 @@ from .services import (
     mark_no_show,
     move_appointment,
 )
-from .tests import AgendaTestBase, _aware
+from .test_agenda_legacy import AgendaTestBase, _aware
 
 WIDE = [(0, 24 * 60)]
 
@@ -259,7 +259,7 @@ class ReleaseForUnpaidDepositTests(_Base):
         self.salon.refresh_from_db()
 
     def test_no_move_message_is_left_behind_the_release(self):
-        from .services import process_deposit_holds
+        from ..services import process_deposit_holds
 
         with patch("apps.clients.services.client_facts", return_value={}):
             appointment = self._book(10, via="app")
