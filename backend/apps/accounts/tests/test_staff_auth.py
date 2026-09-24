@@ -368,7 +368,7 @@ class StaffLoginChoiceTests(TestCase):
         working = Salon.objects.create(name="Con ruolo", slug="con-ruolo")
         user = User.objects.create_user(email="bea@parlour.it", password="Password-Bea-1")
         Membership.objects.create(user=user, salon=empty)
-        role = Role.objects.create(salon=working, name="Operatrice", scopes=["agenda"])
+        role = Role.objects.create(salon=working, name="Operatrice di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=working, role=role)
         res = self._login("bea@parlour.it", "Password-Bea-1")
         self.assertEqual(res.json()["salon"]["slug"], "con-ruolo")

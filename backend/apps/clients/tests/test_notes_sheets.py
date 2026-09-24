@@ -280,7 +280,7 @@ class SheetPhotoUrlTests(TestCase):
         user = User.objects.create_user(email="operatrice@theparlour.it", password="x" * 10)
         user.first_name, user.last_name = "Giulia", "Bianchi"
         user.save()
-        role = Role.objects.create(salon=self.salon, name="Operatrice", scopes=["agenda", "clients"])
+        role = Role.objects.create(salon=self.salon, name="Operatrice di prova", scopes=["agenda", "clients"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
         self.auth = bearer(user, self.salon)
         self.card = Client.objects.create(salon=self.salon, first_name="Sofia", phone="+393331110000")

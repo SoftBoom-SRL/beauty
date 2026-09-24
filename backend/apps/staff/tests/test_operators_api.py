@@ -71,7 +71,7 @@ class OperatorColorApiTests(TestCase):
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         operator = Operator.objects.create(salon=salon, first_name="Giulia", last_name="Rossi", color="#AAAAAA")
         user = User.objects.create_user(email="front@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=salon, role=role)
         auth = bearer(user, salon)
         res = self.client.patch(f"/api/staff/{operator.id}/color", data='{"color": "#c9b8f2"}', content_type="application/json", **auth)

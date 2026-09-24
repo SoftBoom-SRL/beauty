@@ -154,7 +154,7 @@ class DepositHoldTests(AgendaTestBase):
         appointment = self._book()
         self.assertIsNotNone(appointment.deposit_due_at)
         user = User.objects.create_user(email="cassa@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda", "sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         res = self.client.post(
@@ -239,7 +239,7 @@ class DepositHoldTests(AgendaTestBase):
         from ..services.deposit_holds import process_deposit_holds
 
         user = User.objects.create_user(email="rail@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         appointment = self._book()

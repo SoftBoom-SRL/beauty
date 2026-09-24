@@ -283,7 +283,7 @@ class _StaffMixin:
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         return user
 

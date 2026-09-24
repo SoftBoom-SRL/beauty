@@ -67,7 +67,7 @@ class ClientIdFilterApiTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["marketing"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         tokens = create_staff_tokens(user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}

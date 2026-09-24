@@ -29,7 +29,7 @@ class AutomationsApiTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.user = User.objects.create_user(email="owner@the-parlour.test", password="pw12345!")
-        self.role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        self.role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["marketing"])
         Membership.objects.create(
             user=self.user, salon=self.salon, role=self.role, is_owner=True
         )
@@ -106,7 +106,7 @@ class AutomationsApiTests(TestCase):
         )
 
     def test_write_requires_marketing_scope(self):
-        other_role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        other_role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         other_user = User.objects.create_user(email="frontdesk@the-parlour.test", password="pw12345!")
         Membership.objects.create(
             user=other_user, salon=self.salon, role=other_role, is_owner=False

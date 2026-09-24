@@ -25,7 +25,7 @@ class AppointmentEditApiTests(AgendaTestBase):
         self.user = User.objects.create_user(
             email="sole@theparlour.it", password="theparlour"
         )
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["agenda"])
         Membership.objects.create(
             user=self.user, salon=self.salon, role=role, is_owner=True
         )

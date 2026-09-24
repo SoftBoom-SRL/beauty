@@ -281,7 +281,7 @@ class ForcedBookingTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="force@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         return bearer(user, self.salon)
 
@@ -349,7 +349,7 @@ class RequestValidationTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="val@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         self.auth = bearer(user, self.salon)
 

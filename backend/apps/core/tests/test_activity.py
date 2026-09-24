@@ -77,7 +77,7 @@ class ActivityFeedApiTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.user = User.objects.create_user(email="mara@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role, is_owner=False)
         self.auth = bearer(self.user, self.salon)
 
@@ -252,7 +252,7 @@ class ActivityStreamTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.user = User.objects.create_user(email="mara2@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=self.user, salon=self.salon, role=role, is_owner=False)
         self.auth = bearer(self.user, self.salon)
 

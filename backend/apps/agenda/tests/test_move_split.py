@@ -81,7 +81,7 @@ class MoveWholeVisitToAnotherOperatorTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="spina@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         visit = self._visit(self.op1, self.op2)
@@ -257,7 +257,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="hunt21@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda", "sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         return bearer(user, self.salon)
 
