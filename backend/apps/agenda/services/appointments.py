@@ -213,8 +213,10 @@ def edit_appointment(
         raise HttpError(412, STALE_APPOINTMENT_MESSAGE)
     before = undo_log.appointment_snapshot(appointment)
     # Orari occupati prima della modifica: togliendo o accorciando un servizio
-    # il tempo che si libera va alla lista d'attesa, come nello spostamento.
+    # il tempo che si libera va alla lista d'attesa, come nello spostamento. E i
+    # servizi di prima: chi aspetta proprio quello tolto è fra i match.
     before_spans = _appointment_spans(appointment)
+    services_before = set(appointment.items.values_list("service_id", flat=True))
     changed = ["updated_at"]
     if note is not None:
         appointment.note = note
@@ -268,7 +270,8 @@ def edit_appointment(
     # 10:00–12:00, le 11:30–12:00 tornavano libere senza che la lista d'attesa
     # lo sapesse.
     emit_with_freed_slots(
-        appointment, "appointment.updated", before=before_spans, after=_appointment_spans(appointment)
+        appointment, "appointment.updated", before=before_spans, after=_appointment_spans(appointment),
+        services_before=services_before,
     )
     undo_log.record_appointment_change(
         appointment,
@@ -563,12 +566,14 @@ def split_appointment(
     )
     # Staccando la piega su un altro giorno le sue 11:30–12:00 si liberavano
     # senza nessun `slot.freed`. «Dopo» conta anche il servizio staccato: se
-    # finisce poco più in là, il tempo che occupa ancora non è libero.
+    # finisce poco più in là, il tempo che occupa ancora non è libero. Nei
+    # match entra anche lui: chi aspetta una piega può prendere quel posto.
     emit_with_freed_slots(
         appointment,
         "appointment.updated",
         before=before_spans,
         after=_spans_union(_appointment_spans(appointment), _appointment_spans(created)),
+        services_before={it.service_id for it in items},
     )
     emit_appointment_event(created, "appointment.created")
     undo_log.record(
