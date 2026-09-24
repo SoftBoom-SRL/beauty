@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.core.models import DepositRule, OutboxEvent
-from common.testing import bearer
+from common.testing import bearer, put_json
 
 from ..models import Appointment, Pause, UndoEntry, WaitlistEntry
 from ..services.appointments import create_appointment, edit_appointment, move_appointment, split_appointment
@@ -452,6 +452,15 @@ class UndoOfABookingWithADepositLinkTests(UndoTestBase):
 class UndoRechecksTheSlotTests(UndoTestBase):
     """02-08: si torna dov'era solo se quel posto è ancora libero."""
 
+    BREAK_TAKEN = "Nel frattempo quell'orario è stato occupato: la pausa non si può rimettere dov'era"
+
+    def _booked_by_someone_else(self, start):
+        return create_appointment(
+            self.salon, self._other_client(),
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+            start, via="app",
+        )
+
     def test_a_client_booked_the_old_time_in_the_meantime(self):
         appointment = self._book()
         move_appointment(appointment, _aware(self.day, 15), actor=self.user)
@@ -483,6 +492,56 @@ class UndoRechecksTheSlotTests(UndoTestBase):
         move_appointment(appointment, _aware(self.day, 15), actor=self.user)
         self._book(_aware(self.day, 10, 30), actor=None, items=[{"service_id": self.svc30.id, "operator_id": self.op1.id}])
         self.assertEqual(self._undo().status_code, 200)
+
+    def test_a_removed_break_does_not_come_back_on_top_of_a_booking(self):
+        """Bug sospetto 6 (24/09): alle 12:55 si toglie la pausa di Giulia delle
+        13:00, alle 12:58 una cliente prenota dall'app alle 13:00 con lei, alle
+        13:02 «Indietro» rimetteva la pausa sopra la visita, senza un avviso."""
+        pause = Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 13), duration_min=60
+        )
+        self.assertEqual(self.client.delete(f"/api/agenda/pauses/{pause.id}", **self.auth).status_code, 200)
+        self._booked_by_someone_else(_aware(self.day, 13))
+        res = self._undo()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["detail"], self.BREAK_TAKEN)
+        self.assertFalse(Pause.objects.filter(id=pause.id).exists())
+
+    def test_a_moved_break_does_not_go_back_on_top_of_a_booking(self):
+        pause = Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 13), duration_min=60
+        )
+        moved = put_json(
+            self.client, f"/api/agenda/pauses/{pause.id}",
+            {"operator_id": self.op1.id, "start": _aware(self.day, 15).isoformat(), "duration_min": 60, "note": ""},
+            **self.auth,
+        )
+        self.assertEqual(moved.status_code, 200, moved.content)
+        self._booked_by_someone_else(_aware(self.day, 13, 30))
+        res = self._undo()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["detail"], self.BREAK_TAKEN)
+        pause.refresh_from_db()
+        self.assertEqual(pause.start, _aware(self.day, 15))
+
+    def test_a_break_past_midnight_is_checked_on_the_next_day_too(self):
+        pause = Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 23), duration_min=120
+        )
+        self.assertEqual(self.client.delete(f"/api/agenda/pauses/{pause.id}", **self.auth).status_code, 200)
+        self._booked_by_someone_else(_aware(self.day + dt.timedelta(days=1), 0, 30))
+        res = self._undo()
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["detail"], self.BREAK_TAKEN)
+
+    def test_a_booking_right_after_the_break_does_not_stop_it(self):
+        pause = Pause.objects.create(
+            salon=self.salon, operator=self.op1, start=_aware(self.day, 13), duration_min=60
+        )
+        self.assertEqual(self.client.delete(f"/api/agenda/pauses/{pause.id}", **self.auth).status_code, 200)
+        self._booked_by_someone_else(_aware(self.day, 14))
+        self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(Pause.objects.get(id=pause.id).start, _aware(self.day, 13))
 
     def test_a_place_taken_by_force_stays_a_choice(self):
         other = create_appointment(

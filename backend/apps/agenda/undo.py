@@ -40,7 +40,9 @@ from .services.deposits import close_deposit_link_after_commit, renew_deposit_li
 from .services.freed_slots import _appointment_spans, _chain_spans, _spans_minus, emit_with_freed_slots
 from .services.locking import lock_salon
 from .services.messages import _event_payload, _withdraw_deposit_messages
+from .services.occupancy import _busy_map
 from .services.resolution import _validate_segments
+from .services.timegrid import _overlaps, day_and_minute
 from .services.undo_messages import revert_held_events
 
 logger = logging.getLogger("youty.agenda")
@@ -439,6 +441,37 @@ def _delete_appointment(appointment: Appointment, label: str) -> None:
     appointment.delete()
 
 
+def _ensure_pause_slot_free(snap: dict, salon) -> None:
+    """Il tempo dove la pausa torna dev'essere ancora libero (409 altrimenti).
+
+    Come `_ensure_slot_free` per gli appuntamenti, si controlla solo il tempo
+    che la pausa riprende e oggi non tiene. Alle 12:55 la reception toglieva la
+    pausa di Laura delle 13:00, alle 12:58 una cliente prenotava dall'app alle
+    13:00 con Laura, e alle 13:02 «Indietro» rimetteva la pausa sopra la
+    visita, senza un avviso: l'operatrice poteva credersi in pausa con una
+    cliente in arrivo. Occupano il lavoro delle visite e le altre pause; la
+    posa di un'altra cliente no, come negli altri gesti dello staff.
+    """
+    start = parse_datetime(snap["start"])
+    wanted = {snap["operator_id"]: [(start, start + dt.timedelta(minutes=snap["duration_min"]))]}
+    pause = Pause.objects.filter(id=snap["id"]).first()
+    held = {pause.operator_id: [(pause.start, pause.end)]} if pause is not None else {}
+    for operator_id, pieces in _spans_minus(wanted, held).items():
+        for piece_start, piece_end in pieces:
+            day, first_min = day_and_minute(piece_start)
+            last_min = first_min + int((piece_end - piece_start).total_seconds() // 60)
+            busy = [(s, e) for s, e, hard in _busy_map(salon, day).get(operator_id, ()) if hard]
+            if last_min > 24 * 60:
+                # A cavallo della mezzanotte conta anche quello che comincia il
+                # giorno dopo (le pause durano fino a dodici ore).
+                tomorrow = _busy_map(salon, day + dt.timedelta(days=1)).get(operator_id, ())
+                busy += [(s + 24 * 60, e + 24 * 60) for s, e, hard in tomorrow if hard]
+            if _overlaps(busy, first_min, last_min):
+                raise HttpError(
+                    409, "Nel frattempo quell'orario è stato occupato: la pausa non si può rimettere dov'era"
+                )
+
+
 def _restore_pause(snap: dict) -> None:
     """Rimette la pausa com'era, ricreandola se nel frattempo è sparita."""
     pause = Pause.objects.filter(id=snap["id"]).first()
@@ -606,6 +639,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             touched.append(appointment)
             days.append(appointment.start)
         for snap in entry.before.get("pauses", []):
+            _ensure_pause_slot_free(snap, salon)
             _restore_pause({**snap, "salon_id": salon.id})
         if entry.kind in (UndoEntry.Kind.CANCEL, UndoEntry.Kind.NO_SHOW):
             _reissue_deposit_links(touched)
