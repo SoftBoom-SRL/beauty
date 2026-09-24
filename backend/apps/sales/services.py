@@ -4,14 +4,18 @@ una riga per il denaro incassato fuori dal conto (gift card, caparra, no-show).
 In sales è l'unico modulo che scrive Sale, SaleLine e Payment: il riepilogo di
 giornata e lo storico stanno in reports.py, la cassa delle caparre in deposits.py.
 
-Le integrazioni cross-app (magazzino, gift card, fedeltà) sono importate lazy
-dentro le funzioni, come da convenzione SPEC §1: le firme di riferimento sono
+Le integrazioni cross-app (magazzino, coupon, gift card, fedeltà) sono importate
+lazy dentro le funzioni, come da convenzione SPEC §1 (e i test le patchano nei
+moduli qui sotto): le firme di riferimento sono
 
     inventory.services.deduct_stock_for_sale(sale)
-    marketing.services.redeem_gift_card(salon, code, amount)
-    marketing.services.create_gift_card(salon, value, *, buyer_client=None,
+    marketing.coupons.validate_coupon(salon, code, client=None)
+    marketing.coupons.coupon_discount(coupon, base)
+    marketing.coupons.mark_coupon_redeemed(coupon, sale)
+    marketing.gift_cards.redeem_gift_card(salon, code, amount)
+    marketing.gift_cards.create_gift_card(salon, value, *, buyer_client=None,
         recipient_name="", paid=False, paid_method="", sold_by=None, sale=None)
-    marketing.services.accrue_loyalty(sale)
+    marketing.loyalty.accrue_loyalty(sale)
 """
 
 from decimal import ROUND_HALF_UP, Decimal

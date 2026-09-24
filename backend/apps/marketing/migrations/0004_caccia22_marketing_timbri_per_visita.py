@@ -15,7 +15,7 @@ scontrino emetteva più premi. Qui:
   sono nei portafogli delle clienti, spesso già annunciati per messaggio o
   spesi in cassa. Chi vuole ritirarne qualcuno lo fa a mano da Promozioni;
 - per le altre tessere a timbri il rapporto torna a 1, che è quello che la
-  cassa applica ormai comunque (`services._points_earned`).
+  cassa applica ormai comunque (`loyalty._points_earned`).
 
 Una riga nel registro attività del salone dice cosa è cambiato e perché.
 """
