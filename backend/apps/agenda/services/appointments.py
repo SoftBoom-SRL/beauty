@@ -246,13 +246,14 @@ def edit_appointment(
             resolved = resolve_items_edit(appointment.salon, items, appointment.start, force=True, **kwargs)
             appointment.forced = True
             changed.append("forced")
+        total_before = sum((item.price for item in existing.values()), start=Decimal("0"))
         appointment.items.all().delete()
         _write_items(appointment, resolved)
         appointment.operator = resolved[0].operator
         changed.append("operator")
     appointment.save(update_fields=changed)
     if items is not None:
-        shrink_deposit_to_total(appointment, actor=actor)
+        shrink_deposit_to_total(appointment, actor=actor, total_before=total_before)
 
     log_activity(
         appointment.salon,
@@ -516,7 +517,9 @@ def split_appointment(
     appointment.save(update_fields=changed)
     # La visita di partenza ora vale meno: se la caparra la supera il conto non
     # si chiuderebbe più (la cassa dovrebbe incassare un importo negativo).
-    shrink_deposit_to_total(appointment, actor=actor)
+    shrink_deposit_to_total(
+        appointment, actor=actor, total_before=sum((it.price for it in items), start=Decimal("0"))
+    )
 
     created = Appointment.objects.create(
         salon=appointment.salon,

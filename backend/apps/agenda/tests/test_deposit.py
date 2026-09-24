@@ -329,6 +329,57 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         )
 
 
+class DepositExcessWrittenWhenItChangesTests(AgendaTestBase):
+    """Bug sospetto 7 (24/09): «caparra superiore alla visita» nel registro solo se l'eccedenza cambia.
+
+    La dashboard manda la lista dei servizi a ogni ritocco di durata in
+    griglia: con la caparra versata più alta della visita, ogni ritocco
+    scriveva di nuovo la stessa riga, che sembrava un'eccedenza diversa.
+    """
+
+    def _excess_amounts(self):
+        return [
+            log.payload["amount"]
+            for log in ActivityLog.objects.filter(salon=self.salon, type="deposit.excess").order_by("id")
+        ]
+
+    def test_retouching_the_duration_does_not_write_it_again(self):
+        from ..services.appointments import edit_appointment
+
+        windows = {self.op1.id: [(8 * 60, 20 * 60)]}
+        with self._windows(windows):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="dashboard",
+            )
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.PAID, deposit_amount=Decimal("70.00")
+        )
+        appointment.refresh_from_db()
+        colour = appointment.items.get(service=self.svc60)
+        with self._windows(windows):
+            # via il servizio da 30: la visita scende a 50, 20 € tornano alla cliente
+            edit_appointment(
+                appointment,
+                items=[{"id": colour.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            )
+            # tre ritocchi della durata: il conto è lo stesso
+            for minutes in (75, 90, 60):
+                item = appointment.items.get()
+                edit_appointment(appointment, items=[{
+                    "id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id,
+                    "duration_min": minutes,
+                }])
+            self.assertEqual(self._excess_amounts(), ["20.00"])
+            # al posto del colore un servizio da 30: l'eccedenza cambia, e si scrive
+            edit_appointment(appointment, items=[{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+        self.assertEqual(self._excess_amounts(), ["20.00", "40.00"])
+
+
 class DepositDownToZeroTests(AgendaTestBase):
     """Bug sospetto 5 (24/09): una caparra da pagare scesa a 0 € non c'è più.
 

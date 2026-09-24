@@ -132,7 +132,7 @@ def compute_deposit(salon, client, total_price) -> Decimal:
     return min(max(amount, Decimal("0.00")), total_price.quantize(CENT))
 
 
-def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
+def shrink_deposit_to_total(appointment: Appointment, *, actor=None, total_before=None) -> Decimal:
     """Allinea la caparra a una visita che si è accorciata (servizio staccato o tolto).
 
     Caparra ancora da pagare: scende al nuovo totale, e il link già mandato —
@@ -149,6 +149,9 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
     cliente ripagava la visita (02-01, 05-06). Ora il checkout detrae fino al
     totale e restituisce da sé l'eccedenza (`settle_deposit_excess`).
 
+    `total_before` è il totale della visita prima del gesto: l'eccedenza va
+    nel registro (`deposit.excess`) solo se è cambiata rispetto ad allora.
+
     Ritorna l'eccedenza (0 se non c'era).
     """
     total = sum(
@@ -159,7 +162,15 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
 
     if appointment.deposit_status == Appointment.DepositStatus.PAID:
         excess = appointment.deposit_credit - total
-        if excess > 0:
+        # La dashboard manda la lista dei servizi a ogni ritocco di durata in
+        # griglia: con 50 € di caparra su una visita scesa a 40, tre ritocchi
+        # scrivevano tre righe «10 € tornano alla cliente», che sembravano
+        # eccedenze diverse. Si scrive solo quando l'eccedenza cambia.
+        excess_before = (
+            None if total_before is None
+            else appointment.deposit_credit - Decimal(total_before).quantize(CENT)
+        )
+        if excess > 0 and excess != excess_before:
             log_activity(
                 appointment.salon,
                 "deposit.excess",
