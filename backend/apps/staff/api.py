@@ -14,7 +14,7 @@ from apps.core.models import Location, Salon
 from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import require_scope
+from common.permissions import has_scope, require_scope
 from common.utils import salon_get
 
 from .models import Absence, Operator, WeeklyShift
@@ -108,12 +108,12 @@ def _sees_cash(ctx) -> bool:
     «Operatrice» — dato proprio perché non veda gli incassi — li leggeva tutti
     da /api/staff (09-01, 10-09).
     """
-    return ctx.is_owner or "sales" in ctx.scopes
+    return has_scope(ctx, "sales")
 
 
 def _sees_hourly_cost(ctx) -> bool:
     """Il costo orario è un dato salariale: lo vede chi gestisce il personale."""
-    return ctx.is_owner or "team" in ctx.scopes
+    return has_scope(ctx, "team")
 
 
 def _operator_out(op: Operator, ctx) -> dict:

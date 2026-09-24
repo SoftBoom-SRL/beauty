@@ -5,6 +5,7 @@ from typing import Optional
 from ninja import Schema
 
 from common.media import signed_media_url
+from common.permissions import has_scope
 
 
 class OkOut(Schema):
@@ -179,7 +180,7 @@ class MovementOut(Schema):
         # «sales», come gli incassi. Prima bastava l'accesso al magazzino
         # (10-09). Senza un contesto di richiesta non si espone nulla.
         auth = getattr((context or {}).get("request"), "auth", None)
-        if auth is None or not (auth.is_owner or "sales" in auth.scopes):
+        if auth is None or not has_scope(auth, "sales"):
             return None
         # `inventory/invoices/` è un prefisso riservato in common/media.py: senza
         # token firmato la vista /media/ risponde 403 e il link della fattura

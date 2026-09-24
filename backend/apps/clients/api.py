@@ -26,7 +26,7 @@ from apps.core.models import Salon, SalonSettings
 from apps.core.services import emit_event, log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import require_scope
+from common.permissions import has_scope, require_scope
 from common.media import signed_media_url, stored_upload_name, validate_upload
 from common.phone import canonical_phone, find_client_by_phone, phone_key
 from common.utils import salon_get
@@ -558,7 +558,7 @@ def get_client(request, client_id: int):
     # Spesa totale, numero di visite e ultima visita sono dati di cassa: li
     # vede solo chi ha il permesso «vendite», come sulla lista degli incassi.
     # A chi non ce l'ha la scheda arriva completa, con i contatori a zero.
-    may_see = ctx.is_owner or "sales" in ctx.scopes
+    may_see = has_scope(ctx, "sales")
     if may_see:
         stats = client_stats(client)
     else:
@@ -804,7 +804,7 @@ def client_history(request, client_id: int):
     # Gli incassi di ogni visita sono dati di cassa: senza il permesso
     # «vendite» la timeline resta completa ma senza importi, come la lista
     # degli incassi che a quel ruolo è già preclusa.
-    can_read_sales = ctx.is_owner or "sales" in ctx.scopes
+    can_read_sales = has_scope(ctx, "sales")
 
     appointments = list(
         Appointment.objects.filter(salon=ctx.salon, client=client)
