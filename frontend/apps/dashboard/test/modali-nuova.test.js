@@ -3,12 +3,13 @@
 // server e che cosa dice. Sono i comportamenti da tenere fermi mentre il
 // drawer si divide in pezzi: l'orario libero, l'orario cliccato in agenda che
 // non è libero (si forza, deciso), quello libero preso nel frattempo (ci si
-// ferma), l'orario a mano, la caparra da versare, ciò che manca.
+// ferma), l'orario a mano, la caparra da versare, ciò che manca. Bug sospetti
+// del 24/09/2026: n. 52 (i pulsanti degli orari si rimontavano).
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
 import { isoAtMin, parseISO, toDateStr, todayStr } from '@youty/shared';
-import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
+import { find, findAll, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
 const { default: NewApptModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/NewApptModal.jsx', {
   stubs: ['ClientPicker.jsx'],
@@ -146,4 +147,22 @@ test('senza cliente il pulsante dice che cosa manca, e non parte niente', async 
   await settle(g);
   assert.equal(g.creates().length, 0);
   assert.deepEqual(g.lastToast(), { msg: 'Manca: cliente', icon: 'alert' });
+});
+
+test('scegliendo un\'alternativa i pulsanti degli orari non si rimontano: il fuoco resta', async () => {
+  // le 10:00 cliccate in agenda non sono libere: il pannello propone le alternative
+  const g = setup({ slots: [slot(570), slot(630), slot(660)] });
+  await settle(g);
+  const chips = () => findAll(g.m.tree, (el) => typeof el.type === 'function' && el.props?.s?.start);
+  const before = chips();
+  assert.deepEqual(before.map((el) => el.props.s.start), [at(570), at(630), at(660)]);
+  // Invio (o clic) sul bottone delle 10:30: il drawer si ridisegna
+  before[1].type(before[1].props).props.onClick();
+  g.render();
+  const after = chips();
+  assert.deepEqual(after.map((el) => el.props.s.start), [at(570), at(630), at(660)]);
+  // lo stesso componente da un disegno all'altro: React aggiorna i bottoni
+  // invece di rimontarli, e il fuoco resta su quello scelto
+  after.forEach((el, i) => assert.equal(el.type, before[i].type, `il bottone delle ${el.props.s.start} si rimonta`));
+  assert.deepEqual(after.map((el) => el.type(el.props).props.className), ['dk-slot', 'dk-slot dk-slot--on', 'dk-slot']);
 });

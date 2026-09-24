@@ -6,6 +6,24 @@ import { Icon, minutesOfDay, timeLabel } from '@youty/shared';
 import { firstName, AFTERNOON_MIN } from '../../lib.js';
 import StepLabel from './StepLabel.jsx';
 
+/* Il bottone di un orario. Sta fuori da TimeStep e riceve come props quello
+ * che gli serve: definito lì dentro era un componente nuovo a ogni render, e
+ * React rimontava tutti i bottoni degli orari a ogni disegno del pannello —
+ * chi sceglie con la tastiera perdeva il fuoco dopo ogni scelta (bug sospetti
+ * del 24/09, n. 52). `anyRecommended`: fra gli orari ce ne sono di consigliati
+ * e di attenuati (vedi TimeStep). */
+function SlotChip({ s, selStart, pickSlot, operators, anyRecommended, t }) {
+  const sel = s.start === selStart;
+  const who = (s.assignment || []).map((a) => firstName(operators.find((o) => o.id === a.operator_id)?.first_name)).filter(Boolean);
+  const meh = s.recommended === false; // lascerebbe un buco invendibile: si può scegliere, ma è attenuato
+  const title = [who.length ? t('Con ', 'With ') + [...new Set(who)].join(', ') : '', meh ? t('Lascerebbe un buco troppo corto per un altro servizio', 'Would leave a gap too short for another service') : (anyRecommended ? t('Consigliato: non lascia buchi', 'Recommended: leaves no gaps') : '')].filter(Boolean).join(' · ');
+  return (
+    <button key={s.start} type="button" onClick={() => pickSlot(s.start)} className={'dk-slot' + (sel ? ' dk-slot--on' : '')} title={title} style={meh && !sel ? { opacity: 0.55 } : undefined}>
+      {timeLabel(minutesOfDay(s.start))}{!meh && anyRecommended && !sel && <span aria-hidden="true" style={{ display: 'inline-block', width: 5, height: 5, borderRadius: 99, background: 'var(--ok)', marginLeft: 5, verticalAlign: 'middle' }} />}
+    </button>
+  );
+}
+
 export default function TimeStep({
   stepRef, slots, selStart, pickSlot, reqStatus, req, reqOp, setReq, totalDur, showAll, setShowAll, dateLabel, items, setItems,
   eligibleOps, shiftDate, operators, t,
@@ -13,21 +31,8 @@ export default function TimeStep({
   const morning = (slots || []).filter((s) => minutesOfDay(s.start) < AFTERNOON_MIN);
   const afternoon = (slots || []).filter((s) => minutesOfDay(s.start) >= AFTERNOON_MIN);
   const anyRecommended = (slots || []).some((s) => s.recommended) && (slots || []).some((s) => s.recommended === false);
-  /* Il bottone di un orario. È definito qui dentro e quindi è un componente
-   * nuovo a ogni render: React rimonta i bottoni degli orari a ogni
-   * disegno (e il fuoco si perde). Così era, e così resta (bug segnalato,
-   * da correggere a parte). */
-  const SlotChip = ({ s }) => {
-    const sel = s.start === selStart;
-    const who = (s.assignment || []).map((a) => firstName(operators.find((o) => o.id === a.operator_id)?.first_name)).filter(Boolean);
-    const meh = s.recommended === false; // lascerebbe un buco invendibile: si può scegliere, ma è attenuato
-    const title = [who.length ? t('Con ', 'With ') + [...new Set(who)].join(', ') : '', meh ? t('Lascerebbe un buco troppo corto per un altro servizio', 'Would leave a gap too short for another service') : (anyRecommended ? t('Consigliato: non lascia buchi', 'Recommended: leaves no gaps') : '')].filter(Boolean).join(' · ');
-    return (
-      <button key={s.start} type="button" onClick={() => pickSlot(s.start)} className={'dk-slot' + (sel ? ' dk-slot--on' : '')} title={title} style={meh && !sel ? { opacity: 0.55 } : undefined}>
-        {timeLabel(minutesOfDay(s.start))}{!meh && anyRecommended && !sel && <span aria-hidden="true" style={{ display: 'inline-block', width: 5, height: 5, borderRadius: 99, background: 'var(--ok)', marginLeft: 5, verticalAlign: 'middle' }} />}
-      </button>
-    );
-  };
+  // quello che serve a ogni bottone degli orari (SlotChip)
+  const chipProps = { selStart, pickSlot, operators, anyRecommended, t };
   return (
     <div ref={stepRef} style={{ marginBottom: 18 }}>
       <StepLabel n={3} done={!!selStart} t={t}>{t('Orario', 'Time')}</StepLabel>
@@ -61,7 +66,7 @@ export default function TimeStep({
             {reqStatus.alternatives.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 <div className="t-sm" style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>{t('Alternative più vicine', 'Closest alternatives')}</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{reqStatus.alternatives.map((s) => <SlotChip key={s.start} s={s} />)}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{reqStatus.alternatives.map((s) => <SlotChip key={s.start} s={s} {...chipProps} />)}</div>
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
@@ -79,7 +84,7 @@ export default function TimeStep({
           {[[t('Mattina', 'Morning'), morning], [t('Pomeriggio', 'Afternoon'), afternoon]].filter(([, l]) => l.length).map(([label, list]) => (
             <div key={label}>
               <div className="t-meta" style={{ fontSize: 10, marginBottom: 6 }}>{label} · {list.length}</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{list.map((s) => <SlotChip key={s.start} s={s} />)}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{list.map((s) => <SlotChip key={s.start} s={s} {...chipProps} />)}</div>
             </div>
           ))}
           {anyRecommended && (
