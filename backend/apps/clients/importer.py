@@ -107,9 +107,13 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
         # savepoint per riga: una riga rifiutata dal database non porta
         # via con sé quelle già importate. I contatori e le cache di
         # deduplicazione vengono riportati indietro insieme ai dati, altrimenti
-        # il riepilogo conterebbe una riga che non è stata scritta.
+        # il riepilogo conterebbe una riga che non è stata scritta. Anche la
+        # cache delle etichette: un'etichetta nata nella riga rifiutata sparisce
+        # col savepoint, e la cache la dava alle righe dopo, che il database
+        # rifiutava a loro volta (voce 23 dei bug sospetti del 24/09).
         counters = (created, updated, skipped)
         phones_before, emails_before = set(by_phone), set(by_email)
+        categories_before = set(category_cache)
         warnings_before = len(warnings)
         try:
             with transaction.atomic():
@@ -273,6 +277,8 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                 by_phone.pop(key, None)
             for key in set(by_email) - emails_before:
                 by_email.pop(key, None)
+            for key in set(category_cache) - categories_before:
+                category_cache.pop(key, None)
             del warnings[warnings_before:]
             errors.append({"row": index, "reason": f"Riga rifiutata dal database: {exc}"})
             skipped = counters[2] + 1
