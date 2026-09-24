@@ -2,8 +2,7 @@
 // prenotazione senza sessione (Prenota): richiesta del codice, registrazione
 // di chi è nuova, verifica. Stesse regole e stessi messaggi nei due posti.
 import React from 'react';
-import { ApiError, SALON_SLUG, clientAuth } from '@youty/shared';
-import { errToast } from '../lib/errors.js';
+import { ApiError, SALON_SLUG, clientAuth, toastApiError } from '@youty/shared';
 
 /** `phone` è il numero com'è scritto nel campo (si manda senza spazi ai
  *  bordi). Le tre azioni non rilanciano: dicono com'è andata e mettono in
@@ -28,7 +27,7 @@ export function useOtpFlow({ phone, t, fireToast, otherErrors = 'inline' }) {
   const codeSurelySent = !!registeredPhone && registeredPhone === phone.trim();
 
   const other = (err) => {
-    if (otherErrors === 'toast') errToast(err, fireToast, t);
+    if (otherErrors === 'toast') toastApiError(err, fireToast, t);
     else setError(err?.message || t('Errore di rete', 'Network error'));
   };
 

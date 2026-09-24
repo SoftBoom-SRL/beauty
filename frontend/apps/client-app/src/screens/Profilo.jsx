@@ -1,17 +1,16 @@
 // Profilo.jsx — identity + contacts (GET/PUT /api/auth/client/me), language
 // toggle, WhatsApp reminders toggle, waitlist summary, loyalty snapshot, logout.
 import React from 'react';
-import { Icon, Toggle } from '@youty/shared';
+import { Icon, Toggle, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
 import { headFont, headWeight } from '../theme.js';
-import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 
 export default function Profilo() {
   const { t, lang, setLang, brand, client, setView, fireToast, logout } = useApp();
-  const { data: me, setData: setMe } = useApiData(getMe, [], { onError: (e) => errToast(e, fireToast, t) });
+  const { data: me, setData: setMe } = useApiData(getMe, [], { onError: (e) => toastApiError(e, fireToast, t) });
   // Richieste attive in lista d'attesa e punti fedeltà sono un di più: se non
   // arrivano si legge 0, senza toast. Il conto si fa appena arriva la risposta.
   const waitlist = useApiData(() => getWaitlist().then((l) => (l || []).filter((w) => w.status === 'active').length), []);
@@ -32,7 +31,7 @@ export default function Profilo() {
       if (localToo) localToo(updated);
     } catch (err) {
       setMe(prev);
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -59,7 +58,7 @@ export default function Profilo() {
       });
     } catch (err) {
       setMe((m) => (m ? { ...m, marketing_consent: prev } : m));
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setConsentBusy(false);
     }

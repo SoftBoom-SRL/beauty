@@ -2,15 +2,15 @@
 // POST /api/agenda/client/appointments/{id}/cancel. 400 policy errors are
 // surfaced inline + toast.
 import React from 'react';
-import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/shared';
+import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { cancelAppointment } from '../api/client.js';
-import { fmtDayMed, apptServiceNames, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { Meta } from '../components/Meta.jsx';
 import { MissingAppt } from '../components/MissingAppt.jsx';
 import { SuccessScreen } from '../components/SuccessScreen.jsx';
-import { apptMinutes } from '../lib/appointments.js';
+import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
+import { fmtDayMed } from '../lib/dates.js';
 
 export default function Annulla() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -53,7 +53,7 @@ export default function Annulla() {
         setPolicyErr(err.message); // preavviso minimo non rispettato — contatta il salone
         fireToast({ msg: err.message, icon: 'alert' });
       } else {
-        errToast(err, fireToast, t);
+        toastApiError(err, fireToast, t);
       }
     } finally {
       setBusy(false);

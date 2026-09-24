@@ -5,10 +5,9 @@
 // Il 400 del preavviso minimo (ore configurabili per salone) si mostra
 // inline (banner) + toast, con il testo che arriva dal server.
 import React from 'react';
-import { ApiError, Icon, fmtDur, fmtTime, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, fmtDur, fmtTime, minutesOfDay, timeLabel, toDateStr, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getAvailability, moveAppointment } from '../api/client.js';
-import { nextDays, fmtDayMed, toDateStr, apptServiceNames, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DayStrip } from '../components/DayStrip.jsx';
 import { Meta } from '../components/Meta.jsx';
@@ -18,7 +17,8 @@ import { StickyCta } from '../components/StickyCta.jsx';
 import { SuccessScreen } from '../components/SuccessScreen.jsx';
 import { toastSlotTaken } from '../lib/errors.js';
 import { useTodayKey } from '../hooks/useTodayKey.js';
-import { apptMinutes } from '../lib/appointments.js';
+import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
+import { nextDays, fmtDayMed } from '../lib/dates.js';
 
 export default function Sposta() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -62,7 +62,7 @@ export default function Sposta() {
         // del preavviso: sotto un toast restava «Nessun orario libero questo
         // giorno: prova un altro giorno», e la cliente provava giorno per giorno.
         if (err instanceof ApiError && err.status === 400) setPolicyErr(err.message);
-        else errToast(err, fireToast, t);
+        else toastApiError(err, fireToast, t);
       });
     return () => { alive = false; };
     // `days` fra le dipendenze: a mezzanotte la striscia scivola di un giorno
@@ -107,7 +107,7 @@ export default function Sposta() {
         getAvailability(availabilityParams(days[dayIdx]))
           .then(setSlots).catch(() => setSlots([]));
       } else {
-        errToast(err, fireToast, t);
+        toastApiError(err, fireToast, t);
       }
     } finally {
       setMoving(false);

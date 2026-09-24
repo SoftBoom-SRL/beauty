@@ -1,9 +1,8 @@
 // DepositDue.jsx — la caparra ancora da versare, col pulsante per pagarla.
 import React from 'react';
-import { ApiError, Icon, fmtEur, toDateStr, todayStr, salonTzOpts } from '@youty/shared';
+import { ApiError, Icon, fmtEur, toDateStr, todayStr, salonTzOpts, toastApiError } from '@youty/shared';
 import { createDepositLink } from '../api/client.js';
 import { depositDueMs, depositExpired } from '../lib/appointments.js';
-import { errToast } from '../lib/errors.js';
 
 /** Caparra da versare: importo, scadenza e pulsante di pagamento.
  *  Il link si chiede al server a ogni tocco. 503 = il salone non ha i
@@ -62,7 +61,7 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false, onStale 
       if (err instanceof ApiError && err.status === 503) {
         fireToast?.({ msg: t('Il salone non accetta pagamenti online: potrai pagare in sede.', 'The salon does not take online payments: you can pay on site.'), icon: 'info' });
       } else {
-        errToast(err, fireToast, t);
+        toastApiError(err, fireToast, t);
         if (err instanceof ApiError && err.status === 400) onStale?.();
       }
     } finally { setBusy(false); }

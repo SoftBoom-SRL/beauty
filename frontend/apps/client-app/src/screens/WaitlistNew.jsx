@@ -4,15 +4,14 @@
 // Niente scelta dell'operatrice: la richiesta non manda `operator_id` e vale
 // per chiunque si liberi (il campo c'è, e /api/staff/public/operators pure).
 import React from 'react';
-import { Icon, fmtEur, fmtDur } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, toastApiError } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { joinWaitlist } from '../api/client.js';
-import { svcLangName, catIcon, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { StickyCta } from '../components/StickyCta.jsx';
 import { usePublicServices } from '../hooks/usePublicCatalog.js';
 import { WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../lib/waitlist.js';
-import { svcMinutes } from '../lib/catalog.js';
+import { svcMinutes, svcLangName, catIcon } from '../lib/catalog.js';
 
 export default function WaitlistNew() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -23,7 +22,7 @@ export default function WaitlistNew() {
   const [exactTime, setExactTime] = React.useState('10:00');
   const [busy, setBusy] = React.useState(false);
 
-  React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (catError) toastApiError(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const prefs = [
     ['any', t('Qualsiasi', 'Any time')],
@@ -46,7 +45,7 @@ export default function WaitlistNew() {
       fireToast({ msg: t('Sei in lista! Ti avvisiamo su WhatsApp.', 'You’re on the list! We’ll ping you on WhatsApp.'), icon: 'check' });
       setView('waitlist');
     } catch (err) {
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }

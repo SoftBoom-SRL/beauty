@@ -3,7 +3,7 @@
 // risposte superate, regali già pagati, il codice via SMS di chi non ha la
 // sessione e il POST dell'appuntamento a prova di secondo tentativo.
 import React from 'react';
-import { ApiError, SALON_SLUG, isPlausiblePhone, toDateStr } from '@youty/shared';
+import { ApiError, SALON_SLUG, isPlausiblePhone, toDateStr, toastApiError } from '@youty/shared';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../../api/client.js';
 import { useOtpFlow } from '../../hooks/useOtpFlow.js';
 import { usePublicOperators, usePublicServices } from '../../hooks/usePublicCatalog.js';
@@ -11,7 +11,7 @@ import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { sameBooking } from '../../lib/appointments.js';
 import { svcMinutes } from '../../lib/catalog.js';
 import { nextDays } from '../../lib/dates.js';
-import { errToast, toastSlotTaken } from '../../lib/errors.js';
+import { toastSlotTaken } from '../../lib/errors.js';
 import { giftServiceCards } from '../../lib/wallet.js';
 import { STEP } from './steps.js';
 
@@ -40,7 +40,7 @@ export function usePrenota({ t, lang, session, fireToast }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- todayKey è il motivo del ricalcolo
   const days = React.useMemo(() => nextDays(14), [todayKey]);
 
-  React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (catError) toastApiError(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Gift card «a trattamento» già pagate: il servizio regalato si prenota senza
    * pagare nulla, e va detto prima di scegliere, non alla cassa. */
@@ -118,7 +118,7 @@ export function usePrenota({ t, lang, session, fireToast }) {
     } catch (err) {
       if (seq !== slotsReq.current) return;
       setSlots([]);
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     }
   }, [days, session, JSON.stringify(items)]); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { if (step === STEP.TIME) loadSlots(dayIdx); }, [step, dayIdx, loadSlots]);
@@ -167,7 +167,7 @@ export function usePrenota({ t, lang, session, fireToast }) {
         setStep(STEP.TIME);
         loadSlots(dayIdx);
       } else {
-        errToast(err, fireToast, t);
+        toastApiError(err, fireToast, t);
       }
     }
   };

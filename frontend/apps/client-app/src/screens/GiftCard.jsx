@@ -2,11 +2,10 @@
 // form (POST /api/marketing/client/gift-cards — unpaid, si paga in salone;
 // Stripe checkout arriverà in fase 2).
 import React from 'react';
-import { Icon, ProgressBar, fmtEur, NumInput } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur, NumInput, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { buyGiftCard, getWallet } from '../api/client.js';
 import { headFont, headWeight } from '../theme.js';
-import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
@@ -28,7 +27,7 @@ export default function GiftCard() {
   const load = React.useCallback(() => {
     getWallet()
       .then(setWallet)
-      .catch((e) => { setError(e); errToast(e, fireToast, t); });
+      .catch((e) => { setError(e); toastApiError(e, fireToast, t); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { load(); }, [load]);
 
@@ -58,7 +57,7 @@ export default function GiftCard() {
       fireToast({ msg: t('Gift card creata!', 'Gift card created!'), icon: 'gift' });
       load();
     } catch (err) {
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }

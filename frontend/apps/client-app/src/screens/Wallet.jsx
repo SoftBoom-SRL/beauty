@@ -2,18 +2,17 @@
 // expiry), loyalty programs (points/threshold/progress bar).
 // Data: GET /api/marketing/client/wallet. Gift card detail → view 'giftcard'.
 import React from 'react';
-import { Icon, ProgressBar, fmtEur } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWallet } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
-import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 export default function Wallet() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const { data: wallet, error } = useApiData(getWallet, [], { onError: (e) => errToast(e, fireToast, t) });
+  const { data: wallet, error } = useApiData(getWallet, [], { onError: (e) => toastApiError(e, fireToast, t) });
 
   const loading = !wallet && !error;
   const cards = wallet?.gift_cards || [];

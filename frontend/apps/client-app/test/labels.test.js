@@ -1,16 +1,16 @@
 // Etichette dell'app cliente: preferenza della lista d'attesa (lib/waitlist.js),
 // nomi e icone del listino (lib/catalog.js), servizi di un appuntamento
-// (lib/appointments.js), scadenze e coupon del portafoglio (lib/wallet.js) e il
-// toast d'errore (lib/errors.js).
+// (lib/appointments.js), scadenze e coupon del portafoglio (lib/wallet.js) e i
+// toast d'errore (toastApiError di @youty/shared e lib/errors.js).
 process.env.TZ = 'Asia/Tokyo';
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ApiError, setSalonTz } from '@youty/shared';
+import { ApiError, setSalonTz, toastApiError } from '@youty/shared';
 import { apptServiceNames } from '../src/lib/appointments.js';
 import { catIcon, svcLangName } from '../src/lib/catalog.js';
-import { errToast, toastSlotTaken } from '../src/lib/errors.js';
+import { toastSlotTaken } from '../src/lib/errors.js';
 import { couponLabel, couponOrigin, fmtExpiry } from '../src/lib/wallet.js';
 import { prefLabel, WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../src/lib/waitlist.js';
 
@@ -101,12 +101,12 @@ test('portafoglio: coupon in percentuale (senza arrotondare) o a importo, e da d
   assert.equal(couponOrigin(undefined, tEn), 'Discount');
 });
 
-test('errore dell\'API: il messaggio del server, altrimenti «Errore di rete»', () => {
+test('errore dell\'API (toastApiError, l\'errToast di prima): il messaggio del server, altrimenti «Errore di rete»', () => {
   const calls = [];
   const fireToast = (o) => calls.push(o);
-  errToast(new ApiError(400, 'Preavviso minimo non rispettato'), fireToast, tIt);
-  errToast(new TypeError('Failed to fetch'), fireToast, tIt);
-  errToast(null, fireToast, tEn);
+  toastApiError(new ApiError(400, 'Preavviso minimo non rispettato'), fireToast, tIt);
+  toastApiError(new TypeError('Failed to fetch'), fireToast, tIt);
+  toastApiError(null, fireToast, tEn);
   assert.deepEqual(calls, [
     { msg: 'Preavviso minimo non rispettato', icon: 'alert' },
     { msg: 'Errore di rete', icon: 'alert' },

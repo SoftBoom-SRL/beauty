@@ -1,10 +1,6 @@
-// errors.js — come l'app cliente mostra gli errori dell'API.
+// errors.js — i messaggi d'errore dell'app cliente che non sono il semplice
+// toast dell'API (quello è toastApiError di @youty/shared).
 // Logica pura, senza React: la caricano anche i test con `node --test`.
-
-/** Uniform ApiError → toast: il messaggio del server se una risposta è
- *  arrivata, altrimenti «Errore di rete». È toastApiError di @youty/shared,
- *  stessi argomenti (err, fireToast, t). */
-export { toastApiError as errToast } from '@youty/shared';
 
 /** Il 409 di chi prenota o sposta: l'orario scelto l'ha appena preso
  *  qualcun'altra. Stesso toast in Prenota e in Sposta. */

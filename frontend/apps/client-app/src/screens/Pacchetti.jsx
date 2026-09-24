@@ -4,21 +4,21 @@
 // original price → discount badge). Il numero per il `tel:` arriva dal branding
 // pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.
 import React from 'react';
-import { Icon, fmtEur } from '@youty/shared';
+import { Icon, fmtEur, toastApiError } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { getPublicPackages } from '../api/client.js';
 import { headFont, headWeight } from '../theme.js';
-import { svcLangName, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { useApiData } from '../hooks/useApiData.js';
 import { usePublicServices } from '../hooks/usePublicCatalog.js';
+import { svcLangName } from '../lib/catalog.js';
 
 export default function Pacchetti() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const { cats } = usePublicServices(SALON_SLUG);
   const { data: pkgs, error } = useApiData(() => getPublicPackages(SALON_SLUG), [], {
-    onError: (e) => errToast(e, fireToast, t),
+    onError: (e) => toastApiError(e, fireToast, t),
   });
 
   /* price lookup: service_id → price (from the public price list) */

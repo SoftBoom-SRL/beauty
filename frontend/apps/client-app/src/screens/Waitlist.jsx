@@ -1,12 +1,13 @@
 // Waitlist.jsx — the client's active waitlist requests + leave + join CTA.
 // Data: GET /api/agenda/client/waitlist, DELETE /api/agenda/client/waitlist/{id}.
 import React from 'react';
-import { Icon } from '@youty/shared';
+import { Icon, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWaitlist, leaveWaitlist } from '../api/client.js';
-import { prefLabel, fmtDayMed, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { Meta } from '../components/Meta.jsx';
+import { prefLabel } from '../lib/waitlist.js';
+import { fmtDayMed } from '../lib/dates.js';
 
 export default function Waitlist() {
   const { t, lang, brand, setView, fireToast } = useApp();
@@ -20,7 +21,7 @@ export default function Waitlist() {
   const load = React.useCallback(() => {
     getWaitlist()
       .then(setList)
-      .catch((e) => { setError(e); errToast(e, fireToast, t); });
+      .catch((e) => { setError(e); toastApiError(e, fireToast, t); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { load(); }, [load]);
 
@@ -38,7 +39,7 @@ export default function Waitlist() {
       setList((l) => (l || []).filter((w) => w.id !== id));
       fireToast({ msg: t('Richiesta rimossa', 'Request removed'), icon: 'check' });
     } catch (err) {
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       mark(id, false);
     }

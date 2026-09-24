@@ -2,14 +2,15 @@
 // status/deposit chips + actions, empty-state variant, salon footer.
 // Data: GET /api/agenda/client/appointments → upcoming[0].
 import React from 'react';
-import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont, headWeight } from '../theme.js';
-import { relLabel, fmtDayMed, apptServiceNames, mapsUrl, downloadIcs, errToast } from './lib.jsx';
 import { Meta } from '../components/Meta.jsx';
 import { DepositDue } from '../components/DepositDue.jsx';
 import { useClientAppointments } from '../hooks/useClientAppointments.js';
-import { apptMinutes } from '../lib/appointments.js';
+import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
+import { relLabel, fmtDayMed } from '../lib/dates.js';
+import { mapsUrl, downloadIcs } from '../lib/links.js';
 
 /* cover with monogram (prototype Cover, data from brand) */
 function Cover({ brand, t }) {
@@ -85,7 +86,7 @@ export default function Home() {
 function HomeLogged() {
   const { t, lang, brand, client, setView, fireToast } = useApp();
   const { data, error, reload } = useClientAppointments();
-  React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (error) toastApiError(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const next = data?.upcoming?.[0] || null;
   const loading = !data && !error;
