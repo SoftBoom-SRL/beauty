@@ -38,6 +38,9 @@ ricette) e, per il frontend, [`frontend/README.md`](frontend/README.md).
   e verificando che il mock sia stato chiamato.
 - Le funzioni di altre app che i test sostituiscono si importano dentro la
   funzione che le usa (vengono cercate a ogni chiamata).
+- Giorni e ore di prova nel fuso del salone (`aware(giorno, ora)`,
+  `timezone.localdate()`): il giorno e l'ora di `timezone.now()` sono quelli
+  UTC. Per provare la suite a un'altra ora: `tools/test_a_ora.py 2026-10-01T00:30`.
 - Un campo nuovo vuole la migrazione (`makemigrations`), e una migrazione di
   dati deve reggere su PostgreSQL 16 e usare `apps.get_model`.
 - Niente formattatori automatici sul codice esistente; lo stile è quello del

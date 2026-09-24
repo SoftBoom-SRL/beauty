@@ -3,5 +3,6 @@
 ruff==0.15.8
 # traceback leggibili dai test lanciati con --parallel
 tblib==3.2.2
-# orologio fermo del backend nel test di fumo nel browser (tools/smoke)
+# orologio spostato: backend del test di fumo (tools/smoke) e suite a un'ora
+# scelta (tools/test_a_ora.py)
 time-machine==3.5.1
