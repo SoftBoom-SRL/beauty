@@ -29,6 +29,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from .fields import client_payload, stamped_consents
+from .history import build_history, client_appointments
 from .importer import import_rows
 from .labels import create_label, delete_label, label_payload, set_categories, update_label
 from .records import (
@@ -361,23 +362,7 @@ def list_client_appointments(request, client_id: int):
     # persona è un dato della sua scheda, non dell'agenda del giorno.
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-
-    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione esistente
-    from apps.agenda.models import Appointment  # lazy: evita import cross-app a livello modulo
-
-    appointments = (
-        Appointment.objects.filter(salon=ctx.salon, client=client)
-        .select_related("client", "operator", "salon")
-        .prefetch_related("items__service", "items__operator")
-        .order_by("start")
-    )
-    # Indice delle gift card calcolato una volta sola: senza, _appointment_out
-    # ne interroga una per appuntamento (più una SELECT sul salone, che non era
-    # in select_related). Una cliente con 80 visite costava 160 query in più.
-    gifts = gift_index(ctx.salon, [client.id])
-    # `viewer`: chi non ha i permessi marketing o vendite vede i codici delle
-    # gift card mascherati, come in agenda (contratto C21).
-    return [_appointment_out(a, gifts, viewer=ctx) for a in appointments]
+    return client_appointments(ctx, client)
 
 
 # ---- Storico unificato (visite + note + schede) ---------------------------------
@@ -399,97 +384,7 @@ def client_history(request, client_id: int):
     # conserva: leggerli richiede il permesso «clienti», come scriverli.
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-
-    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione
-    from apps.agenda.models import Appointment  # lazy
-    from apps.sales.api import _sale_out  # lazy
-    from apps.sales.models import Sale  # lazy
-
-    # Gli incassi di ogni visita sono dati di cassa: senza il permesso
-    # «vendite» la timeline resta completa ma senza importi, come la lista
-    # degli incassi che a quel ruolo è già preclusa.
-    can_read_sales = has_scope(ctx, "sales")
-
-    appointments = list(
-        Appointment.objects.filter(salon=ctx.salon, client=client)
-        .select_related("client", "operator", "salon")
-        .prefetch_related("items__service", "items__operator")
-        .order_by("-start")
-    )
-    # Una lista sola: la stessa query girava due volte, e l'indice delle gift
-    # card va calcolato una volta per tutte (vedi list_client_appointments).
-    gifts = gift_index(ctx.salon, [client.id])
-    all_sales = (
-        list(Sale.objects.filter(salon=ctx.salon, client=client).select_related("client"))
-        if can_read_sales
-        else []
-    )
-    sales = {s.appointment_id: s for s in all_sales if s.appointment_id}
-    # La vendita-caparra non ha `appointment` (resta libero per il conto
-    # finale) ma `deposit_appointment`: finiva fra le vendite al banco e lo
-    # storico mostrava una «Vendita al banco» da 30 € accanto alla visita che
-    # quei 30 € li aveva già detratti. È l'anticipo di quella visita, e lì sta.
-    visit_ids = {a.id for a in appointments}
-    deposits = {
-        s.deposit_appointment_id: s for s in all_sales if s.deposit_appointment_id in visit_ids
-    }
-    counter_sales = [
-        s for s in all_sales if not s.appointment_id and s.deposit_appointment_id not in visit_ids
-    ]
-    notes = list(client.notes.select_related("author").prefetch_related("attachments"))
-    sheets = list(client.sheets.select_related("author"))
-    notes_by_appt: dict = {}
-    for n in notes:
-        if n.appointment_id:
-            notes_by_appt.setdefault(n.appointment_id, []).append(n)
-    sheets_by_appt: dict = {}
-    for sh in sheets:
-        if sh.appointment_id:
-            sheets_by_appt.setdefault(sh.appointment_id, []).append(sh)
-
-    now = timezone.now()
-    entries = []
-    for a in appointments:
-        sale = sales.get(a.id)
-        deposit = deposits.get(a.id)
-        entries.append(
-            {
-                "kind": "visit",
-                "date": a.start,
-                "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
-                "appointment": _appointment_out(a, gifts, viewer=ctx),
-                "operator_name": a.operator.full_name if a.operator_id else "",
-                "sale": _sale_out(sale) if sale else None,
-                "deposit_sale": _sale_out(deposit) if deposit else None,
-                "notes": [note_out(n) for n in notes_by_appt.get(a.id, [])],
-                "sheets": [sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
-            }
-        )
-    for s in counter_sales:
-        entries.append({"kind": "sale", "date": s.created_at, "sale": _sale_out(s)})
-    for n in notes:
-        if not n.appointment_id:
-            entries.append({"kind": "note", "date": n.created_at, "note": note_out(n)})
-    for sh in sheets:
-        if not sh.appointment_id:
-            entries.append({"kind": "sheet", "date": sh.created_at, "sheet": sheet_out(sh)})
-    entries.sort(key=lambda e: e["date"], reverse=True)
-    return {
-        "client_id": client.id,
-        # Senza il permesso «vendite» `sale` è sempre null, anche sulle visite
-        # pagate: l'interfaccia lo leggeva come «non incassato» e l'operatrice
-        # diceva alla reception che la cliente l'ultima volta non aveva pagato.
-        # Come `stats_hidden` sulla scheda: nascosto e assente si distinguono.
-        "sales_hidden": not can_read_sales,
-        "counts": {
-            "visits": sum(1 for e in entries if e["kind"] == "visit" and not e["upcoming"]),
-            "upcoming": sum(1 for e in entries if e["kind"] == "visit" and e["upcoming"]),
-            "notes": len(notes),
-            "sheets": len(sheets),
-            "sales": len(sales) + len(counter_sales),
-        },
-        "entries": entries,
-    }
+    return build_history(ctx, client)
 
 
 # ---- Note interne (con allegati: foto e documenti) -------------------------------
