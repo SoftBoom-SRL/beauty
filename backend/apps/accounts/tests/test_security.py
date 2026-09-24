@@ -114,7 +114,7 @@ class ClientIpTests(TestCase):
 
     def test_a_very_long_email_does_not_blow_up_the_login(self):
         """S11: la chiave del contatore finiva in un CharField(200)."""
-        from ..api import _login_account_key
+        from ..api.staff import _login_account_key
 
         chiave = _login_account_key("a" * 400 + "@example.com")
         self.assertLessEqual(len(chiave), 200)
