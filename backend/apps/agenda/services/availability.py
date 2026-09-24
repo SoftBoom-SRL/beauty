@@ -13,6 +13,8 @@ from django.conf import settings
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from common.intervals import merge_intervals
+
 from .occupancy import _bookable_service, _busy_map, _chain_deadline, _opening_bands, _operators_qs
 from .timegrid import _is_free, _slot_datetime
 
@@ -333,12 +335,7 @@ def _slot_is_recommended(segments, windows, busy, min_useful: int) -> bool:
         spans_by_op[operator.id].append((start, end))
 
     for op_id, spans in spans_by_op.items():
-        runs: list[tuple[int, int]] = []
-        for start, end in sorted(spans):
-            if runs and start <= runs[-1][1]:
-                runs[-1] = (runs[-1][0], max(runs[-1][1], end))
-            else:
-                runs.append((start, end))
+        runs = merge_intervals(spans)
         occupied = list(busy.get(op_id, ())) + [(s, e, True) for s, e in runs]
         op_windows = windows.get(op_id, [])
         for start, end in runs:

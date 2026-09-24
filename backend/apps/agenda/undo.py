@@ -33,6 +33,7 @@ from django.utils.dateparse import parse_datetime
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from common.money import CENT
 
 from .models import Appointment, AppointmentService, Pause, UndoEntry
 from .services.deposits import close_deposit_link_after_commit, renew_deposit_link_after_commit
@@ -83,7 +84,7 @@ def _at(value) -> str:
 
 
 def _money(value) -> str:
-    return str(Decimal(value or 0).quantize(Decimal("0.01")))
+    return str(Decimal(value or 0).quantize(CENT))
 
 
 def appointment_snapshot(appointment: Appointment) -> dict:

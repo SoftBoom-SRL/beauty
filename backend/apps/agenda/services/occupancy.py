@@ -12,6 +12,8 @@ from django.db.models import Q
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from common.intervals import merge_intervals
+
 from ..models import Appointment, Pause
 from .timegrid import _minutes_local
 
@@ -175,13 +177,7 @@ def _opening_bands(salon, day: dt.date):
     bounds = opening_windows(salon, day)
     if bounds is None:
         return None
-    bands: list[tuple[int, int]] = []
-    for start, end in sorted(bounds):
-        if bands and start <= bands[-1][1]:
-            bands[-1] = (bands[-1][0], max(bands[-1][1], end))
-        else:
-            bands.append((start, end))
-    return bands
+    return merge_intervals(bounds)
 
 
 def _chain_deadline(bands, start_min: int | None, windows) -> tuple[int, str] | None:

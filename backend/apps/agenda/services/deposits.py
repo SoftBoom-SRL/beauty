@@ -16,6 +16,7 @@ from django.utils import timezone
 from apps.core.models import DepositRule
 from apps.core.services import log_activity
 from common.conditions import evaluate
+from common.money import CENT
 
 from ..models import Appointment, AppointmentService
 
@@ -124,10 +125,10 @@ def compute_deposit(salon, client, total_price) -> Decimal:
     if rule is None:
         return Decimal("0.00")
     if rule.amount_type == DepositRule.AmountType.PERCENT:
-        amount = (total_price * rule.amount / Decimal("100")).quantize(Decimal("0.01"))
+        amount = (total_price * rule.amount / Decimal("100")).quantize(CENT)
     else:
-        amount = Decimal(rule.amount).quantize(Decimal("0.01"))
-    return min(max(amount, Decimal("0.00")), total_price.quantize(Decimal("0.01")))
+        amount = Decimal(rule.amount).quantize(CENT)
+    return min(max(amount, Decimal("0.00")), total_price.quantize(CENT))
 
 
 def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
@@ -152,8 +153,8 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
     total = sum(
         (item.price for item in AppointmentService.objects.filter(appointment=appointment)),
         start=Decimal("0"),
-    ).quantize(Decimal("0.01"))
-    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(Decimal("0.01"))
+    ).quantize(CENT)
+    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(CENT)
 
     if appointment.deposit_status == Appointment.DepositStatus.PAID:
         excess = appointment.deposit_credit - total

@@ -16,6 +16,7 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.core.services import automation_delay_seconds, emit_event, held_events, supersede_events
+from common.intervals import merge_intervals
 
 from ..models import Appointment, WaitlistEntry
 from .messages import (
@@ -45,16 +46,6 @@ def suppress_slot_events(salon, appointment_id) -> int:
     return supersede_events(list(held_events(salon, slot_event_key(appointment_id), lock=True)))
 
 
-def _merge_spans(intervals):
-    merged = []
-    for start, end in sorted(intervals):
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
 def _chain_spans(start, chain) -> dict:
     """Intervalli occupati da una catena di servizi: chain = [(operator_id, attivo, posa)]."""
     spans: dict[int, list] = defaultdict(list)
@@ -64,7 +55,7 @@ def _chain_spans(start, chain) -> dict:
         if operator_id and end > cursor:
             spans[operator_id].append((cursor, end))
         cursor = end
-    return {op: _merge_spans(intervals) for op, intervals in spans.items()}
+    return {op: merge_intervals(intervals) for op, intervals in spans.items()}
 
 
 def _appointment_spans(appointment: Appointment) -> dict:
@@ -103,7 +94,7 @@ def _spans_minus(spans: dict, other: dict) -> dict:
                 if piece[0] < piece[1]
             ]
         if pieces:
-            out[op] = _merge_spans(pieces)
+            out[op] = merge_intervals(pieces)
     return out
 
 
@@ -111,7 +102,7 @@ def _spans_union(spans: dict, other: dict) -> dict:
     out = {op: list(intervals) for op, intervals in spans.items()}
     for op, intervals in other.items():
         out.setdefault(op, []).extend(intervals)
-    return {op: _merge_spans(intervals) for op, intervals in out.items()}
+    return {op: merge_intervals(intervals) for op, intervals in out.items()}
 
 
 def _slot_piece(event) -> tuple:
