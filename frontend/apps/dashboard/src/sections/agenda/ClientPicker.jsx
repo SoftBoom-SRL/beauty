@@ -10,9 +10,10 @@
 // anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
 // chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
+import { ApiError, apiErrorText, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { initialsOf } from './lib.js';
+import * as agendaApi from './agendaApi.js';
 import { GenderPicker } from '../../ui/index.js';
 import { BirthdayInput } from '../clienti/components.jsx';
 
@@ -61,7 +62,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     let alive = true;
     setResults(null);
     const tm = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: q.trim(), limit: 7, is_active: true } })
+      agendaApi.searchClients(q.trim())
         .then((res) => { if (alive) { setResults(res.items || []); setHi(0); } })
         .catch(() => { if (alive) setResults([]); });
     }, 180);
@@ -91,7 +92,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     setSaving(true); setErr(''); setArchived(null);
     try {
       // stessi campi della scheda anagrafica: ciò che non viene compilato resta vuoto
-      const c = await api.post('/api/clients/', {
+      const c = await agendaApi.createClient({
         first_name: first, last_name: last, phone, gender: draft.gender || '',
         email: draft.email.trim(), lang: draft.lang, category_ids: draft.tags,
         birthday: draft.birthday || null,
@@ -101,7 +102,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       });
       if (draft.note.trim()) {
         // la cliente esiste già: una nota non riuscita non deve bloccare la prenotazione
-        try { await api.post(`/api/clients/${c.id}/notes`, { text: draft.note.trim(), visibility: 'private' }); }
+        try { await agendaApi.addClientNote(c.id, { text: draft.note.trim(), visibility: 'private' }); }
         catch { /* ignora */ }
       }
       fireToast({ msg: t(`Cliente creato: ${c.full_name}`, `Client created: ${c.full_name}`), icon: 'check' });
@@ -110,7 +111,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       if (e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
         setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
       }
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 
@@ -118,11 +119,11 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     if (saving || !archived) return;
     setSaving(true); setErr('');
     try {
-      const c = await api.put(`/api/clients/${archived.id}`, { is_active: true });
+      const c = await agendaApi.reactivateClient(archived.id);
       fireToast({ msg: t(`Scheda di ${c.full_name} riattivata`, `${c.full_name}'s profile reactivated`), icon: 'check' });
       pick(c);
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 

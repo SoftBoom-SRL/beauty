@@ -9,8 +9,11 @@ import { test } from 'node:test';
 import { dayGridRange, gridMarks, gridRange, openingFor, weekGridRange } from '../src/sections/agenda/lib.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, textOf, tick } from './grid-harness.mjs';
 
-const { default: DayGrid } = await loadComponent('apps/dashboard/src/sections/agenda/DayGrid.jsx');
-const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx');
+// i pezzi senza hook delle griglie, che per i test fanno parte di DayGrid e WeekView
+const DAY_PARTS = ['OperatorHeaderCell', 'OpColorPicker', 'HourGutter', 'GridLines', 'NowLine', 'ClosedHours', 'GhostBlocks', 'VisitBlocks', 'DayDragBadge'];
+const { default: DayGrid } = await loadComponent('apps/dashboard/src/sections/agenda/DayGrid.jsx', { expand: DAY_PARTS });
+const WEEK_PARTS = ['WeekDayHeader', 'HourGutter', 'WeekDayColumn', 'GridLines', 'NowLine', 'WeekDragBadge'];
+const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx', { expand: WEEK_PARTS });
 
 const PXM = 1.35;
 const DATE = '2026-10-03';   // sabato

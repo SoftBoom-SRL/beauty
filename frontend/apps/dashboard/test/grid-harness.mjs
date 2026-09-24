@@ -1,4 +1,5 @@
-// Banco di prova per i componenti della griglia d'agenda (DayGrid, WeekView)
+// Banco di prova per i componenti dell'agenda (le griglie DayGrid e WeekView,
+// la sezione, il pannello di dettaglio, il drawer «Nuova prenotazione»)
 // senza browser. esbuild compila il componente VERO con un React finto — gli
 // hook girano in modo sincrono, gli effetti subito dopo il render — e un DOM
 // minimo fatto di rettangoli. Si chiamano gli stessi gestori che chiamerebbe
@@ -86,7 +87,9 @@ export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.
 export const Avatar = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
+export const Toggle = () => null;
 export const statusMeta = (s) => ({ label: String(s || ''), color: '#999' });
+export { depositMeta } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'ui', 'meta.js'))};
 // ApiError, apiErrorText e toastApiError sono quelli veri di apiErrors.js, con
 // la stessa classe per il componente, per gli aiuti e per il test
 // (globalThis.__ApiError). Ogni loadComponent è un bundle con la sua copia del
@@ -99,12 +102,19 @@ export const { ApiError, apiErrorText, toastApiError } = E;
 const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
 `;
-const CTX = 'export const useDash = () => globalThis.__dash;';
+/* ctx.jsx: il contesto è globalThis.__dash; useLive tiene l'ultima callback in
+ * globalThis.__useLive, e il test la chiama con gli eventi (il debounce di 250
+ * ms del vero useLive qui non c'è). */
+const CTX = `export const useDash = () => globalThis.__dash;
+export const useLive = (match, fn) => { globalThis.__useLive = fn; };`;
 
 /** Compila `entry` (percorso dal frontend/) e ne restituisce i moduli esportati.
  *  `stubs`: nomi di file (es. 'RightRail.jsx') da sostituire con componenti muti
- *  che portano lo stesso nome — si guardano le props che ricevono. */
-export async function loadComponent(entry, { stubs = [] } = {}) {
+ *  che portano lo stesso nome — si guardano le props che ricevono.
+ *  `expand`: nomi di sotto-componenti senza hook che findAll, find e textOf
+ *  attraversano come se fossero scritti nel padre (vedi EXPAND). */
+export async function loadComponent(entry, { stubs = [], expand = [] } = {}) {
+  expand.forEach((name) => EXPAND.add(name));
   const res = await build({
     entryPoints: [join(FRONT, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
@@ -124,7 +134,7 @@ export async function loadComponent(entry, { stubs = [] } = {}) {
         b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => {
           if (a.path.startsWith('stub:')) {
             const name = a.path.slice(5).replace(/\.jsx$/, '');
-            return { contents: `export default function ${name}() { return null; }\nexport function ApptHoverCard() { return null; }`, loader: 'js' };
+            return { contents: `export default function ${name}() { return null; }`, loader: 'js' };
           }
           return { contents: { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT };
         });
@@ -164,12 +174,23 @@ export function mount(Comp, props, { attach } = {}) {
 }
 
 /* ---- albero degli elementi ---- */
+/* Sotto-componenti «trasparenti»: i pezzi senza hook di una vista (la colonna
+ * delle ore, il badge del trascinamento, le testate…). Nel browser li disegna
+ * il React vero; qui l'albero si ferma ai componenti funzione, e per i test
+ * quei pezzi fanno parte del padre: findAll, find e textOf li attraversano
+ * chiamandoli come funzioni, e l'elemento del componente resta trovabile. Li
+ * elenca loadComponent({ expand }); gli altri componenti (i blocchi, che i
+ * test chiamano da sé) non si attraversano. */
+const EXPAND = new Set();
 const kids = (el) => {
-  const c = el && typeof el === 'object' ? el.props?.children : null;
+  if (!el || typeof el !== 'object') return [];
+  if (typeof el.type === 'function' && EXPAND.has(el.type.name)) return [el.type(el.props)].flat(Infinity);
+  const c = el.props?.children;
   if (c == null || c === false || c === true) return [];
   return (Array.isArray(c) ? c : [c]).flat(Infinity);
 };
-/** Tutti gli elementi (non espande i componenti funzione) che soddisfano `pred`. */
+/** Tutti gli elementi (non espande i componenti funzione, tranne quelli di
+ *  `expand`) che soddisfano `pred`. */
 export function findAll(tree, pred) {
   const out = [];
   const walk = (el) => {
@@ -202,7 +223,7 @@ export function installDom({ pills = [] } = {}) {
     removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((f) => f !== fn); },
   };
   globalThis.document = {
-    body: { classList: { add() {}, remove() {} } },
+    body: { classList: { add() {}, remove() {} }, style: { setProperty() {}, removeProperty() {} } },
     querySelectorAll: (sel) => (sel === '[data-daydrop]'
       ? pills.map((p) => ({ getAttribute: () => p.iso, getBoundingClientRect: () => p.rect }))
       : []),

@@ -3,7 +3,7 @@
 import React from 'react';
 import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel, toDateStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { fmtMoney, initialsOf, prefLabel } from './lib.js';
+import { fmtMoney, initialsOf, prefLabel, svcLabel } from './lib.js';
 import { cashUpLines } from './modals/rules.js';
 
 export default function RightRail({ summary, waitlist, released, onRestore, onRebook, onOpenAppt, onOpenLog, onOpenWaitlist, onOpenOpportunity }) {
@@ -133,7 +133,7 @@ function ReleasedRail({ t, lang, released, canWrite, onRestore, onRebook, onOpen
                 <button onClick={() => onOpenAppt && onOpenAppt(a)} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.client?.full_name}</div>
                   <div className="t-sm tabnum" style={{ color: 'var(--muted)', fontSize: 11.5 }}>
-                    {fmtDateIt(toDateStr(a.start), { weekday: false })} · {timeLabel(minutesOfDay(a.start))} · {(a.items || []).map((i) => i.service_name).join(' + ')}
+                    {fmtDateIt(toDateStr(a.start), { weekday: false })} · {timeLabel(minutesOfDay(a.start))} · {svcLabel(a)}
                   </div>
                 </button>
                 {a.client?.phone && (

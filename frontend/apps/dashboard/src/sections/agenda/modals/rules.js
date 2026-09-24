@@ -2,7 +2,8 @@
 // prenotazione, riepilogo di cassa). Qui c'è solo logica, senza React: così la
 // si prova con `node --test` (vedi apps/dashboard/test/modali-*.test.js) e le
 // regole che replicano il server stanno in un posto solo.
-import { isoAtMin, minutesOfDay, salonTzOpts } from '@youty/shared';
+import { fmtDur, isoAtMin, minutesOfDay, salonTzOpts, timeLabel, todayStr } from '@youty/shared';
+import { explainSlot } from '../lib/slots.js';
 
 /** Scadenza della caparra, letta sull'orologio del SALONE («24/09, 18:00»).
  *  Il toLocaleString senza fuso scriveva l'ora del dispositivo: da un portatile
@@ -14,6 +15,10 @@ export function depositDueLabel(iso, lang) {
 }
 
 /* ---- la copia dell'appuntamento nel pannello di dettaglio ------------------ */
+
+/** Stati in cui la visita è finita (conto chiuso, no-show, annullata): niente
+ *  più modifiche né comandi dal pannello. */
+export const TERMINAL = ['closed', 'no_show', 'cancelled'];
 
 /** Firma dei servizi di una visita: id, servizio, operatrice, durata, posa. */
 export const itemsSig = (list) => JSON.stringify((list || []).map((i) => [
@@ -126,6 +131,56 @@ export function rebaseDraft({ base, rows, note, theirs }) {
 export const canMarkNoShow = (appt, now = Date.now()) =>
   !!appt && appt.status === 'confirmed' && Date.parse(appt.start) <= now;
 
+/** Chi può prendersi la visita («Passa a»): l'operatrice principale e le
+ *  colleghe abilitate a TUTTI i servizi che oggi sono suoi (sono quelli che
+ *  cambiano mano, come nel trascinamento in agenda). Il server rifiuterebbe
+ *  le altre. */
+export function handoverOps(appt, operators) {
+  const mainItems = (appt.items || []).filter((it) => (it.operator_id ?? appt.operator_id) === appt.operator_id);
+  return operators.filter((op) => op.id === appt.operator_id
+    || (mainItems.length > 0 && mainItems.every((it) => (op.service_ids || []).includes(it.service_id))));
+}
+
+/** Le colleghe che hanno una parte della visita: con «Passa a» la loro parte
+ *  resta a loro (nomi senza doppioni, nell'ordine dei servizi). */
+export function otherOpNames(appt, operators) {
+  return [...new Set((appt.items || [])
+    .filter((it) => it.operator_id && it.operator_id !== appt.operator_id)
+    .map((it) => operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name)
+    .filter(Boolean))];
+}
+
+/** Orario di ogni riga del pannello: i servizi sono in fila dall'inizio della
+ *  visita (`startMin`), posa compresa, così si vede subito che cosa slitta
+ *  quando si cambia una durata o si aggiunge un trattamento. `to` è la fine
+ *  del LAVORO (quando l'operatrice ha finito); `gap` è quello che viene dopo —
+ *  la posa di un colore o il buco che il salone vuole lasciare — e il
+ *  servizio successivo comincia di là (`next`). Tenerli separati è ciò che
+ *  permette di scrivere un'ora di fine senza trascinarsi dietro il
+ *  trattamento dopo. */
+export function itemSpans(rows, startMin) {
+  let cursor = startMin;
+  return rows.map((it) => {
+    const from = cursor;
+    const to = from + Math.max(0, parseInt(it.duration_min, 10) || 0);
+    const gap = Math.max(0, parseInt(it.soak_min, 10) || 0);
+    cursor = to + gap;
+    return { from, to, gap, next: cursor };
+  });
+}
+
+/** Attesa fra un servizio e l'altro oltre la posa del listino
+ *  (`catalogSoak(row)`): è un avviso, non un divieto — il colore ne ha 30,
+ *  quello che c'è in più è un buco voluto e come tale si segnala. Dopo
+ *  l'ultimo servizio non c'è nulla da aspettare. */
+export function gapNotes(rows, spans, catalogSoak) {
+  return rows.map((it, i) => {
+    if (i >= rows.length - 1) return null;
+    const extra = (spans[i].gap || 0) - catalogSoak(it);
+    return extra > 0 ? { index: i, minutes: extra, gap: spans[i].gap } : null;
+  }).filter(Boolean);
+}
+
 /* ---- limiti del server sui campi ------------------------------------------ */
 
 /** ReasonIn.reason (no-show e annullamento): 255 caratteri, come la colonna. */
@@ -229,6 +284,53 @@ export function nextSelection({ prev, src, prevForced = false, slots, reqStartMi
     return { start: isoAtMin(date, reqStartMin), src: 'req', force: true, dropped: null };
   }
   return { start: null, src: null, force: false, dropped: null };
+}
+
+/** Esito dell'orario chiesto dall'agenda (`req` = { operatorId, startMin }):
+ *  null senza richiesta o senza servizi, { loading } mentre arrivano gli
+ *  orari, { ok, slot } se è fra i liberi; altrimenti { ok: false, label,
+ *  detail, alternatives } — PERCHÉ non è libero (l'operatrice non fa un
+ *  servizio, il suo turno o un'altra cliente, nessuna libera) e i quattro
+ *  orari liberi più vicini, in ordine. `serviceName(serviceId)` = il nome da
+ *  scrivere; `isEligible(serviceId, opId)` = chi sa fare cosa; `nowMin` =
+ *  l'ora attuale se il giorno è oggi (null altrimenti). */
+export function requestStatus({ req, reqOp, items, slots, dayRows, totalDur, step, nowMin, clientId, t, lang, serviceName, isEligible }) {
+  if (!req || req.startMin == null || !items.length) return null;
+  if (slots === null) return { loading: true };
+  const exact = (slots || []).find((s) => minutesOfDay(s.start) === req.startMin);
+  if (exact) return { ok: true, slot: exact };
+  let label, detail = '';
+  const notEligible = reqOp ? items.filter((it) => !isEligible(it.service_id, reqOp.id)) : [];
+  if (reqOp && notEligible.length) {
+    label = t(`${reqOp.first_name} non esegue ${serviceName(notEligible[0].service_id)}`, `${reqOp.first_name} doesn't perform ${serviceName(notEligible[0].service_id)}`);
+    detail = t('Abilita il servizio in Staff oppure scegli un’altra operatrice', 'Enable the service in Staff or pick another stylist');
+  } else if (reqOp && dayRows) {
+    const row = dayRows.find((r) => r.operator.id === reqOp.id);
+    const v = row ? explainSlot(row, req.startMin, totalDur || step, { nowMin, sameClientId: clientId, t, rows: dayRows }) : null;
+    if (v && !v.ok) { label = `${reqOp.first_name}: ${v.label}`; detail = v.detail; }
+    else label = t(`${reqOp.first_name} non è libera per tutta la durata (${fmtDur(totalDur, lang)})`, `${reqOp.first_name} isn't free for the whole duration (${fmtDur(totalDur, lang)})`);
+  } else if (!reqOp) {
+    label = t(`Nessuna operatrice libera alle ${timeLabel(req.startMin)}`, `No stylist free at ${timeLabel(req.startMin)}`);
+  } else {
+    label = t(`${reqOp.first_name} non è disponibile alle ${timeLabel(req.startMin)}`, `${reqOp.first_name} isn't available at ${timeLabel(req.startMin)}`);
+  }
+  const alternatives = [...(slots || [])]
+    .sort((a, b) => Math.abs(minutesOfDay(a.start) - req.startMin) - Math.abs(minutesOfDay(b.start) - req.startMin))
+    .slice(0, 4)
+    .sort((a, b) => minutesOfDay(a.start) - minutesOfDay(b.start));
+  return { ok: false, label, detail, alternatives };
+}
+
+/** Il giorno della prenotazione come lo scrive il drawer: «Oggi · gio 24
+ *  set», «Domani · …», altrimenti solo la data breve. */
+export function relativeDateLabel(date, lang, t) {
+  const d = new Date(date + 'T00:00');
+  const today = new Date(todayStr() + 'T00:00');
+  const diff = Math.round((d - today) / 86400000);
+  const base = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
+  if (diff === 0) return t('Oggi', 'Today') + ' · ' + base;
+  if (diff === 1) return t('Domani', 'Tomorrow') + ' · ' + base;
+  return base;
 }
 
 /* ---- «Riprogramma» ----------------------------------------------------------- */

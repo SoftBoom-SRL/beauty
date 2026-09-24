@@ -3,12 +3,13 @@
 // so staff can stagger times against the live grid. Submits each row sequentially to
 // POST /api/agenda/appointments, tracks per-row status, and never aborts the batch on one failure.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
+import { ApiError, apiErrorText, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { initialsOf, toastErr, fmtMoney } from '../lib.js';
+import { initialsOf, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
+import * as agendaApi from '../agendaApi.js';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, fireToast, hasScope, locationId } = useDash();
@@ -63,7 +64,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
     for (const row of snapshot) {
       patchRow(row.key, { status: 'creating', error: '' });
       try {
-        const res = await api.post('/api/agenda/appointments', {
+        const res = await agendaApi.createAppointment({
           client_id: row.client.id,
           items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
           start: row.selStart,
@@ -74,14 +75,14 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
       } catch (err) {
         const msg = err instanceof ApiError && err.status === 409
           ? t('Orario non più disponibile', 'Time no longer available')
-          : (err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'));
+          : apiErrorText(err, t);
         // 409 → the slot is gone: clear it and force a fresh availability fetch so staff can re-pick
         patchRow(row.key, (r) => ({
           status: 'error', error: msg,
           selStart: err instanceof ApiError && err.status === 409 ? null : r.selStart,
           reloadKey: r.reloadKey + 1,
         }));
-        if (!(err instanceof ApiError)) toastErr(err, t, fireToast);
+        if (!(err instanceof ApiError)) toastApiError(err, fireToast, t);
       }
     }
     setBatchRunning(false);
@@ -216,7 +217,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
 
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcOf = (id) => (services || []).find((s) => s.id === id);
-  const svcName = (s) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+  const svcName = (s) => nameIn(s, lang);
   const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
   const eligibleOps = (serviceId) => (operators || []).filter((o) => (o.service_ids || []).includes(serviceId));
 
@@ -238,13 +239,13 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
     if (!row.items.length || !row.date) { setSlots([]); return; }
     let alive = true;
     setSlots(null);
-    api.get('/api/agenda/availability', { params: { date: row.date, location_id: locationId, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
+    agendaApi.getAvailability({ date: row.date, location_id: locationId, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) })
       .then((res) => {
         if (!alive) return;
         setSlots(res);
         if (row.selStart && !res.some((s) => s.start === row.selStart)) onPatch({ selStart: null });
       })
-      .catch((err) => { if (alive) { setSlots([]); toastErr(err, t, fireToast); } });
+      .catch((err) => { if (alive) { setSlots([]); toastApiError(err, fireToast, t); } });
     return () => { alive = false; };
   }, [row.date, itemsKey, row.reloadKey, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 

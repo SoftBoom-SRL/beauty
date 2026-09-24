@@ -10,7 +10,9 @@ import { isoAtMin } from '@youty/shared';
 import { weekDayOps } from '../src/sections/agenda/lib.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
 
-const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx');
+// i pezzi senza hook della griglia, che per i test fanno parte di WeekView
+const WEEK_PARTS = ['WeekDayHeader', 'HourGutter', 'WeekDayColumn', 'GridLines', 'NowLine', 'WeekDragBadge'];
+const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx', { expand: WEEK_PARTS });
 
 const PXM = 1.35;
 const W1 = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
@@ -52,7 +54,9 @@ function setup(extra = {}) {
     settings: { slot_interval_min: 15 }, locationId: 1, modal: null,
     live: { subscribe: (fn) => { liveFn = fn; return () => {}; } },
   };
-  const cb = { onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy() };
+  // «torna indietro» come lo passa la sezione (index.jsx): la voce più recente
+  // prima del gesto e l'«Annulla» del suo avviso
+  const cb = { onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), undoMark: spy(0), undoAfter: spy(() => () => {}) };
   const scrollEl = {
     scrollTop: 0, clientHeight: 800,
     getBoundingClientRect: () => rect(0, 100, 1000, 800),
