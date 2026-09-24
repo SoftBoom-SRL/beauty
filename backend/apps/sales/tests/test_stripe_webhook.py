@@ -163,14 +163,14 @@ class DuplicateDepositPaymentTests(TestCase):
 
         from apps.core.models import ActivityLog
 
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
         metadata = {
             "appointment_id": str(self.appointment.id),
             "salon_id": str(self.salon.id),
             "kind": "deposit",
         }
-        _payment_intent_succeeded({"id": "pi_first", "amount_received": 3000}, metadata)
+        on_payment_intent_succeeded({"id": "pi_first", "amount_received": 3000}, metadata)
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_status, "paid")
         self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_first")
@@ -178,7 +178,7 @@ class DuplicateDepositPaymentTests(TestCase):
         stripe = Mock()
         stripe.Refund.create.return_value = {"id": "re_dup", "status": "succeeded"}
         with patch("apps.sales.stripe_service._client", return_value=stripe):
-            _payment_intent_succeeded({"id": "pi_second", "amount_received": 3000}, metadata)
+            on_payment_intent_succeeded({"id": "pi_second", "amount_received": 3000}, metadata)
         stripe.Refund.create.assert_called_once()
         self.assertEqual(stripe.Refund.create.call_args.kwargs["payment_intent"], "pi_second")
         self.appointment.refresh_from_db()

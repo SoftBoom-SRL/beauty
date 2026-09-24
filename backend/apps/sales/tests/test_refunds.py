@@ -60,9 +60,9 @@ class DepositRefundStateTests(TestCase):
         )
 
     def _refunded(self, payload, event_type="charge.refunded"):
-        from ..api import _charge_refunded
+        from ..stripe_webhooks import on_refund_event
 
-        _charge_refunded(payload, event_type)
+        on_refund_event(payload, event_type)
         self.appointment.refresh_from_db()
 
     def test_a_partial_refund_leaves_the_rest_deductible(self):
@@ -172,10 +172,10 @@ class RefundLeavesTheTillTests(TestCase):
     def test_a_deposit_refunded_on_stripe_leaves_the_till(self):
         from apps.agenda.services import cancel_appointment
 
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
         appointment = self._appointment(deposit="30.00", price="100.00")
-        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, {
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, {
             "appointment_id": str(appointment.id), "salon_id": str(self.salon.id), "kind": "deposit",
         })
         appointment.refresh_from_db()
