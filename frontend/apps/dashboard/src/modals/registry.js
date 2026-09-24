@@ -1,6 +1,6 @@
-// registry.js — modal name → lazily loaded component. OWNED BY THE SHELL.
-// The component files live INSIDE the owning section's folder (pre-created as
-// stubs): section agents fill in their own modal files, never this registry.
+// registry.js — nome del modale → componente caricato a richiesta, per
+// ctx.openModal(nome, props) (vedi DkModals.jsx). I componenti stanno nella
+// cartella della sezione a cui appartengono.
 import { lazy } from 'react';
 
 export const MODALS = {

@@ -25,7 +25,8 @@ const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3
 const randColor = () => flatPalette[Math.floor(Math.random() * flatPalette.length)];
 const catName = (c, kind, lang) => (KINDS[kind].bilingual ? ((lang === 'en' && c.name_en) ? c.name_en : c.name_it) : c.name);
 
-// Accepts both `kind` (servizi agent) and `scope` (clienti agent) for the initial tab.
+// La scheda iniziale arriva come `kind` (Impostazioni, Servizi) o come `scope`
+// (la scheda cliente): valgono entrambe.
 export default function CategoriesManagerModal({ onClose, kind: kindProp, scope: scopeProp }) {
   const { t, lang, hasScope, reload, fireToast, services } = useDash();
   const initialKind = kindProp ?? scopeProp;

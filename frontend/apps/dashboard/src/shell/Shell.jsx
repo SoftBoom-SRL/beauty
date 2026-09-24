@@ -1,5 +1,5 @@
-// Shell.jsx — dashboard chrome: sidebar + topbar + section outlet + global hosts
-// (toast, modal dispatcher, drawer). Section agents NEVER edit this file.
+// Shell.jsx — la cornice della dashboard: barra laterale, barra in alto, la
+// sezione attiva e i contenitori globali (toast, modali, drawer).
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';

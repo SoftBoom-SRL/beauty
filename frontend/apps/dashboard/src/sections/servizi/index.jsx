@@ -163,7 +163,7 @@ export default function ServiziSection() {
     }
   }, [editPkg, fetchPackages, fireToast, t, toastErr]);
 
-  /* ---- categories manager (owned by Impostazioni) ---- */
+  /* ---- gestione categorie: il modale globale di Impostazioni ---- */
   const openCats = useCallback(() => openModal('catsmgr', { kind: 'servizi' }), [openModal]);
 
   /* #2 — colore categoria configurabile dalla scheda servizio (resta un attributo della categoria) */
