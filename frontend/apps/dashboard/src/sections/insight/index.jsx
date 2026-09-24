@@ -9,7 +9,7 @@
 // - AI suggestion cards (INSIGHTS mock) replaced by one static "fase 2" card.
 // - Analyst drawer wired to POST /api/insights/ask which 501s until fase 2.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, EmptyState, Icon, fmtDateIt, fmtEurOrZero } from '@youty/shared';
+import { api, EmptyState, Icon, fmtDateIt, fmtEurOrZero, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { buildAllKpis, loadFavs, saveFavs, comparisonRanges, DEFAULT_FAVS } from './kpiDefs.js';
 import KpiBand from './KpiBand.jsx';
@@ -115,7 +115,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
        * «intervallo scelto» (15-15): si svuota tutto e si dice perché. */
       setKpis(null); setCurCmpKpis(null); setPrevKpis(null); setCmpRange(null);
       setSeries([]); setByCategory([]); setWeekday([]);
-      const msg = err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+      const msg = apiErrorText(err, t);
       setLoadError(msg);
       fireToast({ msg, icon: 'alert' });
     }).finally(() => { if (alive) setLoading(false); });

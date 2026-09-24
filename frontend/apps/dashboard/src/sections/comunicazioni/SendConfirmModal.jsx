@@ -2,7 +2,7 @@
 // Sends now, or schedules (optional scheduled_at): either way the event is queued in the
 // outbox and the actual WhatsApp delivery is handled by Yourang.
 import React, { useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, Icon, toastApiError } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { audienceSummary, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
@@ -48,7 +48,7 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
       });
       onSent(updated);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSending(false);
     }
   };

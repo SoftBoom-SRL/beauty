@@ -8,7 +8,7 @@
 // (DK_OWNER_STAFF) were dropped — the API has no per-location report endpoint;
 // KPIs shown are salon-wide, locations render as a plain list.
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, staffAuth, Icon, Avatar, fmtEurOrZero } from '@youty/shared';
+import { api, staffAuth, Icon, Avatar, fmtEurOrZero, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 
 export default function ProfileSection() {
@@ -26,8 +26,7 @@ export default function ProfileSection() {
       .then((k) => { if (alive) setKpis(k); })
       .catch((err) => {
         if (!alive) return;
-        if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-        else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       })
       .finally(() => { if (alive) setKpisLoading(false); });
     return () => { alive = false; };

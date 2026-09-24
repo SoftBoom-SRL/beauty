@@ -1,7 +1,7 @@
 // NewOperatorModal — create operator form (POST /api/staff/). Rendered locally
 // by the staff section (not in the shell modal registry).
 import React, { useState } from 'react';
-import { api, ApiError, Icon, NumInput } from '@youty/shared';
+import { api, Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { GD_PALETTE, inputCss, svcLabel } from './lib.js';
@@ -39,7 +39,7 @@ export default function NewOperatorModal({ onClose, onCreated }) {
       fireToast({ msg: t('Operatrice creata', 'Stylist created'), icon: 'check' });
       onCreated ? onCreated(created.id) : onClose();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

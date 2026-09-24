@@ -1,7 +1,7 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
 // KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
 import { lineGrossCents, saleLineLabel } from './history.js';
@@ -53,7 +53,7 @@ export default function HistoryTab() {
         if (seq !== reqSeq.current) return;
         setData({ count: 0, kpi: { revenue: 0, count: 0, items_count: 0 } });
         setItems([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       })
       .finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [kind, dateFrom, dateTo, qDeb, opId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -67,7 +67,7 @@ export default function HistoryTab() {
       setItems((l) => [...l, ...(r.items || [])]);
     } catch (err) {
       if (seq !== reqSeq.current) return;
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setLoadingMore(false);
     }
@@ -82,7 +82,7 @@ export default function HistoryTab() {
         .then((r) => setDetails((d) => ({ ...d, [id]: r })))
         .catch((err) => {
           setDetails((d) => ({ ...d, [id]: 'error' }));
-          fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+          toastApiError(err, fireToast, t);
         });
     }
   };

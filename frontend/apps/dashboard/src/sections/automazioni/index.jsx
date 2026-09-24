@@ -3,7 +3,7 @@
 // confirm). Right: builder (POST / PUT /api/automations/). Events, condition
 // fields and operators come from GET /api/automations/events-catalog.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, Icon, Toggle, EmptyState } from '@youty/shared';
+import { api, Icon, Toggle, EmptyState, toastApiError } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import Builder from './Builder.jsx';
@@ -20,10 +20,7 @@ export default function AutomazioniSection() {
   const [confirmDel, setConfirmDel] = useState(null); // rule pending deletion
   const [deleting, setDeleting] = useState(false);
 
-  const toastErr = useCallback((err) => {
-    if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-    else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-  }, [fireToast, t]);
+  const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   const refetch = useCallback(async () => {
     const list = await api.get('/api/automations/');

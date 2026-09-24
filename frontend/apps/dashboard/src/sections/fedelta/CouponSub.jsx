@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
+import { api, fmtEur, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
@@ -65,7 +65,7 @@ export default function CouponSub() {
     }).catch((err) => {
       if (seq !== reqSeq.current) return;
       setItems([]); setCount(0);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [originF, statusF, query, offset, fireToast, t]);
 

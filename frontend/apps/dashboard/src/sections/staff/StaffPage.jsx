@@ -3,7 +3,7 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput, nameIn, salonTzOpts } from '@youty/shared';
+import { api, Avatar, Icon, NumInput, nameIn, salonTzOpts, toastApiError, apiErrorText } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import { rebaseDraft } from '../../ui/rebase.js';
 import { useDash, useLive } from '../../ctx.jsx';
@@ -33,9 +33,7 @@ export default function StaffPage({ id, onBack }) {
   const [staffTab, setStaffTab] = useState('anagrafica');
   const [saving, setSaving] = useState(null);       // null | 'all' | 'shifts'
 
-  const toastErr = useCallback((err) => {
-    fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-  }, [fireToast, t]);
+  const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   const applyDetail = useCallback((d) => {
     setDetail(d);
@@ -599,7 +597,7 @@ function ServicesAssign({ services, categories, selected, onToggle, onBulk, canT
           : { msg: t(`Servizio creato: ${name}. Per abilitarlo all’operatrice serve il permesso “team”.`, `Service created: ${name}. Enabling it for the stylist requires the “team” permission.`), icon: 'check' });
       setCreating(false); setQ('');
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 

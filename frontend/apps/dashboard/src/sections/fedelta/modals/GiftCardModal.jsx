@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, todayStr, fmtEur, NumInput, nameIn } from '@youty/shared';
+import { api, Icon, todayStr, fmtEur, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
@@ -57,7 +57,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
       await api.post('/api/marketing/gift-cards', payload);
       onSaved();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };

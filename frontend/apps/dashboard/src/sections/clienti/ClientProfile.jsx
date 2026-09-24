@@ -2,7 +2,7 @@
 // contact actions, editable labels, KPI stats, deposit banner, language card
 // and the 5 tabs (Storico / Scheda tecnica / Note / Wallet / Consensi).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur, fmtEurOrZero } from '@youty/shared';
+import { api, Avatar, Icon, fmtEur, fmtEurOrZero, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
 import { initialsOf, relMeta, waHref, formatBirthday, daysToBirthday, dateLabel } from './helpers.js';
@@ -27,9 +27,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const [deleting, setDeleting] = useState(false);
   const [onWaitlist, setOnWaitlist] = useState(false);
 
-  const toastErr = useCallback((err) => {
-    fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-  }, [fireToast, t]);
+  const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   /* detail (ClientDetailOut: + visits, total_spent, last_visit) */
   useEffect(() => {

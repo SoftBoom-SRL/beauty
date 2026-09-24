@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, Toggle, NumInput, nameIn } from '@youty/shared';
+import { api, Icon, Toggle, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
 import { LOYALTY_TYPES, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward, earnFields, earnMetricsFor } from '../meta.js';
@@ -56,7 +56,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
       }
       onSaved(isNew ? t('Programma creato', 'Program created') : t('Programma aggiornato', 'Program updated'));
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -69,7 +69,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
       await api.del(`/api/marketing/loyalty-programs/${draft.id}`);
       onDeactivated();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };

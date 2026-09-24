@@ -4,7 +4,7 @@
 // (launch/seasonal/story/announce) has no API field and was dropped; status filter,
 // search, cards, composer and WhatsApp preview are kept.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, mediaUrl, Icon, EmptyState } from '@youty/shared';
+import { api, mediaUrl, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ComEditModal from './ComEditModal.jsx';
@@ -46,7 +46,7 @@ export default function ComunicazioniSection() {
       setItems((prev) => (append ? [...prev, ...(res.items || [])] : (res.items || [])));
     } catch (err) {
       if (seq !== reqSeq.current) return;
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       append ? setLoadingMore(false) : setLoading(false);
     }

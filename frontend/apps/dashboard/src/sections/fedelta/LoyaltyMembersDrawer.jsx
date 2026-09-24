@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, Avatar, EmptyState } from '@youty/shared';
+import { api, Icon, Avatar, EmptyState, toastApiError } from '@youty/shared';
 import Pager from './Pager.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import { LOYALTY_TYPES } from './meta.js';
@@ -37,7 +37,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
       onEnrolled?.(); // il conteggio sulla scheda del programma
     } catch (err) {
       // 400 «già iscritta» / «programma disattivato», 404 cliente di un altro salone
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setEnrolling(false);
     }
@@ -51,7 +51,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
       .catch((err) => {
         if (!alive) return;
         setItems([]); setCount(0);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };

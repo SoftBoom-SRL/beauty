@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, EmptyState, nameIn } from '@youty/shared';
+import { api, Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import LoyaltyEditModal from './modals/LoyaltyEditModal.jsx';
 import LoyaltyMembersDrawer from './LoyaltyMembersDrawer.jsx';
@@ -19,7 +19,7 @@ export default function LoyaltySub() {
       .then((res) => setItems(res || []))
       .catch((err) => {
         setItems([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       })
       .finally(() => setLoading(false));
   };

@@ -4,7 +4,7 @@
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
 import { useMemo, useState } from 'react';
-import { api, ApiError, Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr } from '@youty/shared';
+import { api, Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
 
@@ -72,7 +72,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
       if (edit.id) await api.put(`/api/staff/${operatorId}/absences/${edit.id}`, body);
       else await api.post(`/api/staff/${operatorId}/absences`, body);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
       return;
     }
@@ -95,7 +95,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
     try {
       await api.del(`/api/staff/${operatorId}/absences/${edit.id}`);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
       return;
     }

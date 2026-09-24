@@ -7,7 +7,7 @@
 // → POST /api/clients/import a blocchi → esito con errori e avvisi per riga.
 // Parsing, riconoscimento e normalizzazione stanno in ../importCsv.js.
 import React, { useMemo, useRef, useState } from 'react';
-import { api, ApiError, Icon, Toggle, isPlausiblePhone } from '@youty/shared';
+import { api, Icon, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { inputCss, formatBirthday, dateLabel } from '../helpers.js';
@@ -150,7 +150,7 @@ export default function BulkImportModal({ onClose }) {
       setResult(total);
       fireToast({ msg: t(`Importati ${total.created} nuovi · ${total.updated} aggiornati`, `${total.created} added · ${total.updated} updated`), icon: 'check' });
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+      const msg = apiErrorText(err, t);
       setResult({ ...total, failedAt: i, failMsg: msg });
       fireToast({ msg, icon: 'alert' });
     } finally { setBusy(false); }

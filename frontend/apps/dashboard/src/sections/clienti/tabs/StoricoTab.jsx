@@ -5,7 +5,7 @@
 // Da ogni visita si aggiunge una nota di trattamento (con allegati) o si apre
 // la scheda tecnica, senza uscire dal profilo.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta } from '@youty/shared';
+import { api, EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
@@ -21,7 +21,7 @@ export default function StoricoTab({ c }) {
   const load = useCallback(() => (
     api.get(`/api/clients/${c.id}/history`)
       .then(setHist)
-      .catch((err) => { setHist({ entries: [], counts: {} }); fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); })
+      .catch((err) => { setHist({ entries: [], counts: {} }); toastApiError(err, fireToast, t); })
   ), [c.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setHist(null); load(); }, [load]);
   // `deposit.`: una caparra pagata o rimborsata altrove cambia l'etichetta della visita

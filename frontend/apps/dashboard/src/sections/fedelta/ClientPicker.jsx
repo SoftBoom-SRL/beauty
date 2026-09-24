@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
+import { api, ApiError, Icon, PhoneInput, isPlausiblePhone, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 
 /** Client search-picker (predictive) with inline "new client" creation.
@@ -66,7 +66,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
       if (err instanceof ApiError && err.status === 409 && err.data?.archived_client_id) {
         setArchived({ id: err.data.archived_client_id, name: err.data.archived_client_name || '' });
       }
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setCreating(false);
     }
@@ -81,7 +81,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
       fireToast({ msg: t(`Scheda di ${saved.full_name} riattivata`, `${saved.full_name}'s profile reactivated`), icon: 'check' });
       setQ(''); close();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setCreating(false);
     }

@@ -6,7 +6,7 @@
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
+import { api, Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
@@ -230,7 +230,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
     } catch (err) {
       // 400 "Appuntamento già incassato", 422 payments mismatch / gift card balance, ...
       setConfirmOpen(false);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

@@ -5,7 +5,7 @@
 // Execution (channel + message) lives on Yourang — shown read-only, with a live
 // client-side WhatsApp preview (token substitution) as a nicety.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, API_URL, Icon, Toggle } from '@youty/shared';
+import { api, API_URL, Icon, Toggle, toastApiError } from '@youty/shared';
 import { DkSeg } from '../../ui/index.js';
 import { mergeRuleDraft } from './draft.js';
 import { useDash } from '../../ctx.jsx';
@@ -114,8 +114,7 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
       setStale(false);
       onSaved(saved);
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-      else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

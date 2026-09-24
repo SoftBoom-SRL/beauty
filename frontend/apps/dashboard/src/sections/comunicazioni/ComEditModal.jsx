@@ -3,7 +3,7 @@
 // index.jsx as a plain <DkModal>. Owns its own save/delete API calls; the parent just
 // refetches the list on success.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, ApiError, Icon, toastApiError } from '@youty/shared';
 import { DkModal, DkSeg } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { comStatusMeta, comWhenLabel, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
@@ -144,7 +144,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
         onSaved(saved);
       }
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -158,7 +158,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
       const saved = await persist();
       onSend(saved);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -172,7 +172,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
       fireToast({ msg: t('Comunicazione eliminata', 'Communication deleted'), icon: 'x' });
       onDeleted(comm.id);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setDeleting(false);
     }
   };

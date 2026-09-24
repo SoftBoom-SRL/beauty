@@ -3,7 +3,7 @@
 // and the registry TechSheetModal. Prototype TECH_FIELDS mapped onto the
 // API's flat TechnicalSheet columns (see helpers.js).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, mediaUrl, nameIn } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, mediaUrl, nameIn, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { TECH_FIELDS, dateTimeLabel, initialsOf, inputCss, sheetVal } from './helpers.js';
 
@@ -20,7 +20,7 @@ export function TechSheetCard({ sheet: initial, defaultOpen }) {
       const updated = await api.postForm(`/api/clients/${sheet.client_id}/sheets/${sheet.id}/photo`, { photo: file });
       setSheet(updated);
       fireToast({ msg: t('Foto salvata nella scheda', 'Photo saved to the sheet'), icon: 'check' });
-    } catch (err) { fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
   return (
     <div className="dk-card" style={{ padding: 0, boxShadow: 'none', border: '1px solid var(--hair)', overflow: 'hidden' }}>
@@ -118,7 +118,7 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
       }
       onSaved && onSaved(sheet);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 

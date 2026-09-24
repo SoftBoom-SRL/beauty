@@ -2,7 +2,7 @@
 // Owns its own fetch/refetch of /api/catalog/services and /api/catalog/packages
 // so edits show immediately; syncs the ctx base catalogs via reload.* after writes.
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from '@youty/shared';
+import { api, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import ServiziSub from './ServiziSub.jsx';
 import PacchettiSub from './PacchettiSub.jsx';
@@ -25,10 +25,7 @@ export default function ServiziSection() {
   const [loadingSvc, setLoadingSvc] = useState(true);
   const [loadingPkg, setLoadingPkg] = useState(true);
 
-  const toastErr = useCallback((err) => {
-    if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-    else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-  }, [fireToast, t]);
+  const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   const fetchServices = useCallback(async () => {
     const data = await api.get('/api/catalog/services');

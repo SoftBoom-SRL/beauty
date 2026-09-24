@@ -3,7 +3,7 @@
 // modifica testo, gestione allegati). Usati dalla scheda Note e dallo Storico
 // (note di trattamento legate alla visita).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Icon, mediaUrl } from '@youty/shared';
+import { api, Icon, mediaUrl, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { dateTimeLabel, inputCss } from './helpers.js';
 
@@ -85,7 +85,7 @@ export function NoteComposer({ clientId, appointmentId = null, onSaved, onCancel
       fireToast({ msg: files.length ? t('Nota e allegati salvati', 'Note and attachments saved') : t('Nota aggiunta', 'Note added'), icon: 'check' });
       onSaved?.(note);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 
@@ -144,7 +144,7 @@ export function NoteCard({ note, clientId, canWrite, onChanged, onDeleted, compa
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
   const shared = isAiVisible(note.visibility);
-  const toastErr = (err) => fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+  const toastErr = (err) => toastApiError(err, fireToast, t);
 
   const saveText = async () => {
     if (text.trim() === note.text) { setEditing(false); return; }

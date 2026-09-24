@@ -5,7 +5,7 @@
 // caparra sempre. Alla creazione: nota iniziale + consensi; in modifica i
 // consensi restano nella scheda Consensi (il server ne registra la data).
 import React, { useState } from 'react';
-import { api, ApiError, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
+import { api, ApiError, Icon, PhoneInput, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { BirthdayInput, Field, GenderPicker } from '../components.jsx';
@@ -93,7 +93,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       fireToast({ msg: t(`Scheda di ${saved.full_name} riattivata`, `${saved.full_name}'s profile reactivated`), icon: 'check' });
       await afterCreate(saved);
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : t('Errore di rete', 'Network error'));
+      setErr(apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 
@@ -137,7 +137,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       if (!isEdit && e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
         setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
       }
-      const msg = e instanceof ApiError ? e.message : t('Errore di rete', 'Network error');
+      const msg = apiErrorText(e, t);
       setErr(msg);
     } finally { setSaving(false); }
   };

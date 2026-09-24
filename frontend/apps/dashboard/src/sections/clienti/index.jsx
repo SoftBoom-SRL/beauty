@@ -2,7 +2,7 @@
 // filterable, paginated client list (left) and full client profile (right).
 // Ported from desktop-clienti.jsx (DkClienti) onto the real API.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, EmptyState, Icon } from '@youty/shared';
+import { api, Avatar, EmptyState, Icon, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
@@ -77,7 +77,7 @@ export default function ClientiSection() {
       .catch((err) => {
         if (seq !== reqSeq.current || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
         setItems([]); setCount(0);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       });
   }, [listParams, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -91,7 +91,7 @@ export default function ClientiSection() {
       setCount(res.count);
     } catch (err) {
       if (seq !== reqSeq.current) return;
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setLoadingMore(false); }
   };
 

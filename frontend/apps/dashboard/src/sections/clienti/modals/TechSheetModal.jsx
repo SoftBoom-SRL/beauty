@@ -4,7 +4,7 @@
 // Props (all optional except clientId): { clientId, apptId, apptLabel,
 // category, viewSheetId }.
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '@youty/shared';
+import { api, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { TechSheetCard, TechSheetForm } from '../TechSheet.jsx';
@@ -22,7 +22,7 @@ export default function TechSheetModal({ clientId, apptId = null, apptLabel = ''
       .catch((err) => {
         if (dead) return;
         setSheets([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       });
     api.get(`/api/clients/${clientId}`)
       .then((c) => { if (!dead) setClientName(c.full_name); })

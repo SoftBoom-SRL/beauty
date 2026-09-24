@@ -1,7 +1,7 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
 import { useEffect, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
+import { api, Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
@@ -25,7 +25,7 @@ export default function CartTab({ onGoHistory }) {
   /* ---- products: prima pagina + ricerca lato server oltre la pagina ---- */
   const [q, setQ] = useState('');
   const { products, list: prodList, searching, refresh: refreshProducts } = useProductCatalog(q, {
-    onError: (err) => fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }),
+    onError: (err) => toastApiError(err, fireToast, t),
   });
 
   /* ---- cart ---- */
@@ -166,7 +166,7 @@ export default function CartTab({ onGoHistory }) {
       fireToast({ msg: t(`Vendita registrata · ${money(sale.total, lang)}`, `Sale recorded · ${money(sale.total, lang)}`), icon: 'check' });
     } catch (err) {
       setConfirmOpen(false);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

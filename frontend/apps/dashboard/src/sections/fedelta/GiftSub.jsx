@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEurNoFree, Icon, EmptyState } from '@youty/shared';
+import { api, fmtEurNoFree, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
@@ -77,7 +77,7 @@ export default function GiftSub() {
     }).catch((err) => {
       if (seq !== reqSeq.current) return;
       setItems([]); setTotal(0); setKpi(null);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
   }, [statusF, payF, query, offset, fireToast, t]);
 
@@ -90,7 +90,7 @@ export default function GiftSub() {
       fireToast({ msg: t('Gift card segnata come pagata', 'Gift card marked as paid'), icon: 'check' });
       reload();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     }
   };
 

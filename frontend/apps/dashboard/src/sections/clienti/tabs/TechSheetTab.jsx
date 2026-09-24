@@ -1,7 +1,7 @@
 // TechSheetTab.jsx — profile tab: list of immutable technical sheets +
 // inline creation form (GET/POST /api/clients/{id}/sheets).
 import { useEffect, useState } from 'react';
-import { api, ApiError, EmptyState, Icon } from '@youty/shared';
+import { api, EmptyState, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { TechSheetCard, TechSheetForm } from '../TechSheet.jsx';
 
@@ -16,7 +16,7 @@ export default function TechSheetTab({ c }) {
       .then(setSheets)
       .catch((err) => {
         setSheets([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       });
   };
   useEffect(() => { setSheets(null); load(); }, [c.id]); // eslint-disable-line react-hooks/exhaustive-deps

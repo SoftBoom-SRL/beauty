@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api, ApiError, fmtEur, Icon, NumInput } from '@youty/shared';
+import { api, fmtEur, Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, numCss, segBtn } from '../formStyles.js';
@@ -41,7 +41,7 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
       }
       onSaved(isNew ? t('Coupon creato', 'Coupon created') : t('Coupon aggiornato', 'Coupon updated'));
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -54,7 +54,7 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
       await api.del(`/api/marketing/coupons/${draft.id}`);
       onDeleted();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };
@@ -68,7 +68,7 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
       fireToast({ msg: t('Coupon segnato come utilizzato', 'Coupon marked as redeemed'), icon: 'check' });
       if (onRedeemed) onRedeemed(); // refresh the list behind the modal
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
