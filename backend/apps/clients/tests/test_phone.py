@@ -1,23 +1,99 @@
-"""Caccia 22/09 — regole dei numeri di telefono (06-04, 06-11, 16-11).
+"""Numeri di telefono: normalizzazione, chiave di identità, doppioni.
 
-Una sola tabella di casi, una riga per regola: è la stessa che
-frontend/packages/shared/src/phone.js deve rispettare (normalizePhone), perché
-il numero normalizzato è la chiave con cui si riconosce una cliente già in
-rubrica — se backend e frontend divergono, la stessa persona diventa due
-schede.
-
-R1 «+» o «00» = internazionale: dopo il prefisso si toglie UNO 0 interurbano,
-   per tutti i paesi tranne Italia (+39), San Marino (+378), Vaticano (+379) e
-   Costa d'Avorio (+225), dove lo 0 fa parte del numero.
-R2 solo cifre: 12 o più cifre che cominciano con un prefisso ITU assegnato =
-   internazionale (e vale R1); altrimenti numero italiano → +39.
-R3 dopo +39, 12 o più cifre che cominciano per 39 = prefisso ripetuto: quel
-   39 si toglie (+39 393 1234567, 10 cifre, è un cellulare vero e resta).
+Lo stesso numero scritto in modi diversi è la stessa cliente: la chiave
+(`phone_key`) è quella con cui la si riconosce in rubrica e al login. In fondo
+la migrazione che ricalcola le chiavi salvate con le regole di prima e il
+comando che elenca i doppioni.
 """
 
-from django.test import SimpleTestCase
+import contextlib
+import importlib
+import io
 
-from common.phone import normalize_phone, phone_key
+from django.apps import apps as django_apps
+from django.core.management import call_command
+from django.test import SimpleTestCase, TestCase
+from ninja.errors import HttpError
+
+from apps.core.models import Salon
+from common.phone import find_client_by_phone, normalize_phone, phone_key
+
+from ..api import create_client
+from ..models import Client, ClientNote, TechnicalSheet
+from ..schemas import ClientIn
+from .base import ClientsTestCase
+
+
+class PhoneNormalizationTests(ClientsTestCase):
+    """Lo stesso numero scritto in modi diversi è lo stesso cliente."""
+
+    def test_same_number_written_differently_is_one_client(self):
+        created = create_client(
+            self.request, ClientIn(first_name="Sofia", last_name="Ricci", phone="+39 333 1234567")
+        )
+        self.assertEqual(created.phone, "+393331234567")
+        with self.assertRaises(HttpError) as caught:
+            create_client(self.request, ClientIn(first_name="Sofia", last_name="Bis", phone="3331234567"))
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_an_international_number_without_the_plus_is_not_prefixed_again(self):
+        """«393331234567» è E.164 scritto senza il «+», non un numero italiano.
+
+        Antependendo il prefisso diventava «+39393331234567»: una seconda
+        scheda per la stessa persona, promemoria e OTP verso un numero che non
+        esiste, e il login dell'app cliente che non riaggancia più lo storico.
+        La regola è la stessa di splitPhone nel frontend (oltre 11 cifre =
+        numero internazionale).
+        """
+        from common.phone import normalize_phone
+
+        self.assertEqual(normalize_phone("393331234567"), "+393331234567")
+        self.assertEqual(normalize_phone("39 333 1234567"), "+393331234567")
+        self.assertEqual(normalize_phone("447911123456"), "+447911123456")
+        # Sotto la soglia resta un numero nazionale, anche se comincia per 33
+        # (Francia) o 39: «3331234567» è un cellulare italiano.
+        self.assertEqual(normalize_phone("3331234567"), "+393331234567")
+        self.assertEqual(normalize_phone("3391234567"), "+393391234567")
+
+    def test_the_same_person_written_both_ways_is_one_client(self):
+        created = create_client(
+            self.request, ClientIn(first_name="Sofia", phone="+393331234567")
+        )
+        with self.assertRaises(HttpError) as caught:
+            create_client(self.request, ClientIn(first_name="Sofia", phone="393331234567"))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+        self.assertEqual(created.phone, "+393331234567")
+
+    def test_lookup_finds_legacy_spellings(self):
+        from common.phone import find_client_by_phone
+
+        legacy = self.make_client(phone="+39 333 987 6543")  # salvato prima della normalizzazione
+        self.assertEqual(find_client_by_phone(self.salon, "3339876543"), legacy)
+        self.assertEqual(find_client_by_phone(self.salon, "0039 333 9876543"), legacy)
+        self.assertIsNone(find_client_by_phone(self.salon, "3330000000"))
+        other = Salon.objects.create(name="Altro", slug="altro")
+        self.assertIsNone(find_client_by_phone(other, "3339876543"))  # mai fuori dal salone
+
+
+# ---------------------------------------------------------------------------
+# Caccia 22/09 — regole dei numeri di telefono (06-04, 06-11, 16-11).
+#
+# Una sola tabella di casi, una riga per regola: è la stessa che
+# frontend/packages/shared/src/phone.js deve rispettare (normalizePhone), perché
+# il numero normalizzato è la chiave con cui si riconosce una cliente già in
+# rubrica — se backend e frontend divergono, la stessa persona diventa due
+# schede.
+#
+# R1 «+» o «00» = internazionale: dopo il prefisso si toglie UNO 0 interurbano,
+#    per tutti i paesi tranne Italia (+39), San Marino (+378), Vaticano (+379) e
+#    Costa d'Avorio (+225), dove lo 0 fa parte del numero.
+# R2 solo cifre: 12 o più cifre che cominciano con un prefisso ITU assegnato =
+#    internazionale (e vale R1); altrimenti numero italiano → +39.
+# R3 dopo +39, 12 o più cifre che cominciano per 39 = prefisso ripetuto: quel
+#    39 si toglie (+39 393 1234567, 10 cifre, è un cellulare vero e resta).
+# ---------------------------------------------------------------------------
+
 
 CASES = [
     # --- R1: «+» / «00», uno 0 interurbano via, tranne IT / SM / VA / CI ---
@@ -84,18 +160,6 @@ class PhoneRulesTableTests(SimpleTestCase):
 # 18-02: chiavi scritte con l'algoritmo del 17/09, mai ricalcolate
 # ---------------------------------------------------------------------------
 
-import contextlib  # noqa: E402
-import importlib  # noqa: E402
-import io  # noqa: E402
-
-from django.apps import apps as django_apps  # noqa: E402
-from django.core.management import call_command  # noqa: E402
-from django.test import TestCase  # noqa: E402
-
-from apps.core.models import Salon  # noqa: E402
-from common.phone import find_client_by_phone  # noqa: E402
-
-from .models import Client, ClientNote, TechnicalSheet  # noqa: E402
 
 MIGRATION = importlib.import_module("apps.clients.migrations.0008_caccia22_clienti_phone_key")
 

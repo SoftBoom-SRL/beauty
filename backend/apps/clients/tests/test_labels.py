@@ -1,9 +1,4 @@
-"""Caccia 22/09 — etichette cliente e condizioni che le citano.
-
-06-06 + 01-13 + 15-07: le condizioni di regole caparra e automazioni salvano
-il NOME dell'etichetta; rinominarla le spegneva in silenzio. 06-12: un nome
-già usato (o il doppio clic su «Salva») usciva come 500.
-"""
+"""Etichette della cliente (ClientCategory) e le regole che le citano per nome."""
 
 from decimal import Decimal
 from types import SimpleNamespace
@@ -13,11 +8,27 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent, Salon
-from common.auth import StaffContext
+from common.testing import staff_context
 
-from .api import create_category, delete_category, update_category
-from .models import Client, ClientCategory
-from .schemas import CategoryIn
+from ..api import create_category, delete_category, update_category
+from ..models import Client, ClientCategory
+from ..schemas import CategoryIn
+from .base import ClientsTestCase
+
+
+class CategoryTests(ClientsTestCase):
+    def test_create_category(self):
+        category = create_category(self.request, CategoryIn(name="VIP"))
+        self.assertTrue(ClientCategory.objects.filter(id=category.id).exists())
+
+
+# ---------------------------------------------------------------------------
+# Caccia 22/09 — etichette cliente e condizioni che le citano.
+#
+# 06-06 + 01-13 + 15-07: le condizioni di regole caparra e automazioni salvano
+# il NOME dell'etichetta; rinominarla le spegneva in silenzio. 06-12: un nome
+# già usato (o il doppio clic su «Salva») usciva come 500.
+# ---------------------------------------------------------------------------
 
 
 def _label_rule(name, cmp="contains"):
@@ -27,9 +38,7 @@ def _label_rule(name, cmp="contains"):
 class _Base(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.request = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=False)
-        )
+        self.request = SimpleNamespace(auth=staff_context(self.salon, {"clients"}))
         self.client_obj = Client.objects.create(salon=self.salon, first_name="Anna", phone="+393331112233")
 
     def deposit_rule(self, conditions, name="A rischio"):

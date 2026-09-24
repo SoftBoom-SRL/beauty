@@ -1,47 +1,305 @@
-"""Caccia 22/09 — la scheda cliente: PUT parziale, consensi, archiviate.
+"""Scheda cliente: creazione, modifica anche parziale, archiviazione, consensi.
 
-C15 + 18-07: il PUT applica solo i campi presenti e scrive solo le colonne
-cambiate; le date dei consensi le scrive il server (14-14, 06-10). 07-03: la
-revoca del consenso e la disattivazione valgono anche per gli invii marketing
-in coda. 06-02: il numero di una scheda archiviata porta a quella scheda,
-invece che a un «già registrato» senza via d'uscita.
+Anche genere e compleanno senza anno, i valori troppo lunghi o fuori dalle
+scelte del modello (422) e i codici delle gift card mostrati nella scheda.
 """
 
 import datetime as dt
 import json
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, Salon
-from common.auth import StaffContext, create_staff_tokens
+from common.testing import bearer, post_json, put_json, staff_context
 
-from .api import create_client, delete_client, update_client
-from .models import Client, ClientCategory
-from .schemas import ClientIn, ClientUpdateIn
+from ..api import create_client, delete_client, get_client, update_client
+from ..models import Client, ClientCategory, ClientNote, TechnicalSheet
+from ..schemas import ClientIn, ClientUpdateIn
+from .base import ClientsTestCase, _staff_http
+
+
+class ClientCrudTests(ClientsTestCase):
+    def test_create_and_update_client(self):
+        data = ClientIn(first_name="Giulia", last_name="Bianchi", phone="+393331112222")
+        client = create_client(self.request, data)
+        self.assertEqual(client.full_name, "Giulia Bianchi")
+        self.assertTrue(Client.objects.filter(id=client.id, salon=self.salon).exists())
+
+        update_data = ClientIn(first_name="Giulia", last_name="Verdi", phone="+393331112222")
+        updated = update_client(self.request, client.id, update_data)
+        self.assertEqual(updated.last_name, "Verdi")
+
+    def test_duplicate_phone_rejected_on_create(self):
+        self.make_client(phone="+393339990000")
+        data = ClientIn(first_name="Altra", last_name="Persona", phone="+393339990000")
+        with self.assertRaises(HttpError) as exc:
+            create_client(self.request, data)
+        self.assertEqual(exc.exception.status_code, 400)
+
+    def test_since_is_filled_at_creation(self):
+        """Senza `since` il KPI «nuovi clienti» resta a zero per sempre."""
+        client = create_client(
+            self.request, ClientIn(first_name="Giada", phone="+393334445555")
+        )
+        self.assertEqual(client.since, timezone.localdate())
+
+    def test_given_since_is_kept(self):
+        """Chi importa uno storico dice da quando è cliente: non si sovrascrive."""
+        client = create_client(
+            self.request,
+            ClientIn(first_name="Giada", phone="+393334446666", since=dt.date(2019, 5, 2)),
+        )
+        self.assertEqual(client.since, dt.date(2019, 5, 2))
+
+    def test_the_database_refuses_two_cards_for_the_same_number(self):
+        """L'identità è phone_key, non la stringa digitata.
+
+        Il vincolo su (salone, telefono) guardava il testo: «+39 333 000 1111»
+        e «+393330001111» erano due schede per la stessa persona, con storico,
+        affidabilità e caparre spaccati a metà.
+        """
+        from django.db import IntegrityError, transaction
+
+        self.make_client(phone="+393330001111")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.make_client(phone="+39 333 000 1111", first_name="Doppia")
+
+    def test_a_concurrent_duplicate_answers_400_not_500(self):
+        """Il controllo di unicità non è atomico: a fermare la seconda scheda è
+        il vincolo del database, e la violazione deve uscire come 400."""
+        from unittest.mock import patch
+
+        self.make_client(phone="+393337778888")
+        data = ClientIn(first_name="Altra", phone="+39 333 777 8888")
+        # find_client_by_phone cieco = le due richieste simultanee che superano
+        # entrambe il controllo e arrivano insieme alla INSERT.
+        with patch("apps.clients.api.find_client_by_phone", return_value=None):
+            with self.assertRaises(HttpError) as exc:
+                create_client(self.request, data)
+        self.assertEqual(exc.exception.status_code, 400)
+
+
+class ClientPartialUpdateTests(ClientsTestCase):
+    """Il PUT applica solo i campi presenti nel corpo.
+
+    `ClientIn` ha un default per quasi tutto: riversarlo intero su una scheda
+    esistente cancellava i consensi (con la prova del consenso privacy),
+    riportava l'affidabilità a 100 e riattivava le schede disattivate.
+    """
+
+    def test_a_partial_put_does_not_wipe_consents_and_reliability(self):
+        client = self.make_client(
+            phone="+393332221111",
+            reliability=42,
+            consents={"privacy": True, "privacy_at": "2026-01-02T10:00:00", "marketing": True},
+        )
+        update_client(
+            self.request,
+            client.id,
+            ClientIn(first_name="Sofia", last_name="Neri", phone="+393332221111"),
+        )
+        client.refresh_from_db()
+        self.assertEqual(client.last_name, "Neri")
+        self.assertEqual(client.reliability, 42)
+        self.assertTrue(client.consents["privacy"])
+        self.assertEqual(client.consents["privacy_at"], "2026-01-02T10:00:00")
+        self.assertTrue(client.consents["marketing"])
+
+    def test_a_partial_put_does_not_reactivate_a_disabled_card(self):
+        client = self.make_client(phone="+393332223333", is_active=False)
+        update_client(self.request, client.id, ClientIn(first_name="Sofia", phone="+393332223333"))
+        client.refresh_from_db()
+        self.assertFalse(client.is_active)
+
+    def test_what_is_in_the_body_is_applied(self):
+        client = self.make_client(phone="+393332224444", reliability=100)
+        update_client(
+            self.request,
+            client.id,
+            ClientIn(first_name="Sofia", phone="+393332224444", reliability=30, is_active=False),
+        )
+        client.refresh_from_db()
+        self.assertEqual(client.reliability, 30)
+        self.assertFalse(client.is_active)
+
+    def test_categories_are_left_alone_when_the_body_omits_them(self):
+        client = self.make_client(phone="+393332225555")
+        vip = ClientCategory.objects.create(salon=self.salon, name="VIP")
+        client.categories.add(vip)
+        update_client(self.request, client.id, ClientIn(first_name="Sofia", phone="+393332225555"))
+        self.assertEqual(list(client.categories.all()), [vip])
+
+    def test_stripe_identifiers_are_not_writable_from_the_client(self):
+        """Copiare gli identificativi Stripe di un'altra cliente su questa
+        scheda permetteva di addebitare un no-show sulla carta di lei."""
+        client = self.make_client(phone="+393332226666")
+        data = ClientIn.model_validate(
+            {
+                "first_name": "Sofia",
+                "phone": "+393332226666",
+                "stripe_customer_id": "cus_di_un_altra",
+                "stripe_payment_method_id": "pm_di_un_altra",
+            }
+        )
+        self.assertFalse(hasattr(data, "stripe_customer_id"))
+        update_client(self.request, client.id, data)
+        client.refresh_from_db()
+        self.assertEqual(client.stripe_customer_id, "")
+        self.assertEqual(client.stripe_payment_method_id, "")
+
+    def test_soft_delete_sets_is_active_false_and_logs(self):
+        client = self.make_client()
+        delete_client(self.request, client.id)
+        client.refresh_from_db()
+        self.assertFalse(client.is_active)
+        self.assertTrue(ActivityLog.objects.filter(type="client.deleted").exists())
+
+    def test_detail_has_zeroed_computed_fields_without_sales_app(self):
+        client = self.make_client()
+        detail = get_client(self.request, client.id)
+        self.assertEqual(detail.visits, 0)
+        self.assertEqual(detail.total_spent, Decimal("0"))
+        self.assertIsNone(detail.last_visit)
+
+
+class ClientGenderBirthdayApiTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients"])
+
+    def _post(self, payload):
+        return post_json(self.client, "/api/clients/", payload, **self.auth)
+
+    def test_birthday_without_year_roundtrip(self):
+        res = self._post({"first_name": "Sofia", "phone": "+393331112233", "birthday": "--03-15", "gender": "female"})
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body["birthday"], "--03-15")
+        self.assertFalse(body["birthday_year_known"])
+        self.assertIsNone(body["age"])
+        self.assertEqual(body["gender"], "female")
+        client = Client.objects.get(id=body["id"])
+        self.assertEqual((client.birthday.month, client.birthday.day), (3, 15))
+        self.assertEqual(client.birthday.year, Client.BIRTHDAY_YEAR_UNKNOWN)
+
+        detail = self.client.get(f"/api/clients/{body['id']}", **self.auth).json()
+        self.assertEqual(detail["birthday"], "--03-15")
+
+    def test_full_birthday_gives_age_and_update_keeps_format(self):
+        res = self._post({"first_name": "Giada", "phone": "+393331112299", "birthday": "1990-03-15"})
+        body = res.json()
+        self.assertEqual(body["birthday"], "1990-03-15")
+        self.assertTrue(body["birthday_year_known"])
+        # Età esatta, non «almeno 30»: l'asserzione larga restava verde anche
+        # con l'off-by-one del compleanno non ancora passato quest'anno.
+        today = timezone.localdate()
+        expected = today.year - 1990 - ((today.month, today.day) < (3, 15))
+        self.assertEqual(body["age"], expected)
+        put = put_json(
+            self.client,
+            f"/api/clients/{body['id']}",
+            {"first_name": "Giada", "phone": "+393331112299", "birthday": "--12-24", "gender": "other"},
+            **self.auth,
+        )
+        self.assertEqual(put.status_code, 200, put.content)
+        self.assertEqual(put.json()["birthday"], "--12-24")
+        self.assertEqual(put.json()["gender"], "other")
+
+    def test_invalid_birthday_or_gender_rejected(self):
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "birthday": "--13-40"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "birthday": "15/03/1990"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "X", "phone": "+39111", "gender": "boh"}).status_code, 400)
+        self.assertEqual(self._post({"first_name": "", "phone": "+39111"}).status_code, 400)
+
+
+class InputValidationApiTests(TestCase):
+    """Valori più lunghi della colonna o fuori dalle scelte del modello.
+
+    Gli schemi dichiaravano `str` nudi e nessun endpoint chiama `full_clean()`:
+    su Postgres una stringa troppo lunga usciva come 500 (`DataError` non
+    gestita), e quando ci stava restava scritto un valore che nessuna lettura
+    sa interpretare.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.user, self.auth = _staff_http(self.salon, ["clients"])
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", phone="+393331112222"
+        )
+
+    def _json(self, method, url, payload):
+        return getattr(self.client, method)(
+            url, data=json.dumps(payload), content_type="application/json", **self.auth
+        )
+
+    def test_note_visibility_outside_the_choices_is_refused(self):
+        for bad in ("da-condividere", "shared", "pubblica"):
+            res = self._json("post", f"/api/clients/{self.client_obj.id}/notes", {"text": "x", "visibility": bad})
+            self.assertEqual(res.status_code, 422, bad)
+        self.assertEqual(ClientNote.objects.count(), 0)
+
+    def test_client_language_outside_the_choices_is_refused(self):
+        res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "lang": "italiano"})
+        self.assertEqual(res.status_code, 422, res.content)
+
+    def test_reliability_out_of_range_is_refused(self):
+        res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "reliability": 5000})
+        self.assertEqual(res.status_code, 422, res.content)
+
+    def test_category_name_and_color_are_bounded(self):
+        self.assertEqual(self._json("post", "/api/clients/categories", {"name": "A" * 61}).status_code, 422)
+        self.assertEqual(
+            self._json("post", "/api/clients/categories", {"name": "VIP", "color": "rgb(255,0,0)"}).status_code, 422
+        )
+        self.assertEqual(ClientCategory.objects.count(), 0)
+
+    def test_sheet_fields_longer_than_the_column_are_refused(self):
+        res = self._json(
+            "post",
+            f"/api/clients/{self.client_obj.id}/sheets",
+            {"category": "a" * 41, "treatment": "Colore"},
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(TechnicalSheet.objects.count(), 0)
+
+
+# ---------------------------------------------------------------------------
+# Caccia 22/09 — la scheda cliente: PUT parziale, consensi, archiviate.
+#
+# C15 + 18-07: il PUT applica solo i campi presenti e scrive solo le colonne
+# cambiate; le date dei consensi le scrive il server (14-14, 06-10). 07-03: la
+# revoca del consenso e la disattivazione valgono anche per gli invii marketing
+# in coda. 06-02: il numero di una scheda archiviata porta a quella scheda,
+# invece che a un «già registrato» senza via d'uscita.
+# ---------------------------------------------------------------------------
+
 
 MARKETING = "apps.marketing.services"
 
 
-def _staff_http(salon, scopes=("clients",)):
+def _reception_auth(salon, scopes=("clients",)):
+    """Un membro nuovo col ruolo «Reception»: ridà solo l'header (`_staff_http` anche l'utente)."""
     from apps.accounts.models import Membership, Role, User
 
     user = User.objects.create_user(email=f"reception{salon.id}@theparlour.it", password="x" * 10)
     role = Role.objects.create(salon=salon, name="Reception", scopes=list(scopes))
     Membership.objects.create(user=user, salon=salon, role=role, is_owner=False)
-    return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
+    return bearer(user, salon)
 
 
 class _Base(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.request = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=False)
-        )
+        self.request = SimpleNamespace(auth=staff_context(self.salon, {"clients"}))
 
     def card(self, **kw):
         defaults = dict(salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331234567")
@@ -52,12 +310,10 @@ class _Base(TestCase):
 class PartialPutOverHttpTests(_Base):
     def setUp(self):
         super().setUp()
-        self.auth = _staff_http(self.salon)
+        self.auth = _reception_auth(self.salon)
 
     def put(self, client, body):
-        return self.client.put(
-            f"/api/clients/{client.id}", json.dumps(body), content_type="application/json", **self.auth
-        )
+        return put_json(self.client, f"/api/clients/{client.id}", body, **self.auth)
 
     def test_a_label_alone_is_a_valid_body(self):
         """Con lo schema del POST nome e telefono erano obbligatori: il PUT di una
@@ -221,11 +477,11 @@ class MarketingFollowsTheCardTests(_Base):
 class ArchivedPhoneTests(_Base):
     def test_creating_with_the_number_of_an_archived_card_points_to_it(self):
         archived = self.card(first_name="Anna", last_name="Verdi", is_active=False)
-        res = self.client.post(
+        res = post_json(
+            self.client,
             "/api/clients/",
-            json.dumps({"first_name": "Anna", "last_name": "Verdi", "phone": "333 123 4567"}),
-            content_type="application/json",
-            **_staff_http(self.salon),
+            {"first_name": "Anna", "last_name": "Verdi", "phone": "333 123 4567"},
+            **_reception_auth(self.salon),
         )
         self.assertEqual(res.status_code, 409, res.content)
         body = res.json()
@@ -294,7 +550,7 @@ class GiftCodesOnTheCardTests(TestCase):
         )
 
     def _codes(self, scopes):
-        auth = _staff_http(self.salon, scopes)
+        auth = _reception_auth(self.salon, scopes)
         visits = self.client.get(f"/api/clients/{self.sofia.id}/appointments", **auth)
         history = self.client.get(f"/api/clients/{self.sofia.id}/history", **auth)
         self.assertEqual(visits.status_code, 200, visits.content)
