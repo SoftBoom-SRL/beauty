@@ -38,8 +38,8 @@ from apps.core.services import (
 from apps.core.services import default_location  # noqa: F401
 from common.conditions import evaluate
 
-from . import undo as undo_log
-from .models import Appointment, AppointmentService, Pause, UndoEntry, WaitlistEntry
+from .. import undo as undo_log
+from ..models import Appointment, AppointmentService, Pause, UndoEntry, WaitlistEntry
 
 logger = logging.getLogger("youty.agenda")
 
