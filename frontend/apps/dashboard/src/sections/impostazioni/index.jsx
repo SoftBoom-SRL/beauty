@@ -80,8 +80,11 @@ export default function ImpostazioniSection() {
   }, [deepLink, setDeepLink]);
 
   // Stato del collegamento Yourang e risposta del popup OAuth. L'ascolto si
-  // registra subito dopo le letture e con la stessa dipendenza (isOwner), come
-  // quando stavano nello stesso effetto.
+  // registra subito dopo le letture, con la loro dipendenza (isOwner), come
+  // quando stavano nello stesso effetto, e in più `t`: registrato con il `t`
+  // del momento, dopo il cambio di lingua (che si fa proprio in questa
+  // pagina) il toast diceva «Yourang collegato» con la pagina in inglese
+  // (voce 44). `t` cambia solo con la lingua.
   const loadYourang = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
   useEffect(() => {
     if (!isOwner) return;
@@ -91,7 +94,7 @@ export default function ImpostazioniSection() {
   usePopupMessage(YOURANG_MSG, (m) => {
     if (m.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); loadYourang(); }
     else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed') + (m.error ? ': ' + m.error : ''), icon: 'info' });
-  }, [isOwner], isOwner);
+  }, [isOwner, t], isOwner);
 
   /* Collegato da poco: la prima sincronizzazione gira in background sul server.
    * Si ricontrolla ogni tanto finché non risulta fatta (o non compare un
