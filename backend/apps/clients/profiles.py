@@ -146,12 +146,13 @@ def notify_marketing(name: str, *args, **kwargs) -> None:
     Le due funzioni (marketing_consent_changed, drop_from_pending_sends)
     appartengono al marketing: un'installazione che non le ha ancora non deve
     perdere il salvataggio della scheda, ma deve lasciarne traccia nei log.
+    Si cercano a ogni chiamata: i test le sostituiscono o le tolgono dal modulo.
     """
-    try:
-        from apps.marketing import services as marketing_services  # lazy: evita cicli
+    from apps.marketing import services as marketing_services  # lazy: evita cicli
 
+    try:
         hook = getattr(marketing_services, name)
-    except (ImportError, AttributeError):
+    except AttributeError:
         logger.warning("clients: apps.marketing.services.%s non disponibile", name)
         return
     hook(*args, **kwargs)
