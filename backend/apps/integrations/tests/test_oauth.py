@@ -234,6 +234,35 @@ class FlowStartTests(_FlowCase):
         self.assertEqual(set(YourangOAuthState.objects.values_list("state", flat=True)), {"in-corso", new})
 
 
+class LoginStartCapTests(_FlowCase):
+    """Bug sospetti del 24/09, voce 57: l'avvio pubblico del login ha un tetto per IP.
+
+    Ogni chiamata scrive una riga (lo state) e l'endpoint non chiede nessuna
+    sessione. Gli altri endpoint pubblici che scrivono (registrazione,
+    richiesta del codice, modulo contatti) hanno un tetto per IP, questo no:
+    uno script che lo chiamava in ciclo riempiva la tabella.
+    """
+
+    URL = "/api/integrations/yourang/oauth/login/start"
+
+    def test_one_address_cannot_fill_the_table(self):
+        with mock.patch("apps.integrations.client._discovery", return_value=DISCOVERY) as discovery:
+            statuses = [self.client.get(self.URL, REMOTE_ADDR="203.0.113.7").status_code for _ in range(60)]
+            refused = self.client.get(self.URL, REMOTE_ADDR="203.0.113.7")
+            other = self.client.get(self.URL, REMOTE_ADDR="198.51.100.20")
+        discovery.assert_called()
+        self.assertIn(429, statuses)
+        allowed = statuses.index(429)
+        self.assertEqual(statuses, [200] * allowed + [429] * (60 - allowed))
+        self.assertEqual(refused.json()["detail"], "Troppe richieste: riprova tra qualche minuto")
+        # Un altro indirizzo ha il suo tetto, e le richieste rifiutate non scrivono niente.
+        self.assertEqual(other.status_code, 200, other.content)
+        self.assertEqual(YourangOAuthState.objects.count(), allowed + 1)
+        from apps.integrations.api import LOGIN_START_MAX_PER_IP
+
+        self.assertEqual(allowed, LOGIN_START_MAX_PER_IP)
+
+
 class OrgChangeTests(_FlowCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
