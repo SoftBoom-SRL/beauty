@@ -1,27 +1,40 @@
-"""Logica vendite: `finalize_sale` condiviso da checkout e POS + riepilogo di giornata.
+"""Scritture delle vendite: `finalize_sale` condiviso da checkout e POS, e le vendite di
+una riga per il denaro incassato fuori dal conto (gift card, caparra, no-show).
 
-Le integrazioni cross-app (magazzino, gift card, fedeltà) sono importate lazy
-dentro le funzioni, come da convenzione SPEC §1: le firme di riferimento sono
+In sales è l'unico modulo che scrive Sale, SaleLine e Payment: il riepilogo di
+giornata e lo storico stanno in reports.py, la cassa delle caparre in deposits.py.
+
+Le integrazioni cross-app (magazzino, coupon, gift card, fedeltà) sono importate
+lazy dentro le funzioni, come da convenzione SPEC §1 (e i test le patchano nei
+moduli qui sotto): le firme di riferimento sono
 
     inventory.services.deduct_stock_for_sale(sale)
-    marketing.services.redeem_gift_card(salon, code, amount)
-    marketing.services.create_gift_card(salon, value, *, buyer_client=None,
+    marketing.coupons.validate_coupon(salon, code, client=None)
+    marketing.coupons.coupon_discount(coupon, base)
+    marketing.coupons.mark_coupon_redeemed(coupon, sale)
+    marketing.gift_cards.redeem_gift_card(salon, code, amount)
+    marketing.gift_cards.create_gift_card(salon, value, *, buyer_client=None,
         recipient_name="", paid=False, paid_method="", sold_by=None, sale=None)
-    marketing.services.accrue_loyalty(sale)
+    marketing.loyalty.accrue_loyalty(sale)
 """
 
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Sum
-from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from common.money import CENT
 
-from .models import DepositRefund, Payment, Sale, SaleLine
+# compat refactoring: rimuovere dopo l'integrazione — l'agenda chiama queste
+# tre funzioni come `apps.sales.services.<nome>`, anche con `getattr(...,
+# None)`: un nome che manca qui spegnerebbe in silenzio la cassa delle caparre.
+# Vivono in deposits.py, che non importa services in testa: niente ciclo.
+from .deposits import deposit_retained, settle_deposit_excess, sync_deposit_refunds  # noqa: F401
+from .models import Payment, Sale, SaleLine
 
-TWO_PLACES = Decimal("0.01")
+# Scarto ammesso fra pagamenti e dovuto: vale un centesimo come `CENT`, ma è
+# una tolleranza, non un arrotondamento.
 PAYMENT_TOLERANCE = Decimal("0.01")
 # Tetti di sanità su una riga di vendita: un errore di battitura (o una
 # richiesta costruita a mano) non deve poter scrivere a registro una cifra
@@ -37,7 +50,7 @@ def line_amount(qty, unit_price, discount_pct: int = 0, is_gift: bool = False) -
     gross = Decimal(qty) * Decimal(str(unit_price))
     if discount_pct:
         gross = gross * (Decimal(100) - Decimal(discount_pct)) / Decimal(100)
-    return gross.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+    return gross.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
@@ -86,7 +99,7 @@ def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
                 "service_id": raw.get("service_id"),
                 "product_id": raw.get("product_id"),
                 "qty": qty,
-                "unit_price": Decimal(str(unit_price)).quantize(TWO_PLACES),
+                "unit_price": Decimal(str(unit_price)).quantize(CENT),
                 "discount_pct": discount_pct,
                 "is_gift": is_gift,
                 "amount": amount,
@@ -146,7 +159,7 @@ def _coupon_for_sale(salon, code: str, client, prepared: list[dict], total: Deci
     code = (code or "").strip().upper()  # i codici sono tutti maiuscoli (human_code)
     if not code:
         return None, Decimal("0.00")
-    from apps.marketing.services import coupon_discount, validate_coupon  # lazy
+    from apps.marketing.coupons import coupon_discount, validate_coupon  # lazy
 
     coupon = validate_coupon(salon, code, client=client)
     gift_cards = sum(
@@ -182,7 +195,7 @@ def _spread_coupon(prepared: list[dict], discount: Decimal) -> None:
     ordered = sorted(eligible, key=lambda d: d["amount"])
     remaining = discount
     for data in ordered[:-1]:
-        share = min((discount * data["amount"] / base).quantize(TWO_PLACES, rounding=ROUND_HALF_UP), data["amount"])
+        share = min((discount * data["amount"] / base).quantize(CENT, rounding=ROUND_HALF_UP), data["amount"])
         data["coupon_share"] = share
         remaining -= share
     for data in reversed(ordered):  # la più grande assorbe l'arrotondamento
@@ -216,7 +229,7 @@ def finalize_sale(
     payments = [{"method": cash|card|other|gift_card, "amount": Decimal, "gift_card_code"?: str}]
     coupon_code = buono sconto presentato al banco, facoltativo (vedi `_coupon_for_sale`)
     """
-    deposit_deducted = Decimal(str(deposit_deducted or 0)).quantize(TWO_PLACES)
+    deposit_deducted = Decimal(str(deposit_deducted or 0)).quantize(CENT)
     if deposit_deducted < 0:
         raise HttpError(422, "Acconto detratto non valido")
 
@@ -266,7 +279,7 @@ def finalize_sale(
             created_by=actor,
         )
         if coupon is not None:
-            from apps.marketing.services import mark_coupon_redeemed  # lazy
+            from apps.marketing.coupons import mark_coupon_redeemed  # lazy
 
             # Il buono si consuma DENTRO la transazione della vendita: se qui
             # fallisce (un altro banco l'ha battuto un istante prima) non resta
@@ -292,7 +305,7 @@ def finalize_sale(
             if data["line_type"] == SaleLine.LineType.PRODUCT:
                 has_products = True
             if data["line_type"] == SaleLine.LineType.GIFT_CARD:
-                from apps.marketing.services import create_gift_card  # lazy
+                from apps.marketing.gift_cards import create_gift_card  # lazy
 
                 # Una carta per riga: `_prepare_lines` ha già spezzato le
                 # quantità maggiori di uno, così ogni carta emessa ha la sua
@@ -311,13 +324,13 @@ def finalize_sale(
                 line.save(update_fields=["gift_card"])
 
         for payment in payments:
-            amount = Decimal(str(payment.get("amount") or 0)).quantize(TWO_PLACES)
+            amount = Decimal(str(payment.get("amount") or 0)).quantize(CENT)
             card = None
             if payment["method"] == Payment.Method.GIFT_CARD:
                 code = (payment.get("gift_card_code") or "").strip()
                 if not code:
                     raise HttpError(422, "Codice gift card mancante nel pagamento")
-                from apps.marketing.services import redeem_gift_card  # lazy
+                from apps.marketing.gift_cards import redeem_gift_card  # lazy
 
                 card = redeem_gift_card(salon, code, amount)
             Payment.objects.create(
@@ -329,7 +342,7 @@ def finalize_sale(
 
             deduct_stock_for_sale(sale)
 
-        from apps.marketing.services import accrue_loyalty  # lazy
+        from apps.marketing.loyalty import accrue_loyalty  # lazy
 
         accrue_loyalty(sale)
 
@@ -369,7 +382,7 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
     """
     if SaleLine.objects.filter(gift_card=card).exists():
         return None  # già venduta al banco: sarebbe un doppio conteggio
-    amount = Decimal(str(card.initial_value)).quantize(TWO_PLACES)
+    amount = Decimal(str(card.initial_value)).quantize(CENT)
     if amount <= 0:
         return None
     if method not in Payment.Method.values:
@@ -449,7 +462,7 @@ def record_deposit_cashed(salon, appointment, *, method: str, actor=None):
     la caparra portata in salone. Ritorna la Sale creata, o None se quella
     caparra ha già la sua vendita.
     """
-    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(TWO_PLACES)
+    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(CENT)
     if amount <= 0:
         return None
     if Sale.objects.filter(deposit_appointment=appointment).exists():
@@ -464,195 +477,9 @@ def record_no_show_charge(salon, appointment, *, amount, actor=None):
     corrispondente un no-show da 80 € lasciava il riepilogo di giornata e i KPI
     a zero. Ritorna la Sale creata, o None se l'appuntamento ne ha già una.
     """
-    amount = Decimal(str(amount or 0)).quantize(TWO_PLACES)
+    amount = Decimal(str(amount or 0)).quantize(CENT)
     if amount <= 0:
         return None
     if Sale.objects.filter(appointment=appointment).exists():
         return None
     return _money_sale(salon, appointment, amount, Payment.Method.CARD, actor, deposit=False)
-
-
-def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
-    """La caparra copriva più del conto finale: la differenza torna alla cliente.
-
-    Prima quel conto era impossibile da chiudere — il dovuto risultava negativo
-    e la cassa rispondeva 422 per sempre. Ora si detrae fino al totale e
-    l'eccedenza si rimborsa: su Stripe se la caparra è arrivata da lì,
-    altrimenti resta scritta nel registro come da restituire a mano.
-    """
-    from . import stripe_service  # lazy: come le altre integrazioni
-
-    excess = Decimal(str(excess or 0)).quantize(TWO_PLACES)
-    if excess <= 0:
-        return
-    cents = int((excess * 100).quantize(Decimal("1")))
-    refund = stripe_service.refund_payment_intent(
-        appointment.salon,
-        appointment.deposit_payment_intent_id,
-        idempotency_key=f"deposit-excess-{appointment.salon_id}-{appointment.id}",
-        amount_cents=cents,
-        account=stripe_service.deposit_account(appointment),
-    )
-    if refund is not None:
-        from apps.agenda.services import record_deposit_refund  # lazy
-
-        refund = stripe_service.as_dict(refund)
-        # Lo stato lo decide Stripe: un rimborso «pending» non è ancora denaro
-        # tornato indietro. Registrandolo qui la quota detraibile si aggiorna.
-        record_deposit_refund(
-            appointment,
-            refund_id=refund.get("id") or f"deposit-excess-{appointment.id}",
-            cents=int(refund.get("amount") or cents),
-            status=refund.get("status") or "succeeded",
-            actor=actor,
-        )
-    log_activity(
-        appointment.salon,
-        "deposit.excess_refunded" if refund is not None else "deposit.excess_refund_due",
-        f"Caparra superiore al conto: € {excess} da restituire"
-        + ("" if refund is not None else " a mano")
-        + f" — {appointment.client.full_name}",
-        actor=actor,
-        payload={"appointment_id": appointment.id, "amount": str(excess)},
-    )
-
-
-def deposit_retained(appointment) -> Decimal:
-    """Caparra ancora del salone: incassata meno i rimborsi riusciti E quelli in corso.
-
-    È la quota che il conto finale deve assorbire (detraendola o restituendola).
-    Con un rimborso parziale ancora «pending» la caparra risulta «rimborso in
-    corso» e la quota detraibile mostrata alla cassa è zero: il resto non veniva
-    né detratto né restituito, e la cliente lo perdeva (02-21, 05-14). Il
-    checkout ne restituisce la parte che non ha detratto.
-    """
-    from apps.agenda.services import _refund_sums, _refunds_committed_cents, _to_cents  # lazy
-
-    if appointment.deposit_status not in ("paid", "refunding"):
-        return Decimal("0.00")
-    refunds = appointment.deposit_refunds or {}
-    _done, in_flight, _gone, _floor = _refund_sums(refunds)
-    # `deposit_refunded_amount` è la copia di quanto già restituito che la
-    # dashboard mostra: di solito coincide con i rimborsi riusciti, ma se è più
-    # alto (scritto a mano dall'admin, senza la riga del rimborso) vale lui.
-    # Contare solo le righe avrebbe detratto al conto, o restituito di nuovo,
-    # soldi che la cliente ha già riavuto.
-    committed = max(
-        _refunds_committed_cents(refunds),
-        _to_cents(appointment.deposit_refunded_amount) + in_flight,
-    )
-    left = _to_cents(appointment.deposit_amount) - committed
-    return (Decimal(max(left, 0)) / 100).quantize(TWO_PLACES)
-
-
-def sync_deposit_refunds(appointment) -> None:
-    """Allinea i movimenti di rimborso (`DepositRefund`) ai rimborsi riusciti della caparra.
-
-    Solo per le caparre entrate in cassa con la loro vendita: una caparra pagata
-    a visita già annullata non è mai stata contata, e il suo rimborso non ha
-    niente da stornare. Un rimborso che smette di risultare riuscito (Stripe lo
-    fallisce dopo) perde la sua riga; il «pavimento» di `charge.refunded` vale
-    per la parte non spiegata dai rimborsi con id. I rimborsi Stripe tornano
-    sulla carta; quelli confermati a mano con il metodo con cui la caparra era
-    stata incassata.
-    """
-    from apps.agenda.services import REFUND_DONE, REFUND_FLOOR_KEY, _refunds_done_cents  # lazy
-
-    deposit_sale = Sale.objects.filter(deposit_appointment=appointment).first()
-    if deposit_sale is None:
-        return
-    first_payment = deposit_sale.payments.order_by("id").first()
-    manual_method = first_payment.method if first_payment is not None else Payment.Method.OTHER
-    refunds = appointment.deposit_refunds or {}
-    wanted: dict[str, tuple[int, str]] = {}
-    explained = 0
-    for key, row in refunds.items():
-        if key == REFUND_FLOOR_KEY or (row.get("status") or "") != REFUND_DONE:
-            continue
-        cents = int(row.get("amount_cents") or 0)
-        if cents <= 0:
-            continue
-        explained += cents
-        wanted[f"{appointment.id}:{key}"] = (cents, manual_method if row.get("manual") else Payment.Method.CARD)
-    # La parte del pavimento non spiegata dalle righe riuscite, al netto dei
-    # rimborsi ancora in volo o falliti (vedi agenda.services._refunds_done_cents):
-    # un rimborso in corso non esce dalla cassa prima di essere avvenuto.
-    unexplained = _refunds_done_cents(refunds) - explained
-    if unexplained > 0:
-        wanted[f"{appointment.id}:{REFUND_FLOOR_KEY}"] = (unexplained, Payment.Method.CARD)
-
-    existing = {
-        row.key: row
-        for row in DepositRefund.objects.filter(salon_id=appointment.salon_id, key__startswith=f"{appointment.id}:")
-    }
-    for key, (cents, method) in wanted.items():
-        amount = (Decimal(cents) / 100).quantize(TWO_PLACES)
-        row = existing.pop(key, None)
-        if row is None:
-            DepositRefund.objects.create(
-                salon_id=appointment.salon_id,
-                appointment=appointment,
-                deposit_sale=deposit_sale,
-                key=key,
-                amount=amount,
-                method=method,
-            )
-        elif row.amount != amount:
-            row.amount = amount
-            row.save(update_fields=["amount"])
-    for row in existing.values():
-        row.delete()
-
-
-def today_summary(salon) -> dict:
-    """Incassi di oggi (box agenda): {total, count, checkout_total, pos_total,
-    gift_card_sold, gift_card_redeemed, deposit_used, deposit_cashed,
-    deposit_refunded, cash_in}.
-
-    `total` è il venduto di oggi: le vendite-caparra restano fuori, perché sono
-    un anticipo sul conto che al checkout verrà fatturato per intero — contarle
-    qui faceva risultare 130 € di venduto per un servizio da 100 con 30 di
-    caparra. Entrano invece in `deposit_cashed`, che è denaro davvero arrivato
-    oggi. `gift_card_redeemed` è la parte saldata con gift card e `deposit_used`
-    quella coperta da caparre versate in precedenza: denaro già incassato in un
-    altro giorno. `deposit_refunded` sono le caparre restituite oggi (rimborso
-    all'annullamento, eccedenza al conto, restituzione a mano): denaro uscito.
-    `cash_in` è quello entrato davvero oggi, al netto di quello uscito:
-    total + deposit_cashed − gift_card_redeemed − deposit_used − deposit_refunded.
-    Così né un regalo né un anticipo vengono contati due volte, e una caparra
-    restituita non resta in cassa.
-    """
-    zero = Decimal("0.00")
-    today = timezone.localdate()
-    of_today = Sale.objects.filter(salon=salon, created_at__date=today)
-    deposits = of_today.filter(deposit_appointment__isnull=False)
-    qs = of_today.filter(deposit_appointment__isnull=True)
-    agg = qs.aggregate(total=Sum("total"), count=Count("id"))
-    by_kind = dict(qs.values_list("kind").annotate(t=Sum("total")))
-    gift_sold = (
-        SaleLine.objects.filter(sale__in=qs, line_type=SaleLine.LineType.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    gift_redeemed = (
-        Payment.objects.filter(sale__in=qs, method=Payment.Method.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    total = agg["total"] or zero
-    deposit_used = qs.aggregate(t=Sum("deposit_deducted"))["t"] or zero
-    deposit_cashed = deposits.aggregate(t=Sum("total"))["t"] or zero
-    deposit_refunded = (
-        DepositRefund.objects.filter(salon=salon, created_at__date=today).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    return {
-        "total": total,
-        "count": agg["count"] or 0,
-        "checkout_total": by_kind.get(Sale.Kind.CHECKOUT.value) or zero,
-        "pos_total": by_kind.get(Sale.Kind.POS.value) or zero,
-        "gift_card_sold": gift_sold,
-        "gift_card_redeemed": gift_redeemed,
-        "deposit_used": deposit_used,
-        "deposit_cashed": deposit_cashed,
-        "deposit_refunded": deposit_refunded,
-        "cash_in": total + deposit_cashed - gift_redeemed - deposit_used - deposit_refunded,
-    }

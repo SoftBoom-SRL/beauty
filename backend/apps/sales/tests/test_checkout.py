@@ -16,7 +16,8 @@ from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
 from ..models import Sale, SaleLine
-from ..services import finalize_sale, record_deposit_cashed, today_summary
+from ..reports import today_summary
+from ..services import finalize_sale, record_deposit_cashed
 from .base import PATCH_LOYALTY, HistoryTestBase, _blocks
 
 
@@ -167,7 +168,7 @@ class CheckoutApiTests(TestCase):
     def test_the_checkout_does_not_overwrite_a_deposit_paid_meanwhile(self):
         """La cliente paga il link mentre la cassiera chiude il conto: il salvataggio
         finale riportava la caparra a «richiesta» e cancellava il PaymentIntent."""
-        from apps.sales.api import finalize_sale as real_finalize
+        from apps.sales.checkout import finalize_sale as real_finalize
 
         def _paid_meanwhile(*args, **kwargs):
             self.Appointment.objects.filter(pk=self.appointment.pk).update(
@@ -175,7 +176,7 @@ class CheckoutApiTests(TestCase):
             )
             return real_finalize(*args, **kwargs)
 
-        with patch("apps.sales.api.finalize_sale", side_effect=_paid_meanwhile):
+        with patch("apps.sales.checkout.finalize_sale", side_effect=_paid_meanwhile):
             response = self._checkout()
         self.assertEqual(response.status_code, 200, response.content)
         self.appointment.refresh_from_db()
@@ -265,9 +266,9 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         }
 
     def test_the_deposit_paid_online_enters_the_till_that_day(self):
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
-        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
         sale = Sale.objects.get(deposit_appointment=self.appointment)
         self.assertEqual(sale.total, Decimal("30.00"))
         self.assertEqual(sale.payments.get().method, "card")
@@ -279,13 +280,13 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         self.assertEqual(summary["total"], Decimal("0.00"))
         self.assertEqual(summary["count"], 0)
         # lo stesso evento ripetuto non incassa due volte
-        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
         self.assertEqual(Sale.objects.filter(deposit_appointment=self.appointment).count(), 1)
 
     def test_the_same_money_is_not_counted_twice_at_the_checkout(self):
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
-        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
         self.appointment.refresh_from_db()
         with patch(PATCH_LOYALTY):
             finalize_sale(
@@ -307,7 +308,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
     def test_paying_the_link_after_the_bill_is_given_back(self):
         """Caparra pagata a conto già chiuso: prima diventava semplicemente
         «pagata» e il salone teneva 130 € per un conto da 100."""
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
         self.appointment.status = "closed"
         self.appointment.save(update_fields=["status"])
@@ -315,7 +316,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
             salon=self.salon, kind=Sale.Kind.CHECKOUT, appointment=self.appointment,
             client=self.client_obj, total=Decimal("100.00"),
         )
-        _payment_intent_succeeded({"id": "pi_late", "amount_received": 3000}, self.metadata)
+        on_payment_intent_succeeded({"id": "pi_late", "amount_received": 3000}, self.metadata)
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_status, "refund_due")
         self.assertEqual(self.appointment.deposit_payment_intent_id, "pi_late")
@@ -327,23 +328,23 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         from apps.core.models import SalonSettings
 
         from .. import stripe_service
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
         token = stripe_service.account_token(self.salon)  # nessun account: piattaforma
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"stripe_account_id": "acct_nuovo"}
         )
         self.salon.refresh_from_db()
-        _payment_intent_succeeded(
+        on_payment_intent_succeeded(
             {"id": "pi_1", "amount_received": 3000}, {**self.metadata, "acct": token}, ""
         )
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_status, "paid")
 
     def test_an_event_from_an_unknown_account_is_still_ignored(self):
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
-        _payment_intent_succeeded(
+        on_payment_intent_succeeded(
             {"id": "pi_1", "amount_received": 3000},
             {**self.metadata, "acct": "firma-inventata"},
             "acct_estraneo",
@@ -413,9 +414,9 @@ class BugHunt21SeptemberTests(TestCase):
         all'inizio della richiesta: il webhook della caparra pagata, arrivato
         nel frattempo, veniva riscritto all'indietro — denaro incassato su
         Stripe e PaymentIntent perso, quindi nemmeno rimborsabile."""
-        from .. import api as sales_api
+        from .. import checkout as sales_checkout
 
-        real_finalize = sales_api.finalize_sale
+        real_finalize = sales_checkout.finalize_sale
 
         def interleaved(*args, **kwargs):
             # il webhook Stripe arriva mentre il checkout è in corso
@@ -424,7 +425,7 @@ class BugHunt21SeptemberTests(TestCase):
             )
             return real_finalize(*args, **kwargs)
 
-        with patch.object(sales_api, "finalize_sale", side_effect=interleaved):
+        with patch.object(sales_checkout, "finalize_sale", side_effect=interleaved):
             response = self._checkout()
         self.assertEqual(response.status_code, 200, response.content)
         self.appointment.refresh_from_db()

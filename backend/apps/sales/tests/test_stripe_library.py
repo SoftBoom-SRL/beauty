@@ -193,9 +193,9 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(appointment.no_show_payment_intent_id, "pi_ns")
 
     def test_a_second_payment_on_the_same_deposit_is_refunded(self):
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
-        _payment_intent_succeeded({"id": "pi_first", "amount_received": 3000}, self.metadata())
+        on_payment_intent_succeeded({"id": "pi_first", "amount_received": 3000}, self.metadata())
         http = self.fake([("POST", "/v1/refunds", {
             "id": "re_dup", "object": "refund", "amount": 3000, "status": "succeeded",
             "payment_intent": "pi_second",

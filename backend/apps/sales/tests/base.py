@@ -25,9 +25,9 @@ from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
 PATCH_DEDUCT = "apps.inventory.services.deduct_stock_for_sale"
-PATCH_LOYALTY = "apps.marketing.services.accrue_loyalty"
-PATCH_REDEEM = "apps.marketing.services.redeem_gift_card"
-PATCH_CREATE_GC = "apps.marketing.services.create_gift_card"
+PATCH_LOYALTY = "apps.marketing.loyalty.accrue_loyalty"
+PATCH_REDEEM = "apps.marketing.gift_cards.redeem_gift_card"
+PATCH_CREATE_GC = "apps.marketing.gift_cards.create_gift_card"
 
 WEBHOOK_URL = "/api/sales/stripe/webhook"
 

@@ -76,7 +76,7 @@ class SaleOut(Schema):
     id: int
     kind: str
     appointment_id: Optional[int] = None
-    # Vendita-caparra: l'appuntamento di cui è l'anticipo (vedi list_sales).
+    # Vendita-caparra: l'appuntamento di cui è l'anticipo (vedi reports.sales_history).
     deposit_appointment_id: Optional[int] = None
     client_id: Optional[int] = None
     client_name: str = ""
@@ -139,10 +139,6 @@ class ChargeNoShowOut(Schema):
 class SetupIntentOut(Schema):
     setup_intent_id: str
     client_secret: Optional[str] = None
-
-
-class OkOut(Schema):
-    ok: bool = True
 
 
 class StripeConnectStatusOut(Schema):

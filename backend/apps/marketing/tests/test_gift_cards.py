@@ -18,8 +18,8 @@ from apps.core.models import Salon
 from common.auth import create_client_tokens, create_staff_tokens
 from common.testing import client_bearer, post_json
 
+from ..gift_cards import create_gift_card, redeem_gift_card
 from ..models import Coupon, GiftCard
-from ..services import create_gift_card, redeem_gift_card
 from .base import GiftCardTestBase, OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 

@@ -11,7 +11,7 @@ from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
 from ..models import Sale
-from ..services import today_summary
+from ..reports import today_summary
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_x")

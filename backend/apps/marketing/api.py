@@ -1,22 +1,54 @@
-import re
+"""Endpoint marketing: coupon, gift card, programmi fedeltà, comunicazioni, app cliente.
+
+Qui c'è solo il lato HTTP: permessi, lettura delle righe del salone
+(`salon_get`, che i test patchano in questo modulo), transazioni e lock delle
+modifiche, forma della risposta. Le regole stanno nei moduli per argomento:
+codes.py, coupons.py, gift_cards.py, loyalty.py, communications.py,
+consent.py e wallet.py.
+"""
+
 from decimal import Decimal
 from typing import Optional
 
-from django.apps import apps as django_apps
 from django.db import transaction
-from django.db.models import Count, DecimalField, F, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Count, Q
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 from ninja.pagination import LimitOffsetPagination, paginate
 
+from apps.catalog.models import Service
+from apps.clients.models import Client
 from apps.core.services import log_activity
+from apps.sales.models import Sale
 from common import ratelimit
 from common.auth import client_auth, staff_auth
+from common.money import CENT
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
+from . import wallet
+from .codes import COUPON_CODE_LENGTH, codes_hidden, mark_expired_if_past, status_q, unique_code
+from .communications import (
+    already_sent,
+    cancel_pending_send,
+    check_audience_type,
+    send_communication,
+    settle_due_communications,
+)
+from .consent import record_marketing_consent
+from .coupons import validate_coupon_value
+from .gift_cards import (
+    CLIENT_GIFT_CARD_MAX,
+    CLIENT_GIFT_CARD_MIN,
+    CLIENT_GIFT_CARD_PER_DAY,
+    cash_gift_card,
+    create_gift_card,
+    gift_card_kpis,
+    sell_gift_card,
+)
+from .loyalty import apply_program_data
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
     ClientGiftCardIn,
@@ -35,70 +67,14 @@ from .schemas import (
     LoyaltyProgramOut,
     MarketingConsentIn,
     MarkPaidIn,
-    OkOut,
     WalletOut,
-    codes_hidden,
-)
-from .services import (
-    cancel_pending_send,
-    create_gift_card,
-    marketing_consent_changed,
-    send_communication,
-    settle_due_communications,
-    unique_code,
 )
 
 router = Router(tags=["marketing"])
 
-_ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_places=2))
-
 
 def _get_client(ctx, client_id):
-    Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
     return salon_get(Client, ctx, client_id)
-
-
-# Tetto compatibile con DecimalField(max_digits=10, decimal_places=2): oltre
-# questa cifra il salvataggio esplode in 500 invece di dire cosa non va.
-MAX_MONEY = Decimal("99999999.99")
-
-
-def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
-    """Un buono deve scontare qualcosa, e non più del conto.
-
-    Senza questi controlli passavano un «-20 €» (che aumentava il totale), uno
-    «sconto del 500%» mostrato tale e quale nel portafoglio della cliente, e
-    valori fuori scala che facevano fallire la scrittura.
-    """
-    value = Decimal(str(value))
-    if value <= 0:
-        raise HttpError(422, "Il valore del coupon dev'essere maggiore di zero")
-    if kind == Coupon.Kind.PERCENT and value > 100:
-        raise HttpError(422, "Uno sconto percentuale non può superare il 100%")
-    if value > MAX_MONEY:
-        raise HttpError(422, "Valore del coupon fuori scala")
-    return value
-
-
-def _status_q(model, status: str) -> Q:
-    """Filtro di stato di coupon e gift card con la scadenza letta adesso (C21).
-
-    EXPIRED a database lo scrive solo un tentativo di riscatto: con il filtro
-    secco su `status` una carta scaduta la settimana scorsa stava fra le
-    «attive» — la nuova prenotazione la prometteva come regalo e la cassa poi
-    la rifiutava — e «Scadute» non la trovava. Stessa regola dell'uscita
-    (schemas.effective_status).
-    """
-    now = timezone.now()
-    if status == model.Status.ACTIVE:
-        return Q(status=model.Status.ACTIVE) & (
-            Q(expires_at__isnull=True) | Q(expires_at__gte=now)
-        )
-    if status == model.Status.EXPIRED:
-        return Q(status=model.Status.EXPIRED) | Q(
-            status=model.Status.ACTIVE, expires_at__lt=now
-        )
-    return Q(status=status)
 
 
 # ---- Coupon ------------------------------------------------------------------
@@ -118,7 +94,7 @@ def list_coupons(
     if origin:
         qs = qs.filter(origin=origin)
     if status:
-        qs = qs.filter(_status_q(Coupon, status))
+        qs = qs.filter(status_q(Coupon, status))
     if q:
         match = Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
         # A chi vede i codici mascherati la ricerca per codice direbbe comunque
@@ -138,12 +114,12 @@ def create_coupon(request, data: CouponIn):
     require_scope(ctx, "marketing")
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
-    value = _validate_coupon_value(data.kind, data.value)
+    value = validate_coupon_value(data.kind, data.value)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     coupon = Coupon.objects.create(
         salon=ctx.salon,
         client=client,
-        code=unique_code(Coupon, ctx.salon, 8),
+        code=unique_code(Coupon, ctx.salon, COUPON_CODE_LENGTH),
         kind=data.kind,
         value=value,
         origin=Coupon.Origin.MANUAL,
@@ -168,7 +144,7 @@ def update_coupon(request, coupon_id: int, data: CouponIn):
         raise HttpError(422, "Solo i coupon attivi sono modificabili")
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
-    value = _validate_coupon_value(data.kind, data.value)
+    value = validate_coupon_value(data.kind, data.value)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     # UPDATE condizionato a status='active', solo sui campi della maschera. Il
     # save() completo della copia letta a inizio richiesta riscriveva anche
@@ -214,13 +190,10 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
     coupon = salon_get(Coupon, ctx, coupon_id)
     if coupon.status != Coupon.Status.ACTIVE:
         raise HttpError(422, "Coupon non più valido")
-    if coupon.expires_at and coupon.expires_at < timezone.now():
-        coupon.status = Coupon.Status.EXPIRED
-        coupon.save(update_fields=["status"])
+    if mark_expired_if_past(coupon):
         raise HttpError(422, "Coupon scaduto")
     sale = None
     if data.sale_id:
-        Sale = django_apps.get_model("sales", "Sale")  # lazy
         sale = salon_get(Sale, ctx, data.sale_id)
     # Il consumo è una sola UPDATE filtrata su status='active': è il database a
     # decidere chi arriva primo. Con il leggi-poi-scrivi di prima, due banchi che
@@ -264,7 +237,7 @@ def list_gift_cards(
         "buyer_client", "gift_service"
     )
     if status:
-        qs = qs.filter(_status_q(GiftCard, status))
+        qs = qs.filter(status_q(GiftCard, status))
     if payment_status:
         qs = qs.filter(payment_status=payment_status)
     if q:
@@ -280,28 +253,7 @@ def list_gift_cards(
     if client_id:
         # il cliente può comparire come acquirente e/o destinatario della carta
         qs = qs.filter(Q(buyer_client_id=client_id) | Q(recipient_client_id=client_id))
-    # «Venduto» è il denaro davvero incassato: le carte ancora da pagare non
-    # sono ricavi, e i premi fedeltà (paid_method="loyalty") non li ha pagati
-    # nessuno — contarli gonfiava il KPI di soldi mai entrati in cassa.
-    sold = Q(payment_status=GiftCard.PaymentStatus.PAID) & ~Q(paid_method="loyalty")
-    # «Da spendere» è il credito che il salone deve ancora onorare: solo carte
-    # attive, pagate e non scadute.
-    spendable = (
-        Q(status=GiftCard.Status.ACTIVE)
-        & Q(payment_status=GiftCard.PaymentStatus.PAID)
-        & (Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now()))
-    )
-    kpi = qs.aggregate(
-        sold_total=Coalesce(Sum("initial_value", filter=sold), _ZERO),
-        redeemed_total=Coalesce(
-            Sum(
-                F("initial_value") - F("balance"),
-                output_field=DecimalField(max_digits=12, decimal_places=2),
-            ),
-            _ZERO,
-        ),
-        outstanding=Coalesce(Sum("balance", filter=spendable), _ZERO),
-    )
+    kpi = gift_card_kpis(qs)
     # Elenco paginato: i KPI restano calcolati su TUTTE le carte filtrate, ma
     # la risposta non trascina più migliaia di righe in un colpo solo.
     total = qs.count()
@@ -326,46 +278,22 @@ def create_gift_card_staff(request, data: GiftCardIn):
     gift_service = None
     value = data.value
     if data.gift_service_id:
-        Service = django_apps.get_model("catalog", "Service")  # lazy
         gift_service = salon_get(Service, ctx, data.gift_service_id)
         value = gift_service.price
     recipient = _get_client(ctx, data.recipient_client_id) if data.recipient_client_id else None
-    # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
-    # sua vendita è esattamente il buco che stiamo chiudendo.
-    with transaction.atomic():
-        card = create_gift_card(
-            ctx.salon,
-            value,
-            gift_service=gift_service,
-            buyer_client=buyer,
-            recipient_client=recipient,
-            recipient_name=data.recipient_name,
-            paid=data.paid,
-            paid_method=data.paid_method,
-            sold_by=ctx.user,
-        )
-        extra = []
-        if data.delivery_date:
-            card.delivery_date = data.delivery_date
-            extra.append("delivery_date")
-        if data.expires_at:
-            card.expires_at = data.expires_at
-            extra.append("expires_at")
-        if extra:
-            card.save(update_fields=extra)
-        if data.paid:
-            # «Vendo e segno pagata subito» è il caso normale al banco (la
-            # maschera manda paid=true di default), ma nasceva una carta
-            # payment_status=paid senza nessuna vendita a registro: quei soldi
-            # non comparivano nei ricavi né nel riepilogo di giornata, e al
-            # riscatto venivano perfino sottratti dall'incasso. La carta faceva
-            # SPARIRE il suo valore dai conti invece di aggiungerlo, e non c'era
-            # modo di rimediare dopo (mark-paid rispondeva «già pagata»).
-            # record_gift_card_cashed si difende da sola dal doppio conteggio.
-            from apps.sales.services import record_gift_card_cashed  # lazy
-
-            record_gift_card_cashed(ctx.salon, card, method=data.paid_method, actor=ctx.user)
-    return card
+    return sell_gift_card(
+        ctx.salon,
+        value,
+        gift_service=gift_service,
+        buyer=buyer,
+        recipient=recipient,
+        recipient_name=data.recipient_name,
+        paid=data.paid,
+        paid_method=data.paid_method,
+        delivery_date=data.delivery_date,
+        expires_at=data.expires_at,
+        actor=ctx.user,
+    )
 
 
 @router.post("/gift-cards/{int:card_id}/mark-paid", auth=staff_auth, response=GiftCardOut)
@@ -375,40 +303,7 @@ def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     # dall'app la paga la cliente al banco, dove c'è chi ha `sales`.
     require_scope(ctx, "sales")
     card = salon_get(GiftCard, ctx, card_id)
-    # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
-    # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
-    if card.status == GiftCard.Status.ACTIVE and card.expires_at and card.expires_at < timezone.now():
-        card.status = GiftCard.Status.EXPIRED
-        card.save(update_fields=["status"])
-        raise HttpError(422, "Gift card scaduta: non può essere incassata")
-    # Tutto l'incasso sta in una transazione con la riga bloccata: il doppio clic
-    # su «Segna come pagata» trovava la carta ancora da pagare in entrambe le
-    # richieste e registrava due vendite (e due pagamenti) per gli stessi soldi.
-    from apps.sales.services import record_gift_card_cashed  # lazy
-
-    with transaction.atomic():
-        card = GiftCard.objects.select_for_update().get(pk=card.pk)
-        if card.payment_status == GiftCard.PaymentStatus.PAID:
-            raise HttpError(422, "Gift card già pagata")
-        # Una carta annullata o scaduta non si incassa: il salone prenderebbe soldi
-        # per un credito che non è più spendibile.
-        if card.status != GiftCard.Status.ACTIVE:
-            raise HttpError(422, "Gift card non attiva: non può essere incassata")
-        card.payment_status = GiftCard.PaymentStatus.PAID
-        card.paid_at = timezone.now()
-        card.paid_method = data.method
-        card.save(update_fields=["payment_status", "paid_at", "paid_method"])
-        # L'incasso diventa una vendita, altrimenti il denaro non entra nei ricavi
-        # e al riscatto viene addirittura sottratto.
-        record_gift_card_cashed(ctx.salon, card, method=data.method, actor=ctx.user)
-    log_activity(
-        ctx.salon,
-        "giftcard.paid",
-        f"Incasso gift card {card.code}: €{card.initial_value} ({data.method})",
-        actor=ctx.user,
-        payload={"gift_card_id": card.id, "amount": str(card.initial_value), "method": data.method},
-    )
-    return card
+    return cash_gift_card(ctx.salon, card, method=data.method, actor=ctx.user)
 
 
 # ---- Programmi fedeltà -------------------------------------------------------
@@ -426,96 +321,11 @@ def list_loyalty_programs(request, active: bool | None = None):
     return qs
 
 
-# Premi che il gestionale sa davvero emettere e il banco sa riscattare. Il
-# «prodotto omaggio» non c'è: non esiste un buono legato a un articolo di
-# magazzino, e accettarlo qui significherebbe promettere alla cliente un premio
-# che nessuna cassa può onorare.
-ISSUABLE_REWARDS = ("coupon_amount", "discount_pct", "free_service", "gift_card")
-
-# Tetto al rapporto di accumulo. Un refuso (1000 invece di 1) su un programma
-# «per euro» con soglia bassa emetteva migliaia di premi a ogni scontrino;
-# services.MAX_REWARDS_PER_SALE ferma l'emorragia a valle, questo la evita a
-# monte. Cento punti per euro è già una scelta esotica, oltre è un errore.
-MAX_EARN_RATIO = Decimal("100")
-# Un punto che scade fra otto anni non scade: oltre questo non ha senso e il
-# campo (PositiveSmallIntegerField) andrebbe comunque in overflow.
-MAX_POINTS_EXPIRY_MONTHS = 120
-MAX_THRESHOLD = 1_000_000
-
-_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-
-def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
-    if data.reward_type not in ISSUABLE_REWARDS:
-        raise HttpError(422, "Tipo di premio non gestito: scegli buono, sconto, servizio omaggio o gift card")
-    if data.reward_type == "free_service" and not data.reward_service_id:
-        raise HttpError(422, "Scegli il servizio da regalare")
-    if data.reward_type != "free_service" and Decimal(str(data.reward_value or 0)) <= 0:
-        raise HttpError(422, "Indica il valore del premio")
-    # Gli altri enum arrivavano scritti a database tali e quali: un "per_euro "
-    # con lo spazio finiva nel ramo «per servizio» senza dire niente, e un
-    # enrollment sbagliato spegneva in silenzio ogni iscrizione automatica —
-    # punti fermi a zero e nessun errore da nessuna parte.
-    if data.type not in LoyaltyProgram.Type.values:
-        raise HttpError(422, "Tipo di programma non valido")
-    if data.earn_metric not in LoyaltyProgram.EarnMetric.values:
-        raise HttpError(422, "Modalità di accumulo non valida")
-    if data.enrollment not in LoyaltyProgram.Enrollment.values:
-        raise HttpError(422, "Modalità di iscrizione non valida")
-    # Una tessera «A timbri» salvata con la metrica «per euro» (quella del
-    # modello vuoto della dashboard, che per i timbri nasconde il selettore)
-    # dava un timbro per euro: una piega da 45 € valeva quattro premi.
-    stamps = data.type == LoyaltyProgram.Type.STAMPS
-    if stamps and data.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-        raise HttpError(
-            400,
-            "Un programma a timbri dà un timbro per visita o per servizio, non per euro speso",
-        )
-    # threshold=0 faceva accumulare punti che non diventavano mai un premio.
-    if not 1 <= data.threshold <= MAX_THRESHOLD:
-        raise HttpError(422, "La soglia dev'essere un numero di punti fra 1 e 1.000.000")
-    # Per i timbri il rapporto non si sceglie (un timbro a visita o a servizio,
-    # vedi services._points_earned): si scrive 1 qualunque cosa arrivi, così
-    # quello che la scheda mostra è quello che succede in cassa.
-    if not stamps:
-        earn_ratio = Decimal(str(data.earn_ratio))
-        if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
-            raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
-    if Decimal(str(data.reward_value or 0)) > MAX_MONEY:
-        raise HttpError(422, "Valore del premio fuori scala")
-    if data.reward_type == "discount_pct" and Decimal(str(data.reward_value or 0)) > 100:
-        raise HttpError(422, "Uno sconto percentuale non può superare il 100%")
-    if not 0 <= data.points_expiry_months <= MAX_POINTS_EXPIRY_MONTHS:
-        raise HttpError(422, "Scadenza punti non valida (0 = mai, massimo 120 mesi)")
-    if not _HEX_COLOR.match(data.color or ""):
-        raise HttpError(422, "Colore non valido: usa il formato #RRGGBB")
-    if data.reward_service_id:
-        Service = django_apps.get_model("catalog", "Service")  # lazy
-        program.reward_service = salon_get(Service, ctx, data.reward_service_id)
-        # Il listino ammette servizi a 0 €: come premio diventavano una carta da
-        # zero che nessuno può emettere, e alla soglia l'errore bloccava ogni
-        # incasso di quella cliente.
-        if data.reward_type == "free_service" and Decimal(
-            str(program.reward_service.price or 0)
-        ) <= 0:
-            raise HttpError(
-                422, "Il servizio da regalare ha prezzo zero: scegline uno a pagamento"
-            )
-    else:
-        program.reward_service = None
-    for name, value in data.dict(exclude={"reward_service_id"}).items():
-        setattr(program, name, value)
-    if stamps:
-        program.earn_ratio = Decimal("1")
-    program.save()
-    return program
-
-
 @router.post("/loyalty-programs", auth=staff_auth, response=LoyaltyProgramOut)
 def create_loyalty_program(request, data: LoyaltyProgramIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    program = _apply_program_data(LoyaltyProgram(salon=ctx.salon), ctx, data)
+    program = apply_program_data(LoyaltyProgram(salon=ctx.salon), ctx, data)
     log_activity(
         ctx.salon,
         "loyalty_program.created",
@@ -530,7 +340,7 @@ def create_loyalty_program(request, data: LoyaltyProgramIn):
 def update_loyalty_program(request, program_id: int, data: LoyaltyProgramIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    program = _apply_program_data(salon_get(LoyaltyProgram, ctx, program_id), ctx, data)
+    program = apply_program_data(salon_get(LoyaltyProgram, ctx, program_id), ctx, data)
     log_activity(
         ctx.salon,
         "loyalty_program.updated",
@@ -646,30 +456,11 @@ def _locked_communication(ctx, comm_id: int) -> Communication:
     return Communication.objects.select_for_update().get(pk=comm.pk)
 
 
-def _already_sent(comm: Communication) -> bool:
-    """Inviata, o programmata con la data già passata: l'evento è partito."""
-    if comm.status == Communication.Status.SENT:
-        return True
-    return (
-        comm.status == Communication.Status.SCHEDULED
-        and comm.scheduled_at is not None
-        and comm.scheduled_at <= timezone.now()
-    )
-
-
-def _check_audience(data: CommunicationIn):
-    """Un audience_type sconosciuto veniva letto come «lista di id cliente»:
-    un refuso su «labels» e la promozione pensata per le VIP partiva a due
-    persone a caso, quelle con l'id uguale all'id dell'etichetta."""
-    if data.audience_type not in Communication.AudienceType.values:
-        raise HttpError(422, "Destinatari non validi: scegli etichette o clienti")
-
-
 @router.post("/communications", auth=staff_auth, response=CommunicationOut)
 def create_communication(request, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    _check_audience(data)
+    check_audience_type(data)
     comm = Communication.objects.create(salon=ctx.salon, **data.dict())
     log_activity(
         ctx.salon,
@@ -685,11 +476,11 @@ def create_communication(request, data: CommunicationIn):
 def update_communication(request, comm_id: int, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    _check_audience(data)
+    check_audience_type(data)
     fields = data.dict()
     with transaction.atomic():
         comm = _locked_communication(ctx, comm_id)
-        if _already_sent(comm):
+        if already_sent(comm):
             raise HttpError(422, "Comunicazione già inviata: non modificabile")
         # Modificare una comunicazione già programmata annulla l'invio in coda
         # (o presso Yourang, se l'ha già ricevuto) e la riporta in bozza:
@@ -748,7 +539,7 @@ def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn
         # cliente. Per cambiarle data si passa dalla modifica, che la riporta in
         # bozza.
         if comm.status != Communication.Status.DRAFT:
-            if _already_sent(comm):
+            if already_sent(comm):
                 raise HttpError(422, "Comunicazione già inviata")
             raise HttpError(
                 422, "Comunicazione già programmata: modificala per cambiarle data"
@@ -766,85 +557,7 @@ def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn
 @router.get("/client/wallet", auth=client_auth, response=WalletOut)
 def client_wallet(request):
     ctx = request.auth
-    now = timezone.now()
-    # Il portafoglio filtrava solo su status=ACTIVE, ma EXPIRED si scrive
-    # soltanto quando qualcuno prova a riscattare: una carta scaduta da mesi
-    # continuava a comparire nel «Saldo totale» e la cassa poi la rifiutava
-    # davanti alla cliente. La scadenza va quindi verificata in lettura.
-    not_expired = Q(expires_at__isnull=True) | Q(expires_at__gte=now)
-    # Le carte ancora da pagare restano visibili a CHI LE HA COMPRATE (l'app le
-    # mostra con l'etichetta «Da pagare in salone»: nasconderle farebbe sparire
-    # un acquisto appena fatto), ma non a chi le riceve: annunciare a una
-    # destinataria un credito che il salone non ha ancora incassato significa
-    # farglielo rifiutare in cassa. È la stessa regola dell'agenda, che tra i
-    # regali prenotabili conta solo le carte pagate.
-    mine = Q(payment_status=GiftCard.PaymentStatus.PAID) & (
-        Q(buyer_client=ctx.client) | Q(recipient_client=ctx.client)
-    ) | Q(payment_status=GiftCard.PaymentStatus.UNPAID, buyer_client=ctx.client)
-    cards = list(
-        GiftCard.objects.filter(salon=ctx.salon, status=GiftCard.Status.ACTIVE)
-        .filter(not_expired)
-        .filter(mine)
-        .select_related("gift_service", "buyer_client")
-        .order_by("-created_at")
-    )
-    for card in cards:
-        card._received = card.recipient_client_id == ctx.client.id
-        # Contratto C3, stessa regola di gift_index nell'agenda: pagata, con
-        # saldo (attiva e non scaduta la filtra già la query), e sua — ne è la
-        # destinataria, oppure l'ha comprata lei senza intestarla a nessuno.
-        # Una carta comprata «per Maria» (nome scritto a mano) è di Maria.
-        card._spendable = (
-            card.payment_status == GiftCard.PaymentStatus.PAID
-            and card.balance > 0
-            and (
-                card._received
-                or (
-                    card.buyer_client_id == ctx.client.id
-                    and card.recipient_client_id is None
-                    and card.recipient_name == ""
-                )
-            )
-        )
-    coupons = (
-        Coupon.objects.filter(
-            salon=ctx.salon, client=ctx.client, status=Coupon.Status.ACTIVE
-        )
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gte=now))
-        .order_by("-created_at")
-    )
-    loyalty = []
-    accounts = LoyaltyAccount.objects.filter(
-        client=ctx.client, program__salon=ctx.salon, program__active=True
-    ).select_related("program")
-    for account in accounts:
-        program = account.program
-        progress = (
-            min(100, int(account.points * 100 / program.threshold))
-            if program.threshold
-            else 0
-        )
-        loyalty.append(
-            {
-                "program_id": program.id,
-                "program_name": program.name,
-                "type": program.type,
-                "color": program.color,
-                "points": account.points,
-                "threshold": program.threshold,
-                "progress_pct": progress,
-            }
-        )
-    return {"gift_cards": list(cards), "coupons": list(coupons), "loyalty": loyalty}
-
-
-# Una gift card comprata dall'app è un impegno che il salone dovrà onorare: il
-# tetto è quello che una cliente può ragionevolmente regalare. Senza, un POST
-# con value=99999999.99 creava una carta da cento milioni che entrava nei KPI
-# del salone, e in ciclo riempiva la tabella.
-CLIENT_GIFT_CARD_MIN = Decimal("5")
-CLIENT_GIFT_CARD_MAX = Decimal("1000")
-CLIENT_GIFT_CARD_PER_DAY = 5
+    return wallet.client_wallet(ctx.salon, ctx.client)
 
 
 @router.post("/client/gift-cards", auth=client_auth, response=GiftCardOut)
@@ -852,7 +565,7 @@ def client_create_gift_card(request, data: ClientGiftCardIn):
     """Acquisto gift card dall'app: nasce unpaid, pagamento in salone
     (Stripe checkout in fase 2)."""
     ctx = request.auth
-    value = Decimal(str(data.value)).quantize(Decimal("0.01"))
+    value = Decimal(str(data.value)).quantize(CENT)
     if not CLIENT_GIFT_CARD_MIN <= value <= CLIENT_GIFT_CARD_MAX:
         raise HttpError(
             422,
@@ -862,8 +575,12 @@ def client_create_gift_card(request, data: ClientGiftCardIn):
     recipient_name = (data.recipient_name or "").strip()[:120]
     # Nessuna carta viene pagata al momento: senza un limite, un ciclo dall'app
     # riempie la tabella di carte fantasma che il salone si ritrova da smaltire.
-    if not ratelimit.hit(f"giftcard:client:{ctx.client.id}", CLIENT_GIFT_CARD_PER_DAY, 24 * 3600):
-        raise HttpError(429, "Troppe gift card richieste oggi: riprova domani")
+    ratelimit.enforce(
+        f"giftcard:client:{ctx.client.id}",
+        CLIENT_GIFT_CARD_PER_DAY,
+        24 * 3600,
+        "Troppe gift card richieste oggi: riprova domani",
+    )
     return create_gift_card(
         ctx.salon,
         value,
@@ -883,30 +600,5 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
     `send_communication` risolve i destinatari su `consents.marketing=True`
     l'invio successivo la salta senza altre modifiche.
     """
-    client = request.auth.client
-    now = timezone.now().isoformat()
-    consents = dict(client.consents or {})
-    was_accepted = bool(consents.get("marketing"))
-    consents["marketing"] = bool(data.accepted)
-    # Si tiene traccia di QUANDO: il consenso va dimostrato, e la revoca pure.
-    if data.accepted:
-        consents["marketing_at"] = now
-        consents.pop("marketing_revoked_at", None)
-    else:
-        consents["marketing_revoked_at"] = now
-        consents["marketing_at"] = ""
-    client.consents = consents
-    client.save(update_fields=["consents"])
-    # La revoca vale anche per le campagne già programmate o in coda (07-03):
-    # si ripete a ogni revoca, perché la cliente può essere finita in un invio
-    # anche quando il consenso era stato tolto da un'altra parte.
-    if not data.accepted or not was_accepted:
-        marketing_consent_changed(client, bool(data.accepted))
-    log_activity(
-        request.auth.salon,
-        "client.consent_updated",
-        f"{client.full_name}: consenso marketing "
-        + ("concesso" if data.accepted else "revocato"),
-        payload={"client_id": client.id, "marketing": bool(data.accepted)},
-    )
+    record_marketing_consent(request.auth.salon, request.auth.client, data.accepted)
     return OkOut()

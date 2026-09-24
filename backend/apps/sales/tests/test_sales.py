@@ -16,7 +16,8 @@ from apps.core.models import ActivityLog, Salon
 from common.auth import create_staff_tokens
 
 from ..models import Payment, Sale, SaleLine
-from ..services import finalize_sale, line_amount, today_summary
+from ..reports import today_summary
+from ..services import finalize_sale, line_amount
 from .base import PATCH_CREATE_GC, PATCH_DEDUCT, PATCH_LOYALTY, PATCH_REDEEM, _blocks
 
 
@@ -422,7 +423,8 @@ class BugHuntRegressionTests(TestCase):
         """Le carte comprate dall'app si incassano da Fedeltà: senza una vendita
         corrispondente quel denaro non entrava nei ricavi, e al riscatto veniva
         perfino sottratto."""
-        from apps.sales.services import record_gift_card_cashed, today_summary
+        from apps.sales.reports import today_summary
+        from apps.sales.services import record_gift_card_cashed
 
         card = self.GiftCard.objects.create(
             salon=self.salon, code="GC-TEST-0001",

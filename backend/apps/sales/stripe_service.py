@@ -15,6 +15,8 @@ from django.db import transaction
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from common.money import CENT, to_cents
+
 logger = logging.getLogger("youty.stripe")
 
 CONNECT_AUTHORIZE_URL = "https://connect.stripe.com/oauth/authorize"
@@ -184,10 +186,6 @@ def connect_disconnect(salon) -> None:
     salon_settings.save(update_fields=["stripe_account_id", "stripe_connected_at", "updated_at"])
 
 
-def _to_cents(amount) -> int:
-    return int((Decimal(str(amount)) * 100).quantize(Decimal("1")))
-
-
 def _currency(salon) -> str:
     return (getattr(salon, "currency", "") or "EUR").lower()
 
@@ -221,7 +219,7 @@ def ensure_customer(client) -> str:
             return client.stripe_customer_id
         customer = as_dict(
             stripe.Customer.create(
-                name=f"{client.first_name} {client.last_name}".strip(),
+                name=client.full_name,
                 phone=client.phone or None,
                 email=client.email or None,
                 metadata={"client_id": client.id, "salon_id": client.salon_id},
@@ -252,30 +250,6 @@ def create_setup_intent(client):
             usage="off_session",
             metadata={"client_id": client.id},
             **_account_opts(client.salon),
-        )
-    )
-
-
-def create_deposit_intent(appointment):
-    """PaymentIntent per l'acconto di un appuntamento (metadata.appointment_id, kind=deposit)."""
-    stripe = _client()
-    amount = Decimal(str(appointment.deposit_amount or 0))
-    if amount <= 0:
-        raise HttpError(400, "Nessun acconto richiesto per questo appuntamento")
-    customer_id = ensure_customer(appointment.client)
-    return as_dict(
-        stripe.PaymentIntent.create(
-            amount=_to_cents(amount),
-            currency=_currency(appointment.salon),
-            customer=customer_id,
-            metadata={
-                "appointment_id": appointment.id,
-                "kind": "deposit",
-                "salon_id": appointment.salon_id,
-                "acct": account_token(appointment.salon),
-            },
-            idempotency_key=f"deposit-{appointment.salon_id}-{appointment.id}",
-            **_account_opts(appointment.salon),
         )
     )
 
@@ -342,7 +316,7 @@ def create_deposit_checkout(appointment) -> dict:
                 "quantity": 1,
                 "price_data": {
                     "currency": _currency(appointment.salon),
-                    "unit_amount": _to_cents(amount),
+                    "unit_amount": to_cents(amount),
                     "product_data": {"name": f"Caparra appuntamento {when} · {appointment.salon.name}"},
                 },
             }
@@ -613,7 +587,7 @@ def no_show_charge_amount(appointment) -> Decimal:
             str(appointment.deposit_refunded_amount or 0)
         )
         amount -= max(kept, Decimal("0.00"))
-    return max(amount, Decimal("0.00")).quantize(Decimal("0.01"))
+    return max(amount, Decimal("0.00")).quantize(CENT)
 
 
 def charge_full_amount(appointment):
@@ -648,7 +622,7 @@ def charge_full_amount(appointment):
     try:
         intent = as_dict(
             stripe.PaymentIntent.create(
-                amount=_to_cents(amount),
+                amount=to_cents(amount),
                 currency=_currency(appointment.salon),
                 customer=customer_id,
                 payment_method=client.stripe_payment_method_id,

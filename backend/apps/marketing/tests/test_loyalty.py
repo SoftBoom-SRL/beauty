@@ -19,8 +19,9 @@ from django.test.utils import CaptureQueriesContext
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
+from ..gift_cards import create_gift_card
+from ..loyalty import accrue_loyalty
 from ..models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
-from ..services import accrue_loyalty, create_gift_card
 from .base import OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 
@@ -156,7 +157,7 @@ class LoyaltyRewardIssueTests(TestCase):
 
     def test_a_gift_card_sold_at_the_till_is_still_written_down_as_money_taken(self):
         from apps.core.models import ActivityLog
-        from apps.marketing.services import create_gift_card
+        from apps.marketing.gift_cards import create_gift_card
 
         create_gift_card(self.salon, Decimal("40.00"), paid=True, paid_method="cash")
         taken = ActivityLog.objects.get(salon=self.salon, type="giftcard.paid")
@@ -209,7 +210,7 @@ class LoyaltyRewardIssueTests(TestCase):
         Ora se ne emettono al massimo MAX_REWARDS_PER_SALE e i punti avanzati
         restano alla cliente — non si perde niente, arriveranno dopo.
         """
-        from ..services import MAX_REWARDS_PER_SALE
+        from ..loyalty import MAX_REWARDS_PER_SALE
 
         program = self._program(
             reward_type="coupon_amount", reward_value=Decimal("5.00"),
