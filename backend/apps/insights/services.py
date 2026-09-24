@@ -12,7 +12,7 @@ anche qui. Un ciclo di import da evitare non c'è più.
 """
 
 from datetime import date as date_cls
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db.models import Count, DateField, OuterRef, Q, Subquery, Sum
@@ -27,18 +27,7 @@ from apps.sales.models import DepositRefund, Payment, Sale, SaleLine
 from apps.staff.models import Operator
 from common.money import CENT
 
-PERIODS = {"month", "quarter", "year"}
-GRANULARITIES = {"day", "week", "month"}
-
-# Giorni massimi di un intervallo personalizzato: due anni abbondanti, cioè
-# molto più del confronto anno su anno che il titolare guarda davvero.
-MAX_RANGE_DAYS = 732
-
-# Date accettate come periodo. Fuori da qui l'anno 1 andava in overflow nella
-# conversione in UTC e il 9999 in `date(anno + 1, …)`: la richiesta finiva in un
-# 500 invece di dire che la data non ha senso.
-MIN_DATE = date_cls(1900, 1, 1)
-MAX_DATE = date_cls(2999, 12, 31)
+from .periods import GRANULARITIES, dates_in_range, resolve_range
 
 ZERO = Decimal("0.00")
 
@@ -56,86 +45,6 @@ _NO_SHOW = Appointment.Status.NO_SHOW
 _CANCELLED = Appointment.Status.CANCELLED
 
 
-# ---------------------------------------------------------------------------
-# Periodi
-# ---------------------------------------------------------------------------
-
-
-def _check_date(d: date_cls | None) -> None:
-    if d is not None and not MIN_DATE <= d <= MAX_DATE:
-        raise HttpError(
-            400, f"Data fuori scala: usa una data fra il {MIN_DATE.year} e il {MAX_DATE.year}"
-        )
-
-
-def _add_months(d: date_cls, months: int) -> date_cls:
-    month_index = d.month - 1 + months
-    year = d.year + month_index // 12
-    month = month_index % 12 + 1
-    return date_cls(year, month, 1)
-
-
-def period_range(period: str, date: date_cls | None = None) -> tuple[datetime, datetime]:
-    """Intervallo [start, end) del periodo che contiene `date` (default oggi).
-
-    `period` è month/quarter/year. `end` è esclusivo. start/end sono datetime
-    timezone-aware nel fuso applicativo corrente.
-    """
-    if period not in PERIODS:
-        raise HttpError(400, "Periodo non valido: usa month, quarter o year")
-    _check_date(date)
-    anchor = date or timezone.localdate()
-    if period == "month":
-        start_date = anchor.replace(day=1)
-        end_date = _add_months(start_date, 1)
-    elif period == "quarter":
-        quarter_start_month = (anchor.month - 1) // 3 * 3 + 1
-        start_date = date_cls(anchor.year, quarter_start_month, 1)
-        end_date = _add_months(start_date, 3)
-    else:  # year
-        start_date = date_cls(anchor.year, 1, 1)
-        end_date = date_cls(anchor.year + 1, 1, 1)
-    tz = timezone.get_current_timezone()
-    start = timezone.make_aware(datetime.combine(start_date, time.min), tz)
-    end = timezone.make_aware(datetime.combine(end_date, time.min), tz)
-    return start, end
-
-
-def custom_range(date_from: date_cls, date_to: date_cls) -> tuple[datetime, datetime]:
-    """Intervallo esplicito [start, end) da due date INCLUSE (end = date_to + 1 giorno)."""
-    _check_date(date_from)
-    _check_date(date_to)
-    if date_from > date_to:
-        raise HttpError(400, "Intervallo non valido: la data iniziale è successiva a quella finale")
-    # Tetto all'ampiezza: il selettore di date non ha un anno minimo, e un
-    # "0202-01-01" produceva 666.000 giorni da scorrere uno per uno (turni,
-    # bucket, occupazione) tenendo occupato un thread del server per minuti.
-    if (date_to - date_from).days + 1 > MAX_RANGE_DAYS:
-        raise HttpError(
-            400, f"Intervallo troppo ampio: al massimo {MAX_RANGE_DAYS} giorni (circa due anni)"
-        )
-    tz = timezone.get_current_timezone()
-    start = timezone.make_aware(datetime.combine(date_from, time.min), tz)
-    end = timezone.make_aware(datetime.combine(date_to + timedelta(days=1), time.min), tz)
-    return start, end
-
-
-def resolve_range(period, date, date_from, date_to) -> tuple[datetime, datetime]:
-    """Range personalizzato se `date_from` e `date_to` sono entrambi forniti,
-    altrimenti il periodo standard month/quarter/year."""
-    if date_from and date_to:
-        return custom_range(date_from, date_to)
-    return period_range(period, date)
-
-
-def _dates_in_range(start: datetime, end: datetime) -> list[date_cls]:
-    """Elenco dei giorni [start.date(), end.date())."""
-    d, end_d = start.date(), end.date()
-    days = []
-    while d < end_d:
-        days.append(d)
-        d += timedelta(days=1)
-    return days
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +151,7 @@ def _occupancy_for_days(
 
 def occupancy_by_weekday(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> list[dict]:
     start, end = resolve_range(period, date, date_from, date_to)
-    days = _dates_in_range(start, end)
+    days = dates_in_range(start, end)
     booked_by_day = _daily_booked_minutes(salon, start, end, _OCCUPIED_STATUSES)
     shift_by_day = _daily_shift_minutes(
         salon, days, _worked_operator_ids(salon, start, end, _OCCUPIED_STATUSES)
@@ -307,7 +216,7 @@ def revenue_series(
         .annotate(revenue=Sum("total"))
     )
     by_bucket = {row["bucket"]: row["revenue"] or ZERO for row in rows}
-    buckets = _buckets(_dates_in_range(start, end), granularity)
+    buckets = _buckets(dates_in_range(start, end), granularity)
     return [{"date": b, "revenue": by_bucket.get(b, ZERO)} for b in buckets]
 
 
@@ -420,11 +329,34 @@ def _new_client_ids(salon, start: datetime, end: datetime) -> set:
 
 
 def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> dict:
+    """I KPI del cruscotto per il periodo: vendite, visite, clienti.
+
+    Tre parti, nello stesso ordine di sempre (le query sono quelle di prima,
+    una dopo l'altra): `_sales_figures`, poi le visite chiuse e il riferimento
+    temporale, `_visit_figures` e `_client_figures`.
+    """
     start, end = resolve_range(period, date, date_from, date_to)
-    days = _dates_in_range(start, end)
+    days = dates_in_range(start, end)
 
     # --- vendite -------------------------------------------------------
     sales_qs = Sale.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end)
+    sales = _sales_figures(salon, sales_qs, start, end)
+
+    # --- appuntamenti ----------------------------------------------------
+    appts_qs = Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end)
+    closed_qs = appts_qs.filter(status=_CLOSED)
+    appointments_count = closed_qs.count()
+    # Per il periodo in corso il riferimento è adesso, per quelli passati la fine.
+    reference = min(end, timezone.now())
+    visits = _visit_figures(salon, appts_qs, reference, start, end, days)
+
+    # --- clienti -----------------------------------------------------------
+    clients = _client_figures(salon, closed_qs, sales_qs, reference, start, end, appointments_count)
+    return {**sales, "appointments_count": appointments_count, **visits, **clients}
+
+
+def _sales_figures(salon, sales_qs, start: datetime, end: datetime) -> dict:
+    """Fatturato, caparre, scontrini, prodotti e gift card del periodo (`sales_qs`)."""
     # La caparra è un anticipo, non un conto: entra in cassa il giorno in cui
     # arriva con una vendita sua (`record_deposit_cashed`), e al checkout il
     # servizio viene fatturato PER INTERO con l'anticipo detratto da quanto
@@ -477,13 +409,21 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     # Caparre versate prima e detratte al checkout: denaro incassato in un altro
     # periodo, da non sommare di nuovo qui.
     deposit_used = billed_qs.aggregate(total=Sum("deposit_deducted"))["total"] or ZERO
+    return {
+        "revenue": revenue,
+        "gift_card_sold": gift_card_sold,
+        "gift_card_redeemed": gift_card_redeemed,
+        "deposit_used": deposit_used,
+        "deposit_cashed": deposit_cashed,
+        "cash_in": revenue + deposit_cashed - gift_card_redeemed - deposit_used,
+        "sales_count": sales_count,
+        "avg_ticket": avg_ticket,
+        "retail_revenue": retail_revenue,
+    }
 
-    # --- appuntamenti ----------------------------------------------------
-    appts_qs = Appointment.objects.filter(salon=salon, start__gte=start, start__lt=end)
-    closed_qs = appts_qs.filter(status=_CLOSED)
-    appointments_count = closed_qs.count()
-    # Per il periodo in corso il riferimento è adesso, per quelli passati la fine.
-    reference = min(end, timezone.now())
+
+def _visit_figures(salon, appts_qs, reference, start: datetime, end: datetime, days) -> dict:
+    """No-show e annullamenti sugli appuntamenti già passati, e occupazione del periodo."""
     # No-show e annullamenti sugli appuntamenti già passati: un confermato di
     # domani non può ancora essere un no-show, e contandolo al denominatore il
     # periodo in corso risultava sempre migliore del precedente (5 no-show su
@@ -500,8 +440,15 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
         salon, days, _worked_operator_ids(salon, start, end, _OCCUPIED_STATUSES)
     )
     occupancy_pct = _occupancy_for_days(booked_by_day, shift_by_day, days)
+    return {
+        "noshow_rate": noshow_rate,
+        "cancel_rate": cancel_rate,
+        "occupancy_pct": occupancy_pct,
+    }
 
-    # --- clienti -----------------------------------------------------------
+
+def _client_figures(salon, closed_qs, sales_qs, reference, start: datetime, end: datetime, appointments_count: int) -> dict:
+    """Ritorno, riaggancio, clienti nuove e di ritorno, frequenza e clienti per categoria."""
     closed_client_ids = set(closed_qs.values_list("client_id", flat=True).distinct())
     clients_1plus = len(closed_client_ids)
     per_client_counts = closed_qs.values("client_id").annotate(cnt=Count("id"))
@@ -555,21 +502,7 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
         )
         .order_by("order", "id")
     ]
-
     return {
-        "revenue": revenue,
-        "gift_card_sold": gift_card_sold,
-        "gift_card_redeemed": gift_card_redeemed,
-        "deposit_used": deposit_used,
-        "deposit_cashed": deposit_cashed,
-        "cash_in": revenue + deposit_cashed - gift_card_redeemed - deposit_used,
-        "sales_count": sales_count,
-        "avg_ticket": avg_ticket,
-        "retail_revenue": retail_revenue,
-        "appointments_count": appointments_count,
-        "noshow_rate": noshow_rate,
-        "cancel_rate": cancel_rate,
-        "occupancy_pct": occupancy_pct,
         "return_rate": return_rate,
         "rebooking_rate": rebooking_rate,
         "new_clients": new_clients,

@@ -14,7 +14,7 @@ from ninja.errors import HttpError
 from apps.core.models import Salon
 from common.testing import bearer
 
-from ..services import custom_range, period_range, resolve_range
+from ..periods import custom_range, period_range, resolve_range
 
 
 class PeriodRangeTests(TestCase):
@@ -78,7 +78,7 @@ class CustomRangeTests(TestCase):
         # scorsi uno per uno, con un thread del server occupato per minuti.
         from ninja.errors import HttpError
 
-        from ..services import MAX_RANGE_DAYS
+        from ..periods import MAX_RANGE_DAYS
 
         with self.assertRaises(HttpError):
             custom_range(date(202, 1, 1), date(2026, 12, 31))

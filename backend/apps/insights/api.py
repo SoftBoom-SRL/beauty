@@ -32,11 +32,17 @@ def _parse_date(raw: str | None):
     return parsed
 
 
+def _period_dates(date, date_from, date_to):
+    """Le tre date facoltative di ogni endpoint (giorno del periodo, inizio e fine
+    dell'intervallo), lette in quest'ordine: la prima non valida risponde 400."""
+    return _parse_date(date), _parse_date(date_from), _parse_date(date_to)
+
+
 @router.get("/kpis", auth=staff_auth, response=KpisOut)
 def get_kpis(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_scope(ctx, "insights")
-    return kpis(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
+    return kpis(ctx.salon, period, *_period_dates(date, date_from, date_to))
 
 
 @router.get("/revenue-series", auth=staff_auth, response=list[RevenuePointOut])
@@ -46,21 +52,21 @@ def get_revenue_series(
 ):
     ctx = request.auth
     require_scope(ctx, "insights")
-    return revenue_series(ctx.salon, period, granularity, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
+    return revenue_series(ctx.salon, period, granularity, *_period_dates(date, date_from, date_to))
 
 
 @router.get("/revenue-by-category", auth=staff_auth, response=list[CategoryRevenueOut])
 def get_revenue_by_category(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_scope(ctx, "insights")
-    return revenue_by_category(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
+    return revenue_by_category(ctx.salon, period, *_period_dates(date, date_from, date_to))
 
 
 @router.get("/occupancy-by-weekday", auth=staff_auth, response=list[WeekdayOccupancyOut])
 def get_occupancy_by_weekday(request, period: str = "month", date: str | None = None, date_from: str | None = None, date_to: str | None = None):
     ctx = request.auth
     require_scope(ctx, "insights")
-    return occupancy_by_weekday(ctx.salon, period, _parse_date(date), _parse_date(date_from), _parse_date(date_to))
+    return occupancy_by_weekday(ctx.salon, period, *_period_dates(date, date_from, date_to))
 
 
 @router.post("/ask", auth=staff_auth)
