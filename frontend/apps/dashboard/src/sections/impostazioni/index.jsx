@@ -3,7 +3,7 @@
 // (ActivityLogPage), sedi (LocationsPage). Drawers: brand, team, roles.
 // Categories open the global 'catsmgr' modal. Consumes deepLink 'log-today'.
 // Commissioni & Notifiche have no API backing → informational rows (fase 2 / Yourang).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon, api, fmtDateIt, fmtTime } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import BookingsOptimPage from './BookingsOptimPage.jsx';

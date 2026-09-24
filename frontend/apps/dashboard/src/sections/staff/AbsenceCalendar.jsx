@@ -3,7 +3,7 @@
 // { date_from, date_to, type: vacation|holiday|other, note } instead of the
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, ApiError, Icon, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
@@ -39,12 +39,14 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
       for (let d = from; d <= to; d++) { if (!map[d]) map[d] = a; }
     });
     return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key dipende solo da y e m, già qui
   }, [absences, y, m, daysInMonth]);
 
   const monthAbsences = useMemo(() => (
     (absences || [])
       .filter((a) => !(a.date_to < key(1) || a.date_from > key(daysInMonth)))
       .sort((a, b) => a.date_from.localeCompare(b.date_from))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key dipende solo da y e m, già qui
   ), [absences, y, m, daysInMonth]);
 
   const cells = [];

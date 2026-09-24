@@ -13,7 +13,7 @@ import { api, ApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, par
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
-  DK_START, DK_END, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
+  DK_START, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, toastErr, opDisplay, isoAtMin,
   GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue, weekGridRange,
 } from './lib.js';
 
@@ -112,6 +112,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     zoomAnchor.current = null;
     const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
     el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
+    // Solo lo zoom sposta lo scroll. G0 non può stare fra le dipendenze: è
+    // dichiarata più sotto, e leggerla qui durante il render sarebbe un errore.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
   useEffect(() => {
     const el = scrollRef.current;

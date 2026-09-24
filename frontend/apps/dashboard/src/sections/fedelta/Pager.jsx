@@ -1,4 +1,3 @@
-import React from 'react';
 import { Icon } from '@youty/shared';
 
 /** Simple prev/next pager for {items,count} Ninja pagination envelopes. Hides itself when

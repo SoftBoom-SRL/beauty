@@ -1,7 +1,7 @@
 // NotesTab.jsx — note libere sul cliente (non legate a una visita): composer con
 // foto/documenti + elenco. Le note di trattamento vivono nello Storico, sotto la
 // visita a cui appartengono, ma compaiono anche qui (con il riferimento).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';

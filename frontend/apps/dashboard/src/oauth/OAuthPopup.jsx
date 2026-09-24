@@ -11,7 +11,7 @@
 // The start page keeps the nonce of the flow in sessionStorage and the done page
 // sends it back with code and state (see flow.js): a code that was not asked for
 // by this window is never exchanged.
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, staffAuth, useT } from '@youty/shared';
 import { claimRestart, clearRestart, saveFlow, takeFlow } from './flow.js';
 
@@ -96,6 +96,7 @@ export default function OAuthPopup({ path }) {
     })();
 
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- il codice si scambia una volta sola: cambiare lingua non deve ripeterlo
   }, [path]);
 
   return (

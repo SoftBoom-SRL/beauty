@@ -116,7 +116,7 @@ export function BirthdayInput({ value, onChange, t, lang, disabled }) {
   const emitted = useRef(value || '');
   useEffect(() => {
     if ((value || '') !== emitted.current) { emitted.current = value || ''; setPart(fromValue(value)); }
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value]);
   const months = lang === 'en' ? MONTHS_EN : MONTHS_IT;
   const update = (patch) => {
     const { part: next, value: v } = birthdayEdit(part, patch);

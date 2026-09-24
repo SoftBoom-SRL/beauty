@@ -112,7 +112,7 @@ def _sale_detail(sale: Sale) -> dict:
     return {
         **_sale_out(sale),
         "lines": [
-            _line_out(l) for l in sale.lines.select_related("operator", "gift_card", "product", "service")
+            _line_out(line) for line in sale.lines.select_related("operator", "gift_card", "product", "service")
         ],
         "payments": [_payment_out(p) for p in sale.payments.select_related("gift_card")],
     }

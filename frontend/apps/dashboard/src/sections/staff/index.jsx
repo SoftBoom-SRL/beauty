@@ -1,5 +1,5 @@
 // Staff section — operator grid + per-operator page (port of prototype DkStaff/DkStaffPage).
-import React, { useState } from 'react';
+import { useState } from 'react';
 import StaffGrid from './StaffGrid.jsx';
 import StaffPage from './StaffPage.jsx';
 

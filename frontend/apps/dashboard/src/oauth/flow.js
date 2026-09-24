@@ -29,7 +29,7 @@ export function saveFlow(storage, mode, nonce) {
  *  OAuth diretto non lo porta. */
 export function takeFlow(storage, mode) {
   if (!storage) return null;
-  let flow = null;
+  let flow;
   try {
     flow = JSON.parse(storage.getItem(FLOW_KEY) || 'null');
   } catch {

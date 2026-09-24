@@ -184,7 +184,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     if (slots === null) return { loading: true };
     const exact = (slots || []).find((s) => minutesOfDay(s.start) === req.startMin);
     if (exact) return { ok: true, slot: exact };
-    let label = '', detail = '';
+    let label, detail = '';
     const notEligible = reqOp ? items.filter((it) => !isEligible(it.service_id, reqOp.id)) : [];
     if (reqOp && notEligible.length) {
       label = t(`${reqOp.first_name} non esegue ${svcName(svcOf(notEligible[0].service_id), lang)}`, `${reqOp.first_name} doesn't perform ${svcName(svcOf(notEligible[0].service_id), lang)}`);

@@ -1,6 +1,5 @@
 // Punto Vendita (POS) — Prodotti (counter-sale cart) + Storico (sales history).
 // Sub-tab ids match the shell's SECTION_SUBTABS for `pos`: 'products' | 'history'.
-import React from 'react';
 import { Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import CartTab from './CartTab.jsx';

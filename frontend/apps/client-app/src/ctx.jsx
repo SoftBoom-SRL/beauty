@@ -1,6 +1,6 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Screen agents CONSUME this via useApp() — never edit it.
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
 import { makeBrand } from './theme.js';
 
@@ -51,7 +51,7 @@ export function AppProvider({ children }) {
     } catch (err) {
       setBrandError(err?.message || 'Errore');
     }
-  }, []);
+  }, [setLang]);
   useEffect(() => { loadBrand(); }, [loadBrand]);
 
   /* favicon e titolo white-label: logo del salone se c'è, altrimenti un

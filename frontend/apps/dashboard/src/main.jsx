@@ -1,4 +1,3 @@
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { staffAuth, LangProvider } from '@youty/shared';
 import App from './App.jsx';

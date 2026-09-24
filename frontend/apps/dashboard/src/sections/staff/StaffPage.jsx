@@ -2,7 +2,7 @@
 // Tabs: Anagrafica (basics + colour + assignable services, PUT /api/staff/{id}),
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput, salonTzOpts } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import { rebaseDraft } from '../../ui/rebase.js';

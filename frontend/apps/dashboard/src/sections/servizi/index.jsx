@@ -1,7 +1,7 @@
 // Servizi — services & packages catalog (ported from prototype DkServizi).
 // Owns its own fetch/refetch of /api/catalog/services and /api/catalog/packages
 // so edits show immediately; syncs the ctx base catalogs via reload.* after writes.
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import ServiziSub from './ServiziSub.jsx';

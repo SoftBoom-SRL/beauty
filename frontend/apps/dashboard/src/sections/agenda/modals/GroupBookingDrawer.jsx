@@ -11,7 +11,7 @@ import { initialsOf, toastErr, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
-  const { t, lang, services, serviceCategories, operators, fireToast, hasScope, locationId } = useDash();
+  const { t, lang, services, fireToast, hasScope, locationId } = useDash();
   const canWrite = hasScope('agenda');
   const baseDate = date || todayStr();
 

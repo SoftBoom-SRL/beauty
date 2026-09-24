@@ -45,7 +45,7 @@ export function detectDelimiter(text) {
  *  mandava a cercare «Riga 12» dove il file aveva la 14 (14-17). */
 export function parseCsvLines(text, delim) {
   const out = []; let row = []; let cell = ''; let q = false; let line = 1;
-  const s = text.replace(/^﻿/, '');
+  const s = text.replace(/^\uFEFF/, '');
   const push = () => { row.push(cell); out.push({ cells: row.map((c) => c.trim()), line }); row = []; cell = ''; line += 1; };
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
@@ -107,7 +107,7 @@ const SYN = {
   lang: ['lingua', 'language', 'lang', 'idioma'],
   note: ['note', 'notes', 'nota', 'commenti', 'commento', 'osservazioni', 'annotazioni', 'memo'],
 };
-const norm = (s) => String(s || '').toLowerCase().replace(/[_\-]/g, ' ').replace(/\s+/g, ' ').trim();
+const norm = (s) => String(s || '').toLowerCase().replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim();
 export function guessFieldByHeader(header) {
   const h = norm(header);
   if (!h) return 'ignore';
@@ -196,11 +196,11 @@ const fixYear = (y) => { if (y.length === 4) return Number(y); const n = Number(
 export function parseFlexibleDate(raw, order = 'dmy') {
   const s = String(raw || '').trim().toLowerCase();
   if (!s) return null;
-  let m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ t].*)?$/.exec(s);
+  let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ t].*)?$/.exec(s);
   if (m) { const y = +m[1], mo = +m[2], d = +m[3]; return valid(d, mo, y) ? `${y}-${pad(mo)}-${pad(d)}` : null; }
   m = /^--?(\d{1,2})-(\d{1,2})$/.exec(s);
   if (m) { const mo = +m[1], d = +m[2]; return valid(d, mo) ? `--${pad(mo)}-${pad(d)}` : null; }
-  m = /^(\d{1,2})[-\/.](\d{1,2})(?:[-\/.](\d{2}|\d{4}))?$/.exec(s);
+  m = /^(\d{1,2})[-/.](\d{1,2})(?:[-/.](\d{2}|\d{4}))?$/.exec(s);
   if (m) {
     const a = +m[1], b = +m[2];
     const y = m[3] ? fixYear(m[3]) : null;

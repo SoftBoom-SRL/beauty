@@ -9,7 +9,7 @@
 // «Scheda completa» espande lo STESSO riquadro con tutto ciò che c'è in
 // anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
 // chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, PhoneInput, Toggle, isPlausiblePhone } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { initialsOf } from './lib.js';

@@ -1,6 +1,6 @@
 // ctx.jsx — DashboardProvider: session, base catalogs from the API, navigation,
 // modal/drawer/toast plumbing, live feed. Section agents CONSUME this via useDash().
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, API_URL, setSalonTz, staffAuth, useT, useToastHost } from '@youty/shared';
 import { createBatcher, createSeen } from './liveSeen.js';
 
@@ -142,10 +142,14 @@ function useLiveFeed(session) {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
     };
-  }, [myId, deliver]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [myId, deliver]);
 
   return useMemo(() => ({ events, unread, markRead, subscribe, version, streamOk }), [events, unread, markRead, subscribe, version, streamOk]);
 }
+
+// Salone non ancora caricato: sempre lo stesso array vuoto, così i useMemo che
+// dipendono dalle sedi non si ricalcolano a ogni render.
+const NO_LOCATIONS = [];
 
 export function DashboardProvider({ children }) {
   const { t, lang, setLang } = useT();
@@ -198,7 +202,7 @@ export function DashboardProvider({ children }) {
   useEffect(() => { bootLoad(); }, [bootLoad]);
 
   const settings = salon?.settings || null;
-  const locations = salon?.locations || [];
+  const locations = salon?.locations || NO_LOCATIONS;
 
   /* ---- navigation ---- */
   const [tab, setTabRaw] = useState('agenda');
@@ -232,6 +236,7 @@ export function DashboardProvider({ children }) {
     if (has(/^(service|category|package)\./)) { reload.services().catch(() => {}); reload.serviceCategories().catch(() => {}); }
     if (has(/^client_category\./)) reload.clientCategories().catch(() => {});
     if (has(/^settings\./)) reload.salon().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- live.subscribe, non live: vedi sopra
   }), [live.subscribe, reload]);
 
   /* ---- cross-section UI state ---- */

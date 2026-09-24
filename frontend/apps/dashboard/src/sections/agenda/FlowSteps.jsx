@@ -4,7 +4,6 @@
 // Nessuna logica di dominio: riceve `steps` già pronti dai costruttori in lib.js.
 //
 // steps: [{ n, title, detail?, tone?: 'default' | 'danger' | 'ok' | 'muted' }]
-import React from 'react';
 
 const TONES = {
   default: { badgeBg: 'var(--ink)', badgeFg: '#fff', border: 'none', title: 'var(--ink)', detail: 'var(--ink)' },

@@ -2,7 +2,7 @@
 // (PUT /api/core/settings { opening_hours_week }). Fonte unica: agenda (chip
 // "oggi"), app cliente (testo generato dal server) e impostazioni.
 // Solo il titolare scrive; gli altri vedono in sola lettura.
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { api, Icon, Toggle } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';

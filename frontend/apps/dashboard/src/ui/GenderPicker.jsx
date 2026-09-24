@@ -1,7 +1,6 @@
 // GenderPicker — pillole a scelta singola per il genere del cliente.
 // Vuoto = non specificato (cliccare di nuovo la pillola attiva la deseleziona).
 // Condiviso fra la scheda cliente (sezione Clienti) e la creazione rapida in agenda.
-import React from 'react';
 
 export const GENDERS = [
   { k: 'female', it: 'Donna', en: 'Woman', glyph: '♀' },

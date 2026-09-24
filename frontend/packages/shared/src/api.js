@@ -76,7 +76,7 @@ async function request(method, path, opts = {}) {
 
   // 401 → let the auth layer try to recover (staff: refresh once, then retry)
   if (res.status === 401 && auth && !_retried && onUnauthorized) {
-    let recovered = false;
+    let recovered;
     try { recovered = await onUnauthorized(); } catch { recovered = false; }
     if (recovered) return request(method, path, { ...opts, _retried: true });
   }

@@ -3,7 +3,7 @@
 import React from 'react';
 import { Avatar, Icon, fmtDateIt, minutesOfDay, timeLabel, toDateStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { fmtMoney, initialsOf, prefLabel, firstName } from './lib.js';
+import { fmtMoney, initialsOf, prefLabel } from './lib.js';
 import { cashUpLines } from './modals/rules.js';
 
 export default function RightRail({ summary, waitlist, released, onRestore, onRebook, onOpenAppt, onOpenLog, onOpenWaitlist, onOpenOpportunity }) {

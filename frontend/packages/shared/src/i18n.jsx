@@ -1,7 +1,7 @@
 // i18n.jsx — bilingual IT/EN helper, same `t(it, en)` pattern as the prototype.
 // Also accepts the object form `t({ it, en })` used by API payloads / prototype data.
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 const LangCtx = createContext({ lang: 'it', setLang: () => {} });
 
@@ -41,6 +41,6 @@ export function makeT(lang) {
 /** { t, lang, setLang } — t('Ciao', 'Hello') or t({ it: 'Ciao', en: 'Hello' }) */
 export function useT() {
   const { lang, setLang } = useContext(LangCtx);
-  const t = useCallback(makeT(lang), [lang]);
+  const t = useMemo(() => makeT(lang), [lang]);
   return { t, lang, setLang };
 }

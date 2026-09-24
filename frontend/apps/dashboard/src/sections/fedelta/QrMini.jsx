@@ -1,4 +1,3 @@
-import React from 'react';
 
 /** Dependency-free pseudo-QR — deterministic from `code`, purely a visual placeholder
  * (ported 1:1 from the prototype's desktop-fedelta.jsx QrMini). No real QR encoding/library. */

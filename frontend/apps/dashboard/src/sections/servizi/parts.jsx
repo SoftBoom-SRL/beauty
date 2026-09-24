@@ -1,5 +1,4 @@
 // parts.jsx — small building blocks shared across Servizi/Pacchetti cards & modals.
-import React from 'react';
 import { Icon, Avatar, NumInput } from '@youty/shared';
 
 export function CategoryDot({ color, size = 10 }) {

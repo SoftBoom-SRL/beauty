@@ -52,6 +52,7 @@ export default function Prenota() {
   const [registeredPhone, setRegisteredPhone] = React.useState(null);
   const todayKey = useTodayKey();
   // ricalcolata quando cambia il giorno: vedi useTodayKey
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- todayKey è il motivo del ricalcolo
   const days = React.useMemo(() => nextDays(14), [todayKey]);
 
   const codeSurelySent = !!registeredPhone && registeredPhone === ident.phone.trim();

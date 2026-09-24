@@ -503,8 +503,8 @@ def step_09_cross_surface_loyalty(api, ctx, args):
 
     _, wallet = api.get("/api/marketing/client/wallet", token=ctx["client_token"],
                         label="GET /api/marketing/client/wallet")
-    entry = next((l for l in wallet.get("loyalty", [])
-                  if l["program_id"] == program["id"]), None)
+    entry = next((row for row in wallet.get("loyalty", [])
+                  if row["program_id"] == program["id"]), None)
     if entry is None:
         raise StepFail(f"wallet cliente senza il programma '{program['name']}': {short(wallet)}")
     if entry["points"] <= before:

@@ -1,5 +1,4 @@
 // Utility.jsx — floating top utility bar: language toggle + logout.
-import React from 'react';
 import { Icon, clientAuth } from '@youty/shared';
 import { useApp } from './ctx.jsx';
 

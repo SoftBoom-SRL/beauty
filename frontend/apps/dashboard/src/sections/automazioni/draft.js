@@ -3,7 +3,7 @@
 import { rebaseDraft, sameValue } from '../../ui/rebase.js';
 
 // le condizioni hanno id locali (per le key React): nel confronto non contano
-const stripIds = (conds) => (conds || []).map(({ id, ...r }) => r); // eslint-disable-line no-unused-vars
+const stripIds = (conds) => (conds || []).map(({ id, ...r }) => r);
 
 /** Confronto di un campo della bozza (condizioni senza gli id locali). */
 export const sameDraftField = (a, b, k) => (k === 'conds' ? sameValue(stripIds(a), stripIds(b)) : sameValue(a, b));

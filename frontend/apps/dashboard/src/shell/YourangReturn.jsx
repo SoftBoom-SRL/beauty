@@ -17,7 +17,7 @@
 // Il telo è dipinto col brand di YOURANG e porta il suo logo, non quelli del
 // salone: chi guarda il telo sta andando A yourang, quindi è yourang che deve
 // annunciarsi.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useT, Icon } from '@youty/shared';
 
 // Dove torna il browser. Il fallback locale vale per `npm run dev`, la prod

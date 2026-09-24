@@ -1,5 +1,5 @@
 // bits.jsx — small UI pieces shared by the Magazzino sub-tabs (ported from the prototype).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
 
 /** debounce a changing value (used for the server-side q filter) */

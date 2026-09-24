@@ -1,5 +1,4 @@
 // SectionStub.jsx — placeholder rendered by not-yet-ported sections.
-import React from 'react';
 import { Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 

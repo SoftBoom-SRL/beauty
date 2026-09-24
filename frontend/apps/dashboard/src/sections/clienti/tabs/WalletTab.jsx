@@ -4,7 +4,7 @@
 // merito in ordine non garantito su PostgreSQL) poteva non trovarla mai, e la
 // cliente a 9 timbri su 10 risultava «non iscritta» (14-06, 07-06).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, EmptyState, Icon, ProgressBar, fmtEur } from '@youty/shared';
+import { api, Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
@@ -83,7 +83,7 @@ export default function WalletTab({ c }) {
       .catch(() => { if (!dead) setLoyalty(keepOr); });
 
     return () => { dead = true; };
-  }, [c.id, rev]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [c.id, rev]);
 
   const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + eur0(cp.value, lang);
 

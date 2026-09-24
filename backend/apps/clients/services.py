@@ -6,7 +6,16 @@ sales/agenda potrebbero non essere ancora pronte: ogni lettura cross-app è
 importata pigramente e degrada a 0/[] senza sollevare eccezioni.
 """
 
+import datetime as dt
+import re
+import unicodedata
 from decimal import Decimal
+
+from django.db import DataError, IntegrityError, transaction
+from django.utils import timezone
+from ninja.errors import HttpError
+
+from common.phone import canonical_phone, normalize_phone, phone_key as _phone_key
 
 from .models import Client
 
@@ -108,17 +117,6 @@ def client_facts(client: Client) -> dict:
         client=client, cancelled_late=True
     ).count()
     return facts
-
-
-import datetime as dt
-import re
-import unicodedata
-
-from django.db import DataError, IntegrityError, transaction
-from django.utils import timezone
-from ninja.errors import HttpError
-
-from common.phone import canonical_phone, normalize_phone, phone_key as _phone_key
 
 
 # ---- Compleanno: con o senza anno ----------------------------------------------

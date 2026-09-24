@@ -2,7 +2,7 @@
 // + logo upload (postForm POST /api/core/settings/logo). Owner-only writes;
 // polite lock state for non-owners. No logo-delete endpoint: "remove" only
 // clears the locally selected file before saving.
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { api, mediaUrl, Icon } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import HexInput from '../../ui/HexInput.jsx';

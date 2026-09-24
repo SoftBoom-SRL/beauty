@@ -1,5 +1,4 @@
 // OpportunityModal — placeholder: the AI suggestions engine ships with phase 2.
-import React from 'react';
 import { Icon } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';

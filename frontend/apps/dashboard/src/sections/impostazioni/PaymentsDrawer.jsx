@@ -3,7 +3,7 @@
 // scadenza: dopo quanti minuti dalla prenotazione lo slot viene liberato se la
 // caparra non è arrivata, e quando parte il sollecito. Le regole di CHI paga
 // la caparra restano in Prenotazioni & ottimizzazione → Regole deposito.
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, Icon, NumInput } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
@@ -13,7 +13,7 @@ import { toastErr, LockNote } from './lib.jsx';
 const HOLD_PRESETS = [0, 15, 20, 30, 60, 120];
 
 export default function PaymentsDrawer({ onClose }) {
-  const { t, lang, session, settings, reload, fireToast } = useDash();
+  const { t, session, settings, reload, fireToast } = useDash();
   const isOwner = !!session?.is_owner;
   const [stripe, setStripe] = useState(null);      // StripeConnectStatusOut
   const [hold, setHold] = useState(settings?.deposit_hold_minutes || 0);
@@ -25,7 +25,7 @@ export default function PaymentsDrawer({ onClose }) {
   const [confirmOff, setConfirmOff] = useState(false);
 
   const loadStripe = () => api.get('/api/sales/stripe/connect/status').then(setStripe).catch(() => setStripe(null));
-  useEffect(() => { loadStripe(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadStripe(); }, []);
 
   // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il code
   useEffect(() => {

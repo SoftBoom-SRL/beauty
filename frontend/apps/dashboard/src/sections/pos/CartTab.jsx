@@ -1,6 +1,6 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';

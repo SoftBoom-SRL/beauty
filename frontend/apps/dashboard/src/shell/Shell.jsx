@@ -1,6 +1,6 @@
 // Shell.jsx — dashboard chrome: sidebar + topbar + section outlet + global hosts
 // (toast, modal dispatcher, drawer). Section agents NEVER edit this file.
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 import { SECTIONS } from '../sections/registry.js';
@@ -44,7 +44,7 @@ export default function Shell() {
         </div>
       </div>
 
-      {/* global AI FAB — «Chiedi a Youty» risponde a chi vede l'Analisi dati:
+      {/* FAB dell'assistente, su ogni pagina — «Chiedi a Youty» risponde a chi vede l'Analisi dati:
           il titolare o chi ha il permesso «Analisi dati» (contratto C11) */}
       {hasScope('insights') && (
         <button
@@ -75,7 +75,7 @@ export default function Shell() {
           Sta all'ancora del cerchio, per questo il FAB qui sopra è a bottom 74. */}
       <YourangReturn />
 
-      {/* global hosts */}
+      {/* toast, modali e drawer di tutta l'app */}
       <DkToast {...toastProps} />
       <DkModals />
       <DkDrawer open={!!drawer} onClose={() => setDrawer(null)}>{drawer}</DkDrawer>

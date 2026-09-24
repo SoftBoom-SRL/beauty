@@ -2,7 +2,7 @@
 // POST /api/auth/staff/password. Il backend incrementa token_version, quindi
 // invalida ogni altra sessione dell'utente: ci restituisce token nuovi che
 // applichiamo subito, altrimenti ci sloggheremmo da soli.
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { api, staffAuth, Icon } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';

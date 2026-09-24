@@ -6,8 +6,6 @@ Tutti prendono il salone (`lock_salon`) prima della riga dell'appuntamento.
 """
 
 import datetime as dt
-import json
-from decimal import Decimal
 from unittest.mock import patch
 
 from django.db.models.query import QuerySet

@@ -1430,9 +1430,9 @@ class GiftCardQuantityTests(TestCase):
         self.assertEqual(create_gc.call_count, 3)
         lines = list(sale.lines.all())
         self.assertEqual(len(lines), 3)
-        self.assertEqual([l.qty for l in lines], [1, 1, 1])
+        self.assertEqual([line.qty for line in lines], [1, 1, 1])
         self.assertEqual(
-            sorted(l.gift_card_id for l in lines), sorted(c.id for c in cards)
+            sorted(line.gift_card_id for line in lines), sorted(c.id for c in cards)
         )
 
 
@@ -1703,9 +1703,9 @@ class BugHunt21SeptemberTests(TestCase):
         self.assertEqual(sale.total, Decimal("150.00"))
         lines = list(SaleLine.objects.filter(sale=sale).order_by("id"))
         self.assertEqual(len(lines), 3)
-        self.assertEqual([l.qty for l in lines], [1, 1, 1])
+        self.assertEqual([line.qty for line in lines], [1, 1, 1])
         self.assertEqual(
-            sorted(l.gift_card_id for l in lines), sorted(c.id for c in cards)
+            sorted(line.gift_card_id for line in lines), sorted(c.id for c in cards)
         )
         # nessuna carta può essere incassata una seconda volta
         for card in cards:

@@ -1,6 +1,5 @@
 // ConsensiTab.jsx — GDPR consents (consents JSON: privacy / marketing /
 // card_charge) + whatsapp_reminders, all persisted via PUT /api/clients/{id}.
-import React from 'react';
 import { Icon, Toggle } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { consentStamp, dateTimeLabel } from '../helpers.js';

@@ -1,5 +1,4 @@
 // NavBar.jsx — bottom navigation (Home / Prenotazioni / Prenota FAB / Wallet / Profilo).
-import React from 'react';
 import { Icon } from '@youty/shared';
 import { useApp } from './ctx.jsx';
 

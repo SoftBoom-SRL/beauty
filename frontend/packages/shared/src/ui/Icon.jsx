@@ -1,5 +1,4 @@
 // Icon.jsx — SVG stroke icon set (ported from prototype components.jsx)
-import React from 'react';
 
 export const ICON_PATHS = {
   calendar: '<rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/>',

@@ -20,7 +20,7 @@
 //   decimals   number (default 2)            cifre decimali max (se non integer)
 //   placeholder string (default '0')         testo grigio a campo vuoto
 //   ...rest    className, style, disabled, autoFocus, aria-label, onFocus, onBlur…
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 // "vuoto" a video: null/undefined, stringa vuota, oppure qualunque zero
 // (numerico o stringa tipo "0" / "0.00" che arriva dall'API).

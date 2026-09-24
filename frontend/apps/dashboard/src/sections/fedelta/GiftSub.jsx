@@ -9,7 +9,7 @@ import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
 import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
-import { GC_STATUS_META, GC_PAYMENT_META, effectiveStatus, isMaskedCode } from './meta.js';
+import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e

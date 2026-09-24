@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from django.test import override_settings
 from django.utils import timezone
+from ninja.errors import HttpError
 
 from apps.agenda.models import Appointment
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, SalonSettings
@@ -275,7 +276,7 @@ class HoldWithoutLinkTests(StripeTestBase):
         )
         self.appointment.refresh_from_db()
         http = self.fake([("POST", "/v1/checkout/sessions", ({"error": {"message": "boom"}}, 500))])
-        with self.assertRaises(Exception):
+        with self.assertRaises(HttpError):
             stripe_service.ensure_deposit_link(self.appointment, resend=True)
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_due_at, due)

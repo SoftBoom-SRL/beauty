@@ -1,5 +1,5 @@
 // primitives.jsx — shared UI primitives ported from prototype components.jsx + shared.jsx
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Icon } from './Icon.jsx';
 
 /* ============================== AVATAR ============================== */
@@ -182,7 +182,7 @@ export function Toast({ toast, onUndo, onDone }) {
     if (!toast) return;
     const tm = setTimeout(onDone, toast.undo ? 4200 : 2600);
     return () => clearTimeout(tm);
-  }, [toast]);
+  }, [toast, onDone]);
   if (!toast) return null;
   return (
     <div style={{

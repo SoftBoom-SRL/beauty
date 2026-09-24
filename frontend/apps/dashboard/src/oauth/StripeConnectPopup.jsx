@@ -3,7 +3,7 @@
 //   /stripe-connect/done  → Stripe torna con ?code&state: li scambia, avvisa l'opener, si chiude
 // Stessa origine dell'opener: `api` porta il Bearer dello staff e il
 // postMessage punta a window.location.origin (come OAuthPopup per Yourang).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, useT } from '@youty/shared';
 
 export default function StripeConnectPopup({ path }) {

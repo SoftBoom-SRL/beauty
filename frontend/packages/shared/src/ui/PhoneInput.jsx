@@ -9,7 +9,7 @@
 //
 // Props: value, onChange(e164), placeholder, autoFocus, disabled, onEnter,
 //        variant 'dashboard' | 'client', style, inputStyle, id, ariaLabel, lang
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon.jsx';
 import { COUNTRIES, DEFAULT_ISO2, countryOf, splitPhone, joinPhone, formatNational, readPhoneField } from '../phone.js';

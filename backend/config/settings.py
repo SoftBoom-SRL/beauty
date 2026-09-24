@@ -328,7 +328,6 @@ SSE_MAX_CONNECTIONS = int(os.getenv("SSE_MAX_CONNECTIONS", "12"))
 # ---------------------------------------------------------------------------
 # django-unfold — tema dell'admin
 # ---------------------------------------------------------------------------
-from django.templatetags.static import static  # noqa: E402
 from django.urls import reverse_lazy  # noqa: E402
 
 

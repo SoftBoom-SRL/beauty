@@ -1,7 +1,7 @@
 // StaffGrid — operator cards with today's availability, month revenue, today's clients.
 // Port of prototype DkStaff grid; data = ctx operators (GET /api/staff/ → OperatorStatusOut).
 // Sotto, a richiesta, le operatrici disattivate (GET /api/staff/?include_inactive=true, C8).
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, Avatar, Icon } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { HIDDEN, todayStatus, opName, eur } from './lib.js';

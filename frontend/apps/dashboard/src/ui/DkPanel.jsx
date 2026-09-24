@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { useEscLayer } from './layers.js';
 import { Icon } from '@youty/shared';
 

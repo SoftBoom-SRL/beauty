@@ -9,7 +9,7 @@ import { api, ApiError, API_URL, Icon, Toggle } from '@youty/shared';
 import { DkSeg } from '../../ui/index.js';
 import { mergeRuleDraft } from './draft.js';
 import { useDash } from '../../ctx.jsx';
-import DkCondRow, { defaultRule, ruleForField } from './DkCondRow.jsx';
+import DkCondRow, { defaultRule } from './DkCondRow.jsx';
 import { DkStepper, DkCopyField, DkTrigStep, MiniMetric, DkEventMenu } from './controls.jsx';
 import {
   eventIcon, eventHint, OFFSET_UNITS, offsetPhrase,

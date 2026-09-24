@@ -84,7 +84,7 @@ class InventoryTests(TestCase):
 
         order_a = by_supplier[self.supplier_a.id]
         self.assertEqual(order_a.status, PurchaseOrder.Status.DRAFT)
-        qty_by_product = {l.product_id: l.qty_ordered for l in order_a.lines.all()}
+        qty_by_product = {line.product_id: line.qty_ordered for line in order_a.lines.all()}
         self.assertEqual(qty_by_product[p1.id], Decimal("10"))  # reorder_qty
         self.assertEqual(qty_by_product[p2.id], Decimal("3"))  # soglia − stock
 

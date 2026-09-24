@@ -3,7 +3,7 @@
 // copies of prototype components also needed by the impostazioni section (deposit
 // rules). A future refactor should unify them in dashboard ui/ — kept local per
 // section-ownership rules.
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
 
 /* ---- small generic dropdown (field / operator pickers) — prototype port ----

@@ -24,6 +24,7 @@ export default function Sposta() {
   const [done, setDone] = React.useState(null); // new start ISO on success
   const todayKey = useTodayKey();
   // ricalcolata quando cambia il giorno: vedi useTodayKey
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- todayKey è il motivo del ricalcolo
   const days = React.useMemo(() => nextDays(14), [todayKey]);
 
   // Stesse operatrici dell'appuntamento: lo spostamento le conserva, quindi la

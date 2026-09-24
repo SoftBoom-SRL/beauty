@@ -1,9 +1,9 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
 // KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { centsToEur, inputCss, lineAmount, methodLabel, money, opName, saleDateLabel } from './lib.js';
+import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
 import { lineGrossCents, saleLineLabel } from './history.js';
 
 const LIMIT = 50;

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { staffAuth, useT, Icon, ApiError } from '@youty/shared';
 
 // Il salone dimostrativo di `seed_demo` esiste solo in sviluppo: in produzione la

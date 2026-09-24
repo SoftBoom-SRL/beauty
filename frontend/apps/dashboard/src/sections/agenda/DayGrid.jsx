@@ -117,6 +117,9 @@ export default function DayGrid({
     zoomAnchor.current = null;
     const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
     el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
+    // Solo lo zoom sposta lo scroll. G0 non può stare fra le dipendenze: è
+    // dichiarata più sotto, e leggerla qui durante il render sarebbe un errore.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
   /* Pinch del trackpad (che arriva come ctrl+rotella) e ⌘/ctrl+rotella: il
    * listener è nativo e NON passivo, altrimenti il browser ingrandisce la
@@ -961,12 +964,11 @@ const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
 
 /* ---------- service block (one per AppointmentService) ---------- */
 function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
-  const { item, appt, isFirst, isLast, index } = block;
+  const { item, appt, isFirst, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
   const h = (active + soak) * pxm;
   const compact = h < 50;
-  const narrow = laneCount > 1;
   // Visita con più servizi: senza un segno che li lega, in agenda si vedono
   // due riquadri identici a due appuntamenti diversi della stessa cliente, e
   // non si capisce né che sono una cosa sola né che si possono staccare.

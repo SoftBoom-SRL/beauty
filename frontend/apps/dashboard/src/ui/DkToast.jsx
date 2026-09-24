@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { Icon } from '@youty/shared';
 
 /** Desktop toast. Feed it the `toastProps` from useToastHost() (exposed on ctx). */
@@ -7,7 +7,7 @@ export default function DkToast({ toast, onUndo, onDone }) {
     if (!toast) return;
     const tm = setTimeout(onDone, toast.undo ? 4500 : 2800);
     return () => clearTimeout(tm);
-  }, [toast]);
+  }, [toast, onDone]);
   if (!toast) return null;
   return (
     <div className="dk-toast">

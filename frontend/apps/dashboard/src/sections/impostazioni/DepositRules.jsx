@@ -124,7 +124,7 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, drafts, 
    * solo se non ci sono modifiche in corso, altrimenti le si butterebbe via. */
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
-  useEffect(() => { if (!dirtyRef.current) setDraft(toDraft(rule)); }, [rule]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!dirtyRef.current) setDraft(toDraft(rule)); }, [rule]);
 
   const upd = (patch) => { setDraft((d) => ({ ...d, ...patch })); setDirty(true); };
   const setConds = (fn) => { setDraft((d) => ({ ...d, conds: fn(d.conds) })); setDirty(true); };
@@ -175,8 +175,9 @@ function RuleCard({ rule, fields, open, onToggleOpen, onSave, onDelete, drafts, 
   // la pagina ospite salva con il suo «Salva» anche le bozze aperte qui (15-03)
   useEffect(() => {
     if (!drafts) return undefined;
-    drafts.current.set(rule.id, { dirty, save: () => saveDraft({ quiet: true }) });
-    return () => { drafts.current.delete(rule.id); };
+    const map = drafts.current;
+    map.set(rule.id, { dirty, save: () => saveDraft({ quiet: true }) });
+    return () => { map.delete(rule.id); };
   });
 
   return (

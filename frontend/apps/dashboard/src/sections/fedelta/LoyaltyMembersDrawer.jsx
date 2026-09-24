@@ -55,6 +55,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
       })
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t e fireToast servono solo al messaggio d'errore: cambiare lingua non ricarica
   }, [program.id, offset, reloadKey]);
 
   const typeMeta = LOYALTY_TYPES.find((x) => x.k === program.type) || LOYALTY_TYPES[0];

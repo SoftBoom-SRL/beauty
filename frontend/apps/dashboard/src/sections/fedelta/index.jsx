@@ -1,6 +1,5 @@
 // fedelta/index.jsx — Promozioni section: Coupon / Fedeltà / Gift card sub-tabs.
 // Ported from prototype desktop-fedelta.jsx (DkFedelta) with real marketing API calls.
-import React from 'react';
 import { useDash } from '../../ctx.jsx';
 import CouponSub from './CouponSub.jsx';
 import LoyaltySub from './LoyaltySub.jsx';

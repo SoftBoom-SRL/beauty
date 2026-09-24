@@ -1,7 +1,7 @@
 // WaitlistModal — full waiting list (GET /api/agenda/waitlist), ranked presentation,
 // "Contattato" → POST /waitlist/{id}/contacted, "Proponi" → newappt prefill.
 // NOTE: entries are created by clients from the app — no staff add-form (API is client-only).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, Avatar, Icon, fmtDateIt, toDateStr } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import { useDash } from '../../../ctx.jsx';

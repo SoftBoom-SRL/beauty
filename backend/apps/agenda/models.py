@@ -110,7 +110,7 @@ class Appointment(TimeStampedModel):
     # pagamento andavano sull'account nuovo, dove il PaymentIntent non esiste,
     # e fallivano. None = caparra di prima di questo campo: si usa l'account
     # attuale del salone.
-    deposit_stripe_account = models.CharField(max_length=64, null=True, blank=True, default=None)
+    deposit_stripe_account = models.CharField(max_length=64, null=True, blank=True, default=None)  # noqa: DJ001 — None e "" dicono cose diverse, vedi sopra
     # Quando Stripe chiude la sessione del link (al più 24 ore, anche senza
     # scadenza della caparra). Passata quella, il link si rifà invece di
     # rimandare alla cliente una pagina già chiusa.

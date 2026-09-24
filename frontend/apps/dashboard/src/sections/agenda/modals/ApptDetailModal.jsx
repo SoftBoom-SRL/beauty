@@ -2,7 +2,6 @@
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
-import DkModal from '../../../ui/DkModal.jsx';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
@@ -186,20 +185,6 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     finally { if (alive.current) setLinkBusy(false); }
   }
 
-  async function restoreReleased(force = false) {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await api.post(`/api/agenda/appointments/${apptRef.current.id}/restore`, { force });
-      if (alive.current) adopt(res);
-      fireToast({ msg: t('Appuntamento ripristinato', 'Appointment restored'), icon: 'check' });
-      onMutate?.(res);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !force) fireToast({ msg: t('Lo slot non è più libero: usa «Ripristina comunque»', 'The slot is no longer free: use “Restore anyway”'), icon: 'alert' });
-      else toastErr(err, t, fireToast);
-    } finally { if (alive.current) setBusy(false); }
-  }
-
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
   const [matchCount, setMatchCount] = useState(null);
   useEffect(() => {
@@ -241,7 +226,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
    * l'agenda di fianco li mostra man mano (giorno o settimana, quella che è
    * aperta). Finché non si preme «Sposta», non si è ancora toccato niente. */
   const [viewDate, setViewDate] = useState(() => toDateStr(appointment?.start));
-  useEffect(() => { setViewDate(toDateStr(appt?.start)); }, [appt?.start]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setViewDate(toDateStr(appt?.start)); }, [appt?.start]);
   const showDate = (iso) => {
     if (!iso) return;
     setViewDate(iso);

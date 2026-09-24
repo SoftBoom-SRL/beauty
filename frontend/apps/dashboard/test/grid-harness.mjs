@@ -64,6 +64,20 @@ export function createElement(type, props, ...children) {
 export default { createElement, Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo };
 `;
 
+/* Il runtime JSX «automatico», lo stesso del build di Vite: i componenti non
+ * importano React per scrivere JSX. Stessa forma degli elementi di
+ * createElement (la key resta anche fra le props), così i test li leggono
+ * allo stesso modo. */
+const JSX_RUNTIME = `
+export const Fragment = 'Fragment';
+export function jsx(type, props, key) {
+  const p = { ...(props || {}) };
+  if (key !== undefined) p.key = key;
+  return { type, props: p, key: p.key ?? null };
+}
+export const jsxs = jsx;
+`;
+
 /* @youty/shared: gli helper veri di format.js, componenti muti, api finta. */
 const SHARED = `
 export * from ${JSON.stringify(FORMAT)};
@@ -87,12 +101,13 @@ export async function loadComponent(entry, { stubs = [] } = {}) {
   const res = await build({
     entryPoints: [join(FRONT, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
-    jsx: 'transform', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment',
+    jsx: 'automatic',
     loader: { '.js': 'jsx', '.jsx': 'jsx' },
     plugins: [{
       name: 'finti',
       setup(b) {
         b.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'finto' }));
+        b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx-runtime', namespace: 'finto' }));
         b.onResolve({ filter: /^@youty\/shared$/ }, () => ({ path: 'shared', namespace: 'finto' }));
         b.onResolve({ filter: /ctx\.jsx$/ }, () => ({ path: 'ctx', namespace: 'finto' }));
         b.onResolve({ filter: /\.jsx$/ }, (a) => {
@@ -104,7 +119,7 @@ export async function loadComponent(entry, { stubs = [] } = {}) {
             const name = a.path.slice(5).replace(/\.jsx$/, '');
             return { contents: `export default function ${name}() { return null; }\nexport function ApptHoverCard() { return null; }`, loader: 'js' };
           }
-          return { contents: { react: REACT, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT };
+          return { contents: { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT };
         });
       },
     }],

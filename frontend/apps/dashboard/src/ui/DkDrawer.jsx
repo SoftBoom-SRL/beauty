@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { useEscLayer } from './layers.js';
 
 /** Drawer laterale su scrim. Stessa regola del DkModal: chiude solo se il

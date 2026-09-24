@@ -1,5 +1,4 @@
 // ScreenStub.jsx — placeholder rendered by not-yet-ported client screens.
-import React from 'react';
 import { Icon } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 

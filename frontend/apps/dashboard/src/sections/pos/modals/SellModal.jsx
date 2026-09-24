@@ -5,7 +5,7 @@
 // amount due (the API enforces Σ payments == total − deposit ±0.01, else 422).
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
@@ -18,6 +18,10 @@ import {
 
 /** Caparra detraibile: la quota ancora in cassa (`deposit_credit`, al netto dei
  *  rimborsi già fatti), in centesimi. */
+// Visita senza gift card: sempre lo stesso array, così l'effetto che precompila
+// il pagamento non riparte a ogni render.
+const NO_GIFTS = [];
+
 const depositCentsOf = (appt) => toCents(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
 
 export default function SellModal({ appointment, onDone, onClose }) {
@@ -72,7 +76,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
    * (AppointmentOut.gifts): il pagamento parte già impostato con la gift card
    * per l'importo coperto e il resto in contanti, così l'operatrice non deve
    * ricordarsi del regalo né cercare il codice. */
-  const gifts = appt?.gifts || [];
+  const gifts = appt?.gifts || NO_GIFTS;
   const giftPrefilled = useRef(false);
   useEffect(() => {
     if (giftPrefilled.current || !gifts.length || !appt) return;

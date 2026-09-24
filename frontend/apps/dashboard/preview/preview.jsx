@@ -1,6 +1,5 @@
 // Anteprima dell'agenda con dati finti: serve a provare la griglia senza
 // backend e senza credenziali. Solo sviluppo — non entra nel bundle dell'app.
-import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { staffAuth, LangProvider } from '@youty/shared';
 import { DashboardProvider } from '../src/ctx.jsx';

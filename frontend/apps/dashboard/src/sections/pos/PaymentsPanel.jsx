@@ -3,7 +3,6 @@
 // Split rows must add up to `dueCents` (the API 422s otherwise) — shows a live match indicator.
 // Tutto in centesimi interi (money.js): le somme in virgola mobile dicevano
 // «La somma non corrisponde» su importi giusti, o viceversa.
-import React from 'react';
 import { Icon } from '@youty/shared';
 import { centsToEur, divHalfUp, paymentsMatch, toCents } from './money.js';
 import { money, payMethods, sanitizeAmtInput } from './lib.js';

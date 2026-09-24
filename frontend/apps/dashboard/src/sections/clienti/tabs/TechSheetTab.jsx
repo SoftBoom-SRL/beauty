@@ -1,6 +1,6 @@
 // TechSheetTab.jsx — profile tab: list of immutable technical sheets +
 // inline creation form (GET/POST /api/clients/{id}/sheets).
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { TechSheetCard, TechSheetForm } from '../TechSheet.jsx';

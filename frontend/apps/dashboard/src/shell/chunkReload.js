@@ -40,7 +40,7 @@ function sessionStore() {
  */
 export function reloadOnce({ storage = sessionStore(), now = Date.now(), reload } = {}) {
   if (!storage) return false;
-  let last = 0;
+  let last;
   try { last = Number(storage.getItem(RELOAD_KEY)) || 0; } catch { return false; }
   if (last && now - last >= 0 && now - last < RELOAD_WINDOW_MS) return false;
   try { storage.setItem(RELOAD_KEY, String(now)); } catch { return false; }

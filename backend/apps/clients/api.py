@@ -40,7 +40,6 @@ from .models import (
     default_consents,
 )
 from .schemas import (
-    AttachmentOut,
     CategoryIn,
     CategoryOut,
     HookLeadIn,

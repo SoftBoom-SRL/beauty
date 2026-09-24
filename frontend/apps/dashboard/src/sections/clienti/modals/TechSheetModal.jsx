@@ -3,7 +3,7 @@
 // sheet, or the creation form when none exists yet.
 // Props (all optional except clientId): { clientId, apptId, apptLabel,
 // category, viewSheetId }.
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, ApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';

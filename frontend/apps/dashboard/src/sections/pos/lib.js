@@ -58,7 +58,7 @@ export const lineAmount = (l) => centsToEur(lineCents(l));
 export async function findCoupon(code, { clientId = null, t }) {
   const wanted = String(code || '').trim().toUpperCase(); // i codici sono maiuscoli
   if (!wanted) return { error: t('Inserisci un codice', 'Enter a code') };
-  let rows = [];
+  let rows;
   try {
     const res = await api.get('/api/marketing/coupons', { params: { q: wanted, limit: 20 } });
     rows = res?.items || res || [];

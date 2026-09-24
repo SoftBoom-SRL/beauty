@@ -30,7 +30,7 @@ class SalonSettingsAdminForm(forms.ModelForm):
 
     class Meta:
         model = SalonSettings
-        fields = "__all__"
+        fields = "__all__"  # noqa: DJ007 — l'admin mostra tutte le impostazioni, anche quelle nuove
         help_texts = {
             "opening_hours_week": (
                 'Es. {"0": [["09:00", "13:00"], ["14:00", "19:00"]], …, "6": []} — '

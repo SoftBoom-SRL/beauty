@@ -2,7 +2,7 @@
 // bar (ports the prompt input from desktop-insight.jsx) + a single static card
 // explaining that AI-generated suggestions (the prototype's `INSIGHTS` mock cards)
 // land in fase 2. No canned/fake suggestion content is rendered.
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Icon } from '@youty/shared';
 
 export default function AskYoutyPanel({ t, onOpenAnalyst }) {

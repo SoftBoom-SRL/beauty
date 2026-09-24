@@ -24,6 +24,7 @@ export default function LoyaltySub() {
       .finally(() => setLoading(false));
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- caricamento iniziale, una volta sola
   useEffect(reload, []);
 
   const blank = () => ({
