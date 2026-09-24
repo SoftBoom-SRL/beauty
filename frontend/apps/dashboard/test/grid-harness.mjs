@@ -104,6 +104,8 @@ const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
 // il valore di api.js quando VITE_API_URL manca (come in test/shared-shim.mjs)
 export const API_URL = 'http://localhost:8000';
+// i percorsi dei file così come sono (le copertine delle comunicazioni)
+export const mediaUrl = (path) => path;
 `;
 /* ctx.jsx: il contesto è globalThis.__dash; useLive tiene l'ultima callback in
  * globalThis.__useLive, e il test la chiama con gli eventi (il debounce di 250
