@@ -40,7 +40,9 @@ from .services.deposits import close_deposit_link_after_commit, renew_deposit_li
 from .services.freed_slots import _appointment_spans, _chain_spans, _spans_minus, emit_with_freed_slots
 from .services.locking import lock_salon
 from .services.messages import _event_payload, _withdraw_deposit_messages
+from .services.occupancy import _busy_map
 from .services.resolution import _validate_segments
+from .services.timegrid import _overlaps, day_and_minute
 from .services.undo_messages import revert_held_events
 
 logger = logging.getLogger("youty.agenda")
@@ -439,6 +441,37 @@ def _delete_appointment(appointment: Appointment, label: str) -> None:
     appointment.delete()
 
 
+def _ensure_pause_slot_free(snap: dict, salon) -> None:
+    """Il tempo dove la pausa torna dev'essere ancora libero (409 altrimenti).
+
+    Come `_ensure_slot_free` per gli appuntamenti, si controlla solo il tempo
+    che la pausa riprende e oggi non tiene. Alle 12:55 la reception toglieva la
+    pausa di Laura delle 13:00, alle 12:58 una cliente prenotava dall'app alle
+    13:00 con Laura, e alle 13:02 «Indietro» rimetteva la pausa sopra la
+    visita, senza un avviso: l'operatrice poteva credersi in pausa con una
+    cliente in arrivo. Occupano il lavoro delle visite e le altre pause; la
+    posa di un'altra cliente no, come negli altri gesti dello staff.
+    """
+    start = parse_datetime(snap["start"])
+    wanted = {snap["operator_id"]: [(start, start + dt.timedelta(minutes=snap["duration_min"]))]}
+    pause = Pause.objects.filter(id=snap["id"]).first()
+    held = {pause.operator_id: [(pause.start, pause.end)]} if pause is not None else {}
+    for operator_id, pieces in _spans_minus(wanted, held).items():
+        for piece_start, piece_end in pieces:
+            day, first_min = day_and_minute(piece_start)
+            last_min = first_min + int((piece_end - piece_start).total_seconds() // 60)
+            busy = [(s, e) for s, e, hard in _busy_map(salon, day).get(operator_id, ()) if hard]
+            if last_min > 24 * 60:
+                # A cavallo della mezzanotte conta anche quello che comincia il
+                # giorno dopo (le pause durano fino a dodici ore).
+                tomorrow = _busy_map(salon, day + dt.timedelta(days=1)).get(operator_id, ())
+                busy += [(s + 24 * 60, e + 24 * 60) for s, e, hard in tomorrow if hard]
+            if _overlaps(busy, first_min, last_min):
+                raise HttpError(
+                    409, "Nel frattempo quell'orario è stato occupato: la pausa non si può rimettere dov'era"
+                )
+
+
 def _restore_pause(snap: dict) -> None:
     """Rimette la pausa com'era, ricreandola se nel frattempo è sparita."""
     pause = Pause.objects.filter(id=snap["id"]).first()
@@ -460,13 +493,15 @@ def _restore_pause(snap: dict) -> None:
 
 
 def _reissue_deposit_links(appointments) -> None:
-    """Dopo aver annullato un annullamento: un link di pagamento nuovo per la caparra.
+    """Dopo aver annullato un annullamento o un no-show: un link di pagamento nuovo per la caparra.
 
-    L'annullamento ha chiuso su Stripe la sessione del link (vedi
-    services.deposits.close_deposit_link_after_commit): rimessa in agenda con la
-    caparra ancora da pagare, la cliente si ritroverebbe con una pagina già
-    chiusa e allo scadere il posto si libererebbe da solo. Svuotato l'indirizzo,
-    `ensure_deposit_link` ne crea uno nuovo e lo manda, a transazione chiusa.
+    L'annullamento e il no-show hanno chiuso su Stripe la sessione del link
+    (vedi services.deposits.close_deposit_link_after_commit): rimessa in agenda
+    con la caparra ancora da pagare, la cliente si ritroverebbe con una pagina
+    già chiusa, che l'app le riproponeva come valida finché non scadeva, e dopo
+    un annullamento allo scadere il posto si libererebbe da solo. Svuotato
+    l'indirizzo, `ensure_deposit_link` ne crea uno nuovo e lo manda, a
+    transazione chiusa.
     """
     from apps.sales.stripe_service import ensure_deposit_link, payments_enabled  # lazy
 
@@ -604,8 +639,9 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             touched.append(appointment)
             days.append(appointment.start)
         for snap in entry.before.get("pauses", []):
+            _ensure_pause_slot_free(snap, salon)
             _restore_pause({**snap, "salon_id": salon.id})
-        if entry.kind == UndoEntry.Kind.CANCEL:
+        if entry.kind in (UndoEntry.Kind.CANCEL, UndoEntry.Kind.NO_SHOW):
             _reissue_deposit_links(touched)
         else:
             _renew_links_for_restored_amount(touched, entry.after.get("appointments", []))

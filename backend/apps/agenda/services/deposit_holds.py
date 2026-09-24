@@ -19,7 +19,7 @@ from ..models import Appointment
 from .deposits import close_deposit_link_after_commit
 from .freed_slots import _appointment_spans, _sync_freed_slots, emit_with_freed_slots
 from .locking import _lock_and_reload, _lock_row, lock_salon
-from .messages import _event_payload, _withdraw_deposit_messages, appointment_event_key, emit_appointment_event
+from .messages import _event_payload, _withdraw_deposit_messages, appointment_event_key, deposit_paid_payload, emit_appointment_event
 from .resolution import _validate_segments
 
 
@@ -133,7 +133,7 @@ def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor
     emit_event(
         appointment.salon,
         "deposit.paid",
-        _event_payload(appointment),
+        deposit_paid_payload(appointment),
         coalesce_key=appointment_event_key(appointment.id),
     )
     return appointment

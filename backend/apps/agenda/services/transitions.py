@@ -105,6 +105,13 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         actor=actor,
         payload={"appointment_id": appointment.id, "reason": reason},
     )
+    if appointment.deposit_status == Appointment.DepositStatus.REQUIRED:
+        # Come nell'annullamento: il link della caparra non ha più niente da
+        # incassare. Restava pagabile, e la cliente che lo apriva la sera
+        # pagava per una visita saltata: il webhook segnava la caparra «da
+        # rimborsare» e la restituiva, con le commissioni perse dal salone.
+        _withdraw_deposit_messages(appointment)
+        close_deposit_link_after_commit(appointment)
     emit_with_freed_slots(
         appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason},
         before=_appointment_spans(appointment), after={},

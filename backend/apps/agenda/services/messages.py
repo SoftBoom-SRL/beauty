@@ -75,6 +75,19 @@ def _event_payload(appointment: Appointment) -> dict:
     }
 
 
+def deposit_paid_payload(appointment: Appointment) -> dict:
+    """Payload di `deposit.paid`: quello standard più `amount`, la caparra arrivata.
+
+    Lo emettono il pagamento online (webhook Stripe) e l'incasso al banco, e
+    deve avere la stessa forma. Il webhook lo scriveva a mano senza
+    `whatsapp_reminders` e `wa`: per le caparre pagate online Yourang non
+    sapeva se la cliente aveva spento i promemoria WhatsApp, e poteva scriverle
+    su un canale che lei aveva rifiutato. L'incasso al banco, invece, non
+    portava `amount`.
+    """
+    return {**_event_payload(appointment), "amount": str(appointment.deposit_amount)}
+
+
 # Quando due eventi si fondono resta il più alto di questa scala: la conferma di
 # un appuntamento appena nato batte lo spostamento, perché la cliente non ha
 # ancora ricevuto nulla e quello che le serve è la conferma, con l'orario buono.

@@ -17,9 +17,9 @@ from apps.core.services import log_activity
 
 from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, UndoEntry
-from .deposit_holds import schedule_deposit_hold
+from .deposit_holds import _effective_deposit_due, _hold_settings, schedule_deposit_hold
 from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_total
-from .freed_slots import _appointment_spans, _chain_spans, emit_with_freed_slots
+from .freed_slots import _appointment_spans, _chain_spans, _spans_union, emit_with_freed_slots
 from .locking import _lock_and_reload, lock_salon
 from .messages import _event_payload, emit_appointment_event
 from .resolution import (
@@ -212,6 +212,9 @@ def edit_appointment(
     ):
         raise HttpError(412, STALE_APPOINTMENT_MESSAGE)
     before = undo_log.appointment_snapshot(appointment)
+    # Orari occupati prima della modifica: togliendo o accorciando un servizio
+    # il tempo che si libera va alla lista d'attesa, come nello spostamento.
+    before_spans = _appointment_spans(appointment)
     changed = ["updated_at"]
     if note is not None:
         appointment.note = note
@@ -243,13 +246,14 @@ def edit_appointment(
             resolved = resolve_items_edit(appointment.salon, items, appointment.start, force=True, **kwargs)
             appointment.forced = True
             changed.append("forced")
+        total_before = sum((item.price for item in existing.values()), start=Decimal("0"))
         appointment.items.all().delete()
         _write_items(appointment, resolved)
         appointment.operator = resolved[0].operator
         changed.append("operator")
     appointment.save(update_fields=changed)
     if items is not None:
-        shrink_deposit_to_total(appointment, actor=actor)
+        shrink_deposit_to_total(appointment, actor=actor, total_before=total_before)
 
     log_activity(
         appointment.salon,
@@ -259,8 +263,13 @@ def edit_appointment(
         payload={"appointment_id": appointment.id},
     )
     # Cambiando i servizi cambia anche l'ora di fine: senza questo evento il
-    # promemoria alla cliente continuava a riportare la durata vecchia.
-    emit_appointment_event(appointment, "appointment.updated")
+    # promemoria alla cliente continuava a riportare la durata vecchia. Si
+    # annuncia anche il tempo liberato: togliendo la piega da una visita
+    # 10:00–12:00, le 11:30–12:00 tornavano libere senza che la lista d'attesa
+    # lo sapesse.
+    emit_with_freed_slots(
+        appointment, "appointment.updated", before=before_spans, after=_appointment_spans(appointment)
+    )
     undo_log.record_appointment_change(
         appointment,
         kind=UndoEntry.Kind.EDIT,
@@ -376,6 +385,20 @@ def move_appointment(
             if item.operator_id != target.id:
                 item.operator = target
                 item.save(update_fields=["operator"])
+    if (
+        appointment.deposit_status == Appointment.DepositStatus.REQUIRED
+        and appointment.deposit_due_at is not None
+    ):
+        # La scadenza della caparra non supera mai l'inizio: segue quello
+        # nuovo con la regola del rilascio (`_effective_deposit_due`). Si
+        # riallineava solo alla lettura dopo o col cron: prenotata lunedì alle
+        # 18 per martedì alle 10 con 24 ore di termine e spostata a giovedì,
+        # il messaggio dello spostamento diceva «entro martedì alle 10» invece
+        # che alle 18, e così la risposta dell'API.
+        hold, _ = _hold_settings(appointment.salon)
+        if hold > 0:
+            appointment.deposit_due_at = _effective_deposit_due(appointment, hold)
+            changed.append("deposit_due_at")
     appointment.save(update_fields=changed)
 
     log_activity(
@@ -444,6 +467,11 @@ def split_appointment(
     items = list(appointment.items.select_related("service", "operator").order_by("order", "id"))
     if len(items) < 2:
         raise HttpError(400, "L'appuntamento ha un solo servizio: usa «Sposta»")
+    # Orari occupati prima dello stacco: il tempo che il servizio lascia va
+    # alla lista d'attesa, come nello spostamento.
+    before_spans = _chain_spans(
+        appointment.start, [(it.operator_id, it.duration_min, it.soak_min) for it in items]
+    )
     item = next((it for it in items if it.id == item_id), None)
     if item is None:
         raise HttpError(404, "Servizio non trovato nell'appuntamento")
@@ -489,7 +517,9 @@ def split_appointment(
     appointment.save(update_fields=changed)
     # La visita di partenza ora vale meno: se la caparra la supera il conto non
     # si chiuderebbe più (la cassa dovrebbe incassare un importo negativo).
-    shrink_deposit_to_total(appointment, actor=actor)
+    shrink_deposit_to_total(
+        appointment, actor=actor, total_before=sum((it.price for it in items), start=Decimal("0"))
+    )
 
     created = Appointment.objects.create(
         salon=appointment.salon,
@@ -531,7 +561,15 @@ def split_appointment(
             "forced": force,
         },
     )
-    emit_appointment_event(appointment, "appointment.updated")
+    # Staccando la piega su un altro giorno le sue 11:30–12:00 si liberavano
+    # senza nessun `slot.freed`. «Dopo» conta anche il servizio staccato: se
+    # finisce poco più in là, il tempo che occupa ancora non è libero.
+    emit_with_freed_slots(
+        appointment,
+        "appointment.updated",
+        before=before_spans,
+        after=_spans_union(_appointment_spans(appointment), _appointment_spans(created)),
+    )
     emit_appointment_event(created, "appointment.created")
     undo_log.record(
         appointment.salon,
