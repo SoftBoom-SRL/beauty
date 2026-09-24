@@ -14,8 +14,8 @@ from django.utils import timezone
 from apps.core.models import OutboxEvent, Salon
 from common.permissions import SCOPES
 
-from .models import ClientOTP, Membership, Role, StaffRefreshToken, User
-from .services import ensure_default_roles
+from ..models import ClientOTP, Membership, Role, StaffRefreshToken, User
+from ..services import ensure_default_roles
 
 
 def post_json(client, url, data, **extra):
@@ -322,7 +322,7 @@ class ClientOTPSecurityTests(TestCase):
 
     def test_the_cap_per_address_stops_the_enumeration(self):
         """Senza tetto per IP uno script cicla i numeri finché non li trova tutti."""
-        from .api import OTP_MAX_PER_IP
+        from ..api import OTP_MAX_PER_IP
 
         for n in range(OTP_MAX_PER_IP):
             self.assertEqual(self._request_otp(f"+39333444{n:04d}").status_code, 200)
@@ -420,7 +420,7 @@ class InvitationPasswordTests(TestCase):
         )
 
     def test_empty_password_is_refused_and_the_invitation_stays_usable(self):
-        from .models import Invitation
+        from ..models import Invitation
 
         invitation = Invitation.objects.create(
             salon=self.salon, email="giulia@parlour.it", role=self.role
@@ -438,7 +438,7 @@ class InvitationPasswordTests(TestCase):
         self.assertEqual(invitation.status, Invitation.Status.ACCEPTED)
 
     def test_short_and_common_passwords_are_refused(self):
-        from .models import Invitation
+        from ..models import Invitation
 
         for password in ("abc", "password"):
             invitation = Invitation.objects.create(
@@ -465,7 +465,7 @@ class StaffLoginThrottleTests(TestCase):
         )
 
     def test_repeated_wrong_passwords_get_throttled(self):
-        from .api import LOGIN_MAX_PER_ACCOUNT
+        from ..api import LOGIN_MAX_PER_ACCOUNT
 
         statuses = [self._login("sbagliata").status_code for _ in range(LOGIN_MAX_PER_ACCOUNT)]
         self.assertEqual(set(statuses), {401})
@@ -483,7 +483,7 @@ class StaffLoginThrottleTests(TestCase):
         self.assertEqual(set(statuses), {401})
 
     def test_the_cap_per_address_covers_many_accounts(self):
-        from .api import LOGIN_MAX_PER_IP
+        from ..api import LOGIN_MAX_PER_IP
 
         for n in range(LOGIN_MAX_PER_IP):
             post_json(
@@ -841,7 +841,7 @@ class ClientIpTests(TestCase):
 
     def test_a_very_long_email_does_not_blow_up_the_login(self):
         """S11: la chiave del contatore finiva in un CharField(200)."""
-        from .api import _login_account_key
+        from ..api import _login_account_key
 
         chiave = _login_account_key("a" * 400 + "@example.com")
         self.assertLessEqual(len(chiave), 200)

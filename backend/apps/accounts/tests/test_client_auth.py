@@ -21,7 +21,7 @@ from apps.core.models import ActivityLog, Salon
 from common import ratelimit
 from common.auth import _encode, create_client_tokens
 
-from .models import ClientOTP, Membership, Role, User
+from ..models import ClientOTP, Membership, Role, User
 
 
 def post_json(client, url, data, **extra):
@@ -62,7 +62,7 @@ class OtpSalonCapTests(TestCase):
         self.assertEqual(ClientOTP.objects.filter(client=self.sofia).count(), 1)
 
     def test_many_requests_are_still_reported(self):
-        from .api import OTP_ALERT_PER_SALON
+        from ..api import OTP_ALERT_PER_SALON
 
         with self.assertLogs("apps.accounts.api", level="WARNING") as logs:
             for i in range(OTP_ALERT_PER_SALON + 1):
@@ -164,7 +164,7 @@ class PasswordChangeThrottleTests(TestCase):
         )
 
     def test_guessing_the_current_password_is_capped(self):
-        from .api import PASSWORD_CHANGE_MAX_PER_USER
+        from ..api import PASSWORD_CHANGE_MAX_PER_USER
 
         for n in range(PASSWORD_CHANGE_MAX_PER_USER):
             self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)
@@ -174,7 +174,7 @@ class PasswordChangeThrottleTests(TestCase):
         self.assertTrue(self.user.check_password("segretissima"))
 
     def test_the_right_current_password_clears_the_count(self):
-        from .api import PASSWORD_CHANGE_MAX_PER_USER
+        from ..api import PASSWORD_CHANGE_MAX_PER_USER
 
         for n in range(PASSWORD_CHANGE_MAX_PER_USER - 1):
             self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)

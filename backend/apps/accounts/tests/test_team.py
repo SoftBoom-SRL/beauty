@@ -17,8 +17,8 @@ from django.utils import timezone
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
-from .models import Invitation, Membership, Role, User
-from .services import ensure_default_roles
+from ..models import Invitation, Membership, Role, User
+from ..services import ensure_default_roles
 
 
 def post_json(client, url, data, **extra):
