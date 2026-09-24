@@ -18,7 +18,7 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import DepositRule, OutboxEvent, SalonSettings
 
 from ..models import Appointment, WaitlistEntry
-from ..services.appointments import create_appointment, edit_appointment, move_appointment
+from ..services.appointments import create_appointment, edit_appointment, move_appointment, split_appointment
 from ..services.messages import appointment_event_key
 from ..services.transitions import cancel_appointment, mark_no_show
 from .base import WIDE, AgendaTestBase, MessagesTestBase, _aware
@@ -259,6 +259,68 @@ class FreedSlotSaysWhatReallyFreedUpTests(MessagesTestBase):
         move_appointment(appointment, _aware(self.day, 10, 15), actor=self.user)
         (event,) = self._pending("slot:")
         self.assertNotIn(long_wait.id, event.payload["matching_waitlist"])
+
+
+class EditAndSplitFreeTheirTimeTests(MessagesTestBase):
+    """Bug sospetto 3 (24/09): modifica e stacco annunciano il tempo liberato, come lo spostamento."""
+
+    def _visit(self):
+        """10:00–11:30 con Giulia (60' + 30'), già confermata alla cliente."""
+        appointment = self._book(10, items=[
+            {"service_id": self.svc60.id, "operator_id": self.op1.id},
+            {"service_id": self.svc30.id, "operator_id": self.op1.id},
+        ])
+        self._all_sent()
+        return appointment
+
+    def test_removing_a_service_frees_its_time(self):
+        appointment = self._visit()
+        first = appointment.items.order_by("order").first()
+        edit_appointment(
+            appointment,
+            items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            actor=self.user,
+        )
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 30)])
+
+    def test_shortening_a_service_frees_the_rest(self):
+        appointment = self._book(10)
+        self._all_sent()
+        item = appointment.items.get()
+        edit_appointment(
+            appointment,
+            items=[{"id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id, "duration_min": 45}],
+            actor=self.user,
+        )
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 10, 45), 15)])
+
+    def test_detaching_a_service_to_another_day_frees_its_time(self):
+        appointment = self._visit()
+        last = appointment.items.order_by("order").last()
+        split_appointment(appointment, last.id, _aware(self.day + dt.timedelta(days=1), 15), actor=self.user)
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 30)])
+
+    def test_a_service_detached_a_little_later_frees_only_what_it_left(self):
+        appointment = self._visit()
+        last = appointment.items.order_by("order").last()
+        # 11:00–11:30 → 11:15–11:45: dalle 11:15 Giulia è ancora occupata con lei
+        split_appointment(appointment, last.id, _aware(self.day, 11, 15), actor=self.user)
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 15)])
+
+    def test_going_back_takes_the_announcement_back(self):
+        appointment = self._visit()
+        first = appointment.items.order_by("order").first()
+        edit_appointment(
+            appointment,
+            items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            actor=self.user,
+        )
+        self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(self._freed(), [])
+        last = appointment.items.order_by("order").last()
+        split_appointment(appointment, last.id, _aware(self.day + dt.timedelta(days=1), 15), actor=self.user)
+        self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(self._freed(), [])
 
 
 class ClientWhoKnowsIsAlwaysToldTests(MessagesTestBase):
