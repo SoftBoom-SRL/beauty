@@ -184,28 +184,21 @@ def _redeem_stream_ticket(ticket: str) -> dict | None:
 def stream_access(info: dict):
     """(is_owner, scopes) ATTUALI di chi ha chiesto il biglietto, None se non può più ascoltare.
 
-    Lo stesso controllo di StaffAuth: membership viva, utente attivo e stessa
-    versione della password. Senza, chi veniva tolta dal salone (o cambiava
-    password) continuava a ricevere incassi e nomi delle clienti con un
-    biglietto chiesto poco prima, e un permesso tolto restava valido fino a
-    fine stream.
+    Lo stesso controllo di StaffAuth (accounts.sessions): membership viva,
+    utente attivo e stessa versione della password. Senza, chi veniva tolta
+    dal salone (o cambiava password) continuava a ricevere incassi e nomi
+    delle clienti con un biglietto chiesto poco prima, e un permesso tolto
+    restava valido fino a fine stream.
     """
-    from apps.accounts.models import Membership  # lazy: evita cicli in fase di load
+    # lazy: evita cicli in fase di load
+    from apps.accounts.sessions import find_membership, membership_scopes, tv_matches
 
-    membership = (
-        Membership.objects.select_related("user", "role")
-        .filter(
-            user_id=info.get("user_id"),
-            salon_id=info.get("salon_id"),
-            user__is_active=True,
-        )
-        .first()
-    )
+    membership = find_membership(info.get("user_id"), info.get("salon_id"), related=("user", "role"))
     if membership is None:
         return None
-    if (membership.user.token_version or 0) != info.get("tv", 0):
+    if not tv_matches(membership, info.get("tv", 0)):
         return None
-    scopes = sorted(membership.role.scopes or []) if membership.role else []
+    scopes = sorted(membership_scopes(membership))
     return bool(membership.is_owner), scopes
 
 

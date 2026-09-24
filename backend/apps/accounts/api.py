@@ -7,7 +7,6 @@ import logging
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -48,6 +47,7 @@ from .schemas import (
     StaffLoginIn,
 )
 from .services import issue_otp, verify_otp
+from .sessions import find_membership, first_membership, session_payload, tv_matches, user_out
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +55,6 @@ router = Router(tags=["accounts"])
 
 
 # ---- Helpers -----------------------------------------------------------------
-
-
-def _user_out(user) -> dict:
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.get_full_name() or user.email,
-    }
 
 
 def _role_out(role) -> dict | None:
@@ -74,43 +66,6 @@ def _role_out(role) -> dict | None:
         "scopes": role.scopes or [],
         "is_system": role.is_system,
     }
-
-
-def _auth_payload(membership, tokens: dict | None = None) -> dict:
-    salon = membership.salon
-    out = {
-        "user": _user_out(membership.user),
-        "salon": {"id": salon.id, "name": salon.name, "slug": salon.slug},
-        "scopes": sorted(membership.role.scopes or []) if membership.role else [],
-        "is_owner": membership.is_owner,
-    }
-    if tokens:
-        out.update(tokens)
-    return out
-
-
-def _first_membership(user) -> Membership | None:
-    """Il salone in cui entra chi fa login (v1: un salone per sessione, niente selettore).
-
-    Con più membership prendeva la più vecchia e basta: la ex collaboratrice
-    che apre il suo salone con la stessa email (create_salon) entrava sempre
-    in quello di prima, dove magari non ha più nemmeno un ruolo, e il suo non
-    lo raggiungeva mai (08-08). Ora l'ordine è: dove è titolare, poi dove ha
-    un ruolo (una membership senza ruolo non apre nulla), poi la più vecchia.
-    A parità di dati la scelta è sempre la stessa; per il titolare di due
-    saloni resta il primo, come prima: il secondo richiede un selettore.
-    """
-    return (
-        Membership.objects.select_related("user", "salon", "role")
-        .filter(user=user)
-        .annotate(
-            senza_ruolo=Case(
-                When(role__isnull=True, then=Value(1)), default=Value(0), output_field=IntegerField()
-            )
-        )
-        .order_by("-is_owner", "senza_ruolo", "id")
-        .first()
-    )
 
 
 def _active_client_by_phone(salon, phone: str):
@@ -249,11 +204,11 @@ def staff_login(request, data: StaffLoginIn):
     if user is None:
         raise HttpError(401, "Credenziali non valide")
     ratelimit.reset(account_key)
-    membership = _first_membership(user)
+    membership = first_membership(user)
     if membership is None:
         raise HttpError(403, "Nessun salone associato a questo utente")
     tokens = create_staff_tokens(user, membership.salon)
-    return _auth_payload(membership, tokens)
+    return session_payload(membership, tokens)
 
 
 @router.post("/staff/refresh", response=StaffAuthOut)
@@ -269,18 +224,10 @@ def staff_refresh(request, data: RefreshIn):
     payload = decode_token(data.refresh)
     if not payload or payload.get("typ") != "staff_refresh":
         raise HttpError(401, "Token non valido")
-    membership = (
-        Membership.objects.select_related("user", "salon", "role")
-        .filter(
-            user_id=payload.get("sub"),
-            salon_id=payload.get("salon"),
-            user__is_active=True,
-        )
-        .first()
-    )
+    membership = find_membership(payload.get("sub"), payload.get("salon"))
     if membership is None:
         raise HttpError(401, "Token non valido")
-    if payload.get("tv", 0) != (membership.user.token_version or 0):
+    if not tv_matches(membership, payload.get("tv", 0)):
         raise HttpError(401, "Sessione non più valida: la password è stata modificata")
 
     jti = payload.get("jti")
@@ -323,7 +270,7 @@ def staff_refresh(request, data: RefreshIn):
             )
             raise HttpError(401, "Sessione non più valida: esegui di nuovo l'accesso")
     tokens = create_staff_tokens(membership.user, membership.salon)
-    return _auth_payload(membership, tokens)
+    return session_payload(membership, tokens)
 
 
 @router.post("/staff/logout", auth=staff_auth, response=OkOut)
@@ -352,7 +299,7 @@ def staff_logout(request):
 
 @router.get("/me", auth=staff_auth, response=MeOut)
 def me(request):
-    return _auth_payload(request.auth.membership)
+    return session_payload(request.auth.membership)
 
 
 @router.post("/staff/password", auth=staff_auth, response=StaffAuthOut)
@@ -403,7 +350,7 @@ def staff_change_password(request, data: PasswordChangeIn):
     log_activity(
         ctx.salon, "user.password_changed", f"Password modificata: {user.email}", actor=user
     )
-    return _auth_payload(ctx.membership, create_staff_tokens(user, ctx.salon))
+    return session_payload(ctx.membership, create_staff_tokens(user, ctx.salon))
 
 
 # ---- Staff: membri del team ----------------------------------------------------
@@ -412,7 +359,7 @@ def staff_change_password(request, data: PasswordChangeIn):
 def _member_out(membership) -> dict:
     return {
         "id": membership.id,
-        "user": _user_out(membership.user),
+        "user": user_out(membership.user),
         "role": _role_out(membership.role),
         "is_owner": membership.is_owner,
     }
@@ -733,7 +680,7 @@ def accept_invitation(request, data: InvitationAcceptIn):
             payload={"invitation_id": invitation.id},
         )
     tokens = create_staff_tokens(user, invitation.salon)
-    return _auth_payload(membership, tokens)
+    return session_payload(membership, tokens)
 
 
 # ---- Cliente (web app): registrazione e login OTP --------------------------------

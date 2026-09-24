@@ -22,6 +22,7 @@ from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
 from apps.accounts.models import Membership, User
+from apps.accounts.sessions import session_payload
 from apps.core.models import Location, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
@@ -73,17 +74,6 @@ def _provision_salon(user: User, display_name: str) -> Salon:
     Location.objects.create(salon=salon, name=display_name, is_default=True)
     Membership.objects.create(user=user, salon=salon, is_owner=True)
     return salon
-
-
-def _session_payload(membership: Membership, tokens: dict) -> dict:
-    salon, user = membership.salon, membership.user
-    return {
-        "user": {"id": user.id, "email": user.email, "name": user.get_full_name() or user.email},
-        "salon": {"id": salon.id, "name": salon.name, "slug": salon.slug},
-        "scopes": sorted(membership.role.scopes or []) if membership.role else [],
-        "is_owner": membership.is_owner,
-        **tokens,
-    }
 
 
 def _unlinked_memberships(user: User) -> list[Membership]:
@@ -239,4 +229,6 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
         # dalla richiesta; il suo esito finisce su last_sync_at / last_error.
         schedule_initial_sync(conn)
     tokens = create_staff_tokens(membership.user, membership.salon)
-    return _session_payload(membership, tokens)
+    # Lo stesso payload del login con password: la dashboard non distingue
+    # da dove arriva la sessione.
+    return session_payload(membership, tokens)

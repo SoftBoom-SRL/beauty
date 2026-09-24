@@ -105,26 +105,21 @@ class StaffAuth(HttpBearer):
         payload = decode_token(token)
         if not payload or payload.get("typ") != "staff":
             return None
-        from apps.accounts.models import Membership  # lazy: evita cicli in fase di load
+        # lazy: evita cicli in fase di load. Le regole della sessione (membership
+        # viva, versione della password, permessi del ruolo) sono quelle di
+        # accounts.sessions, le stesse del rinnovo e dello stream live.
+        from apps.accounts.sessions import find_membership, membership_scopes, tv_matches
 
-        membership = (
-            Membership.objects.select_related("user", "salon", "role")
-            .filter(
-                user_id=payload["sub"],
-                salon_id=payload["salon"],
-                user__is_active=True,
-            )
-            .first()
-        )
+        membership = find_membership(payload["sub"], payload["salon"])
         if membership is None:
             return None
         # Password cambiata dopo l'emissione del token → sessione non più valida.
         # I token emessi prima di questa modifica non hanno "tv": valgono 0, come
         # il default sull'utente, quindi restano validi e nessuno viene sloggato
         # al deploy.
-        if payload.get("tv", 0) != (membership.user.token_version or 0):
+        if not tv_matches(membership, payload.get("tv", 0)):
             return None
-        scopes = set(membership.role.scopes or []) if membership.role else set()
+        scopes = set(membership_scopes(membership))
         return StaffContext(
             user=membership.user,
             salon=membership.salon,
