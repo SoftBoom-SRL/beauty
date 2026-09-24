@@ -126,6 +126,56 @@ export function rebaseDraft({ base, rows, note, theirs }) {
 export const canMarkNoShow = (appt, now = Date.now()) =>
   !!appt && appt.status === 'confirmed' && Date.parse(appt.start) <= now;
 
+/** Chi può prendersi la visita («Passa a»): l'operatrice principale e le
+ *  colleghe abilitate a TUTTI i servizi che oggi sono suoi (sono quelli che
+ *  cambiano mano, come nel trascinamento in agenda). Il server rifiuterebbe
+ *  le altre. */
+export function handoverOps(appt, operators) {
+  const mainItems = (appt.items || []).filter((it) => (it.operator_id ?? appt.operator_id) === appt.operator_id);
+  return operators.filter((op) => op.id === appt.operator_id
+    || (mainItems.length > 0 && mainItems.every((it) => (op.service_ids || []).includes(it.service_id))));
+}
+
+/** Le colleghe che hanno una parte della visita: con «Passa a» la loro parte
+ *  resta a loro (nomi senza doppioni, nell'ordine dei servizi). */
+export function otherOpNames(appt, operators) {
+  return [...new Set((appt.items || [])
+    .filter((it) => it.operator_id && it.operator_id !== appt.operator_id)
+    .map((it) => operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name)
+    .filter(Boolean))];
+}
+
+/** Orario di ogni riga del pannello: i servizi sono in fila dall'inizio della
+ *  visita (`startMin`), posa compresa, così si vede subito che cosa slitta
+ *  quando si cambia una durata o si aggiunge un trattamento. `to` è la fine
+ *  del LAVORO (quando l'operatrice ha finito); `gap` è quello che viene dopo —
+ *  la posa di un colore o il buco che il salone vuole lasciare — e il
+ *  servizio successivo comincia di là (`next`). Tenerli separati è ciò che
+ *  permette di scrivere un'ora di fine senza trascinarsi dietro il
+ *  trattamento dopo. */
+export function itemSpans(rows, startMin) {
+  let cursor = startMin;
+  return rows.map((it) => {
+    const from = cursor;
+    const to = from + Math.max(0, parseInt(it.duration_min, 10) || 0);
+    const gap = Math.max(0, parseInt(it.soak_min, 10) || 0);
+    cursor = to + gap;
+    return { from, to, gap, next: cursor };
+  });
+}
+
+/** Attesa fra un servizio e l'altro oltre la posa del listino
+ *  (`catalogSoak(row)`): è un avviso, non un divieto — il colore ne ha 30,
+ *  quello che c'è in più è un buco voluto e come tale si segnala. Dopo
+ *  l'ultimo servizio non c'è nulla da aspettare. */
+export function gapNotes(rows, spans, catalogSoak) {
+  return rows.map((it, i) => {
+    if (i >= rows.length - 1) return null;
+    const extra = (spans[i].gap || 0) - catalogSoak(it);
+    return extra > 0 ? { index: i, minutes: extra, gap: spans[i].gap } : null;
+  }).filter(Boolean);
+}
+
 /* ---- limiti del server sui campi ------------------------------------------ */
 
 /** ReasonIn.reason (no-show e annullamento): 255 caratteri, come la colonna. */

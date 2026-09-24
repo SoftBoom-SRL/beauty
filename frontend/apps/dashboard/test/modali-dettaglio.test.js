@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptVersion, editRow, eventConcerns, isOlder, itemsSig, movedMeanwhile, rebaseDraft,
+  apptVersion, editRow, eventConcerns, gapNotes, handoverOps, isOlder, itemSpans, itemsSig, movedMeanwhile, otherOpNames,
+  rebaseDraft,
 } from '../src/sections/agenda/modals/rules.js';
 
 /* Maria alle 10:00 con Anna (1): taglio 30' + colore 60' (posa 30). */
@@ -115,4 +116,79 @@ test('versione: una risposta vecchia non riporta indietro, una uguale non cambia
   assert.notEqual(apptVersion(a), apptVersion(visit({ deposit_status: 'paid' })));
   assert.ok(isOlder(visit({ updated_at: '2026-09-23T08:59:00Z' }), a));
   assert.ok(!isOlder(a, visit({ updated_at: undefined })));   // senza C2 non si decide
+});
+
+/* ---- chi prende la visita, orari delle righe e attese (erano nel pannello) ---- */
+// Le espressioni del pannello, copiate com'erano.
+function wasHandover(appt, operators) {
+  const mainItems = (appt.items || []).filter((it) => (it.operator_id ?? appt.operator_id) === appt.operator_id);
+  const visitOps = operators.filter((op) => op.id === appt.operator_id
+    || (mainItems.length > 0 && mainItems.every((it) => (op.service_ids || []).includes(it.service_id))));
+  const otherOpNames = [...new Set((appt.items || [])
+    .filter((it) => it.operator_id && it.operator_id !== appt.operator_id)
+    .map((it) => operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name)
+    .filter(Boolean))];
+  return { visitOps, otherOpNames };
+}
+function wasSpans(editItems, startMin, catalogSoak) {
+  const itemSpans = (() => {
+    let cursor = startMin;
+    return editItems.map((it) => {
+      const from = cursor;
+      const to = from + Math.max(0, parseInt(it.duration_min, 10) || 0);
+      const gap = Math.max(0, parseInt(it.soak_min, 10) || 0);
+      cursor = to + gap;
+      return { from, to, gap, next: cursor };
+    });
+  })();
+  const gapNotes = editItems.map((it, i) => {
+    if (i >= editItems.length - 1) return null;
+    const extra = (itemSpans[i].gap || 0) - catalogSoak(it);
+    return extra > 0 ? { index: i, minutes: extra, gap: itemSpans[i].gap } : null;
+  }).filter(Boolean);
+  return { itemSpans, gapNotes };
+}
+
+test('«Passa a»: l\'operatrice principale e chi sa fare tutti i suoi servizi; la parte delle colleghe resta loro', () => {
+  const ops = [
+    { id: 1, first_name: 'Anna', service_ids: [3, 4] },
+    { id: 2, first_name: 'Giulia', service_ids: [3] },
+    { id: 4, first_name: 'Bea', service_ids: [3, 4, 5] },
+  ];
+  const cases = [
+    visit(),
+    visit({ items: [...visit().items, { id: 13, service_id: 5, service_name: 'Piega', operator_id: 2, operator_name: 'Giulia', duration_min: 30 }] }),
+    visit({ items: [{ id: 14, service_id: 5, operator_id: 9, operator_name: 'Ex collega', duration_min: 30 }] }),
+    visit({ items: [] }),
+    visit({ items: [{ id: 15, service_id: 3, operator_id: null, duration_min: 30 }] }),
+  ];
+  for (const a of cases) {
+    const was = wasHandover(a, ops);
+    assert.deepEqual(handoverOps(a, ops), was.visitOps);
+    assert.deepEqual(otherOpNames(a, ops), was.otherOpNames);
+  }
+  assert.deepEqual(handoverOps(visit(), ops).map((o) => o.id), [1, 4]);
+  assert.deepEqual(otherOpNames(cases[1], ops), ['Giulia']);
+  assert.deepEqual(otherOpNames(cases[2], ops), ['Ex collega']);
+});
+
+test('orari delle righe e attese oltre la posa del listino', () => {
+  const soak = { 3: 0, 4: 30, 5: 0 };
+  const catalogSoak = (it) => soak[it.service_id] || 0;
+  const rows = [
+    [],
+    draftOf(visit()),
+    [...draftOf(visit()), piega],
+    [{ ...draftOf(visit())[0], soak_min: 20 }, { ...draftOf(visit())[1], duration_min: '' }, { ...piega, soak_min: '15' }],
+    [{ ...piega, duration_min: 'x', soak_min: -5 }, { ...piega, key: 'e10' }],
+  ];
+  for (const r of rows) {
+    const was = wasSpans(r, 600, catalogSoak);
+    const spans = itemSpans(r, 600);
+    assert.deepEqual(spans, was.itemSpans);
+    assert.deepEqual(gapNotes(r, spans, catalogSoak), was.gapNotes);
+  }
+  const spans = itemSpans(rows[3], 600);
+  assert.deepEqual(spans.map((x) => [x.from, x.to, x.gap]), [[600, 630, 20], [650, 650, 30], [680, 710, 15]]);
+  assert.deepEqual(gapNotes(rows[3], spans, catalogSoak), [{ index: 0, minutes: 20, gap: 20 }]);
 });
