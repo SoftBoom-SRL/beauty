@@ -79,11 +79,14 @@ export function jsx(type, props, key) {
 export const jsxs = jsx;
 `;
 
-/* @youty/shared: gli helper veri di format.js, componenti muti, api finta. */
+/* @youty/shared: gli helper veri di format.js, labels.js, apiErrors.js e
+ * clipboard.js, componenti muti, api finta. */
 const SHARED = `
 import * as apiErrors from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'apiErrors.js'))};
 export * from ${JSON.stringify(FORMAT)};
 export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
+// la copia negli appunti vera: usa navigator e document di globalThis, che il test imposta
+export { copyText } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'clipboard.js'))};
 export const Avatar = () => null;
 export const EmptyState = () => null;
 export const Icon = () => null;

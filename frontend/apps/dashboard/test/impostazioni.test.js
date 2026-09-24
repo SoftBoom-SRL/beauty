@@ -1,7 +1,8 @@
 // Impostazioni: condizioni su etichette sparite, acconto in percentuale, orari
 // e registro attività nel fuso del salone. Caccia ai bug del 22/09/2026: 15-07,
-// 15-16, 15-09 (+ 08-09), 15-22. In fondo la pagina e il pannello dei
-// pagamenti veri (test/grid-harness.mjs): l'esito dei collegamenti.
+// 15-16, 15-09 (+ 08-09), 15-22. In fondo la pagina, il pannello dei
+// pagamenti e il campo «Copia» veri (test/grid-harness.mjs): l'esito dei
+// collegamenti e della copia.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -9,13 +10,14 @@ import { setSalonTz } from '../../../packages/shared/src/format.js';
 import { amountForType, depositFields, dropCurrent, ruleSentence } from '../src/sections/impostazioni/rules.js';
 import { todayRanges } from '../src/sections/impostazioni/hours.js';
 import { logDateLabel, salonDaysAgo } from '../src/sections/impostazioni/dates.js';
-import { installDom, loadComponent, mount, spy } from './grid-harness.mjs';
+import { findAll, installDom, loadComponent, mount, spy } from './grid-harness.mjs';
 
 const { default: ImpostazioniSection } = await loadComponent('apps/dashboard/src/sections/impostazioni/index.jsx', {
   stubs: ['BookingsOptimPage.jsx', 'ActivityLogPage.jsx', 'LocationsPage.jsx', 'BrandDrawer.jsx', 'TeamDrawer.jsx',
     'RolesDrawer.jsx', 'PasswordDrawer.jsx', 'PaymentsDrawer.jsx', 'ReasonsDrawer.jsx'],
 });
 const { default: PaymentsDrawer } = await loadComponent('apps/dashboard/src/sections/impostazioni/PaymentsDrawer.jsx');
+const { CopyField } = await loadComponent('apps/dashboard/src/sections/impostazioni/lib.jsx');
 
 const t = (it) => it;
 const cats = [{ id: 1, name: 'Nuova' }, { id: 2, name: 'Da seguire' }, { id: 3, name: 'VIP' }];
@@ -141,4 +143,37 @@ test('collegamento Stripe (PaymentsDrawer): lo stesso, il toast nella lingua di 
     ]);
     assert.deepEqual(reloads, ['salon']);
   } finally { m.unmount(); }
+});
+
+/* ---- «Copia»: l'esito vero della copia ---- */
+
+/** Gli appunti del browser: `writeText` come lo darebbe navigator.clipboard. */
+function clipboard(writeText) {
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText } }, configurable: true, writable: true });
+}
+
+test('«Copia» (link dell\'app, del modulo, token d\'invito): «Copiato» solo se la copia riesce (voce 47)', async () => {
+  installDom();
+  const written = [];
+  for (const [t, ok, ko] of [
+    [tIt, 'Copiato negli appunti', 'Copia non riuscita: seleziona il testo e copialo a mano'],
+    [tEn, 'Copied to clipboard', 'Copy failed: select the text and copy it by hand'],
+  ]) {
+    const fireToast = spy();
+    const m = mount(CopyField, { value: 'https://app.youty.it/the-parlour', t, fireToast });
+    try {
+      const copy = () => findAll(m.tree, (el) => el.type === 'button')[0].props.onClick();
+      clipboard(async (text) => { written.push(text); });
+      await copy();
+      assert.deepEqual(fireToast.calls, [[{ msg: ok, icon: 'check' }]]);
+      // permesso negato: niente «Copiato», e gli appunti restano quelli di prima
+      clipboard(async () => { throw new Error('NotAllowedError'); });
+      await copy();
+      // pagina non sicura: niente clipboard (e il ripiego qui non c'è)
+      clipboard(undefined);
+      await copy();
+      assert.deepEqual(fireToast.calls.slice(1), [[{ msg: ko, icon: 'alert' }], [{ msg: ko, icon: 'alert' }]]);
+    } finally { m.unmount(); }
+  }
+  assert.deepEqual(written, ['https://app.youty.it/the-parlour', 'https://app.youty.it/the-parlour']);
 });
