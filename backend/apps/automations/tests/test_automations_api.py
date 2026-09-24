@@ -4,13 +4,17 @@ token solo a chi ha «marketing».
 
 Caccia del 22/09:
 - 18-07: attiva/disattiva e modifica non lavorano su copie vecchie.
+Bug sospetti del 24/09:
+- voce 26: creazione e modifica sotto il lock del salone, come l'eliminazione
+  di un'etichetta citata nelle condizioni.
 """
 
 import json
 import uuid
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.db import transaction
+from django.test import TestCase, TransactionTestCase
 
 from apps.accounts.models import Membership, Role, User
 from apps.core.models import OutboxEvent, Salon
@@ -326,3 +330,111 @@ class StaleCopyTests(TestCase):
         self.automation.refresh_from_db()
         self.assertEqual(self.automation.name, "Auguri di compleanno")
         self.assertEqual(self.automation.message_preview, "Tanti auguri da The Parlour!")
+
+
+class AutomationLabelLockTests(TransactionTestCase):
+    """Bug sospetti del 24/09, voce 26: l'automazione si salva sotto il lock del salone.
+
+    L'eliminazione di un'etichetta controlla che nessuna automazione la citi e
+    poi la cancella, sotto il lock del salone (`delete_label` in clients).
+    Un'automazione che si salvava senza quel lock poteva essere a metà proprio
+    allora: il controllo non la vedeva, e l'etichetta spariva lo stesso,
+    lasciando una regola che a Yourang non scatta per nessuna. Su SQLite il
+    lock non ferma nessuno: qui, se il salvataggio lo tiene, l'altra postazione
+    aspetta la fine della sua transazione, come su PostgreSQL.
+    `TransactionTestCase` perché la fine della transazione deve arrivare davvero.
+    """
+
+    def setUp(self):
+        from apps.clients.models import ClientCategory
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        self.auth = bearer(user, self.salon)
+        self.label = ClientCategory.objects.create(salon=self.salon, name="A rischio")
+
+    def _automation(self):
+        return {
+            "name": "Promemoria a rischio", "event": "appointment_upcoming",
+            "conditions": {"op": "and", "rules": [{"field": "categories", "cmp": "contains", "value": "A rischio"}]},
+        }
+
+    def _send(self, method, path):
+        return getattr(self.client, method)(
+            path, data=json.dumps(self._automation()), content_type="application/json", **self.auth
+        )
+
+    def _while_the_label_is_deleted(self, save_the_automation):
+        """Salva l'automazione mentre un'altra postazione elimina l'etichetta, nel momento della scrittura.
+
+        Ritorna (risposta del salvataggio, risposta dell'eliminazione, il lock sostituito).
+        """
+        from apps.agenda.services import locking
+
+        real_lock, real_save = locking.lock_salon, Automation.save
+        state = {"held": False, "arrived": False}
+        waiting, deleted = [], []
+
+        def lock_salon(salon):
+            state["held"] = True
+            # Su PostgreSQL il lock resta fino alla fine della transazione.
+            transaction.on_commit(lambda: state.update(held=False))
+            return real_lock(salon)
+
+        def delete_the_label():
+            deleted.append(self.client.delete(f"/api/clients/categories/{self.label.id}", **self.auth))
+
+        def save_while_the_label_is_deleted(automation, *args, **kwargs):
+            if not state["arrived"]:
+                state["arrived"] = True
+                if state["held"]:
+                    waiting.append(delete_the_label)  # aspetta il commit del salvataggio
+                else:
+                    delete_the_label()
+            return real_save(automation, *args, **kwargs)
+
+        with patch("apps.agenda.services.locking.lock_salon", side_effect=lock_salon) as lock, \
+                patch.object(Automation, "save", autospec=True, side_effect=save_while_the_label_is_deleted):
+            saved = save_the_automation()
+            for station in waiting:
+                station()
+        self.assertTrue(state["arrived"])
+        return saved, deleted[0], lock
+
+    def assertLabelStays(self, saved, deleted, lock):
+        from apps.clients.models import ClientCategory
+
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(deleted.status_code, 400, deleted.content)
+        self.assertIn("Promemoria a rischio", deleted.json()["detail"])
+        self.assertTrue(ClientCategory.objects.filter(pk=self.label.pk).exists())
+        lock.assert_any_call(self.salon)
+
+    def test_an_automation_being_created_is_seen_by_the_label_deletion(self):
+        self.assertLabelStays(*self._while_the_label_is_deleted(lambda: self._send("post", "/api/automations/")))
+
+    def test_an_automation_being_changed_to_cite_the_label_is_seen_too(self):
+        automation = Automation.objects.create(salon=self.salon, name="Promemoria", event="appointment_upcoming")
+        self.assertLabelStays(*self._while_the_label_is_deleted(
+            lambda: self._send("put", f"/api/automations/{automation.pk}")
+        ))
+
+    def test_an_automation_deleted_meanwhile_is_a_404(self):
+        # Salone, poi riga: l'automazione si rilegge dopo il lock. Salvata dalla
+        # copia letta a inizio richiesta, quella eliminata nel frattempo da
+        # un'altra postazione faceva 500 («did not affect any rows»).
+        from apps.automations import api as automations_api
+
+        automation = Automation.objects.create(salon=self.salon, name="Promemoria", event="appointment_upcoming")
+        stale = Automation.objects.get(pk=automation.pk)  # letta a inizio richiesta
+        automation.delete()  # poi un'altra postazione la elimina
+
+        def stale_get(model, ctx, pk, **extra):
+            return stale if model is Automation else model.objects.get(pk=pk)
+
+        with patch.object(automations_api, "salon_get", side_effect=stale_get) as get:
+            res = self._send("put", f"/api/automations/{stale.pk}")
+        get.assert_called()
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertFalse(Automation.objects.filter(pk=stale.pk).exists())

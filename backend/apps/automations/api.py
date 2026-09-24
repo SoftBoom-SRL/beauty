@@ -134,15 +134,25 @@ def list_automations(request):
 def create_automation(request, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    automation = Automation.objects.create(salon=ctx.salon, **_validated(data))
-    log_activity(
-        ctx.salon,
-        "automation.created",
-        f"Automazione creata: {automation.name}",
-        actor=ctx.user,
-        payload={"automation_id": automation.id},
-    )
-    publish_definition(ctx.salon, definition(automation))
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    payload = _validated(data)
+    # Sotto il lock del salone, come l'eliminazione di un'etichetta
+    # (`delete_label` in clients), che sotto lo stesso lock controlla che
+    # nessuna automazione la citi: senza, un'automazione a metà salvataggio
+    # sfuggiva al controllo e l'etichetta spariva lo stesso (voce 26 dei bug
+    # sospetti del 24/09).
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        automation = Automation.objects.create(salon=ctx.salon, **payload)
+        log_activity(
+            ctx.salon,
+            "automation.created",
+            f"Automazione creata: {automation.name}",
+            actor=ctx.user,
+            payload={"automation_id": automation.id},
+        )
+        publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -151,20 +161,30 @@ def update_automation(request, automation_id: int, data: AutomationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
     automation = salon_get(Automation, ctx, automation_id)
+    from apps.agenda.services.locking import lock_salon  # lazy
+
     payload = _validated(data)
-    for name, value in payload.items():
-        setattr(automation, name, value)
-    # Solo i campi della maschera: il save completo riscriveva con la copia
-    # letta a inizio richiesta anche `message_preview`, che sincronizza Yourang.
-    automation.save(update_fields=[*payload, "updated_at"])
-    log_activity(
-        ctx.salon,
-        "automation.updated",
-        f"Automazione aggiornata: {automation.name}",
-        actor=ctx.user,
-        payload={"automation_id": automation.id},
-    )
-    publish_definition(ctx.salon, definition(automation))
+    # Il lock del salone, come nella creazione, poi la riga, riletta: dalla
+    # copia letta a inizio richiesta, un'automazione eliminata nel frattempo
+    # da un'altra postazione faceva 500.
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        automation = Automation.objects.select_for_update().filter(pk=automation.pk).first()
+        if automation is None:
+            raise HttpError(404, "Automazione non trovata")
+        for name, value in payload.items():
+            setattr(automation, name, value)
+        # Solo i campi della maschera: `message_preview` lo sincronizza Yourang,
+        # e il save completo di una copia vecchia lo riscriveva.
+        automation.save(update_fields=[*payload, "updated_at"])
+        log_activity(
+            ctx.salon,
+            "automation.updated",
+            f"Automazione aggiornata: {automation.name}",
+            actor=ctx.user,
+            payload={"automation_id": automation.id},
+        )
+        publish_definition(ctx.salon, definition(automation))
     return automation
 
 

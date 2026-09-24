@@ -6,9 +6,10 @@ modulo non sa quale campo rifare. Catalogo, magazzino e staff li scrivevano
 ciascuno per conto proprio, con la stessa espressione regolare e gli stessi
 messaggi: qui sono una volta sola, con quei messaggi.
 
-Restano fuori, di proposito, i colori validati altrove con `$` o dallo schema
-(marketing, impostazioni del salone, etichette cliente): regole diverse, non
-copie di questa.
+Restano fuori, di proposito, i colori validati altrove con una loro
+espressione (il programma fedeltà in marketing, le impostazioni del salone:
+anche lì chiusa come `HEX_COLOR_RE`, che non accetta l'a capo finale) o dallo
+schema (etichette cliente): messaggi e codici diversi, non copie di questa.
 """
 
 import re
