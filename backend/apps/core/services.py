@@ -11,6 +11,12 @@ Un evento può essere TRATTENUTO per qualche secondo prima della consegna
 nessuno l'ha ancora ricevuto, quindi si può ancora fondere con un evento
 successivo sullo stesso oggetto o farlo sparire del tutto: è così che un
 appuntamento inserito e spostato un istante dopo produce un messaggio solo.
+
+Un tipo nuovo di evento o di riga del registro va scritto anche in altri due
+posti, se serve: la scadenza del messaggio per Yourang in core.outbox
+(`EXPIRY_FIELDS`/`EXPIRY_AGES`: senza, non scade mai) e l'area che lo riceve
+nel feed live in core.livefeed (`LIVE_FEED_SCOPES`: senza, il feed non lo
+consegna a nessuno, nemmeno al titolare).
 """
 
 import logging
