@@ -19,7 +19,8 @@ from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
 from ..models import DepositRefund, Sale
-from ..services import record_deposit_cashed, today_summary
+from ..reports import today_summary
+from ..services import record_deposit_cashed
 
 
 class DepositRefundStateTests(TestCase):

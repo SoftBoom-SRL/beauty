@@ -4,12 +4,9 @@ I modelli delle altre app (agenda, clients) sono risolti lazy con
 django.apps.get_model per evitare dipendenze di import a livello di modulo.
 """
 
-from decimal import Decimal
 from typing import Optional
 
 from django.apps import apps as django_apps
-from django.db.models import Count, Q, Sum
-from django.utils.dateparse import parse_date
 from ninja import Query, Router
 from ninja.errors import HttpError
 
@@ -22,9 +19,9 @@ from common.utils import salon_get
 
 from apps.core.services import log_activity
 
-from . import serializers, stripe_service, stripe_webhooks
+from . import reports, serializers, stripe_service, stripe_webhooks
 from .checkout import checkout_appointment
-from .models import Sale, SaleLine
+from .models import Sale
 from .schemas import (
     ChargeNoShowOut,
     CheckoutIn,
@@ -39,7 +36,7 @@ from .schemas import (
     StripeConnectStatusOut,
     TodaySummaryOut,
 )
-from .services import finalize_sale, record_no_show_charge, today_summary
+from .services import finalize_sale, record_no_show_charge
 
 router = Router(tags=["sales"])
 
@@ -107,52 +104,17 @@ def list_sales(
     """Storico vendite con KPI {revenue, count, items_count} sul filtro corrente."""
     ctx = request.auth
     require_scope(ctx, "sales")
-    qs = Sale.objects.filter(salon=ctx.salon)
-    # Le vendite-caparra sono un anticipo, non un conto: il checkout fattura già
-    # il servizio per intero e ne detrae la caparra. Contate qui, «Incasso
-    # totale» diceva 130 per un servizio da 100 con 30 di caparra, i conteggi
-    # raddoppiavano e la caparra compariva come vendita «Da banco» (05-03,
-    # 14-03). Si vedono solo chiedendole: `kind=deposit`.
-    if kind == "deposit":
-        qs = qs.filter(deposit_appointment__isnull=False)
-    else:
-        qs = qs.filter(deposit_appointment__isnull=True)
-        if kind:
-            qs = qs.filter(kind=kind)
-    if date_from and (d := parse_date(date_from)):
-        qs = qs.filter(created_at__date__gte=d)
-    if date_to and (d := parse_date(date_to)):
-        qs = qs.filter(created_at__date__lte=d)
-    if q:
-        qs = qs.filter(
-            Q(client__first_name__icontains=q) | Q(client__last_name__icontains=q)
-        )
-    if client_id:
-        qs = qs.filter(client_id=client_id)
-    if operator_id:
-        qs = qs.filter(lines__operator_id=operator_id)
-
-    base = Sale.objects.filter(pk__in=qs.values("pk"))  # evita duplicati da join
-    agg = base.aggregate(revenue=Sum("total"), count=Count("id"))
-    lines = SaleLine.objects.filter(sale__in=base)
-    revenue = agg["revenue"] or Decimal("0.00")
-    if operator_id:
-        # Filtrando per operatrice il fatturato è quello delle SUE righe: prima
-        # si sommavano le vendite intere, così di una vendita da 100 con 20 di
-        # Giulia e 80 di Anna a Giulia ne venivano attribuiti 100.
-        lines = lines.filter(operator_id=operator_id)
-        revenue = lines.aggregate(t=Sum("amount"))["t"] or Decimal("0.00")
-    items_count = lines.aggregate(n=Sum("qty"))["n"] or 0
-    items = base.select_related("client").order_by("-created_at")[offset : offset + limit]
-    return {
-        "count": agg["count"] or 0,
-        "kpi": {
-            "revenue": revenue.quantize(Decimal("0.01")),
-            "count": agg["count"] or 0,
-            "items_count": items_count,
-        },
-        "items": [serializers.sale_out(s) for s in items],
-    }
+    return reports.sales_history(
+        ctx.salon,
+        kind=kind,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        client_id=client_id,
+        operator_id=operator_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/today-summary", auth=staff_auth, response=TodaySummaryOut)
@@ -160,7 +122,7 @@ def get_today_summary(request):
     # Senza `require_scope`: è il riquadro incassi dell'agenda, che ogni
     # operatrice vede aprendo la sua giornata. Sono totali di giornata, non lo
     # scontrino di una cliente: il dettaglio, quello sì, chiede il permesso.
-    return today_summary(request.auth.salon)
+    return reports.today_summary(request.auth.salon)
 
 
 @router.get("/{int:sale_id}", auth=staff_auth, response=SaleDetailOut)

@@ -16,7 +16,8 @@ from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
 from ..models import Sale, SaleLine
-from ..services import finalize_sale, record_deposit_cashed, today_summary
+from ..reports import today_summary
+from ..services import finalize_sale, record_deposit_cashed
 from .base import PATCH_LOYALTY, HistoryTestBase, _blocks
 
 

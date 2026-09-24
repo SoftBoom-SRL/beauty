@@ -145,7 +145,7 @@ class DepositRefund(models.Model):
     e «Incassato oggi» e gli insight contavano per sempre denaro tornato alla
     cliente. Una riga per rimborso riuscito: la chiave è l'id Stripe (o quella
     del rimborso manuale) preceduta dall'appuntamento. Le righe le tiene
-    allineate `services.sync_deposit_refunds`, a partire dai rimborsi registrati
+    allineate `deposits.sync_deposit_refunds`, a partire dai rimborsi registrati
     sull'appuntamento.
     """
 

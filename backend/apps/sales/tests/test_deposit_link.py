@@ -181,7 +181,7 @@ class DepositLinkAndConnectTests(TestCase):
 
     def test_today_summary_separates_gift_card_money(self):
         from ..models import Payment, Sale, SaleLine
-        from ..services import today_summary
+        from ..reports import today_summary
 
         sale = Sale.objects.create(salon=self.salon, kind=Sale.Kind.POS, total=Decimal("80.00"))
         SaleLine.objects.create(sale=sale, line_type="service", qty=1, unit_price=Decimal("50.00"), amount=Decimal("50.00"))

@@ -1,4 +1,8 @@
-"""Logica vendite: `finalize_sale` condiviso da checkout e POS + riepilogo di giornata.
+"""Scritture delle vendite: `finalize_sale` condiviso da checkout e POS, e le vendite di
+una riga per il denaro incassato fuori dal conto (gift card, caparra, no-show).
+
+In sales è l'unico modulo che scrive Sale, SaleLine e Payment: il riepilogo di
+giornata e lo storico stanno in reports.py, la cassa delle caparre in deposits.py.
 
 Le integrazioni cross-app (magazzino, gift card, fedeltà) sono importate lazy
 dentro le funzioni, come da convenzione SPEC §1: le firme di riferimento sono
@@ -13,8 +17,6 @@ dentro le funzioni, come da convenzione SPEC §1: le firme di riferimento sono
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Sum
-from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
@@ -24,7 +26,7 @@ from apps.core.services import log_activity
 # None)`: un nome che manca qui spegnerebbe in silenzio la cassa delle caparre.
 # Vivono in deposits.py, che non importa services in testa: niente ciclo.
 from .deposits import deposit_retained, settle_deposit_excess, sync_deposit_refunds  # noqa: F401
-from .models import DepositRefund, Payment, Sale, SaleLine
+from .models import Payment, Sale, SaleLine
 
 TWO_PLACES = Decimal("0.01")
 PAYMENT_TOLERANCE = Decimal("0.01")
@@ -475,57 +477,3 @@ def record_no_show_charge(salon, appointment, *, amount, actor=None):
     if Sale.objects.filter(appointment=appointment).exists():
         return None
     return _money_sale(salon, appointment, amount, Payment.Method.CARD, actor, deposit=False)
-
-
-def today_summary(salon) -> dict:
-    """Incassi di oggi (box agenda): {total, count, checkout_total, pos_total,
-    gift_card_sold, gift_card_redeemed, deposit_used, deposit_cashed,
-    deposit_refunded, cash_in}.
-
-    `total` è il venduto di oggi: le vendite-caparra restano fuori, perché sono
-    un anticipo sul conto che al checkout verrà fatturato per intero — contarle
-    qui faceva risultare 130 € di venduto per un servizio da 100 con 30 di
-    caparra. Entrano invece in `deposit_cashed`, che è denaro davvero arrivato
-    oggi. `gift_card_redeemed` è la parte saldata con gift card e `deposit_used`
-    quella coperta da caparre versate in precedenza: denaro già incassato in un
-    altro giorno. `deposit_refunded` sono le caparre restituite oggi (rimborso
-    all'annullamento, eccedenza al conto, restituzione a mano): denaro uscito.
-    `cash_in` è quello entrato davvero oggi, al netto di quello uscito:
-    total + deposit_cashed − gift_card_redeemed − deposit_used − deposit_refunded.
-    Così né un regalo né un anticipo vengono contati due volte, e una caparra
-    restituita non resta in cassa.
-    """
-    zero = Decimal("0.00")
-    today = timezone.localdate()
-    of_today = Sale.objects.filter(salon=salon, created_at__date=today)
-    deposits = of_today.filter(deposit_appointment__isnull=False)
-    qs = of_today.filter(deposit_appointment__isnull=True)
-    agg = qs.aggregate(total=Sum("total"), count=Count("id"))
-    by_kind = dict(qs.values_list("kind").annotate(t=Sum("total")))
-    gift_sold = (
-        SaleLine.objects.filter(sale__in=qs, line_type=SaleLine.LineType.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    gift_redeemed = (
-        Payment.objects.filter(sale__in=qs, method=Payment.Method.GIFT_CARD).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    total = agg["total"] or zero
-    deposit_used = qs.aggregate(t=Sum("deposit_deducted"))["t"] or zero
-    deposit_cashed = deposits.aggregate(t=Sum("total"))["t"] or zero
-    deposit_refunded = (
-        DepositRefund.objects.filter(salon=salon, created_at__date=today).aggregate(t=Sum("amount"))["t"]
-        or zero
-    )
-    return {
-        "total": total,
-        "count": agg["count"] or 0,
-        "checkout_total": by_kind.get(Sale.Kind.CHECKOUT.value) or zero,
-        "pos_total": by_kind.get(Sale.Kind.POS.value) or zero,
-        "gift_card_sold": gift_sold,
-        "gift_card_redeemed": gift_redeemed,
-        "deposit_used": deposit_used,
-        "deposit_cashed": deposit_cashed,
-        "deposit_refunded": deposit_refunded,
-        "cash_in": total + deposit_cashed - gift_redeemed - deposit_used - deposit_refunded,
-    }
