@@ -16,8 +16,8 @@ from django.utils import timezone
 from apps.core.models import Salon
 from common.auth import create_client_tokens, create_staff_tokens
 
-from .models import Coupon, GiftCard
-from .services import create_gift_card, mark_coupon_redeemed
+from ..models import Coupon, GiftCard
+from ..services import create_gift_card, mark_coupon_redeemed
 
 
 def _client(salon, first_name="Sofia", phone="+393331112233"):

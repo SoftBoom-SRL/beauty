@@ -11,8 +11,8 @@ from ninja.errors import HttpError
 from apps.core.models import OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
-from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
-from .services import (
+from ..models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
+from ..services import (
     accrue_loyalty,
     create_gift_card,
     redeem_gift_card,
@@ -311,7 +311,7 @@ class ClientIdFilterApiTests(TestCase):
     def test_loyalty_accounts_filter_by_client_id(self):
         """Senza il filtro la scheda di una cliente si trovava solo scorrendo
         tutte le pagine dei conti del programma."""
-        from .models import LoyaltyAccount, LoyaltyProgram
+        from ..models import LoyaltyAccount, LoyaltyProgram
 
         program = LoyaltyProgram.objects.create(salon=self.salon, name="Punti", threshold=100)
         mine = LoyaltyAccount.objects.create(program=program, client=self.sofia, points=40)
@@ -665,7 +665,7 @@ class LoyaltyRewardIssueTests(TestCase):
         Ora se ne emettono al massimo MAX_REWARDS_PER_SALE e i punti avanzati
         restano alla cliente — non si perde niente, arriveranno dopo.
         """
-        from .services import MAX_REWARDS_PER_SALE
+        from ..services import MAX_REWARDS_PER_SALE
 
         program = self._program(
             reward_type="coupon_amount", reward_value=Decimal("5.00"),

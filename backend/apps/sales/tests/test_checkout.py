@@ -22,8 +22,8 @@ from apps.core.models import ActivityLog, Salon
 from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
-from .models import Sale, SaleLine
-from .services import record_deposit_cashed
+from ..models import Sale, SaleLine
+from ..services import record_deposit_cashed
 
 
 class HistoryTestBase(TestCase):

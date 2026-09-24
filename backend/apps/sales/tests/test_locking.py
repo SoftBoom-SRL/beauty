@@ -16,7 +16,7 @@ from apps.agenda.models import Appointment
 from apps.clients.models import Client
 from apps.core.models import SalonSettings
 
-from .tests_caccia22_stripe import StripeTestBase, event_payload
+from .test_stripe_library import StripeTestBase, event_payload
 
 _real_select_for_update = QuerySet.select_for_update
 
@@ -59,7 +59,7 @@ class LockOrderTests(StripeTestBase):
         self.assertSalonFirst(order)
 
     def test_the_deposit_webhook_locks_the_salon_before_the_appointment(self):
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         order = self._spy()
         _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata())
@@ -108,7 +108,7 @@ class OneStripeCustomerTests(StripeTestBase):
     """18-11: due richieste insieme non creano due Customer, e la carta resta col suo."""
 
     def test_a_second_request_finds_the_customer_already_created(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         customers = iter([{"id": "cus_A", "object": "customer"}, {"id": "cus_B", "object": "customer"}])
         http = self.fake([("POST", "/v1/customers", lambda url, data: next(customers))])

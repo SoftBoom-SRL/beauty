@@ -15,8 +15,8 @@ from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
-from .models import DepositRefund, Sale
-from .services import record_deposit_cashed, today_summary
+from ..models import DepositRefund, Sale
+from ..services import record_deposit_cashed, today_summary
 
 
 class RefundLeavesTheTillTests(TestCase):
@@ -74,7 +74,7 @@ class RefundLeavesTheTillTests(TestCase):
     def test_a_deposit_refunded_on_stripe_leaves_the_till(self):
         from apps.agenda.services import cancel_appointment
 
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         appointment = self._appointment(deposit="30.00", price="100.00")
         _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, {

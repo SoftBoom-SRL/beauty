@@ -29,7 +29,7 @@ from apps.core.models import ActivityLog, Salon
 from apps.staff.models import Operator
 from common.auth import create_client_tokens, create_staff_tokens
 
-from .models import Sale
+from ..models import Sale
 
 WEBHOOK_URL = "/api/sales/stripe/webhook"
 
@@ -172,7 +172,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
     """05-01: ogni risposta Stripe va letta come oggetto della libreria, non come dict."""
 
     def test_the_deposit_link_is_created_and_stored(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         http = self.fake([("POST", "/v1/checkout/sessions", {
             "id": "cs_test_1", "object": "checkout.session",
@@ -237,7 +237,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
 
     @override_settings(STRIPE_CONNECT_CLIENT_ID="ca_test")
     def test_connect_exchange_saves_the_account(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         self.fake([("POST", "/oauth/token", {
             "access_token": "sk_x", "stripe_user_id": "acct_123", "livemode": False,
@@ -286,7 +286,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(appointment.deposit_refunded_amount, Decimal("10.00"))
 
     def test_a_reminder_expires_the_previous_session(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         sessions = iter([
             {"id": "cs_1", "object": "checkout.session", "url": "https://checkout.stripe.com/c/pay/cs_1"},
@@ -340,7 +340,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(appointment.no_show_payment_intent_id, "pi_ns")
 
     def test_a_second_payment_on_the_same_deposit_is_refunded(self):
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         _payment_intent_succeeded({"id": "pi_first", "amount_received": 3000}, self.metadata())
         http = self.fake([("POST", "/v1/refunds", {
@@ -403,7 +403,7 @@ class ClientAppOriginTests(TestCase):
     def test_the_default_falls_back_to_the_dashboard_origin(self):
         import config.settings as settings_module
 
-        from .stripe_service import _deposit_return_urls
+        from ..stripe_service import _deposit_return_urls
 
         env = {k: v for k, v in os.environ.items() if k != "CLIENT_APP_ORIGIN"}
         with patch.dict(os.environ, env, clear=True):

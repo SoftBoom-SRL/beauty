@@ -19,7 +19,7 @@ from apps.core.management.commands.flush_outbox import _due
 from apps.core.models import OutboxEvent, Salon
 from common.auth import create_client_tokens, create_staff_tokens
 
-from .models import Communication
+from ..models import Communication
 
 SEND = "communication.send"
 CANCEL = "communication.cancel"

@@ -20,8 +20,8 @@ from apps.agenda.models import Appointment
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, SalonSettings
 from common.auth import create_client_tokens
 
-from .models import Sale
-from .tests_caccia22_stripe import StripeTestBase, event_payload
+from ..models import Sale
+from .test_stripe_library import StripeTestBase, event_payload
 
 
 def _session(session_id, *, expires_in=3600, **extra):
@@ -48,7 +48,7 @@ class DepositAccountTests(StripeTestBase):
         self.salon.refresh_from_db()
 
     def _pay(self, account=""):
-        from . import stripe_service
+        from .. import stripe_service
 
         metadata = self.metadata(acct=stripe_service.account_token(self.salon))
         payload = event_payload("payment_intent.succeeded", {
@@ -89,7 +89,7 @@ class DepositAccountTests(StripeTestBase):
         self.assertEqual(self.appointment.deposit_status, "refunded")
 
     def test_the_old_link_is_closed_on_the_account_it_was_created_on(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         sessions = iter([_session("cs_platform"), _session("cs_connected")])
         http = self.fake([
@@ -135,7 +135,7 @@ class LinkLifetimeTests(StripeTestBase):
         self.appointment.refresh_from_db()
 
     def test_the_session_expiry_is_stored_with_the_link(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         session = _session("cs_1", expires_in=7200)
         self.fake([("POST", "/v1/checkout/sessions", session)])
@@ -264,7 +264,7 @@ class HoldWithoutLinkTests(StripeTestBase):
         self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
 
     def test_a_failed_reminder_keeps_the_deadline_while_the_old_link_works(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         due = timezone.now() + dt.timedelta(minutes=40)
         Appointment.objects.filter(pk=self.appointment.pk).update(

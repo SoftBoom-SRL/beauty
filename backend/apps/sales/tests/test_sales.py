@@ -15,8 +15,8 @@ from apps.inventory.models import Product, Supplier
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
-from .models import Payment, Sale, SaleLine
-from .services import finalize_sale, line_amount, today_summary
+from ..models import Payment, Sale, SaleLine
+from ..services import finalize_sale, line_amount, today_summary
 
 PATCH_DEDUCT = "apps.inventory.services.deduct_stock_for_sale"
 PATCH_LOYALTY = "apps.marketing.services.accrue_loyalty"
@@ -510,7 +510,7 @@ class ChargeNoShowTests(TestCase):
         )
 
     def test_second_charge_is_refused_and_stripe_is_called_once(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         with patch("stripe.PaymentIntent.create", return_value={"id": "pi_ns_1"}) as create:
             intent, amount = stripe_service.charge_full_amount(self.appointment)
@@ -530,7 +530,7 @@ class ChargeNoShowTests(TestCase):
         self.assertEqual(self.appointment.no_show_payment_intent_id, "pi_ns_1")
 
     def test_only_no_show_appointments_can_be_charged(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         self.appointment.status = "confirmed"
         self.appointment.save(update_fields=["status"])
@@ -573,7 +573,7 @@ class DepositLinkAndConnectTests(TestCase):
 
     @override_settings(STRIPE_SECRET_KEY="")
     def test_link_without_stripe_is_503_and_booking_flow_is_unaffected(self):
-        from . import stripe_service
+        from .. import stripe_service
 
         res = self.client.post(f"/api/sales/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **self.staff_auth)
         self.assertEqual(res.status_code, 503)
@@ -666,7 +666,7 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertTrue(res.json()["connected"])
         self.assertEqual(res.json()["account_id"], "acct_123")
         # le chiamate Stripe successive vanno sull'account collegato
-        from . import stripe_service
+        from .. import stripe_service
 
         self.appointment.salon = Salon.objects.get(pk=self.salon.pk)
         with patch("stripe.checkout.Session.create", return_value={"url": "https://checkout.stripe.com/c/pay/cs_2"}) as create:
@@ -681,8 +681,8 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertFalse(res.json()["connected"])
 
     def test_today_summary_separates_gift_card_money(self):
-        from .models import Payment, Sale, SaleLine
-        from .services import today_summary
+        from ..models import Payment, Sale, SaleLine
+        from ..services import today_summary
 
         sale = Sale.objects.create(salon=self.salon, kind=Sale.Kind.POS, total=Decimal("80.00"))
         SaleLine.objects.create(sale=sale, line_type="service", qty=1, unit_price=Decimal("50.00"), amount=Decimal("50.00"))
@@ -847,7 +847,7 @@ class DepositRefundStateTests(TestCase):
         )
 
     def _refunded(self, payload, event_type="charge.refunded"):
-        from .api import _charge_refunded
+        from ..api import _charge_refunded
 
         _charge_refunded(payload, event_type)
         self.appointment.refresh_from_db()
@@ -928,7 +928,7 @@ class DuplicateDepositPaymentTests(TestCase):
     def test_a_resend_closes_the_previous_checkout_session(self):
         from unittest.mock import Mock
 
-        from . import stripe_service
+        from .. import stripe_service
 
         stripe = Mock()
         stripe.checkout.Session.create.side_effect = [
@@ -950,7 +950,7 @@ class DuplicateDepositPaymentTests(TestCase):
 
         from apps.core.models import ActivityLog
 
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         metadata = {
             "appointment_id": str(self.appointment.id),
@@ -1033,7 +1033,7 @@ class NoShowAmountTests(TestCase):
     def test_a_partly_refunded_deposit_no_longer_covers_the_whole_charge(self):
         """Con 10 € già restituiti su 30, in cassa ne restano 20: l'addebito
         deve scendere di 20, non di 30, altrimenti il salone ci perde 10."""
-        from . import stripe_service
+        from .. import stripe_service
 
         self.appointment.deposit_refunded_amount = Decimal("10.00")
         self.appointment.save(update_fields=["deposit_refunded_amount"])
@@ -1229,7 +1229,7 @@ class CheckoutApiTests(TestCase):
     @override_settings(STRIPE_SECRET_KEY="sk_test")
     def test_closing_the_bill_closes_the_payment_link(self):
         """Il link restava pagabile a conto chiuso: 100 in salone + 30 sul link."""
-        from . import stripe_service
+        from .. import stripe_service
 
         self.appointment.deposit_status = "required"
         self.appointment.deposit_amount = Decimal("30.00")
@@ -1308,7 +1308,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         }
 
     def test_the_deposit_paid_online_enters_the_till_that_day(self):
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
         sale = Sale.objects.get(deposit_appointment=self.appointment)
@@ -1326,7 +1326,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         self.assertEqual(Sale.objects.filter(deposit_appointment=self.appointment).count(), 1)
 
     def test_the_same_money_is_not_counted_twice_at_the_checkout(self):
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata)
         self.appointment.refresh_from_db()
@@ -1350,7 +1350,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
     def test_paying_the_link_after_the_bill_is_given_back(self):
         """Caparra pagata a conto già chiuso: prima diventava semplicemente
         «pagata» e il salone teneva 130 € per un conto da 100."""
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         self.appointment.status = "closed"
         self.appointment.save(update_fields=["status"])
@@ -1369,8 +1369,8 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         sull'account di prima e veniva scartato con i soldi già incassati."""
         from apps.core.models import SalonSettings
 
-        from . import stripe_service
-        from .api import _payment_intent_succeeded
+        from .. import stripe_service
+        from ..api import _payment_intent_succeeded
 
         token = stripe_service.account_token(self.salon)  # nessun account: piattaforma
         SalonSettings.objects.update_or_create(
@@ -1384,7 +1384,7 @@ class DepositIsCashOfItsOwnDayTests(TestCase):
         self.assertEqual(self.appointment.deposit_status, "paid")
 
     def test_an_event_from_an_unknown_account_is_still_ignored(self):
-        from .api import _payment_intent_succeeded
+        from ..api import _payment_intent_succeeded
 
         _payment_intent_succeeded(
             {"id": "pi_1", "amount_received": 3000},
@@ -1640,7 +1640,7 @@ class BugHunt21SeptemberTests(TestCase):
         all'inizio della richiesta: il webhook della caparra pagata, arrivato
         nel frattempo, veniva riscritto all'indietro — denaro incassato su
         Stripe e PaymentIntent perso, quindi nemmeno rimborsabile."""
-        from . import api as sales_api
+        from .. import api as sales_api
 
         real_finalize = sales_api.finalize_sale
 
@@ -1688,7 +1688,7 @@ class BugHunt21SeptemberTests(TestCase):
         collegata alla vendita: le altre risultavano «mai vendute» e
         reincassabili una seconda volta dalla sezione Fedeltà."""
         from apps.marketing.models import GiftCard
-        from .services import record_gift_card_cashed
+        from ..services import record_gift_card_cashed
 
         with patch(PATCH_LOYALTY):
             sale = finalize_sale(

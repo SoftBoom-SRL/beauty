@@ -17,8 +17,8 @@ from django.test.utils import CaptureQueriesContext
 from apps.core.models import ActivityLog, Salon
 from common.auth import create_staff_tokens
 
-from .models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
-from .services import accrue_loyalty, create_gift_card
+from ..models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
+from ..services import accrue_loyalty, create_gift_card
 
 
 def _client(salon, first_name="Sofia", phone="+393331112233"):
