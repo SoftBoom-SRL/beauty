@@ -12,6 +12,7 @@ import { useDash } from '../../ctx.jsx';
 import { LockNote } from './lib.jsx';
 import { settingsApi } from '../../api/core.js';
 import { stripeConnectApi } from '../../api/sales.js';
+import { STRIPE_MSG, openStripePopup, usePopupMessage } from '../../oauth/popup.js';
 
 const HOLD_PRESETS = [0, 15, 20, 30, 60, 120];
 
@@ -31,18 +32,13 @@ export default function PaymentsDrawer({ onClose }) {
   useEffect(() => { loadStripe(); }, []);
 
   // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il code
-  useEffect(() => {
-    const onMsg = (e) => {
-      if (e.origin !== window.location.origin || e.data?.type !== 'stripe-connect') return;
-      if (e.data.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
-      else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (e.data.error ? ': ' + e.data.error : ''), icon: 'alert' });
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  usePopupMessage(STRIPE_MSG, (m) => {
+    if (m.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
+    else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (m.error ? ': ' + m.error : ''), icon: 'alert' });
+  }, []);
 
   const connect = () => {
-    const popup = window.open('/stripe-connect/start', 'stripe-connect', 'width=620,height=760');
+    const popup = openStripePopup();
     if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
   };
   const disconnect = async () => {

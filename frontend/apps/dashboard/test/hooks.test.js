@@ -55,7 +55,7 @@ async function loadHooks() {
   const res = await build({
     stdin: {
       contents: ['useClickAway', 'useDebounced', 'useLatestRequest', 'useOnModalClosed', 'useResource', 'useStoredState']
-        .map((n) => `export * from './${n}.js';`).join('\n'),
+        .map((n) => `export * from './${n}.js';`).join('\n') + "\nexport { usePopupMessage } from '../oauth/popup.js';",
       resolveDir: HOOKS, loader: 'js',
     },
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
@@ -321,4 +321,45 @@ test('useClickAway: con `escape` chiude con Esc e lo segna come preso; un Esc gi
     doc.fire('keydown', { key: 'Enter', defaultPrevented: false, preventDefault() {} });
     assert.equal(closed, 1);
   } finally { delete globalThis.document; }
+});
+
+/* ---------------------------------------------- usePopupMessage (oauth/popup.js) */
+
+function fakeWindow(origin) {
+  const on = [];
+  return {
+    on, location: { origin },
+    addEventListener: (type, fn) => on.push({ type, fn }),
+    removeEventListener: (type, fn) => { const i = on.findIndex((l) => l.type === type && l.fn === fn); if (i >= 0) on.splice(i, 1); },
+    post(data, from = origin) { for (const l of on.filter((x) => x.type === 'message')) l.fn({ origin: from, data }); },
+  };
+}
+
+test('usePopupMessage: solo il tipo giusto e dalla stessa origine', () => {
+  const win = fakeWindow('https://app.youty.it');
+  globalThis.window = win;
+  try {
+    const got = [];
+    const h = mount(() => H.usePopupMessage('yourang-oauth', (m) => got.push(m.ok), []));
+    win.post({ type: 'yourang-oauth', ok: true });
+    win.post({ type: 'stripe-connect', ok: true });
+    win.post({ type: 'yourang-oauth', ok: false }, 'https://altro.example');
+    assert.deepEqual(got, [true]);
+    h.unmount();
+    assert.equal(win.on.length, 0);
+  } finally { delete globalThis.window; }
+});
+
+test('usePopupMessage: spento non ascolta; la callback è quella del render che ha registrato', () => {
+  const win = fakeWindow('https://app.youty.it');
+  globalThis.window = win;
+  try {
+    const got = [];
+    const h = mount(({ on, lang }) => H.usePopupMessage('stripe-connect', () => got.push(lang), [on], on), { on: false, lang: 'it' });
+    assert.equal(win.on.length, 0);
+    h.render({ on: true, lang: 'it' });
+    h.render({ on: true, lang: 'en' });   // dipendenze uguali: resta l'ascolto di prima
+    win.post({ type: 'stripe-connect', ok: true });
+    assert.deepEqual([win.on.length, got], [1, ['it']]);
+  } finally { delete globalThis.window; }
 });

@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import { staffAuth, useT } from '@youty/shared';
 import { claimRestart, clearRestart, saveFlow, takeFlow } from './flow.js';
+import { YOURANG_MSG, notifyOpener } from './popup.js';
 import { yourangApi } from '../api/integrations.js';
 
 const START = {
@@ -27,9 +28,6 @@ export default function OAuthPopup({ path }) {
 
   useEffect(() => {
     let cancelled = false;
-    const notify = (msg) => {
-      if (window.opener) window.opener.postMessage(msg, window.location.origin);
-    };
 
     // sessionStorage può lanciare già all'accesso (cookie bloccati).
     const storage = (() => { try { return window.sessionStorage; } catch { return null; } })();
@@ -86,13 +84,13 @@ export default function OAuthPopup({ path }) {
           return;
         }
 
-        notify({ type: 'yourang-oauth', ok: true, mode: res.mode, session: res.session });
+        notifyOpener({ type: YOURANG_MSG, ok: true, mode: res.mode, session: res.session });
         window.close();
       } catch (e) {
         if (cancelled) return;
         const message = String(e?.message || e);
         setError(message);
-        notify({ type: 'yourang-oauth', ok: false, error: message });
+        notifyOpener({ type: YOURANG_MSG, ok: false, error: message });
       }
     })();
 

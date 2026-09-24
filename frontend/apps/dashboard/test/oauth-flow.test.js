@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import {
   FLOW_KEY, RESTART_KEY, claimRestart, clearRestart, saveFlow, takeFlow,
 } from '../src/oauth/flow.js';
+import { STRIPE_MSG, YOURANG_MSG, notifyOpener, openStripePopup, openYourangPopup } from '../src/oauth/popup.js';
 
 /** sessionStorage finto: una Map con l'interfaccia di Storage. */
 function memoryStorage() {
@@ -78,4 +79,34 @@ test('senza mode (ritorno del flusso OAuth diretto) vale quello salvato all\'avv
   saveFlow(s, 'login', 'n-3');
   assert.deepEqual(takeFlow(s), { mode: 'login', nonce: 'n-3' });
   assert.equal(takeFlow(s), null);
+});
+
+/* ---- popup.js: aprire le finestre e avvisare chi le ha aperte ---- */
+
+function withWindow(win, fn) {
+  globalThis.window = win;
+  try { return fn(); } finally { delete globalThis.window; }
+}
+
+test('popup: stessi indirizzi, nomi e misure delle finestre di prima', () => {
+  const opened = [];
+  withWindow({ open: (...a) => { opened.push(a); return 'w'; } }, () => {
+    assert.equal(openYourangPopup('login'), 'w');
+    openYourangPopup('connect');
+    openStripePopup();
+  });
+  assert.deepEqual(opened, [
+    ['/oauth-popup/start?mode=login', 'yourang-oauth', 'width=520,height=680'],
+    ['/oauth-popup/start?mode=connect', 'yourang-oauth', 'width=520,height=680'],
+    ['/stripe-connect/start', 'stripe-connect', 'width=620,height=760'],
+  ]);
+  assert.deepEqual([YOURANG_MSG, STRIPE_MSG], ['yourang-oauth', 'stripe-connect']);
+});
+
+test('popup: il messaggio va all\'opener e solo alla stessa origine; senza opener niente', () => {
+  const sent = [];
+  const opener = { postMessage: (msg, origin) => sent.push([msg, origin]) };
+  withWindow({ opener, location: { origin: 'https://app.youty.it' } }, () => notifyOpener({ type: YOURANG_MSG, ok: true }));
+  withWindow({ opener: null, location: { origin: 'https://app.youty.it' } }, () => notifyOpener({ type: STRIPE_MSG, ok: false }));
+  assert.deepEqual(sent, [[{ type: 'yourang-oauth', ok: true }, 'https://app.youty.it']]);
 });

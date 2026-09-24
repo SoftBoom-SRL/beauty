@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { useT } from '@youty/shared';
 import { stripeConnectApi } from '../api/sales.js';
+import { STRIPE_MSG, notifyOpener } from './popup.js';
 
 export default function StripeConnectPopup({ path }) {
   const { t } = useT();
@@ -13,7 +14,6 @@ export default function StripeConnectPopup({ path }) {
 
   useEffect(() => {
     let cancelled = false;
-    const notify = (msg) => { if (window.opener) window.opener.postMessage(msg, window.location.origin); };
     (async () => {
       try {
         if (path === '/stripe-connect/start') {
@@ -28,13 +28,13 @@ export default function StripeConnectPopup({ path }) {
         const state = params.get('state');
         if (!code || !state) throw new Error('missing code/state');
         await stripeConnectApi.callback({ code, state });
-        notify({ type: 'stripe-connect', ok: true });
+        notifyOpener({ type: STRIPE_MSG, ok: true });
         window.close();
       } catch (e) {
         if (cancelled) return;
         const message = String(e?.message || e);
         setError(message);
-        notify({ type: 'stripe-connect', ok: false, error: message });
+        notifyOpener({ type: STRIPE_MSG, ok: false, error: message });
       }
     })();
     return () => { cancelled = true; };

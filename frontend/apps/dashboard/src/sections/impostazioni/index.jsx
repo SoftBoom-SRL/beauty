@@ -19,6 +19,7 @@ import ReasonsDrawer from './ReasonsDrawer.jsx';
 import { CopyField } from './lib.jsx';
 import { outboxApi } from '../../api/core.js';
 import { yourangApi } from '../../api/integrations.js';
+import { YOURANG_MSG, openYourangPopup, usePopupMessage } from '../../oauth/popup.js';
 
 /* Host dell'app cliente: la dashboard non può dedurlo (è un altro dominio),
  * arriva come build variable. Se manca, la sezione dei link non compare invece
@@ -78,21 +79,19 @@ export default function ImpostazioniSection() {
     if (deepLink === 'reasons') { setReasonsOpen(true); setDeepLink(null); }
   }, [deepLink, setDeepLink]);
 
-  // Yourang connection status + handshake from the OAuth popup.
+  // Stato del collegamento Yourang e risposta del popup OAuth. L'ascolto si
+  // registra subito dopo le letture e con la stessa dipendenza (isOwner), come
+  // quando stavano nello stesso effetto.
+  const loadYourang = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
   useEffect(() => {
-    if (!isOwner) return undefined;
-    const load = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
-    load();
+    if (!isOwner) return;
+    loadYourang();
     outboxApi.status().then(setOutbox).catch(() => setOutbox(null));
-    const onMsg = (e) => {
-      if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
-      if (e.data.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); load(); }
-      else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed') + (e.data.error ? ': ' + e.data.error : ''), icon: 'info' });
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
+  usePopupMessage(YOURANG_MSG, (m) => {
+    if (m.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); loadYourang(); }
+    else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed') + (m.error ? ': ' + m.error : ''), icon: 'info' });
+  }, [isOwner], isOwner);
 
   /* Collegato da poco: la prima sincronizzazione gira in background sul server.
    * Si ricontrolla ogni tanto finché non risulta fatta (o non compare un
@@ -107,7 +106,7 @@ export default function ImpostazioniSection() {
   }, [isOwner, firstSyncRunning]);
 
   const connectYourang = () => {
-    const popup = window.open('/oauth-popup/start?mode=connect', 'yourang-oauth', 'width=520,height=680');
+    const popup = openYourangPopup('connect');
     if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
   };
 
