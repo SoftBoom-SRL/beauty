@@ -19,6 +19,12 @@ from .schemas import (
     EventsCatalogOut,
     WebhookTriggerOut,
 )
+from .services import definition, publish_definition
+
+# compat refactoring: rimuovere dopo l'integrazione. clients/api.py
+# (`_rename_label_in_conditions`) li importa ancora da qui, con un import pigro.
+from .services import automation_event_key  # noqa: F401
+from .services import definition as _definition  # noqa: F401
 
 router = Router(tags=["automations"])
 
@@ -65,32 +71,6 @@ FILTER_FIELDS = [
 
 def _catalog_items(rows):
     return [{"value": value, "label_it": label_it, "label_en": label_en} for value, label_it, label_en in rows]
-
-
-def automation_event_key(automation_id) -> str:
-    """Chiave degli eventi di un'automazione: flush_outbox consegna in ordine
-    quelli con la stessa chiave, così Yourang non riceve una versione vecchia
-    dopo una nuova (un invio fallito e ritentato passava dopo il successivo)."""
-    return f"automation:{automation_id}"
-
-
-def _definition(automation: Automation) -> dict:
-    """Definizione completa della regola, inviata a Yourang per la sincronizzazione."""
-    return {
-        "id": automation.id,
-        "salon_id": automation.salon_id,
-        "name": automation.name,
-        "event": automation.event,
-        "offset_direction": automation.offset_direction,
-        "offset_value": automation.offset_value,
-        "offset_unit": automation.offset_unit,
-        "send_time": automation.send_time.isoformat() if automation.send_time else None,
-        "conditions": automation.conditions,
-        "trigger_origin": automation.trigger_origin,
-        "webhook_token": str(automation.webhook_token),
-        "message_preview": automation.message_preview,
-        "active": automation.active,
-    }
 
 
 # ---- CRUD --------------------------------------------------------------
@@ -167,10 +147,7 @@ def create_automation(request, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(
-        ctx.salon, "automation.updated", _definition(automation),
-        coalesce_key=automation_event_key(automation.id),
-    )
+    publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -192,10 +169,7 @@ def update_automation(request, automation_id: int, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(
-        ctx.salon, "automation.updated", _definition(automation),
-        coalesce_key=automation_event_key(automation.id),
-    )
+    publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -206,8 +180,8 @@ def delete_automation(request, automation_id: int):
     automation = salon_get(Automation, ctx, automation_id)
     name = automation.name
     automation_id_value = automation.id
-    definition = _definition(automation)
-    definition["deleted"] = True
+    removed = definition(automation)
+    removed["deleted"] = True
     automation.delete()
     log_activity(
         ctx.salon,
@@ -216,10 +190,7 @@ def delete_automation(request, automation_id: int):
         actor=ctx.user,
         payload={"automation_id": automation_id_value},
     )
-    emit_event(
-        ctx.salon, "automation.updated", definition,
-        coalesce_key=automation_event_key(automation_id_value),
-    )
+    publish_definition(ctx.salon, removed)
     return OkOut()
 
 
@@ -243,10 +214,7 @@ def toggle_automation(request, automation_id: int):
             actor=ctx.user,
             payload={"automation_id": automation.id, "active": automation.active},
         )
-        emit_event(
-            ctx.salon, "automation.updated", _definition(automation),
-            coalesce_key=automation_event_key(automation.id),
-        )
+        publish_definition(ctx.salon, definition(automation))
     return automation
 
 
