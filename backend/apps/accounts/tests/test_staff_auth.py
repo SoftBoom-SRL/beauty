@@ -10,19 +10,15 @@ Caccia del 22/09:
 """
 
 import datetime as dt
-import json
 
 from django.test import TestCase
 from django.utils import timezone
 
 from apps.core.models import Salon
 from common.auth import _encode
+from common.testing import post_json
 
 from ..models import Membership, Role, StaffRefreshToken, User
-
-
-def post_json(client, url, data, **extra):
-    return client.post(url, data=json.dumps(data), content_type="application/json", **extra)
 
 
 class StaffAuthTests(TestCase):

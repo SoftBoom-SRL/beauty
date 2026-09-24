@@ -9,26 +9,17 @@ riscrivibili via API.
 """
 
 import datetime as dt
-import json
 from unittest import mock
 
 from django.test import TestCase
 from django.utils import timezone
 
 from apps.core.models import Salon
-from common.auth import create_staff_tokens
 from common.permissions import SCOPES
+from common.testing import bearer, post_json, put_json
 
 from ..models import Invitation, Membership, Role, User
 from ..services import ensure_default_roles
-
-
-def post_json(client, url, data, **extra):
-    return client.post(url, data=json.dumps(data), content_type="application/json", **extra)
-
-
-def bearer(user, salon):
-    return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
 
 
 class DefaultRolesTests(TestCase):
@@ -386,9 +377,7 @@ class SystemRoleTests(_TeamSetup):
         self.role_team.save(update_fields=["scopes"])
 
     def _put(self, role, body, auth):
-        return self.client.put(
-            f"/api/auth/roles/{role.id}", data=json.dumps(body), content_type="application/json", **auth
-        )
+        return put_json(self.client, f"/api/auth/roles/{role.id}", body, **auth)
 
     def test_a_system_role_is_not_rewritten_by_a_team_member(self):
         res = self._put(self.operatrice, {"name": "Operatrice", "scopes": ["clients"]}, self.hr)

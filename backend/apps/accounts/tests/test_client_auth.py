@@ -19,12 +19,9 @@ from django.utils import timezone
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common import ratelimit
 from common.auth import create_client_tokens
+from common.testing import post_json, put_json
 
 from ..models import ClientOTP
-
-
-def post_json(client, url, data, **extra):
-    return client.post(url, data=json.dumps(data), content_type="application/json", **extra)
 
 
 def _client_model():
@@ -517,9 +514,7 @@ class ClientProfileTests(TestCase):
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.sofia)['access']}"}
 
     def _put(self, body):
-        return self.client.put(
-            "/api/auth/client/me", data=json.dumps(body), content_type="application/json", **self.auth
-        )
+        return put_json(self.client, "/api/auth/client/me", body, **self.auth)
 
     def test_the_profile_carries_the_marketing_consent(self):
         res = self.client.get("/api/auth/client/me", **self.auth)
