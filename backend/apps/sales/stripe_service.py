@@ -219,7 +219,7 @@ def ensure_customer(client) -> str:
             return client.stripe_customer_id
         customer = as_dict(
             stripe.Customer.create(
-                name=f"{client.first_name} {client.last_name}".strip(),
+                name=client.full_name,
                 phone=client.phone or None,
                 email=client.email or None,
                 metadata={"client_id": client.id, "salon_id": client.salon_id},
