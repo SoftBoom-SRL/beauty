@@ -12,7 +12,8 @@ from apps.core.models import ActivityLog, OutboxEvent
 from common.testing import bearer, client_bearer, post_json
 
 from ..models import WaitlistEntry
-from ..services import cancel_appointment, create_appointment
+from ..services.appointments import create_appointment
+from ..services.transitions import cancel_appointment
 from .base import AgendaTestBase, MessagesTestBase, _aware
 
 

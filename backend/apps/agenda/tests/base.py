@@ -22,9 +22,9 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import OutboxEvent, Salon, SalonSettings
 from common.testing import aware, bearer, client_bearer, post_json, put_json
 
-from .. import services as S
 from ..models import Appointment, AppointmentService
-from ..services import create_appointment
+from ..services import availability as S
+from ..services.appointments import create_appointment
 
 # Turno di 24 ore per `_windows`, nei test dove i turni non c'entrano.
 WIDE = [(0, 24 * 60)]

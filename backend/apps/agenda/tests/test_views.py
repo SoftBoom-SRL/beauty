@@ -9,9 +9,9 @@ from apps.core.models import Location
 from common.auth import create_staff_tokens
 from common.testing import aware, bearer
 
-from .. import services as S
 from ..models import AppointmentService, Pause
-from ..services import create_appointment
+from ..services import deposits as S
+from ..services.appointments import create_appointment
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 

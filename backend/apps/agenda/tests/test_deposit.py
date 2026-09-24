@@ -13,7 +13,9 @@ from common.auth import create_staff_tokens
 from common.testing import aware
 
 from ..models import Appointment, AppointmentService
-from ..services import compute_deposit, create_appointment, get_free_slots
+from ..services.appointments import create_appointment
+from ..services.availability import get_free_slots
+from ..services.deposits import compute_deposit
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
@@ -117,7 +119,7 @@ class DepositHoldTests(AgendaTestBase):
             appointment = self._book()
         self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
         self.assertIsNone(appointment.deposit_due_at)
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=3))
         self.assertEqual(result["released"], 0)
@@ -135,7 +137,7 @@ class DepositHoldTests(AgendaTestBase):
             salon=self.salon, client=self.client_obj, operator=self.op1, start=start,
             deposit_status=Appointment.DepositStatus.REQUIRED, deposit_amount=Decimal("10.00"),
         )
-        from ..services import process_deposit_holds, schedule_deposit_hold
+        from ..services.deposit_holds import process_deposit_holds, schedule_deposit_hold
 
         schedule_deposit_hold(appointment)
         self.assertEqual(appointment.deposit_due_at, start)
@@ -165,7 +167,7 @@ class DepositHoldTests(AgendaTestBase):
         appointment.refresh_from_db()
         self.assertIsNone(appointment.deposit_due_at)
         # e il termine non la tocca più
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self.assertEqual(
             process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=2))["released"],
@@ -184,7 +186,7 @@ class DepositHoldTests(AgendaTestBase):
         self.assertEqual(res.status_code, 400, res.content)
 
     def test_reminder_then_release_with_trace_and_restore(self):
-        from ..services import process_deposit_holds, released_appointments, restore_released
+        from ..services.deposit_holds import process_deposit_holds, released_appointments, restore_released
 
         appointment = self._book()
         now = timezone.now()
@@ -219,7 +221,7 @@ class DepositHoldTests(AgendaTestBase):
         self.assertIsNotNone(appointment.deposit_due_at)
 
     def test_paid_deposit_is_never_released(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         appointment = self._book()
         appointment.deposit_status = Appointment.DepositStatus.PAID
@@ -233,7 +235,7 @@ class DepositHoldTests(AgendaTestBase):
     def test_released_list_and_restore_api(self):
         from apps.accounts.models import Membership, Role, User
 
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         user = User.objects.create_user(email="rail@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
@@ -272,7 +274,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         return appointment
 
     def test_detaching_a_service_brings_the_deposit_down_to_the_new_total(self):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         appointment = self._paid_visit(Decimal("60.00"))  # totale 80, caparra 60
         first = appointment.items.order_by("order").first()  # il servizio da 50
@@ -292,7 +294,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         self.assertEqual(created.deposit_amount, Decimal("0.00"))
 
     def test_removing_a_service_brings_the_deposit_down_to_the_new_total(self):
-        from ..services import edit_appointment
+        from ..services.appointments import edit_appointment
 
         appointment = self._paid_visit(Decimal("60.00"))
         first = appointment.items.order_by("order").first()
@@ -310,7 +312,7 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         )
 
     def test_a_deposit_that_still_fits_is_left_alone(self):
-        from ..services import edit_appointment
+        from ..services.appointments import edit_appointment
 
         appointment = self._paid_visit(Decimal("20.00"))
         first = appointment.items.order_by("order").first()
@@ -330,7 +332,7 @@ class RefundConcurrencyTests(AgendaTestBase):
     """I rimborsi parziali si sommano, non si sovrascrivono."""
 
     def test_two_partial_refunds_add_up(self):
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = Appointment.objects.create(
             salon=self.salon, client=self.client_obj, operator=self.op1,
@@ -371,7 +373,7 @@ class RestoreReleasedTests(AgendaTestBase):
         return appointment
 
     def test_the_second_restore_click_is_refused(self):
-        from ..services import restore_released
+        from ..services.deposit_holds import restore_released
 
         appointment = self._released()
         stale = Appointment.objects.get(pk=appointment.pk)  # la seconda operatrice
@@ -384,7 +386,7 @@ class RestoreReleasedTests(AgendaTestBase):
         self.assertEqual(OutboxEvent.objects.filter(event_type="appointment.created").count(), 1)
 
     def test_restoring_drops_the_expired_payment_link(self):
-        from ..services import restore_released
+        from ..services.deposit_holds import restore_released
 
         appointment = self._released()
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
@@ -395,7 +397,7 @@ class RestoreReleasedTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_checkout_session_id, "cs_old")
 
     def test_restoring_does_not_overwrite_a_refund_arrived_meanwhile(self):
-        from ..services import restore_released
+        from ..services.deposit_holds import restore_released
 
         appointment = self._released()
         stale = Appointment.objects.get(pk=appointment.pk)
@@ -560,7 +562,7 @@ class PaidDepositOnAShorterVisitTests(AgendaTestBase):
         return appointment
 
     def _split_first(self, appointment):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         first = appointment.items.order_by("order").first()  # il servizio da 50
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
@@ -578,7 +580,7 @@ class PaidDepositOnAShorterVisitTests(AgendaTestBase):
         self.assertEqual(log.payload["amount"], "40.00")
 
     def test_refunding_the_excess_by_hand_does_not_eat_the_credit_twice(self):
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         original = self._split_first(self._paid_visit(Decimal("70.00")))
         # il titolare restituisce i 40 dalla dashboard Stripe
@@ -628,7 +630,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         )
 
     def test_a_late_pending_event_does_not_undo_a_succeeded_refund(self):
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, refund_id="re_1", cents=3000, status="succeeded")
@@ -639,7 +641,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_refunded_amount, Decimal("30.00"))
 
     def test_the_charge_refunded_total_is_remembered(self):
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         # rimborso di 10 dalla dashboard Stripe: prima arriva `charge.refunded`…
@@ -657,7 +659,7 @@ class RefundEventsOrderTests(AgendaTestBase):
     def test_a_failure_after_charge_refunded_puts_the_money_back(self):
         """Il pavimento resta il massimo visto: un rimborso poi fallito non lo abbassa
         da solo. Prima la caparra restava «rimborsata» con i soldi ancora al salone."""
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, floor_cents=3000)
@@ -679,7 +681,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         from apps.sales.models import DepositRefund
         from apps.sales.services import deposit_retained
 
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="pending")
@@ -698,7 +700,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_credit, Decimal("20.00"))
 
     def test_a_whole_refund_still_pending_is_not_yet_refunded(self):
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, refund_id="re_all", cents=3000, status="pending")
@@ -713,7 +715,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         from common.auth import create_staff_tokens
 
         from ..models import AppointmentService
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         AppointmentService.objects.create(
@@ -749,7 +751,7 @@ class RefundEventsOrderTests(AgendaTestBase):
 
     def test_a_pending_partial_refund_leaves_the_rest_deductible(self):
         """02-21: con 10 € in restituzione la cassa detrae i 20 rimasti, non zero."""
-        from ..services import record_deposit_refund
+        from ..services.refunds import record_deposit_refund
 
         appointment = self._paid()
         record_deposit_refund(appointment, refund_id="re_p", cents=1000, status="pending")
@@ -796,14 +798,14 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         return appointment
 
     def _move(self, appointment, start):
-        from ..services import move_appointment
+        from ..services.appointments import move_appointment
 
         with self._windows({self.op1.id: [(0, 24 * 60)]}):
             move_appointment(appointment, start, force=True)
         appointment.refresh_from_db()
 
     def test_a_last_minute_booking_moved_later_is_not_released_at_the_old_time(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self._settings(hold=24 * 60)
         booked_at = timezone.now()
@@ -824,7 +826,7 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         self.assertEqual(result["released"], 1)
 
     def test_a_visit_moved_earlier_gets_the_deadline_cut_on_the_new_start(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self._settings(hold=24 * 60)
         appointment = self._book(_aware(self.day, 10))
@@ -838,7 +840,7 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         self.assertEqual(result["released"], 0)
 
     def test_a_deadline_from_before_the_fix_follows_the_move_too(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self._settings(hold=24 * 60)
         now = timezone.now()
@@ -850,7 +852,7 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         self.assertEqual(result["released"], 0)
 
     def test_no_reminder_right_after_a_last_minute_booking(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self._settings(hold=60, reminder=30)
         now = timezone.now()
@@ -860,7 +862,7 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         self.assertEqual(process_deposit_holds(self.salon, now=now + dt.timedelta(minutes=19))["reminded"], 0)
 
     def test_the_reminder_still_comes_when_it_falls_before_the_cut_deadline(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         self._settings(hold=60, reminder=10)
         now = timezone.now()

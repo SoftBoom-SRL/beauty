@@ -15,15 +15,8 @@ from apps.core.models import DepositRule, OutboxEvent
 from common.testing import bearer
 
 from ..models import Appointment, Pause, UndoEntry, WaitlistEntry
-from ..services import (
-    cancel_appointment,
-    check_in,
-    create_appointment,
-    edit_appointment,
-    mark_no_show,
-    move_appointment,
-    split_appointment,
-)
+from ..services.appointments import create_appointment, edit_appointment, move_appointment, split_appointment
+from ..services.transitions import cancel_appointment, check_in, mark_no_show
 from .base import WIDE, AgendaTestBase, MessagesTestBase, _aware
 
 
@@ -116,7 +109,7 @@ class UndoTests(AgendaTestBase):
         self.assertEqual(appointment.cancel_reason, "")
 
     def test_undo_puts_back_the_services_of_a_detached_one(self):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = create_appointment(

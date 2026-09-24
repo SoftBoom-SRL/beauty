@@ -13,9 +13,10 @@ from ninja.errors import HttpError
 from apps.core.models import SalonSettings
 from common.testing import aware
 
-from .. import services as S
 from ..models import Appointment, AppointmentService
-from ..services import create_appointment, get_free_slots, move_appointment
+from ..services import appointments as S
+from ..services.appointments import create_appointment, move_appointment
+from ..services.availability import get_free_slots
 from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
@@ -206,7 +207,7 @@ class ClosingTimeOnEveryPathTests(AgendaTestBase):
         self.assertEqual(timezone.localtime(appointment.start).hour, 10)
 
     def test_stretching_a_service_cannot_push_it_past_closing_time(self):
-        from ..services import edit_appointment
+        from ..services.appointments import edit_appointment
 
         appointment = self._appointment(17)
         item = appointment.items.get()

@@ -10,9 +10,10 @@ from ninja.errors import HttpError
 from apps.core.models import Location, Salon, SalonSettings
 from common.testing import aware, client_bearer
 
-from .. import services as S
 from ..models import Appointment, AppointmentService, Pause
-from ..services import create_appointment, get_free_slots
+from ..services import appointments as S
+from ..services.appointments import create_appointment
+from ..services.availability import get_free_slots, smart_slots
 from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
@@ -215,7 +216,7 @@ class SmartSlotsTests(AgendaTestBase):
     def test_recommended_flags_and_client_filtering(self):
         from common.auth import create_client_tokens
 
-        from ..services import smart_slots
+        from ..services.availability import smart_slots
 
         SalonSettings.objects.create(salon=self.salon, agenda_fill="max_revenue")
         salon = Salon.objects.get(pk=self.salon.pk)
@@ -255,7 +256,7 @@ class SmartSlotsTests(AgendaTestBase):
         self.assertEqual(len(smart_slots(Salon.objects.get(pk=self.salon.pk), slots)), len(slots))
 
     def test_falls_back_to_all_when_nothing_is_recommended(self):
-        from ..services import smart_slots
+        from ..services.availability import smart_slots
 
         self.assertEqual(smart_slots(self.salon, [{"start": "x", "assignment": [], "recommended": False}]), [{"start": "x", "assignment": [], "recommended": False}])
 
@@ -265,7 +266,7 @@ class BugHuntAgendaTests(AgendaTestBase):
 
     def test_the_client_app_cannot_move_an_appointment_into_the_past(self):
         """Prenotare nel passato era già vietato; spostarci un appuntamento no."""
-        from ..services import move_appointment
+        from ..services.appointments import move_appointment
 
         with self._windows({self.op1.id: [(0, 24 * 60)]}):
             appointment = create_appointment(
@@ -282,7 +283,7 @@ class BugHuntAgendaTests(AgendaTestBase):
             self.assertEqual(moved.start, past)
 
     def test_an_appointment_that_runs_past_midnight_still_blocks_the_next_day(self):
-        from ..services import _busy_map
+        from ..services.occupancy import _busy_map
 
         with self._windows({self.op1.id: [(0, 24 * 60)]}):
             create_appointment(
@@ -369,7 +370,7 @@ class BugHuntAgendaTests(AgendaTestBase):
     def test_a_service_cannot_end_its_soak_after_closing_time(self):
         from apps.catalog.models import Service
 
-        from ..services import resolve_items
+        from ..services.resolution import resolve_items
 
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"opening_hours_week": {
@@ -405,7 +406,7 @@ class SmartSlotMultiOperatorTests(AgendaTestBase):
     def test_a_split_visit_does_not_recommend_a_time_that_fragments_a_colleagues_day(self):
         from apps.clients.models import Client
 
-        from ..services import _slot_is_recommended
+        from ..services.availability import _slot_is_recommended
 
         other = Client.objects.create(
             salon=self.salon, first_name="Altra", last_name="Cliente", phone="+390000000021"
@@ -811,7 +812,7 @@ class RecommendedWithSoakTests(RealShiftsTestBase):
         by = {hm(s["start"]): s["recommended"] for s in slots}
         self.assertTrue(by["09:45"])
         self.assertFalse(by["10:00"])  # lascia 15' morti dopo la posa
-        self.assertIn("09:45", [hm(s["start"]) for s in S.smart_slots(self.salon, slots)])
+        self.assertIn("09:45", [hm(s["start"]) for s in smart_slots(self.salon, slots)])
 
     def test_colour_and_cut_of_the_same_operator_can_be_recommended(self):
         slots = self.slots([
