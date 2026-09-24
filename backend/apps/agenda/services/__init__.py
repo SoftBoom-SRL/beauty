@@ -40,72 +40,24 @@ from common.conditions import evaluate
 
 from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, Pause, UndoEntry, WaitlistEntry
+from .locking import _lock_and_reload, _lock_row, lock_salon
+from .refund_ledger import (
+    _REFUND_STATUS_RANK,
+    REFUND_DONE,
+    REFUND_FLOOR_KEY,
+    REFUND_GONE,  # noqa: F401
+    REFUND_IN_FLIGHT,
+    _refund_sums,  # noqa: F401
+    _refunds_committed_cents,  # noqa: F401
+    _refunds_done_cents,
+    _to_cents,
+)
+from .timegrid import _is_free, _minutes_local, _overlaps, _slot_datetime
 
 logger = logging.getLogger("youty.agenda")
 
 # Stati in cui l'appuntamento è ancora "aperto" e quindi modificabile.
-OPEN_STATUSES = (
-    Appointment.Status.CONFIRMED,
-    Appointment.Status.CHECKED_IN,
-    Appointment.Status.IN_PROGRESS,
-)
-
-
-# ---------------------------------------------------------------------------
-# Primitive su intervalli (minuti da mezzanotte)
-# ---------------------------------------------------------------------------
-
-
-def _minutes_local(value: dt.datetime) -> int:
-    local = timezone.localtime(value)
-    return local.hour * 60 + local.minute
-
-
-def _slot_datetime(day: dt.date, minutes: int) -> dt.datetime | None:
-    """Istante del minuto `minutes` di quel giorno, None se quell'ora locale non esiste.
-
-    La notte del passaggio all'ora legale un'ora sparisce dagli orologi (in Italia
-    le 02:00-02:59 dell'ultima domenica di marzo): `make_aware` la converte
-    comunque, e l'agenda proponeva un orario che nessuna cliente vedrà mai sul
-    telefono. Se il giro di andata e ritorno non riporta lo stesso minuto locale,
-    l'orario semplicemente non esiste e non va offerto.
-    """
-    naive = dt.datetime.combine(day, dt.time.min) + dt.timedelta(minutes=minutes)
-    aware = timezone.make_aware(naive)
-    # Il giro per UTC normalizza l'orologio da parete: se tornando indietro non
-    # si riottiene lo stesso orario, quell'ora locale non è mai esistita. (Un
-    # confronto diretto non basta: convertire un orario nel suo stesso fuso lo
-    # lascia com'è, anche quando è impossibile.)
-    if timezone.localtime(aware.astimezone(dt.timezone.utc)).replace(tzinfo=None) != naive:
-        return None
-    return aware
-
-
-def _overlaps(intervals, start: int, end: int) -> bool:
-    return any(b_start < end and b_end > start for b_start, b_end in intervals)
-
-
-def _within_windows(windows, start: int, end: int) -> bool:
-    # L'intervallo deve stare per intero DENTRO UNA sola finestra di turno
-    # (un servizio non può scavalcare la pausa pranzo).
-    return any(w_start <= start and end <= w_end for w_start, w_end in windows)
-
-
-def _is_free(windows, busy, start: int, end: int, allow_soak: bool = False) -> bool:
-    """Vero se [start, end) sta dentro una finestra di turno e non collide con
-    alcun intervallo BLOCCANTE dell'operatrice.
-
-    `busy` è una lista di tuple (start_min, end_min, hard):
-    - hard=True  -> lavoro attivo o pausa: blocca SEMPRE (conflitto reale);
-    - hard=False -> posa (soak): blocca solo se allow_soak è False.
-
-    Con allow_soak=True gli intervalli di posa NON bloccano: una sovrapposizione
-    manuale sulla posa altrui è ammessa (decisione dello staff), mai automatica.
-    """
-    if not _within_windows(windows, start, end):
-        return False
-    blocking = [(s, e) for s, e, hard in busy if hard or not allow_soak]
-    return not _overlaps(blocking, start, end)
+OPEN_STATUSES = Appointment.OPEN_STATUSES
 
 
 def _busy_map(
@@ -194,36 +146,6 @@ def bookable_operator_ids(salon, location=None) -> set[int]:
     riassegnata per spostare la visita.
     """
     return set(_operators_qs(salon, location).values_list("id", flat=True))
-
-
-def lock_salon(salon) -> None:
-    """Serializza le scritture in agenda del salone dentro la transazione corrente.
-
-    «Controllo che lo slot sia libero» e «inserisco» non sono atomici di per sé:
-    su PostgreSQL due richieste simultanee potevano superare entrambe la
-    verifica prima che una delle due fosse visibile all'altra, e finire
-    sovrapposte. Il lock sulla riga del salone (SELECT … FOR NO KEY UPDATE)
-    fa attendere la seconda finché la prima non ha committato. Su SQLite è un
-    no-op, ma lì le scritture sono già seriali. Va chiamata DENTRO atomic().
-
-    Il lock è FOR NO KEY UPDATE, non FOR UPDATE. Su PostgreSQL le chiavi
-    esterne di Django sono DEFERRABLE INITIALLY DEFERRED: al COMMIT chi ha
-    inserito righe legate al salone (vendite, registro attività, eventi
-    outbox) ne verifica l'esistenza con FOR KEY SHARE sulla riga del salone,
-    incompatibile con FOR UPDATE. Un checkout che teneva la riga di un
-    appuntamento restava così in attesa del salone al commit, mentre chi
-    teneva il salone aspettava quella stessa riga: deadlock, e un 500 a una
-    delle due. NO KEY UPDATE non ferma quei controlli e continua a
-    serializzare fra loro tutte le chiamate a questa funzione. L'ordine resta
-    sempre salone → riga dell'appuntamento (vedi `_lock_and_reload`).
-    """
-    from apps.core.models import Salon  # lazy
-
-    list(
-        Salon.objects.select_for_update(no_key=True)
-        .filter(pk=salon.pk)
-        .values_list("id", flat=True)
-    )
 
 
 def _bookable_service(salon, service_id, *, keep_ids=()):
@@ -1119,41 +1041,6 @@ def _validate_segments(
 # ---------------------------------------------------------------------------
 # Mutazioni
 # ---------------------------------------------------------------------------
-
-
-def _ensure_open(appointment: Appointment) -> None:
-    if appointment.status not in OPEN_STATUSES:
-        raise HttpError(400, "Appuntamento non modificabile nello stato attuale")
-
-
-def _lock_and_reload(appointment: Appointment) -> None:
-    """Prende il lock del salone e RILEGGE l'appuntamento dentro la transazione.
-
-    L'istanza arriva qui caricata quando la richiesta è entrata: nel frattempo
-    un'altra postazione può averla annullata. Decidendo sullo stato vecchio, lo
-    spostamento passava il controllo e il save() successivo riscriveva anche
-    `status`, riportando in agenda un appuntamento annullato. La rilettura
-    avviene DOPO il lock, altrimenti si rileggerebbe di nuovo un dato che può
-    cambiare un istante dopo.
-
-    Dopo il salone si blocca anche la RIGA dell'appuntamento. Il webhook della
-    caparra e il rilascio automatico lavorano sulla riga: col solo lock del
-    salone un annullamento poteva rileggere «caparra richiesta» un istante
-    prima che il pagamento fosse registrato e poi riscriverla sopra, o uno
-    spostamento passare su una visita appena liberata. Sempre in quest'ordine
-    (salone, poi riga), lo stesso di chi tocca l'appuntamento da cassa e Stripe.
-    """
-    _lock_row(appointment)
-    _ensure_open(appointment)
-
-
-def _lock_row(appointment: Appointment) -> None:
-    """Lock del salone, poi lock e rilettura della riga dell'appuntamento."""
-    lock_salon(appointment.salon)
-    try:
-        appointment.refresh_from_db(from_queryset=Appointment.objects.select_for_update())
-    except Appointment.DoesNotExist:
-        raise HttpError(404, "Appuntamento non trovato")
 
 
 def _event_payload(appointment: Appointment) -> dict:
@@ -2670,69 +2557,6 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
             payload={"appointment_id": appointment.id, "amount": str(appointment.deposit_amount)},
         )
     return appointment
-
-
-# Stati Stripe di un rimborso: solo «succeeded» è denaro tornato alla cliente.
-REFUND_DONE = "succeeded"
-REFUND_IN_FLIGHT = ("pending", "requires_action")
-# Rimborsi che non restituiranno niente: il denaro resta (o torna) al salone.
-REFUND_GONE = ("failed", "canceled")
-# Voce di `deposit_refunds` con il totale restituito dichiarato da
-# `charge.refunded`, che non porta l'id del singolo rimborso: vale come
-# soglia minima. Prima non si salvava, e l'evento successivo la dimenticava.
-REFUND_FLOOR_KEY = "charge.refunded"
-# Un aggiornamento non può riportare indietro un rimborso: Stripe non garantisce
-# l'ordine degli eventi, e un `refund.created` «pending» arrivato in ritardo
-# faceva tornare «in corso» un rimborso già riuscito (05-14). Da riuscito si
-# può ancora passare a fallito: Stripe lo fa, di rado.
-_REFUND_STATUS_RANK = {"pending": 0, "requires_action": 0, "succeeded": 1, "failed": 2, "canceled": 2}
-
-
-def _to_cents(amount) -> int:
-    return int((Decimal(str(amount or 0)) * 100).quantize(Decimal("1")))
-
-
-def _refund_sums(refunds: dict) -> tuple[int, int, int, int]:
-    """Centesimi dei rimborsi registrati: (riusciti, in volo, falliti, pavimento)."""
-    done = in_flight = gone = 0
-    for key, row in (refunds or {}).items():
-        if key == REFUND_FLOOR_KEY:
-            continue
-        cents = int(row.get("amount_cents") or 0)
-        status = row.get("status") or ""
-        if status == REFUND_DONE:
-            done += cents
-        elif status in REFUND_IN_FLIGHT:
-            in_flight += cents
-        elif status in REFUND_GONE:
-            gone += cents
-    floor = int(((refunds or {}).get(REFUND_FLOOR_KEY) or {}).get("amount_cents") or 0)
-    return done, in_flight, gone, floor
-
-
-def _refunds_done_cents(refunds: dict) -> int:
-    """Centesimi davvero tornati alla cliente.
-
-    Dei rimborsi con id contano i riusciti. Il totale dichiarato da
-    `charge.refunded` (`REFUND_FLOOR_KEY`) copre anche quelli fatti dalla
-    dashboard Stripe, che arrivano solo da lì; ma non si sa se Stripe ci conti
-    anche i rimborsi ancora in volo, e resta il massimo visto anche dopo un
-    rimborso fallito. Al pavimento si tolgono quindi quelli in volo e quelli
-    falliti che hanno un id: contati come riusciti nel pavimento e poi di
-    nuovo come in volo, un rimborso di dieci euro ancora in corso faceva
-    detrarre alla cassa dieci euro invece di venti; e un rimborso fallito dopo
-    il pavimento lasciava la caparra «rimborsata» con i soldi al salone.
-    Con una riga per ogni rimborso (Stripe manda sempre refund.created e
-    refund.updated) il conto torna in tutti e due i casi.
-    """
-    done, in_flight, gone, floor = _refund_sums(refunds)
-    return max(done, floor - in_flight - gone)
-
-
-def _refunds_committed_cents(refunds: dict) -> int:
-    """Centesimi restituiti o in via di restituzione (vedi `_refunds_done_cents`)."""
-    done, in_flight, gone, floor = _refund_sums(refunds)
-    return max(done + in_flight, floor - gone)
 
 
 def _sync_refund_moves(appointment: Appointment) -> None:
