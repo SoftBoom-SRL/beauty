@@ -9,7 +9,6 @@ solo i 409.
 import datetime as dt
 from typing import NamedTuple
 
-from django.utils import timezone
 from ninja.errors import HttpError
 
 from ..models import Appointment
@@ -21,7 +20,7 @@ from .occupancy import (
     _operators_qs,
     _shift_windows_memo,
 )
-from .timegrid import _is_free, _overlaps
+from .timegrid import _is_free, _overlaps, day_and_minute
 
 
 NO_ELIGIBLE_OPERATOR_MESSAGE = "Nessuna operatrice abilitata al servizio selezionato"
@@ -209,9 +208,7 @@ def resolve_items(
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
 
-    local = timezone.localtime(start)
-    day = local.date()
-    first_min = local.hour * 60 + local.minute
+    day, first_min = day_and_minute(start)
 
     operators = list(_operators_qs(salon, location))
     operator_by_id = {op.id: op for op in operators}
@@ -294,9 +291,7 @@ def resolve_items_edit(
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
 
-    local = timezone.localtime(start)
-    day = local.date()
-    first_min = local.hour * 60 + local.minute
+    day, first_min = day_and_minute(start)
 
     operators = list(_operators_qs(salon, location))
     operator_by_id = {op.id: op for op in operators}
@@ -375,9 +370,8 @@ def _validate_segments(
     spostando la stessa visita dall'app cliente la posa finiva a serranda
     abbassata.
     """
-    local = timezone.localtime(start)
-    day = local.date()
-    first_min = cursor = local.hour * 60 + local.minute
+    day, first_min = day_and_minute(start)
+    cursor = first_min
     busy = _busy_map(
         salon,
         day,
@@ -405,9 +399,8 @@ def _reject_soak_overlap(appointment: Appointment, start: dt.datetime, segments:
     Complemento di `_validate_segments` (che per lo staff la ammette) per le
     richieste dell'app: segments = [(active_min, soak_min, operator)].
     """
-    local = timezone.localtime(start)
-    cursor = local.hour * 60 + local.minute
-    busy = _busy_map(appointment.salon, local.date(), exclude_appointment_id=appointment.id)
+    day, cursor = day_and_minute(start)
+    busy = _busy_map(appointment.salon, day, exclude_appointment_id=appointment.id)
     for active_min, soak_min, operator in segments:
         end = cursor + active_min
         soaks = [(s, e) for s, e, hard in busy.get(operator.id, ()) if not hard]

@@ -11,9 +11,10 @@ import datetime as dt
 from django.utils import timezone
 
 
-def _minutes_local(value: dt.datetime) -> int:
+def day_and_minute(value: dt.datetime) -> tuple[dt.date, int]:
+    """Il giorno e il minuto da mezzanotte di un istante, nel fuso del salone."""
     local = timezone.localtime(value)
-    return local.hour * 60 + local.minute
+    return local.date(), local.hour * 60 + local.minute
 
 
 def _slot_datetime(day: dt.date, minutes: int) -> dt.datetime | None:

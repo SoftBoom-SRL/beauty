@@ -9,13 +9,12 @@ import datetime as dt
 from collections import defaultdict
 
 from django.db.models import Q
-from django.utils import timezone
 from ninja.errors import HttpError
 
 from common.intervals import merge_intervals
 
 from ..models import Appointment, Pause
-from .timegrid import _minutes_local
+from .timegrid import day_and_minute
 
 
 def _busy_map(
@@ -58,8 +57,8 @@ def _busy_map(
     if ignore_client_id:
         appointments = appointments.exclude(client_id=ignore_client_id)
     for appointment in appointments:
-        offset = _minutes_local(appointment.start)
-        if timezone.localtime(appointment.start).date() != day:
+        start_day, offset = day_and_minute(appointment.start)
+        if start_day != day:
             offset -= 1440  # iniziato ieri: oggi conta solo la coda dopo mezzanotte
         for item in appointment.items.all():  # già ordinati per (order, id)
             active_end = offset + item.duration_min
@@ -72,8 +71,8 @@ def _busy_map(
             offset = active_end + item.soak_min
 
     for pause in Pause.objects.filter(salon=salon, start__date__in=(previous, day)):
-        start = _minutes_local(pause.start)
-        if timezone.localtime(pause.start).date() != day:
+        start_day, start = day_and_minute(pause.start)
+        if start_day != day:
             start -= 1440  # iniziata ieri: oggi conta solo la coda dopo mezzanotte
         end = start + pause.duration_min
         if end > 0:

@@ -16,7 +16,7 @@ from ninja.errors import HttpError
 from common.intervals import merge_intervals
 
 from .occupancy import _bookable_service, _busy_map, _chain_deadline, _opening_bands, _operators_qs
-from .timegrid import _is_free, _slot_datetime
+from .timegrid import _is_free, _slot_datetime, day_and_minute
 
 
 class PlanStep(NamedTuple):
@@ -261,8 +261,7 @@ def slot_assignment(
     """
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
-    local = timezone.localtime(start)
-    day = local.date()
+    day, minute = day_and_minute(start)
     context = _search_context(
         salon, day, items, location,
         exclude_appointment_id=exclude_appointment_id, keep_service_ids=keep_service_ids,
@@ -270,7 +269,7 @@ def slot_assignment(
     if context is None:
         return None
     plan, windows, busy = context
-    chain = _chain_at(plan, windows, busy, local.hour * 60 + local.minute, _opening_bands(salon, day))
+    chain = _chain_at(plan, windows, busy, minute, _opening_bands(salon, day))
     return chain[0] if chain else None
 
 
