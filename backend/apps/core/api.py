@@ -1,9 +1,4 @@
-import re
-from decimal import Decimal, InvalidOperation
-
 from django.conf import settings as django_settings
-from django.core.exceptions import ValidationError
-from django.core.validators import URLValidator
 from django.db import transaction
 from django.utils.dateparse import parse_date
 from ninja import File, Router
@@ -13,13 +8,12 @@ from ninja.pagination import LimitOffsetPagination, paginate
 
 from common.auth import staff_auth
 from common.media import stored_upload_name
-from common.money import MAX_MONEY
 from common.permissions import require_owner, require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
 from .livefeed import feed_page
-from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
+from .models import ActivityLog, DepositRule, Location, SalonSettings
 from .outbox import delivery_status
 from .schemas import (
     ActivityFeedOut,
@@ -34,13 +28,8 @@ from .schemas import (
     SettingsIn,
     SettingsOut,
 )
-from .services import (
-    default_location,
-    get_salon_by_slug,
-    log_activity,
-    normalize_opening_hours_week,
-    opening_hours_text,
-)
+from .services import default_location, get_salon_by_slug, log_activity
+from .validation import clean_settings_payload, deposit_rule_fields
 from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
 router = Router(tags=["core"])
@@ -109,117 +98,12 @@ def get_salon(request):
     }
 
 
-# Limiti dei campi numerici delle impostazioni: [min, max] INCLUSI. Senza,
-# `int(None)` esplodeva con un 500 e un valore fuori scala finiva a database su
-# colonne PositiveSmallInteger (che su Postgres si ferma a 32767).
-_SETTINGS_INT_RANGES = {
-    "slot_interval_min": (15, 30),
-    "lastminute_discount_cap": (0, 100),
-    "flexible_window_min": (0, 24 * 60),
-    "flexible_reward_pct": (0, 100),
-    "deposit_hold_minutes": (0, 7 * 24 * 60),
-    "deposit_reminder_minutes": (0, 7 * 24 * 60),
-    # Oltre i dieci minuti non è più un ritardo di sicurezza: è un messaggio che
-    # la cliente riceve quando non se lo aspetta più.
-    "automation_delay_seconds": (0, 600),
-}
-_BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
-MAX_OPENING_HOURS_CHARS = 500
-
-
-def _validate_url(raw: str, label: str) -> str:
-    """URL assoluto http/https, o stringa vuota per cancellarlo.
-
-    Il valore viene reso come `href` nell'app pubblica delle clienti: un
-    "javascript:…" o un "www.qualcosa" finivano tali e quali nel link.
-    """
-    value = (raw or "").strip()
-    if not value:
-        return ""
-    if len(value) > 200:
-        raise HttpError(400, f"{label} troppo lungo (max 200 caratteri)")
-    try:
-        URLValidator(schemes=["http", "https"])(value)
-    except ValidationError:
-        raise HttpError(400, f"{label} non valido: serve un indirizzo http(s) completo")
-    return value
-
-
 @router.put("/settings", auth=staff_auth, response=SettingsOut)
 def update_settings(request, data: SettingsIn):
     ctx = request.auth
     require_owner(ctx)
     s = _settings(ctx.salon)
-    payload = data.dict(exclude_unset=True)
-    default_lang = payload.pop("default_lang", None)
-    if default_lang is not None and default_lang not in Salon.Lang.values:
-        raise HttpError(400, "Lingua non valida (it o en)")
-    # I campi sono tutti Optional nello schema, quindi `exclude_unset` lascia
-    # passare i null mandati esplicitamente: finivano per `setattr` su colonne
-    # NOT NULL (IntegrityError) o dentro `int()` (500). Un null significa «non
-    # tocco questo campo», non «azzeralo».
-    payload = {k: v for k, v in payload.items() if v is not None}
-    if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
-        raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
-    for key, (low, high) in _SETTINGS_INT_RANGES.items():
-        if key in payload:
-            try:
-                value = int(payload[key])
-            except (TypeError, ValueError):
-                raise HttpError(400, f"Valore non numerico per {key}")
-            if not low <= value <= high:
-                raise HttpError(400, f"Valore fuori scala per {key} ({low}–{high})")
-            payload[key] = value
-    for key, choices in (
-        ("agenda_fill", SalonSettings.AgendaFill.values),
-        ("slot_recovery", SalonSettings.SlotRecovery.values),
-    ):
-        if key in payload and payload[key] not in choices:
-            raise HttpError(400, f"Valore non valido per {key}: usa {' o '.join(choices)}")
-    if "brand_color" in payload and not _BRAND_COLOR_RE.match(str(payload["brand_color"])):
-        raise HttpError(400, "Colore non valido: usa il formato #RRGGBB")
-    if "opening_hours" in payload:
-        text = str(payload["opening_hours"])
-        if len(text) > MAX_OPENING_HOURS_CHARS:
-            raise HttpError(400, f"Orari troppo lunghi (max {MAX_OPENING_HOURS_CHARS} caratteri)")
-        payload["opening_hours"] = text
-    if "lastminute_monthly_budget" in payload:
-        try:
-            budget = Decimal(str(payload["lastminute_monthly_budget"]))
-        except (InvalidOperation, TypeError, ValueError):
-            raise HttpError(400, "Budget non valido")
-        if not 0 <= budget <= MAX_MONEY:
-            raise HttpError(400, "Budget fuori scala")
-        payload["lastminute_monthly_budget"] = budget
-    if "privacy_policy_url" in payload:
-        payload["privacy_policy_url"] = _validate_url(
-            payload["privacy_policy_url"], "Indirizzo dell'informativa privacy"
-        )
-    # L'invariante va verificata sui valori EFFETTIVI dopo il salvataggio, non
-    # solo quando arriva il sollecito: abbassando la sola scadenza il sollecito
-    # restava oltre, non partiva più e in Impostazioni continuava a comparire.
-    hold = payload.get("deposit_hold_minutes", s.deposit_hold_minutes)
-    reminder = payload.get("deposit_reminder_minutes", s.deposit_reminder_minutes)
-    if hold and reminder and reminder >= hold:
-        raise HttpError(
-            400,
-            "Il sollecito deve precedere la scadenza della caparra: "
-            f"riduci anche il sollecito sotto i {hold} minuti",
-        )
-    for key in ("cancel_reasons", "no_show_reasons"):
-        if key in payload:
-            cleaned = [str(x).strip()[:80] for x in (payload[key] or []) if str(x).strip()]
-            if len(cleaned) > 30:
-                raise HttpError(400, "Troppe motivazioni (max 30)")
-            payload[key] = cleaned
-    if "opening_hours_week" in payload:
-        try:
-            payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
-        except ValueError as exc:
-            raise HttpError(400, str(exc))
-        # il testo per l'app cliente segue gli orari strutturati, salvo testo esplicito
-        if "opening_hours" not in payload:
-            payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
+    payload, default_lang = clean_settings_payload(data.dict(exclude_unset=True), s)
     for name, value in payload.items():
         setattr(s, name, value)
     # Solo le colonne del payload: `s` è la copia letta a inizio richiesta, e un
@@ -335,26 +219,6 @@ def delete_location(request, location_id: int):
 # ---- Regole deposito -------------------------------------------------------
 
 
-def _deposit_rule_fields(data: DepositRuleIn) -> dict:
-    """Campi della regola, validati.
-
-    Lo schema accettava qualunque importo: convertendo una regola da «Importo
-    fisso» 150 € a «% del totale» la dashboard salvava un acconto del 150 %, e
-    `compute_deposit` chiedeva come caparra l'intero prezzo del servizio.
-    """
-    fields = data.dict()
-    if fields["amount_type"] not in DepositRule.AmountType.values:
-        raise HttpError(400, "Tipo di acconto non valido: usa pct o fixed")
-    amount = fields["amount"]
-    if amount < 0:
-        raise HttpError(400, "L'acconto non può essere negativo")
-    if fields["amount_type"] == DepositRule.AmountType.PERCENT and amount > 100:
-        raise HttpError(400, "Un acconto in percentuale va da 0 a 100")
-    if amount > MAX_MONEY:
-        raise HttpError(400, "Importo dell'acconto fuori scala")
-    return fields
-
-
 @router.get("/deposit-rules", auth=staff_auth, response=list[DepositRuleOut])
 def list_deposit_rules(request):
     require_owner(request.auth)
@@ -365,7 +229,7 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **_deposit_rule_fields(data))
+    rule = DepositRule.objects.create(salon=ctx.salon, **deposit_rule_fields(data))
     log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
@@ -375,7 +239,7 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in _deposit_rule_fields(data).items():
+    for name, value in deposit_rule_fields(data).items():
         setattr(rule, name, value)
     rule.save()
     # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
