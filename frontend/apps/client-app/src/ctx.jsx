@@ -1,7 +1,7 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Gli schermi lo leggono con useApp().
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
+import { apiErrorText, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
 import { getBranding } from './api/client.js';
 import { makeBrand } from './theme.js';
 
@@ -28,6 +28,10 @@ export function AppProvider({ children }) {
   /* ---- white-label branding boot ---- */
   const [brand, setBrand] = useState(null);
   const [brandError, setBrandError] = useState(null);
+  // Il `t` di adesso, per il testo dell'errore: loadBrand non dipende dalla
+  // lingua, altrimenti l'effetto qui sotto rileggerebbe il salone a ogni cambio.
+  const tNow = useRef(t);
+  tNow.current = t;
   const loadBrand = useCallback(async () => {
     setBrandError(null);
     try {
@@ -50,7 +54,13 @@ export function AppProvider({ children }) {
         cancelMinHours: b.cancel_min_hours,
       }));
     } catch (err) {
-      setBrandError(err?.message || 'Errore');
+      // Sotto «Impossibile caricare il salone» (App.jsx) il messaggio del
+      // server se una risposta è arrivata, altrimenti «Errore di rete»
+      // (apiErrorText). Con `err.message` senza rete compariva il testo del
+      // browser, «Failed to fetch» (su Safari «Load failed»), e il ripiego era
+      // un «Errore» senza traduzione (voce 31). Mai vuoto: App.jsx mostra
+      // l'errore e «Riprova» solo se c'è un testo.
+      setBrandError(apiErrorText(err, tNow.current) || tNow.current('Errore di rete', 'Network error'));
     }
   }, [setLang]);
   useEffect(() => { loadBrand(); }, [loadBrand]);

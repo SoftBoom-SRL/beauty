@@ -1,19 +1,22 @@
 // useOtpFlow (src/hooks/useOtpFlow.js): il codice via SMS di accesso e
 // prenotazione. Gli stessi rifiuti con gli stessi messaggi nei due posti; gli
-// altri errori sotto il campo nell'accesso (il messaggio dell'errore, o
-// «Errore di rete») e nel toast nella prenotazione.
+// altri errori sotto il campo nell'accesso (il messaggio del server, o
+// «Errore di rete» se una risposta non è arrivata) e nel toast nella
+// prenotazione.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ApiError, toastApiError } from '@youty/shared';
+import { ApiError, apiErrorText, toastApiError } from '@youty/shared';
 import { loadModule, renderHook } from './load.mjs';
 
-// La classe vera di ApiError e il toast vero, condivisi col modulo impacchettato:
-// il modulo li riconosce con `instanceof` e li chiama come nell'app.
-globalThis.__otp = { ApiError, toastApiError, calls: [], next: [] };
+// La classe vera di ApiError, il testo e il toast veri, condivisi col modulo
+// impacchettato: il modulo li riconosce con `instanceof` e li chiama come
+// nell'app.
+globalThis.__otp = { ApiError, apiErrorText, toastApiError, calls: [], next: [] };
 const SHARED = `
 const O = globalThis.__otp;
 export const ApiError = O.ApiError;
+export const apiErrorText = O.apiErrorText;
 export const toastApiError = O.toastApiError;
 export const SALON_SLUG = 'the-parlour';
 const call = (name) => async (...args) => {
@@ -109,11 +112,18 @@ test('gli altri errori: nell\'accesso sotto il campo, nella prenotazione nel toa
     await inl.h.result[fn](...args);
     inl.h.render();
     assert.equal(inl.h.result.error, 'Servizio non disponibile', fn);
-    // il messaggio di QUALUNQUE errore, anche quello del browser senza rete
+    // senza rete «Errore di rete», nella lingua dell'app: il messaggio
+    // dell'errore era quello del browser, «Failed to fetch» (voce 31)
     answer(offline);
     await inl.h.result[fn](...args);
     inl.h.render();
-    assert.equal(inl.h.result.error, 'Failed to fetch', fn);
+    assert.equal(inl.h.result.error, 'Errore di rete', fn);
+    const en = flow('inline', ' 333 884 1120 ', tEn);
+    answer(offline);
+    await en.h.result[fn](...args);
+    en.h.render();
+    assert.equal(en.h.result.error, 'Network error', fn);
+    // una risposta senza messaggio: anche lei «Errore di rete», come prima
     answer(new ApiError(502, ''));
     await inl.h.result[fn](...args);
     inl.h.render();
