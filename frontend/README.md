@@ -70,6 +70,7 @@ link), `components/`, `screens/` (la prenotazione è divisa per passi in
 `apiErrors.js` (`ApiError`, `apiErrorText`, `toastApiError`), `staffAuth.js` /
 `clientAuth.js` (sessioni), `salon.js`, `i18n.jsx`, `format.js` (date nel fuso
 del salone, euro, durate), `labels.js` (`nameIn`, mesi e giorni), `phone.js`,
+`clipboard.js` (`copyText`: copia negli appunti con un ripiego, e dice se è riuscita),
 `ui/` (Icon, NumInput, PhoneInput, primitive, metadati degli stati,
 `useToastHost`), `styles/base.css`. Ogni nome esportato da `index.js` va
 esportato anche dal sostituto dei test (`frontend/test/shared-shim.mjs`), altrimenti
