@@ -4,12 +4,13 @@
 // (launch/seasonal/story/announce) has no API field and was dropped; status filter,
 // search, cards, composer and WhatsApp preview are kept.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, mediaUrl, Icon, EmptyState, toastApiError } from '@youty/shared';
+import { mediaUrl, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ComEditModal from './ComEditModal.jsx';
 import SendConfirmModal from './SendConfirmModal.jsx';
 import { COM_STATUS_KEYS, audienceSummary, comStatusMeta, comWhenLabel } from './helpers.js';
+import { communicationsApi } from '../../api/marketing.js';
 
 const PAGE = 24;
 
@@ -38,9 +39,7 @@ export default function ComunicazioniSection() {
     const seq = ++reqSeq.current;
     append ? setLoadingMore(true) : setLoading(true);
     try {
-      const res = await api.get('/api/marketing/communications', {
-        params: { status: statusF === 'all' ? '' : statusF, limit: PAGE, offset },
-      });
+      const res = await communicationsApi.list({ status: statusF === 'all' ? '' : statusF, limit: PAGE, offset });
       if (seq !== reqSeq.current) return;
       setCount(res.count || 0);
       setItems((prev) => (append ? [...prev, ...(res.items || [])] : (res.items || [])));

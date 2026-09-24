@@ -2,10 +2,11 @@
 // Sends now, or schedules (optional scheduled_at): either way the event is queued in the
 // outbox and the actual WhatsApp delivery is handled by Yourang.
 import React, { useState } from 'react';
-import { api, Icon, toastApiError } from '@youty/shared';
+import { Icon, toastApiError } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { audienceSummary, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
+import { communicationsApi } from '../../api/marketing.js';
 
 const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 14,
@@ -31,7 +32,7 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
       if (mode === 'now' && comm.scheduled_at) {
         // The backend falls back to the stored scheduled_at when the send body has none
         // (`scheduled_at or comm.scheduled_at`) — clear it first so "send now" really sends now.
-        await api.put(`/api/marketing/communications/${comm.id}`, {
+        await communicationsApi.update(comm.id, {
           title: comm.title, body: comm.body,
           cta_label: comm.cta_label || '', cta_url: comm.cta_url || '',
           audience_type: comm.audience_type, audience: comm.audience || [],
@@ -39,7 +40,7 @@ export default function SendConfirmModal({ comm, onClose, onSent }) {
         });
       }
       const body = mode === 'schedule' ? { scheduled_at: dtLocalToIso(when) } : { scheduled_at: null };
-      const updated = await api.post(`/api/marketing/communications/${comm.id}/send`, body);
+      const updated = await communicationsApi.send(comm.id, body);
       fireToast({
         msg: updated.status === 'scheduled'
           ? t('Invio programmato', 'Send scheduled')
