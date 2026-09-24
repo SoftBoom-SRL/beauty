@@ -1,7 +1,7 @@
 import ReactDOM from 'react-dom/client';
 import { clientAuth } from '@youty/shared';
 import App from './App.jsx';
-import './styles/styles.css';
+import '@youty/shared/styles/base.css';
 import './styles/app.css';
 
 // Wire the client session into the api wrapper (401 → logout; no client refresh exists).
