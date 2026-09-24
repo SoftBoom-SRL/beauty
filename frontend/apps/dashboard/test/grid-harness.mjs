@@ -79,12 +79,16 @@ export function jsx(type, props, key) {
 export const jsxs = jsx;
 `;
 
-/* @youty/shared: gli helper veri di format.js, componenti muti, api finta. */
+/* @youty/shared: gli helper veri di format.js, labels.js, apiErrors.js e
+ * clipboard.js, componenti muti, api finta. */
 const SHARED = `
 import * as apiErrors from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'apiErrors.js'))};
 export * from ${JSON.stringify(FORMAT)};
 export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
+// la copia negli appunti vera: usa navigator e document di globalThis, che il test imposta
+export { copyText } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'clipboard.js'))};
 export const Avatar = () => null;
+export const EmptyState = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
 export const Toggle = () => null;
@@ -101,6 +105,10 @@ globalThis.__ApiError = E.ApiError;
 export const { ApiError, apiErrorText, toastApiError } = E;
 const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
+// il valore di api.js quando VITE_API_URL manca (come in test/shared-shim.mjs)
+export const API_URL = 'http://localhost:8000';
+// i percorsi dei file così come sono (le copertine delle comunicazioni)
+export const mediaUrl = (path) => path;
 `;
 /* ctx.jsx: il contesto è globalThis.__dash; useLive tiene l'ultima callback in
  * globalThis.__useLive, e il test la chiama con gli eventi (il debounce di 250
@@ -112,12 +120,15 @@ export const useLive = (match, fn) => { globalThis.__useLive = fn; };`;
  *  `stubs`: nomi di file (es. 'RightRail.jsx') da sostituire con componenti muti
  *  che portano lo stesso nome — si guardano le props che ricevono.
  *  `expand`: nomi di sotto-componenti senza hook che findAll, find e textOf
- *  attraversano come se fossero scritti nel padre (vedi EXPAND). */
+ *  attraversano come se fossero scritti nel padre (vedi EXPAND).
+ *  `import.meta.env` è vuoto, come in un build senza le variabili VITE_*: i
+ *  moduli che lo leggono al caricamento (Impostazioni) si caricano lo stesso. */
 export async function loadComponent(entry, { stubs = [], expand = [] } = {}) {
   expand.forEach((name) => EXPAND.add(name));
   const res = await build({
     entryPoints: [join(FRONT, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
+    define: { 'import.meta.env': '{}' },
     jsx: 'automatic',
     loader: { '.js': 'jsx', '.jsx': 'jsx' },
     plugins: [{

@@ -5,6 +5,7 @@ import React from 'react';
 import { Icon, ProgressBar, fmtEur, NumInput, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { buyGiftCard, getWallet } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
 import { headFont, headWeight } from '../theme.js';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
@@ -14,8 +15,12 @@ const PRESETS = [25, 50, 75, 100];
 
 export default function GiftCard() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const [wallet, setWallet] = React.useState(null);
-  const [error, setError] = React.useState(null);
+  /* Il portafoglio con la guardia di useApiData: letto a mano, se la cliente
+   * tornava indietro prima della risposta e la chiamata falliva, il toast
+   * «Errore di rete» compariva sulla schermata dove si trovava intanto (voce
+   * 33). Dopo un acquisto si rilegge facendo crescere `reloads`. */
+  const [reloads, setReloads] = React.useState(0);
+  const { data: wallet, error } = useApiData(getWallet, [reloads], { onError: (e) => toastApiError(e, fireToast, t) });
   /* purchase form */
   const [buying, setBuying] = React.useState(false);
   const [amount, setAmount] = React.useState(50);
@@ -23,13 +28,6 @@ export default function GiftCard() {
   const [recipient, setRecipient] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [bought, setBought] = React.useState(null); // GiftCardOut
-
-  const load = React.useCallback(() => {
-    getWallet()
-      .then(setWallet)
-      .catch((e) => { setError(e); toastApiError(e, fireToast, t); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  React.useEffect(() => { load(); }, [load]);
 
   const loading = !wallet && !error;
   const cards = wallet?.gift_cards || [];
@@ -55,7 +53,7 @@ export default function GiftCard() {
       setRecipient('');
       setCustom('');
       fireToast({ msg: t('Gift card creata!', 'Gift card created!'), icon: 'gift' });
-      load();
+      setReloads((n) => n + 1);
     } catch (err) {
       toastApiError(err, fireToast, t);
     } finally {

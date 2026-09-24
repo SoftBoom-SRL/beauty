@@ -4,7 +4,7 @@
 // di campi (depositFields, con i tipi bool/enum/num/money), quindi resta sua.
 // Il menu a tendina è quello comune, ui/DkDrop.jsx.
 import React from 'react';
-import { Icon, NumInput } from '@youty/shared';
+import { Icon, NumInput, copyText } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import DkDrop from '../../ui/DkDrop.jsx';
 
@@ -29,9 +29,17 @@ export function LockNote({ t, msg }) {
 }
 
 export function CopyField({ value, t, fireToast }) {
-  const copy = () => {
-    try { navigator.clipboard && navigator.clipboard.writeText(value); } catch { /* ignore */ }
-    fireToast && fireToast({ msg: t('Copiato negli appunti', 'Copied to clipboard'), icon: 'check' });
+  /* Si aspetta l'esito della copia (copyText, col ripiego di execCommand): la
+   * promessa di navigator.clipboard.writeText non era attesa, e con la copia
+   * rifiutata (permesso negato, pagina non sicura, niente clipboard) restava
+   * una rejection non gestita e partiva lo stesso «Copiato negli appunti». Il
+   * titolare incollava quello che aveva negli appunti prima, per esempio al
+   * posto del link d'invito per una collega (voce 47). */
+  const copy = async () => {
+    const ok = await copyText(value);
+    fireToast && fireToast(ok
+      ? { msg: t('Copiato negli appunti', 'Copied to clipboard'), icon: 'check' }
+      : { msg: t('Copia non riuscita: seleziona il testo e copialo a mano', 'Copy failed: select the text and copy it by hand'), icon: 'alert' });
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 6px 0 12px', height: 40, background: 'var(--surface-2)' }}>

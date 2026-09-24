@@ -155,7 +155,13 @@ export function usePrenota({ t, lang, session, fireToast }) {
 
   /* La prenotazione, uguale da «Conferma» con la sessione e dopo il codice
    * via SMS: il 409 vuol dire che l'orario l'ha appena preso un'altra, e si
-   * torna agli orari, ricaricati. */
+   * torna agli orari, ricaricati. La richiesta la fa l'effetto del passo
+   * TIME, che riparte col cambio di passo (qui si arriva dal riepilogo o dal
+   * codice): chiamare anche loadSlots faceva due richieste, la prima scartata
+   * dal numero di sequenza, e senza sessione pesava sul tetto dell'endpoint
+   * pubblico, 120 l'ora per salone e IP (voce 35). Orario e orari si tolgono
+   * subito, come faceva loadSlots: l'orario preso non resta scelto nemmeno
+   * per un disegno. */
   const book = async () => {
     try {
       const appt = await createAppointmentOnce();
@@ -164,8 +170,9 @@ export function usePrenota({ t, lang, session, fireToast }) {
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         toastSlotTaken(fireToast, t);
+        setSlot(null);
+        setSlots(null);
         setStep(STEP.TIME);
-        loadSlots(dayIdx);
       } else {
         toastApiError(err, fireToast, t);
       }

@@ -1,11 +1,15 @@
 // Guscio della dashboard: feed live senza doppioni e ricarica dopo un deploy.
 // Caccia ai bug del 22/09/2026 (docs/bug-hunt-2026-09-22): 08-14 (contratto C20)
-// e 11-11.
+// e 11-11. In fondo la barra in alto (Topbar.jsx vera, montata con
+// test/grid-harness.mjs): il tasto N del pulsante «Prenota».
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createBatcher, createSeen } from '../src/liveSeen.js';
 import { isChunkLoadError, reloadOnce, reloadPending, RELOAD_KEY, RELOAD_WINDOW_MS } from '../src/shell/chunkReload.js';
+import { installDom, loadComponent, mount, spy } from './grid-harness.mjs';
+
+const { Topbar, useEscLayer } = await loadComponent('apps/dashboard/test/fixtures/topbar-livelli.js');
 
 const ev = (id, type = 'appointment.created') => ({ id, type, summary: `evento ${id}`, actor_id: 2 });
 
@@ -119,4 +123,69 @@ test('useLive: con i timer veri non chiama setTimeout come metodo (Illegal invoc
     globalThis.setTimeout = realSet;
     globalThis.clearTimeout = realClear;
   }
+});
+
+/* ---- la barra in alto: il tasto N ---- */
+
+/** La barra montata sulla sezione `tab`; `fire('keydown', …)` è il tasto su window. */
+function topbar(tab, extra = {}) {
+  const dom = installDom();
+  const openModal = spy();
+  globalThis.__dash = {
+    t: (it) => it, lang: 'it', tab, setTab: () => {}, search: '', setSearch: () => {}, openModal, modal: null,
+    session: { user: { id: 1, name: 'Sole Rossi' } }, live: null, agendaDate: null, ...extra,
+  };
+  return { m: mount(Topbar), fire: (e) => dom.fire('keydown', e), openModal };
+}
+const key = (k, extra = {}) => ({
+  key: k, target: { tagName: 'BODY' }, defaultPrevented: false,
+  preventDefault() { this.defaultPrevented = true; }, ...extra,
+});
+
+test('N apre la nuova prenotazione da ogni sezione, come il pulsante «Prenota» (voce 42)', () => {
+  for (const tab of ['pos', 'clienti', 'magazzino', 'impostazioni']) {
+    const { m, fire, openModal } = topbar(tab);
+    try {
+      // il suggerimento «(N)» del pulsante c'è su ogni pagina
+      const e = key('n');
+      fire(e);
+      assert.deepEqual(openModal.calls, [['newappt', { prefill: {} }]], tab);
+      assert.equal(e.defaultPrevented, true);
+      fire(key('N'));
+      assert.equal(openModal.calls.length, 2, tab);
+    } finally { m.unmount(); }
+  }
+});
+
+test('N: le stesse guardie dell\'agenda, e in agenda il tasto resta suo (voce 42)', () => {
+  const { m, fire, openModal } = topbar('pos');
+  try {
+    for (const mod of ['metaKey', 'ctrlKey', 'altKey']) fire(key('n', { [mod]: true }));
+    // mentre si scrive in un campo
+    for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) fire(key('n', { target: { tagName } }));
+    fire(key('n', { target: { tagName: 'DIV', isContentEditable: true } }));
+    fire(key('m'));
+    assert.deepEqual(openModal.calls, []);
+    // con un modale del registro aperto
+    globalThis.__dash.modal = { id: 1, name: 'sell' };
+    m.render();
+    fire(key('n'));
+    assert.deepEqual(openModal.calls, []);
+    globalThis.__dash.modal = null;
+    m.render();
+    // con un modale o un pannello locale della sezione (la pila di ui/layers.js)
+    const layer = mount(() => { useEscLayer(true, () => {}); return null; });
+    fire(key('n'));
+    assert.deepEqual(openModal.calls, []);
+    layer.unmount();
+    fire(key('n'));
+    assert.deepEqual(openModal.calls, [['newappt', { prefill: {} }]]);
+  } finally { m.unmount(); }
+  // in agenda N lo gestisce l'agenda (useAgendaShortcuts), col giorno che si
+  // ha davanti: la barra non lo gestisce una seconda volta
+  const agenda = topbar('agenda', { agendaDate: '2026-09-25' });
+  try {
+    agenda.fire(key('n'));
+    assert.deepEqual(agenda.openModal.calls, []);
+  } finally { agenda.m.unmount(); }
 });

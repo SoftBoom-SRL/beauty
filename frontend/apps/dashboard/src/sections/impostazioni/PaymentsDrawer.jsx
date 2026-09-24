@@ -31,11 +31,14 @@ export default function PaymentsDrawer({ onClose }) {
   const loadStripe = () => stripeConnectApi.status().then(setStripe).catch(() => setStripe(null));
   useEffect(() => { loadStripe(); }, []);
 
-  // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il code
+  // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il
+  // code. `t` fra le dipendenze, come nella pagina delle Impostazioni (voce 44):
+  // l'ascolto registrato una volta sola teneva il `t` dell'apertura, e il
+  // toast sarebbe uscito nella lingua di allora.
   usePopupMessage(STRIPE_MSG, (m) => {
     if (m.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
     else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (m.error ? ': ' + m.error : ''), icon: 'alert' });
-  }, []);
+  }, [t]);
 
   const connect = () => {
     const popup = openStripePopup();

@@ -1,7 +1,8 @@
 // controls.jsx — small local controls for the Automazioni builder.
 // Il menu a tendina dei campi e degli operatori è quello comune, ui/DkDrop.jsx.
 import { useCallback, useRef, useState } from 'react';
-import { Icon, NumInput } from '@youty/shared';
+import { Icon, NumInput, copyText } from '@youty/shared';
+import { useDash } from '../../ctx.jsx';
 import { useClickAway } from '../../hooks/useClickAway.js';
 
 /* ---- number stepper for the timing offset ---- */
@@ -18,11 +19,19 @@ export function DkStepper({ value, onChange }) {
   );
 }
 
-/* ---- read-only field with copy button (webhook url) ---- */
+/* ---- read-only field with copy button (webhook url) ----
+ * `onCopy` solo a copia riuscita (il costruttore lì dice «URL copiato»). Prima
+ * la promessa di navigator.clipboard.writeText non era attesa: con la copia
+ * rifiutata (permesso negato, pagina non sicura, niente clipboard) restava una
+ * rejection non gestita e l'annuncio partiva lo stesso, e al posto dell'URL
+ * si incollava quello che c'era negli appunti prima (voce 47). Ora si
+ * aspetta l'esito (copyText, col ripiego di execCommand) e se la copia non
+ * riesce lo si dice qui. */
 export function DkCopyField({ value, onCopy, t }) {
-  const copy = () => {
-    try { navigator.clipboard && navigator.clipboard.writeText(value); } catch { /* ignore */ }
-    if (onCopy) onCopy();
+  const { fireToast } = useDash();
+  const copy = async () => {
+    if (await copyText(value)) { if (onCopy) onCopy(); return; }
+    fireToast({ msg: t('Copia non riuscita: seleziona l’URL e copialo a mano', 'Copy failed: select the URL and copy it by hand'), icon: 'alert' });
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--hair)', borderRadius: 10, padding: '0 6px 0 12px', height: 42, background: 'var(--surface-2)' }}>

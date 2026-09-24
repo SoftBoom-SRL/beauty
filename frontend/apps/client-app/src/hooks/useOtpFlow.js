@@ -2,7 +2,7 @@
 // prenotazione senza sessione (Prenota): richiesta del codice, registrazione
 // di chi è nuova, verifica. Stesse regole e stessi messaggi nei due posti.
 import React from 'react';
-import { ApiError, SALON_SLUG, clientAuth, toastApiError } from '@youty/shared';
+import { ApiError, SALON_SLUG, apiErrorText, clientAuth, toastApiError } from '@youty/shared';
 
 /** `phone` è il numero com'è scritto nel campo (si manda senza spazi ai
  *  bordi). Le tre azioni non rilanciano: dicono com'è andata e mettono in
@@ -14,9 +14,10 @@ import { ApiError, SALON_SLUG, clientAuth, toastApiError } from '@youty/shared';
  *    altrimenti 'error'.
  *  - verify(code): verifica il codice e apre la sessione → true; 400 →
  *    «Codice non valido o scaduto», 429 → «Troppi tentativi».
- *  Gli altri errori: `otherErrors: 'inline'` (accesso) ne scrive il messaggio
- *  in `error`, o «Errore di rete» se non ne ha; 'toast' (prenotazione) li
- *  mostra nel toast d'errore dell'app e lascia `error` com'è. */
+ *  Gli altri errori: `otherErrors: 'inline'` (accesso) scrive in `error` il
+ *  messaggio del server, o «Errore di rete» se una risposta non è arrivata
+ *  (o non dice niente); 'toast' (prenotazione) li mostra nel toast d'errore
+ *  dell'app e lascia `error` com'è. */
 export function useOtpFlow({ phone, t, fireToast, otherErrors = 'inline' }) {
   const [error, setError] = React.useState(null);
   // Numero per cui la registrazione è andata a buon fine: solo lì sappiamo che
@@ -28,7 +29,11 @@ export function useOtpFlow({ phone, t, fireToast, otherErrors = 'inline' }) {
 
   const other = (err) => {
     if (otherErrors === 'toast') toastApiError(err, fireToast, t);
-    else setError(err?.message || t('Errore di rete', 'Network error'));
+    // Lo stesso testo del toast (apiErrorText): con `err.message` senza rete
+    // compariva quello del browser, «Failed to fetch» (su Safari «Load
+    // failed»), in inglese anche con l'app in italiano (voce 31). Una risposta
+    // senza messaggio resta «Errore di rete», come prima.
+    else setError(apiErrorText(err, t) || t('Errore di rete', 'Network error'));
   };
 
   /* `request-otp` risponde 200 anche sui numeri sconosciuti — e deve farlo: il

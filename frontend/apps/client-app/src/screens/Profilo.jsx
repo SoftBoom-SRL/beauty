@@ -19,8 +19,11 @@ export default function Profilo() {
   const points = loyalty.error ? 0 : loyalty.data;
   const [saving, setSaving] = React.useState(false);
   const [consentBusy, setConsentBusy] = React.useState(false);
+  // La lingua toccata mentre un altro salvataggio era in corso (vedi chooseLang).
+  const [langQueued, setLangQueued] = React.useState(null);
 
-  const saveMe = async (patch, localToo) => {
+  /* `onFail(prev)`: dopo che la scheda è tornata com'era (`prev`). */
+  const saveMe = async (patch, localToo, onFail) => {
     if (saving) return;
     setSaving(true);
     const prev = me;
@@ -31,11 +34,37 @@ export default function Profilo() {
       if (localToo) localToo(updated);
     } catch (err) {
       setMe(prev);
+      if (onFail) onFail(prev);
       toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
   };
+
+  /* Lingua: cambia subito a schermo e si salva sulla scheda, perché conferme e
+   * promemoria WhatsApp partono nella lingua della scheda. Toccata mentre un
+   * altro salvataggio era in corso, saveMe usciva senza fare niente: EN e
+   * subito dopo IT, e l'app era in italiano con «en» sul server, senza che la
+   * cliente potesse accorgersene (voce 34). Ora la scelta aspetta la fine del
+   * salvataggio in corso e poi si salva l'ultima. Se il salvataggio della
+   * lingua non riesce, a schermo torna quella salvata (la scelta in coda cade
+   * con lui: la cliente vede l'errore e riprova). */
+  const saveLang = (l) => saveMe({ lang: l }, null, (prev) => {
+    setLangQueued(null);
+    setLang(prev?.lang || lang);   // scheda non ancora letta: la lingua di prima
+  });
+  const chooseLang = (l) => {
+    if (l === lang) return;
+    setLang(l);
+    if (saving) setLangQueued(l);
+    else saveLang(l);
+  };
+  React.useEffect(() => {
+    if (saving || langQueued === null) return;
+    setLangQueued(null);
+    // già quella della scheda (EN, IT, EN col primo EN salvato): niente da salvare
+    if (langQueued !== me?.lang) saveLang(langQueued);
+  }, [saving, langQueued]); // eslint-disable-line react-hooks/exhaustive-deps -- saveLang e me sono quelli di questo render
 
   /* Consenso alle comunicazioni promozionali (contratto C12). Dato dal form
    * pubblico o in salone, finora non si poteva più togliere dall'app: nessuna
@@ -131,7 +160,7 @@ export default function Profilo() {
             <div style={{ display: 'flex', gap: 4, background: 'var(--paper-2)', borderRadius: 99, padding: 3 }}>
               {['it', 'en'].map((l) => (
                 <button key={l} className="press"
-                  onClick={() => { if (l !== lang) { setLang(l); saveMe({ lang: l }); } }}
+                  onClick={() => chooseLang(l)}
                   style={{ padding: '5px 12px', borderRadius: 99, fontSize: 12, fontWeight: 700, background: lang === l ? 'var(--brand)' : 'transparent', color: lang === l ? 'var(--brand-on)' : 'var(--muted)' }}>
                   {l.toUpperCase()}
                 </button>

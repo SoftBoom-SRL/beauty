@@ -41,7 +41,11 @@ export default function MagazzinoSection() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadShared(true); }, [loadShared]);
+  // All'apertura non in silenzio: nessuno la chiamava con silent = false, e se
+  // il primo caricamento falliva categorie, fornitori e catalogo restavano
+  // vuoti (indicatori a zero, menu vuoti nei moduli) senza dire perché (voce
+  // 39). Le riletture (feed live, dopo una scrittura) restano silenziose.
+  useEffect(() => { loadShared(); }, [loadShared]);
   const refreshShared = useCallback(() => { loadShared(true); }, [loadShared]);
   /* Da un'altra postazione (o da una vendita: `stock.sold`) si aggiornavano
    * solo le cifre in testata: la riga del prodotto mostrava la giacenza vecchia

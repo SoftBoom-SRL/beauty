@@ -4,7 +4,9 @@
 // che servono alla prova) e, a richiesta, con un React finto per provare hook
 // e schermi (vedi renderHook e mount). I .jsx diventano componenti muti che
 // portano il nome del file, oppure, con `jsx: true`, si compilano davvero
-// (salvo quelli in `stubs`), con ctx.jsx sostituito dal sorgente `ctx`.
+// (salvo quelli in `stubs`), con ctx.jsx sostituito dal sorgente `ctx`. Il
+// modulo `entry` si compila sempre davvero, anche quando è un .jsx: così si
+// prova anche ctx.jsx (AppProvider).
 // Non è un file di test: lo importano i *.test.js.
 import { build } from 'esbuild';
 import { dirname, join } from 'node:path';
@@ -55,8 +57,11 @@ export function useMemo(fn, deps) {
   inst.slots[i] = { v, deps };
   return v;
 }
+// il contesto: il valore è sempre quello predefinito (nessun Provider sopra)
+export function createContext(value) { return { Provider: 'Provider', value }; }
+export function useContext(c) { return c.value; }
 export const Fragment = 'Fragment';
-export default { useState, useRef, useEffect, useCallback, useMemo, Fragment };
+export default { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext, Fragment };
 `;
 
 /* Il runtime JSX «automatico», come nel build di Vite: elementi { type, props, key }. */
@@ -84,11 +89,13 @@ export async function loadModule(entry, { shared = '', react = false, jsx = fals
           b.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'finto' }));
           b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx-runtime', namespace: 'finto' }));
         }
+        // il modulo da provare resta quello vero (vedi l'intestazione)
+        const entryPoint = (a) => a.kind === 'entry-point';
         if (jsx) {
-          b.onResolve({ filter: /(^|\/)ctx\.jsx$/ }, () => ({ path: 'ctx', namespace: 'finto' }));
+          b.onResolve({ filter: /(^|\/)ctx\.jsx$/ }, (a) => (entryPoint(a) ? undefined : { path: 'ctx', namespace: 'finto' }));
           b.onResolve({ filter: /\.jsx$/ }, (a) => (stubs.includes(a.path.split('/').pop()) ? muto(a) : undefined));
         } else {
-          b.onResolve({ filter: /\.jsx$/ }, muto);
+          b.onResolve({ filter: /\.jsx$/ }, (a) => (entryPoint(a) ? undefined : muto(a)));
         }
         const SRC = { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared, ctx };
         b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => ({ contents: SRC[a.path], loader: 'js', resolveDir: APP }));
