@@ -1,8 +1,8 @@
-"""Webhook Stripe: firma e segreti, `metadata.kind`, importo, pagamenti doppi o senza appuntamento.
+"""Webhook Stripe: firma e segreti, `metadata.kind`, importo, pagamenti doppi o senza appuntamento, carte salvate.
 
 Caccia del 22/09: 05-02 (l'endpoint della piattaforma e quello Connect firmano
 con segreti diversi), 02-07/03-02/05-08/18-01 (pagamento di un appuntamento
-che non c'è più).
+che non c'è più). Bug sospetti del 24/09: voce 8 (account della carta salvata).
 """
 
 from decimal import Decimal
@@ -263,3 +263,64 @@ class WebhookSecretsTests(StripeTestBase):
     @override_settings(STRIPE_WEBHOOK_SECRET="", STRIPE_CONNECT_WEBHOOK_SECRET="", STRIPE_WEBHOOK_SECRETS=[])
     def test_without_any_secret_the_webhook_is_refused(self):
         self.assertEqual(self.post_event(self._paid_event(), secret="whsec_x").status_code, 503)
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class SavedCardAccountTests(StripeTestBase):
+    """Bug sospetti del 24/09, voce 8: la carta salvata porta salone e account, come i pagamenti.
+
+    Il SetupIntent aveva nei metadata solo `client_id`: il filtro per salone
+    del webhook non si applicava mai, e una carta salvata mentre il titolare
+    collegava Stripe arrivava dall'account di prima e veniva scartata.
+    """
+
+    def _setup_intent_metadata(self):
+        """I metadata che `create_setup_intent` manda davvero a Stripe."""
+        from .. import stripe_service
+
+        http = self.fake([
+            ("POST", "/v1/customers", {"id": "cus_1", "object": "customer"}),
+            ("POST", "/v1/setup_intents", {
+                "id": "seti_1", "object": "setup_intent", "client_secret": "seti_1_secret_x",
+            }),
+        ])
+        stripe_service.create_setup_intent(self.client_obj)
+        sent = http.calls_to("/v1/setup_intents")[0]["data"]
+        return {
+            key[len("metadata["):-1]: value for key, value in sent.items() if key.startswith("metadata[")
+        }
+
+    def _card_saved(self, metadata, *, account=""):
+        return self.post_event(event_payload("setup_intent.succeeded", {
+            "id": "seti_1", "object": "setup_intent", "customer": "cus_1", "payment_method": "pm_1",
+            "metadata": metadata,
+        }, account=account))
+
+    def test_the_setup_intent_carries_the_salon_and_the_signed_account(self):
+        from .. import stripe_service
+
+        metadata = self._setup_intent_metadata()
+        self.assertEqual(metadata.get("client_id"), str(self.client_obj.id))
+        self.assertEqual(metadata.get("salon_id"), str(self.salon.id))
+        self.assertTrue(stripe_service.account_token_matches(self.salon, metadata.get("acct", ""), ""))
+
+    def test_a_card_saved_while_the_owner_connects_stripe_is_kept(self):
+        from apps.core.models import SalonSettings
+
+        metadata = self._setup_intent_metadata()  # sull'account della piattaforma
+        # Il titolare collega il suo account prima che arrivi l'evento.
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": "acct_nuovo"})
+        self.assertEqual(self._card_saved(metadata).status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.stripe_payment_method_id, "pm_1")
+        # La carta vale sull'account dove è stata salvata, come ogni carta
+        # salvata prima del collegamento.
+        self.assertEqual(self.client_obj.stripe_account_id, "")
+        self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="client.card_saved").exists())
+
+    def test_a_foreign_account_stays_out_even_with_a_copied_signature(self):
+        metadata = self._setup_intent_metadata()
+        self.assertEqual(self._card_saved(metadata, account="acct_estraneo").status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.stripe_payment_method_id, "")
+        self.assertFalse(ActivityLog.objects.filter(type="client.card_saved").exists())

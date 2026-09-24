@@ -335,7 +335,12 @@ def on_setup_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
         if salon_id:
             clients = clients.filter(salon_id=salon_id)
         client = clients.filter(pk=client_id).first()
-        if client and stripe_service.salon_account_id(client.salon) != account:
+        # L'account si riconosce come per i pagamenti: quello di oggi del
+        # salone o quello firmato nei metadata alla creazione. Col solo
+        # confronto con quello di oggi, la carta salvata mentre il titolare
+        # collegava Stripe veniva scartata: la cliente credeva di averla
+        # salvata e il salone non poteva addebitarle un no-show.
+        if client and not _salon_account_recognised(client.salon, account, metadata):
             logger.warning(
                 "setup_intent.succeeded ignorato: account %r non è quello del salone %s",
                 account, client.salon_id,

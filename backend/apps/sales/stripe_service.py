@@ -248,7 +248,15 @@ def create_setup_intent(client):
         stripe.SetupIntent.create(
             customer=customer_id,
             usage="off_session",
-            metadata={"client_id": client.id},
+            # Salone e account di OGGI, firmato, come nei pagamenti: col solo
+            # `client_id` il webhook non poteva filtrare per salone, e una carta
+            # salvata mentre il titolare collegava (o scollegava) Stripe
+            # arrivava dall'account di prima e veniva scartata.
+            metadata={
+                "client_id": client.id,
+                "salon_id": client.salon_id,
+                "acct": account_token(client.salon),
+            },
             **_account_opts(client.salon),
         )
     )
