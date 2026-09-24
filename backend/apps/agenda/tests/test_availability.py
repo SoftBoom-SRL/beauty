@@ -274,7 +274,9 @@ class BugHuntAgendaTests(AgendaTestBase):
                 [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
                 _aware(self.day, 10), via="app",
             )
-            past = timezone.now() - dt.timedelta(days=1)
+            # Ieri alle 10: con «adesso − un giorno», dalle 23:30 la visita di
+            # mezz'ora scavalcava la mezzanotte e usciva dal turno di prova.
+            past = _aware(timezone.localdate() - dt.timedelta(days=1), 10)
             with self.assertRaises(HttpError) as caught:
                 move_appointment(appointment, past, allow_past=False)
             self.assertEqual(caught.exception.status_code, 400)

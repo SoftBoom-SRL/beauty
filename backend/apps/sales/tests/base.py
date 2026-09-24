@@ -129,7 +129,7 @@ class StripeTestBase(TestCase):
     def _restore_http(self):
         stripe.default_http_client = self._previous_http
 
-    def make_appointment(self, price="100.00", **fields):
+    def make_appointment(self, price="100.00", start=None, **fields):
         values = {
             "deposit_status": "required",
             "deposit_amount": Decimal("30.00"),
@@ -137,7 +137,7 @@ class StripeTestBase(TestCase):
         values.update(fields)
         appointment = Appointment.objects.create(
             salon=self.salon, client=self.client_obj, operator=self.operator,
-            start=timezone.now() + timezone.timedelta(days=2), **values,
+            start=start or timezone.now() + timezone.timedelta(days=2), **values,
         )
         AppointmentService.objects.create(
             appointment=appointment, service=self.service, operator=self.operator,

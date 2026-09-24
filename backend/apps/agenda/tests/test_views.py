@@ -176,9 +176,11 @@ class ReadEndpointsTests(AgendaTestBase):
         from apps.accounts.models import Membership
 
         Membership.objects.filter(user=self.user).update(is_owner=True)
+        # Mezzogiorno di oggi nel fuso del salone: `timezone.now()` è in UTC, e
+        # fra mezzanotte e le 2 la sua data è ancora quella di ieri.
         today = Pause.objects.create(
             salon=self.salon, operator=self.op1,
-            start=timezone.now().replace(hour=12, minute=0, second=0, microsecond=0),
+            start=timezone.localtime().replace(hour=12, minute=0, second=0, microsecond=0),
             duration_min=30,
         )
         Pause.objects.create(
