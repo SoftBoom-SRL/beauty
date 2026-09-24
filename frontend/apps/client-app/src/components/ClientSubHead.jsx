@@ -1,7 +1,7 @@
 // ClientSubHead.jsx — l'intestazione degli schermi interni: indietro e titolo.
 // Da non confondere con SubHeader di @youty/shared, che ha un altro aspetto.
 import { Icon } from '@youty/shared';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 
 /** Screen sub-header with back chevron. */
 export function ClientSubHead({ brand, title, onBack }) {
@@ -12,7 +12,7 @@ export function ClientSubHead({ brand, title, onBack }) {
         <button className="press" onClick={onBack} style={{ width: 42, height: 42, marginLeft: -8, borderRadius: 99, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
           <Icon name="chevL" size={24} />
         </button>
-        <div style={{ flex: 1, minWidth: 0, fontFamily: headFont(brand), fontSize: 21, fontWeight: brand.type === 'serif' ? 500 : 700, lineHeight: 1.15 }}>{title}</div>
+        <div style={{ flex: 1, minWidth: 0, fontFamily: headFont(brand), fontSize: 21, fontWeight: headWeight(brand, 700), lineHeight: 1.15 }}>{title}</div>
       </div>
     </div>
   );

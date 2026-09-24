@@ -7,7 +7,7 @@ import React from 'react';
 import { Icon, fmtEur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { getPublicPackages } from '../api/client.js';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 import { svcLangName, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
@@ -57,7 +57,7 @@ export default function Pacchetti() {
               return (
                 <div key={p.id} className="card" style={{ padding: 18, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 4 }}>
-                    <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: brand.type === 'serif' ? 500 : 700, lineHeight: 1.15, flex: 1, minWidth: 0 }}>{p.name}</div>
+                    <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: headWeight(brand, 700), lineHeight: 1.15, flex: 1, minWidth: 0 }}>{p.name}</div>
                     {off > 0 && <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 800, color: 'var(--brand-on)', background: 'var(--brand)', padding: '4px 10px', borderRadius: 99 }}>-{off}%</span>}
                   </div>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 10px', borderRadius: 99 }}>

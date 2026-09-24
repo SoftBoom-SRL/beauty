@@ -7,7 +7,7 @@ import React from 'react';
 import { ApiError, Icon, PhoneInput, clientAuth, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 import { svcLangName, catIcon, nextDays, fmtDayMed, toDateStr, errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DayStrip } from '../components/DayStrip.jsx';
@@ -637,7 +637,7 @@ export default function Prenota() {
               <Icon name={catIcon(s?.catName)} size={23} color="var(--brand-ink)" />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: brand.type === 'serif' ? 500 : 700, lineHeight: 1.2 }}>
+              <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: headWeight(brand, 700), lineHeight: 1.2 }}>
                 {svcs.map((sv) => svcLangName(sv, lang)).join(' + ')}
               </div>
             </div>

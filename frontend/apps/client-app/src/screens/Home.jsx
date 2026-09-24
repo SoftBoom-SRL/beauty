@@ -4,7 +4,7 @@
 import React from 'react';
 import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 import { relLabel, fmtDayMed, apptServiceNames, mapsUrl, downloadIcs, errToast } from './lib.jsx';
 import { Meta } from '../components/Meta.jsx';
 import { DepositDue } from '../components/DepositDue.jsx';
@@ -23,7 +23,7 @@ function Cover({ brand, t }) {
             ? <img src={brand.logo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             : <span style={{ fontFamily: 'var(--serif)', fontSize: 26, fontStyle: 'italic', color: 'var(--brand)', lineHeight: 1 }}>{brand.name.charAt(0)}</span>}
         </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: brand.type === 'serif' ? 500 : 800, color: 'var(--brand-on)', letterSpacing: brand.type === 'serif' ? '0' : '-0.02em', lineHeight: 1 }}>{brand.name}</div>
+        <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: headWeight(brand), color: 'var(--brand-on)', letterSpacing: brand.type === 'serif' ? '0' : '-0.02em', lineHeight: 1 }}>{brand.name}</div>
         <div style={{ color: 'var(--brand-on)', opacity: 0.72, fontSize: 13, fontWeight: 600, marginTop: 6, letterSpacing: '0.04em' }}>{t('La tua area personale', 'Your personal area')}</div>
       </div>
     </div>
@@ -33,7 +33,7 @@ function Cover({ brand, t }) {
 function SalonFooter({ brand, t }) {
   return (
     <div style={{ marginTop: 22, paddingTop: 22, borderTop: '1px solid var(--hair)', textAlign: 'center' }}>
-      <div style={{ fontFamily: headFont(brand), fontSize: 20, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{brand.name}</div>
+      <div style={{ fontFamily: headFont(brand), fontSize: 20, fontWeight: headWeight(brand) }}>{brand.name}</div>
       <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>{t('Prenotazioni online e promemoria WhatsApp', 'Online booking and WhatsApp reminders')}</div>
       {brand.address && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{brand.address}</div>}
       {brand.openingHours && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4, whiteSpace: 'pre-line' }}>{brand.openingHours}</div>}
@@ -62,7 +62,7 @@ export default function Home() {
       <div style={{ paddingBottom: 40, position: 'relative' }}>
         <Cover brand={brand} t={t} />
         <div style={{ padding: '20px 22px 0' }} className="stagger">
-          <div style={{ fontFamily: headFont(brand), fontSize: 24, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.15, marginBottom: 8 }}>
+          <div style={{ fontFamily: headFont(brand), fontSize: 24, fontWeight: headWeight(brand), lineHeight: 1.15, marginBottom: 8 }}>
             {t('Prenota il tuo appuntamento', 'Book your appointment')}
           </div>
           <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 18, maxWidth: 300 }}>
@@ -99,7 +99,7 @@ function HomeLogged() {
       <div style={{ padding: '20px 22px 0' }} className="stagger">
 
         {/* greeting */}
-        <div style={{ fontFamily: headFont(brand), fontSize: 26, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.1, marginBottom: 16 }}>
+        <div style={{ fontFamily: headFont(brand), fontSize: 26, fontWeight: headWeight(brand), lineHeight: 1.1, marginBottom: 16 }}>
           {t('Ciao', 'Hi')} {client?.first_name || ''} 👋
         </div>
 
@@ -122,7 +122,7 @@ function HomeLogged() {
                 )}
               </div>
               {/* relative time — in evidenza */}
-              <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: brand.type === 'serif' ? 500 : 800, color: 'var(--brand-ink)', lineHeight: 1.05, marginBottom: 14 }}>
+              <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: headWeight(brand), color: 'var(--brand-ink)', lineHeight: 1.05, marginBottom: 14 }}>
                 {relLabel(next.start, lang, t)}
               </div>
               {/* details */}
@@ -174,7 +174,7 @@ function HomeLogged() {
             <div style={{ width: 64, height: 64, borderRadius: 20, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 14px' }}>
               <Icon name="calendar" size={30} color="var(--brand-ink)" />
             </div>
-            <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: brand.type === 'serif' ? 500 : 800, color: 'var(--brand-ink)', lineHeight: 1.15 }}>
+            <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: headWeight(brand), color: 'var(--brand-ink)', lineHeight: 1.15 }}>
               {t('Prenota il tuo prossimo appuntamento', 'Book your next appointment')}
             </div>
             <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 8, maxWidth: 260, marginInline: 'auto' }}>

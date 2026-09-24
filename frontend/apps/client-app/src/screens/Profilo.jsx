@@ -5,7 +5,7 @@ import { Icon, Toggle, clientAuth } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 
@@ -81,7 +81,7 @@ export default function Profilo() {
           <div style={{ width: 60, height: 60, borderRadius: 99, background: 'var(--brand)', color: 'var(--brand-on)', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 22, flexShrink: 0 }}>{initials}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {fullName
-              ? <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.1 }}>{fullName}</div>
+              ? <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: headWeight(brand), lineHeight: 1.1 }}>{fullName}</div>
               : <div className="skel" style={{ height: 24, width: 140 }} />}
             <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('Cliente di', 'Client of')} {brand.name}</div>
           </div>

@@ -54,3 +54,7 @@ export function brandVars(brand) {
 }
 
 export const headFont = (brand) => (brand.type === 'serif' ? 'var(--serif)' : 'var(--sans)');
+
+/** Il peso dei titoli: 500 col serif, `heavy` (800, o 700 per i titoli più
+ *  piccoli) col grotesk. Va con headFont. */
+export const headWeight = (brand, heavy = 800) => (brand.type === 'serif' ? 500 : heavy);

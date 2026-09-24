@@ -5,7 +5,7 @@ import React from 'react';
 import { Icon, ProgressBar, fmtEur, NumInput } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { buyGiftCard, getWallet } from '../api/client.js';
-import { headFont } from '../theme.js';
+import { headFont, headWeight } from '../theme.js';
 import { errToast } from './lib.jsx';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
@@ -148,7 +148,7 @@ export default function GiftCard() {
               </React.Fragment>
             ) : (
               <div className="card slide-up" style={{ padding: 18, boxShadow: 'none', border: '1px solid var(--hair)' }}>
-                <div style={{ fontFamily: headFont(brand), fontSize: 18, fontWeight: brand.type === 'serif' ? 500 : 700, marginBottom: 14 }}>
+                <div style={{ fontFamily: headFont(brand), fontSize: 18, fontWeight: headWeight(brand, 700), marginBottom: 14 }}>
                   {t('Nuova gift card', 'New gift card')}
                 </div>
                 {/* amount presets */}

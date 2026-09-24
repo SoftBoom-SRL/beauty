@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { brandVars, darken, headFont, makeBrand, mix, onColor, tintOf } from '../src/theme.js';
+import { brandVars, darken, headFont, headWeight, makeBrand, mix, onColor, tintOf } from '../src/theme.js';
 
 test('colori derivati dal brand', () => {
   assert.equal(mix('#7C4A57', '#000000', 0.28), '#59353f');
@@ -46,4 +46,12 @@ test('variabili CSS del brand e font dei titoli', () => {
   });
   assert.equal(headFont(b), 'var(--serif)');
   assert.equal(headFont({ type: 'grotesk' }), 'var(--sans)');
+});
+
+test('peso dei titoli: 500 col serif, pieno col grotesk', () => {
+  assert.equal(headWeight({ type: 'serif' }), 500);
+  assert.equal(headWeight({ type: 'serif' }, 700), 500);
+  assert.equal(headWeight({ type: 'grotesk' }), 800);
+  assert.equal(headWeight({ type: 'grotesk' }, 700), 700);
+  assert.equal(headWeight(makeBrand({ color: '#7C4A57' })), 500);
 });
