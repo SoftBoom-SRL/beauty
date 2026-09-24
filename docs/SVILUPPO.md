@@ -19,6 +19,7 @@ frontend/                npm workspaces
   packages/shared/       @youty/shared: client API, sessioni, date/soldi, telefoni, UI di base
 docs/                    indice in docs/README.md: rapporti delle cacce, prototipo, manuale
 tools/smoke/             test di fumo nel browser: confronta due versioni schermata per schermata
+tools/test_a_ora.py      la suite del backend con l'orologio spostato (sera, mezzanotte, capodanno…)
 ```
 
 ### 1.1 Com'è fatta un'app del backend
@@ -240,8 +241,14 @@ comuni a tutte le app in `common/testing` (`aware`, `post_json`, `put_json`,
 - I nomi dei ruoli di prova non devono essere quelli dei ruoli di sistema
   («Manager», «Front desk», «Operatrice»): `ensure_default_roles` li
   adotterebbe.
-- Un test che conta sul «mese in corso» o sull'«anno in corso» non dipenda
-  dall'ora in cui gira: vedi `_mid_period` in `insights/tests/test_kpis.py`.
+- Un test non deve dipendere dall'ora in cui gira. Date e ore di prova nel
+  fuso del salone (`aware(giorno, ora)`, `timezone.localdate()`,
+  `timezone.localtime()`), mai `timezone.now().replace(hour=…)`, che è UTC: fra
+  mezzanotte e le 2 la sua data è ancora ieri. Niente «adesso + N ore» per una
+  visita che poi va rivalidata contro i turni: la sera finisce fuori turno o
+  oltre la mezzanotte. Per il «mese in corso» vedi `_mid_period` in
+  `insights/tests/test_kpis.py`. Per provare: `tools/test_a_ora.py
+  2026-10-01T00:30 apps.<app>` lancia i test con l'orologio spostato.
 
 **Frontend.** `node --test`: si provano i moduli puri (`.js`), che si possono
 importare senza DOM. `@youty/shared` nei test è sostituito da

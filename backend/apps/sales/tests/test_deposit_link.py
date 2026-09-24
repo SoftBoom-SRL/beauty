@@ -24,6 +24,7 @@ from apps.clients.models import Client
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from apps.staff.models import Operator
 from common.auth import create_client_tokens, create_staff_tokens
+from common.testing import aware
 
 from ..models import Sale
 from .base import StripeTestBase, _refund, event_payload
@@ -500,7 +501,10 @@ class AmountChangeTests(StripeTestBase):
         from apps.agenda.models import UndoEntry
         from apps.agenda.services.appointments import edit_appointment
 
+        # Alle 10 fra due giorni: «Indietro» rivaluta l'orario, e con «adesso + 2
+        # giorni» dalle 22:30 la visita di un'ora e mezza scavalcava la mezzanotte.
         appointment, extra = self._two_services(
+            start=aware(timezone.localdate() + dt.timedelta(days=2), 10),
             deposit_amount=Decimal("70.00"),
             deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
             deposit_checkout_session_id="cs_old",

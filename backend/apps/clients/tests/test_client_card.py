@@ -388,7 +388,10 @@ class ConsentDatesTests(_Base):
         )
         client.refresh_from_db()
         self.assertTrue(client.consents["privacy"])
-        self.assertTrue(client.consents["privacy_at"].startswith(str(dt.date.today().year)))
+        # L'istante è in UTC: confrontarne l'anno con la data di Roma falliva nella
+        # prima ora dell'anno.
+        stamped = dt.datetime.fromisoformat(client.consents["privacy_at"])
+        self.assertLess(abs(timezone.now() - stamped), dt.timedelta(minutes=5))
         self.assertFalse(client.consents["marketing"])
 
     def test_revoking_marketing_stamps_the_revocation(self):
