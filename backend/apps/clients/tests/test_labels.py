@@ -56,7 +56,7 @@ class _Base(TestCase):
 
 class RenameLabelTests(_Base):
     def test_renaming_keeps_the_deposit_rule_working(self):
-        from apps.agenda.services import compute_deposit
+        from apps.agenda.services.deposits import compute_deposit
 
         label = create_category(self.request, CategoryIn(name="Da seguire"))
         self.client_obj.categories.add(label)

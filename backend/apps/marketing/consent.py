@@ -3,9 +3,9 @@
 La revoca vale anche per quello che è già in coda (GDPR art. 7.3): la
 cliente esce dagli invii non ancora partiti e Yourang riceve CONSENT_EVENT per
 quelli che ha già in mano. La scheda cliente (clients) chiama
-`marketing_consent_changed` e `drop_from_pending_sends` attraverso
-`apps.marketing.services`, che li ri-esporta. Stava in services.py e, per la
-registrazione dall'app, dentro l'endpoint di api.py.
+`marketing_consent_changed` e `drop_from_pending_sends` da qui, cercandole a
+ogni salvataggio (`clients.profiles.notify_marketing`). Stava in services.py
+e, per la registrazione dall'app, dentro l'endpoint di api.py.
 """
 
 from django.db import transaction

@@ -189,7 +189,7 @@ class GiftCardFlowTests(StaffRequestsMixin, TestCase):
         self.assertFalse(bought["received"])
 
         # 3) la destinataria prenota quel trattamento: l'agenda mostra il regalo
-        from apps.agenda.services import create_appointment
+        from apps.agenda.services.appointments import create_appointment
         from django.utils import timezone
         import datetime as dt
 
@@ -240,7 +240,7 @@ class GiftCardFlowTests(StaffRequestsMixin, TestCase):
         )
 
     def test_unpaid_card_is_not_spendable_and_not_offered_in_the_agenda(self):
-        from apps.agenda.api import gift_index
+        from apps.agenda.presenters import gift_index
 
         res = self._post("/api/marketing/gift-cards", {
             "value": "0", "gift_service_id": self.service.id,
@@ -265,7 +265,7 @@ class GiftCardFlowTests(StaffRequestsMixin, TestCase):
 
     def test_card_without_a_client_stays_code_only(self):
         """Regalo consegnato a mano (solo il nome): nessun portafoglio, vale il codice."""
-        from apps.agenda.api import gift_index
+        from apps.agenda.presenters import gift_index
 
         res = self._post("/api/marketing/gift-cards", {
             "value": "50", "buyer_client_id": self.buyer.id, "recipient_name": "Zia Carla", "paid": True, "paid_method": "cash",

@@ -63,7 +63,7 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
 
 def _sync_refund_moves(appointment: Appointment) -> None:
     """Il rimborso esce dalla cassa del giorno in cui avviene (vedi sales.DepositRefund)."""
-    from apps.sales.services import sync_deposit_refunds  # lazy
+    from apps.sales.deposits import sync_deposit_refunds  # lazy
 
     sync_deposit_refunds(appointment)
 
@@ -131,7 +131,7 @@ def record_deposit_refund(
         # Anche un rimborso PARZIALE in volo rende la caparra «in corso»: la
         # quota mostrata alla cassa è zero finché Stripe non conferma, e il
         # checkout restituisce da sé la parte che non ha detratto
-        # (sales.services.deposit_retained). Lasciarla «pagata» avrebbe fatto
+        # (sales.deposits.deposit_retained). Lasciarla «pagata» avrebbe fatto
         # detrarre anche i soldi che stanno tornando alla cliente.
         new_status = Appointment.DepositStatus.REFUNDING
     elif previous in (Appointment.DepositStatus.REFUNDING, Appointment.DepositStatus.REFUNDED):

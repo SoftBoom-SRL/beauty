@@ -1,6 +1,6 @@
 """Servizi staff: disponibilità dell'operatrice (turni, pause, assenze, orari del salone).
 
-`shift_windows` è LA funzione consumata dall'agenda (`apps.agenda.services.get_free_slots`)
+`shift_windows` è LA funzione consumata dall'agenda (`apps.agenda.services.availability.get_free_slots`)
 per sapere quando un'operatrice è lavorabile in una data: la firma non va cambiata.
 Agenda e insights la importano da qui e i test la patchano qui. I KPI
 dell'operatrice (incassi, clienti) stanno in stats.py.

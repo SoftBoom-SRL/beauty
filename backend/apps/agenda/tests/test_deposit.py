@@ -679,7 +679,7 @@ class RefundEventsOrderTests(AgendaTestBase):
         """Se Stripe conta nel totale del `charge.refunded` anche il rimborso in corso,
         la cassa detraeva 10 invece di 20 e il rimborso risultava già fatto."""
         from apps.sales.models import DepositRefund
-        from apps.sales.services import deposit_retained
+        from apps.sales.deposits import deposit_retained
 
         from ..services.refunds import record_deposit_refund
 
@@ -760,7 +760,7 @@ class RefundEventsOrderTests(AgendaTestBase):
 
     def test_a_refund_written_by_hand_is_not_counted_again(self):
         """Un rimborso scritto dall'admin senza la sua riga resta un rimborso."""
-        from apps.sales.services import deposit_retained
+        from apps.sales.deposits import deposit_retained
 
         appointment = self._paid()
         Appointment.objects.filter(pk=appointment.pk).update(deposit_refunded_amount=Decimal("10.00"))

@@ -39,7 +39,7 @@ def lock_salon(salon) -> None:
 
     Va chiamata DENTRO un `atomic()`. Su SQLite è un no-op.
 
-    FOR NO KEY UPDATE come `agenda.services.lock_salon` (18-08): con FOR UPDATE
+    FOR NO KEY UPDATE come `agenda.services.locking.lock_salon` (18-08): con FOR UPDATE
     un checkout che scarica il magazzino teneva il salone in modo incompatibile
     con i controlli delle chiavi esterne (FOR KEY SHARE) che chi ha inserito
     righe legate al salone fa al COMMIT — deadlock, e un 500 a una delle due.

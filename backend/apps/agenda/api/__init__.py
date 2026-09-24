@@ -20,13 +20,7 @@ Parametri comuni in `params`, forma delle risposte in `..presenters`.
 
 from ninja import Router
 
-# compat refactoring: rimuovere dopo l'integrazione. `apps.agenda.api` esponeva
-# anche la serializzazione e l'analisi di `items`: clients (scheda cliente),
-# marketing e i test li importano ancora da qui.
-from ..presenters import _appointment_out, _client_appointment_out, _item_out, gift_index  # noqa: F401
-from ..schemas import MAX_ITEMS_PER_REQUEST  # noqa: F401
 from . import agenda_views, appointments, availability, client_app, pauses, undo_routes, waitlist
-from .params import _parse_items_param  # noqa: F401
 
 router = Router(tags=["agenda"])
 router.add_router("", agenda_views.router)

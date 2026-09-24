@@ -58,16 +58,16 @@ class LockOrderTests(StripeTestBase):
         self.assertSalonFirst(order)
 
     def test_the_deposit_webhook_locks_the_salon_before_the_appointment(self):
-        from ..api import _payment_intent_succeeded
+        from ..stripe_webhooks import on_payment_intent_succeeded
 
         order = self._spy()
-        _payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata())
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata())
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_status, "paid")
         self.assertSalonFirst(order)
 
     def test_a_refund_locks_the_salon_before_the_appointment(self):
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
 
         Appointment.objects.filter(pk=self.appointment.pk).update(deposit_status="paid")
         order = self._spy()
@@ -75,7 +75,7 @@ class LockOrderTests(StripeTestBase):
         self.assertSalonFirst(order)
 
     def test_the_manual_refund_rereads_under_lock(self):
-        from apps.agenda.services import mark_deposit_refunded
+        from apps.agenda.services.refunds import mark_deposit_refunded
 
         stale = Appointment.objects.get(pk=self.appointment.pk)
         Appointment.objects.filter(pk=self.appointment.pk).update(deposit_status="refund_due")
@@ -88,7 +88,7 @@ class LockOrderTests(StripeTestBase):
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_x")
     def test_the_release_locks_the_salon_and_then_only_the_appointment_row(self):
-        from apps.agenda.services import process_deposit_holds
+        from apps.agenda.services.deposit_holds import process_deposit_holds
 
         SalonSettings.objects.update_or_create(salon=self.salon, defaults={"deposit_hold_minutes": 30})
         self.salon.refresh_from_db()

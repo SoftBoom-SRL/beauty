@@ -23,6 +23,7 @@ from common.money import CENT, from_cents, to_cents
 
 from . import stripe_service
 from .models import DepositRefund, Payment, Sale
+from .services import record_deposit_cashed
 
 # Caparra già arrivata (e magari già restituita, o trattenuta): un pagamento
 # nuovo non la paga una seconda volta, e un rimborso Stripe la riguarda.
@@ -49,7 +50,7 @@ def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
         account=stripe_service.deposit_account(appointment),
     )
     if refund is not None:
-        from apps.agenda.services import record_deposit_refund  # lazy
+        from apps.agenda.services.refunds import record_deposit_refund  # lazy
 
         # Lo stato lo decide Stripe: un rimborso «pending» non è ancora denaro
         # tornato indietro. Registrandolo qui la quota detraibile si aggiorna.
@@ -80,7 +81,7 @@ def deposit_retained(appointment) -> Decimal:
     né detratto né restituito, e la cliente lo perdeva (02-21, 05-14). Il
     checkout ne restituisce la parte che non ha detratto.
     """
-    from apps.agenda.services import _refund_sums, _refunds_committed_cents  # lazy
+    from apps.agenda.services.refund_ledger import _refund_sums, _refunds_committed_cents  # lazy
 
     if appointment.deposit_status not in ("paid", "refunding"):
         return Decimal("0.00")
@@ -110,7 +111,7 @@ def sync_deposit_refunds(appointment) -> None:
     sulla carta; quelli confermati a mano con il metodo con cui la caparra era
     stata incassata.
     """
-    from apps.agenda.services import REFUND_DONE, REFUND_FLOOR_KEY, _refunds_done_cents  # lazy
+    from apps.agenda.services.refund_ledger import REFUND_DONE, REFUND_FLOOR_KEY, _refunds_done_cents  # lazy
 
     deposit_sale = Sale.objects.filter(deposit_appointment=appointment).first()
     if deposit_sale is None:
@@ -129,7 +130,7 @@ def sync_deposit_refunds(appointment) -> None:
         explained += cents
         wanted[f"{appointment.id}:{key}"] = (cents, manual_method if row.get("manual") else Payment.Method.CARD)
     # La parte del pavimento non spiegata dalle righe riuscite, al netto dei
-    # rimborsi ancora in volo o falliti (vedi agenda.services._refunds_done_cents):
+    # rimborsi ancora in volo o falliti (vedi agenda.services.refund_ledger._refunds_done_cents):
     # un rimborso in corso non esce dalla cassa prima di essere avvenuto.
     unexplained = _refunds_done_cents(refunds) - explained
     if unexplained > 0:
@@ -181,11 +182,7 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
     cassa senza che nulla lo segnalasse. Qui si fanno solo scritture locali:
     rimborsi ed eventi li fa il chiamante, a lock rilasciato.
     """
-    from apps.agenda.services import lock_salon  # lazy
-
-    # Pigro anche questo: services.py ri-esporta questo modulo (compat), e un
-    # import in testa chiuderebbe il ciclo.
-    from .services import record_deposit_cashed  # lazy
+    from apps.agenda.services.locking import lock_salon  # lazy
 
     with transaction.atomic():
         # Prima il salone, come ogni scrittura in agenda (18-08, vedi checkout).
@@ -292,7 +289,7 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
 
 def refund_overpaid_deposit(appointment, intent_id: str, cents: int, account: str) -> None:
     """Restituisce la parte di caparra pagata in più (link di un importo vecchio)."""
-    from apps.agenda.services import record_deposit_refund  # lazy
+    from apps.agenda.services.refunds import record_deposit_refund  # lazy
 
     refund = stripe_service.refund_payment_intent(
         appointment.salon,

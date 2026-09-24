@@ -26,11 +26,6 @@ from ninja.errors import HttpError
 from apps.core.services import log_activity
 from common.money import CENT
 
-# compat refactoring: rimuovere dopo l'integrazione — l'agenda chiama queste
-# tre funzioni come `apps.sales.services.<nome>`, anche con `getattr(...,
-# None)`: un nome che manca qui spegnerebbe in silenzio la cassa delle caparre.
-# Vivono in deposits.py, che non importa services in testa: niente ciclo.
-from .deposits import deposit_retained, settle_deposit_excess, sync_deposit_refunds  # noqa: F401
 from .models import Payment, Sale, SaleLine
 
 # Scarto ammesso fra pagamenti e dovuto: vale un centesimo come `CENT`, ma è
