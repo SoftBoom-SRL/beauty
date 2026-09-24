@@ -1,12 +1,13 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
 // KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
 import { lineGrossCents, saleLineLabel } from './history.js';
 import { salesApi } from '../../api/sales.js';
 import { useDebounced } from '../../hooks/useDebounced.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const LIMIT = 50;
 
@@ -34,37 +35,38 @@ export default function HistoryTab() {
     q: qDeb || null, operator_id: opId || null, limit: LIMIT, offset,
   });
 
-  /* Biglietto della richiesta in corso: ogni fetch lo incrementa e scarta la
-   * propria risposta se nel frattempo ne è partita un'altra. Senza, premendo
+  /* Biglietto della richiesta in corso (useLatestRequest): ogni fetch ne
+   * prende uno e scarta la propria risposta se nel frattempo ne è partita
+   * un'altra. Senza, premendo
    * «Carica altre vendite» e cambiando subito il filtro operatrice, le 50
    * vendite della vecchia operatrice finivano in coda alla lista nuova, con un
    * conteggio in testata che non corrispondeva. */
-  const reqSeq = useRef(0);
+  const req = useLatestRequest();
 
   useEffect(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoading(true);
     setOpenId(null);
     salesApi.list(params(0))
-      .then((r) => { if (seq === reqSeq.current) { setData(r); setItems(r.items || []); } })
+      .then((r) => { if (req.isLatest(seq)) { setData(r); setItems(r.items || []); } })
       .catch((err) => {
-        if (seq !== reqSeq.current) return;
+        if (!req.isLatest(seq)) return;
         setData({ count: 0, kpi: { revenue: 0, count: 0, items_count: 0 } });
         setItems([]);
         toastApiError(err, fireToast, t);
       })
-      .finally(() => { if (seq === reqSeq.current) setLoading(false); });
+      .finally(() => { if (req.isLatest(seq)) setLoading(false); });
   }, [kind, dateFrom, dateTo, qDeb, opId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoadingMore(true);
     try {
       const r = await salesApi.list(params(items.length));
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems((l) => [...l, ...(r.items || [])]);
     } catch (err) {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       toastApiError(err, fireToast, t);
     } finally {
       setLoadingMore(false);

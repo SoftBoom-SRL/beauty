@@ -3,12 +3,13 @@
 // receive with per-line quantities (POST /receive → discrepancies).
 // Line prices/VAT are not stored on order lines — they are enriched client-side from
 // the products snapshot (purchase price net of supplier discount).
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EmptyState, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { Pager, SkelRows } from './bits.jsx';
 import { ordersApi } from '../../api/inventory.js';
 import OrderCard from './OrderCard.jsx';
+import { useResource } from '../../hooks/useResource.js';
 
 const PAGE = 20;
 
@@ -17,8 +18,6 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
 
   const [statusF, setStatusF] = useState('all');
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState(null); // {items, count}
-  const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
   const [generating, setGenerating] = useState(false);
 
@@ -33,15 +32,11 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
     return m;
   }, [suppliers]);
 
-  useEffect(() => {
-    let dead = false;
-    setLoading(true);
-    ordersApi.list({ status: statusF !== 'all' ? statusF : undefined, limit: PAGE, offset })
-      .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
-      .finally(() => { if (!dead) setLoading(false); });
-    return () => { dead = true; };
-  }, [statusF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data, setData, loading } = useResource(
+    () => ordersApi.list({ status: statusF !== 'all' ? statusF : undefined, limit: PAGE, offset }),
+    [statusF, offset, tick, liveTick],
+    { fallback: { items: [], count: 0 }, onError: (err) => toastApiError(err, fireToast, t) },
+  ); // data: {items, count}
 
   const refresh = () => setTick((n) => n + 1);
   const replaceOrder = (order) => setData((d) => (d ? { ...d, items: d.items.map((o) => (o.id === order.id ? order : o)) } : d));

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { fmtEurNoFree, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
@@ -8,6 +8,7 @@ import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
 import { giftCardsApi } from '../../api/marketing.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
 // basta: un salone che ne ha vendute di più ne vedeva una parte senza che
@@ -54,14 +55,14 @@ export default function GiftSub() {
   }, [q]);
 
   /* Come in CouponSub: un solo effetto con filtri e offset fra le dipendenze,
-   * l'offset azzerato dallo stesso gestore che cambia il filtro, e `reqSeq` a
-   * scartare le risposte in ritardo (altrimenti si vede una pagina mentre il
+   * l'offset azzerato dallo stesso gestore che cambia il filtro, e `req`
+   * (useLatestRequest) a scartare le risposte in ritardo (altrimenti si vede una pagina mentre il
    * pager ne annuncia un'altra). */
-  const reqSeq = useRef(0);
+  const req = useLatestRequest();
   const setFilter = (setter) => (v) => { setter(v); setOffset(0); };
 
   const reload = useCallback(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoading(true);
     giftCardsApi.list({
       status: statusF === 'all' ? undefined : statusF,
@@ -69,16 +70,16 @@ export default function GiftSub() {
       q: query || undefined,
       limit: LIMIT, offset,
     }).then((res) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems(res.items || []);
       setTotal(res.total || 0);
       setKpi(res.kpi || null);
     }).catch((err) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems([]); setTotal(0); setKpi(null);
       toastApiError(err, fireToast, t);
-    }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
-  }, [statusF, payF, query, offset, fireToast, t]);
+    }).finally(() => { if (req.isLatest(seq)) setLoading(false); });
+  }, [statusF, payF, query, offset, fireToast, t, req]);
 
   useEffect(() => { reload(); }, [reload]);
 

@@ -12,6 +12,7 @@ import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
 import { clientsApi } from '../../api/clients.js';
 import { useDebounced } from '../../hooks/useDebounced.js';
 import { useOnModalClosed } from '../../hooks/useOnModalClosed.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const PAGE = 50;
 
@@ -51,17 +52,17 @@ export default function ClientiSection() {
   const requests = useMemo(() => reactivationRequests(live?.events, dismissed), [live?.events, dismissed]);
 
   /* ---- client list (server-side filters, {items,count} pagination) ----
-   * `reqSeq` è il biglietto della richiesta in corso: ogni fetch (prima pagina
-   * o «Carica altre») lo incrementa e scarta la propria risposta se nel
-   * frattempo ne è partita un'altra. Senza, premendo «Carica altre» e
+   * `req` è il biglietto della richiesta in corso (useLatestRequest): ogni
+   * fetch (prima pagina o «Carica altre») ne prende uno e scarta la propria
+   * risposta se nel frattempo ne è partita un'altra. Senza, premendo «Carica altre» e
    * cambiando subito filtro le 50 clienti del filtro precedente finivano in
    * coda alla lista nuova, con il conteggio in testata che non tornava. */
-  const reqSeq = useRef(0);
+  const req = useLatestRequest();
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const shownParams = useRef(null);
   useEffect(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     // Filtro o ricerca cambiati: da capo. Un aggiornamento (evento dal vivo,
     // salvataggio in scheda) ricarica in silenzio le righe già scorse: prima
     // la lista si svuotava e tornava ai primi 50, in cima, e chi scorreva
@@ -72,24 +73,24 @@ export default function ClientiSection() {
     const loaded = fresh ? 0 : (itemsRef.current?.length || 0);
     if (fresh) setItems(null);
     clientsApi.list({ ...listParams, limit: Math.max(PAGE, loaded), offset: 0 })
-      .then((res) => { if (seq === reqSeq.current) { setItems(res.items); setCount(res.count); } })
+      .then((res) => { if (req.isLatest(seq)) { setItems(res.items); setCount(res.count); } })
       .catch((err) => {
-        if (seq !== reqSeq.current || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
+        if (!req.isLatest(seq) || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
         setItems([]); setCount(0);
         toastApiError(err, fireToast, t);
       });
   }, [listParams, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoadingMore(true);
     try {
       const res = await clientsApi.list({ ...listParams, limit: PAGE, offset: items.length });
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems((l) => [...l, ...res.items]);
       setCount(res.count);
     } catch (err) {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       toastApiError(err, fireToast, t);
     } finally { setLoadingMore(false); }
   };

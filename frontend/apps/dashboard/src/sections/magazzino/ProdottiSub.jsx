@@ -1,7 +1,7 @@
 // ProdottiSub.jsx — paginated product table from GET /api/inventory/products.
 // Filters (q, category_id, supplier_id, brand, usage, stock_state) are server-side;
 // the server already sorts below-threshold products first.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EmptyState, fmtEur, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
@@ -14,6 +14,7 @@ import RestockModal from './RestockModal.jsx';
 import ScaricoManualeModal from './ScaricoManualeModal.jsx';
 import { productCategoriesApi, productsApi } from '../../api/inventory.js';
 import { useDebounced } from '../../hooks/useDebounced.js';
+import { useResource } from '../../hooks/useResource.js';
 
 const PAGE = 30;
 
@@ -36,29 +37,22 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
   /* ---- paginated list ----
    * `tick` cambia con le azioni di questa postazione, `liveTick` con quelle delle
    * altre (feed live, vedi index.jsx). */
-  const [data, setData] = useState(null); // {items, count}
-  const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
   const refresh = () => { setTick((n) => n + 1); refreshShared(); };
 
-  useEffect(() => {
-    let dead = false;
-    setLoading(true);
-    productsApi.list({
-      q: qDeb || undefined,
-      category_id: catF !== 'all' ? catF : undefined,
-      supplier_id: supF !== 'all' ? supF : undefined,
-      brand: brandF !== 'all' ? brandF : undefined,
-      usage: usageF !== 'all' ? usageF : undefined,
-      stock_state: stockF !== 'all' ? stockF : undefined,
-      include_inactive: activeF === 'inactive' ? true : undefined,
-      limit: PAGE, offset,
-    })
-      .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
-      .finally(() => { if (!dead) setLoading(false); });
-    return () => { dead = true; };
-  }, [qDeb, catF, supF, brandF, usageF, stockF, activeF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data, loading } = useResource(() => productsApi.list({
+    q: qDeb || undefined,
+    category_id: catF !== 'all' ? catF : undefined,
+    supplier_id: supF !== 'all' ? supF : undefined,
+    brand: brandF !== 'all' ? brandF : undefined,
+    usage: usageF !== 'all' ? usageF : undefined,
+    stock_state: stockF !== 'all' ? stockF : undefined,
+    include_inactive: activeF === 'inactive' ? true : undefined,
+    limit: PAGE, offset,
+  }), [qDeb, catF, supF, brandF, usageF, stockF, activeF, offset, tick, liveTick], {
+    fallback: { items: [], count: 0 },
+    onError: (err) => toastApiError(err, fireToast, t),
+  }); // data: {items, count}
 
   /* ---- header metrics from the shared full snapshot ---- */
   const active = useMemo(() => (allProds || []).filter((p) => p.active), [allProds]);
