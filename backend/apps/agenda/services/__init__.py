@@ -34,6 +34,7 @@ non patcherebbe il nome che il codice usa davvero, che è quello del sottomodulo
 # di altre app (sales, integrations, staff, clients, marketing) cercano ancora
 # qui: ciascuno va importato dal sottomodulo accanto.
 from apps.core.services import default_location  # noqa: F401
+from common.money import to_cents as _to_cents  # noqa: F401 — era refund_ledger._to_cents, identica
 
 from ..models import Appointment
 from .appointments import create_appointment, edit_appointment, move_appointment  # noqa: F401
@@ -50,7 +51,6 @@ from .refund_ledger import (  # noqa: F401
     _refund_sums,
     _refunds_committed_cents,
     _refunds_done_cents,
-    _to_cents,
 )
 from .refunds import mark_deposit_refunded, record_deposit_refund, settle_deposit_refund  # noqa: F401
 from .transitions import cancel_appointment  # noqa: F401

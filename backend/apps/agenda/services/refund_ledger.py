@@ -1,12 +1,10 @@
 """Conti dei rimborsi della caparra: stati Stripe e somme in centesimi.
 
 Funzioni pure sul dizionario `Appointment.deposit_refunds` (una voce per id di
-rimborso Stripe). Le usa anche sales per sapere quanta caparra resta in cassa
-(`deposit_retained`) e quanto esce dall'incasso del giorno
-(`sync_deposit_refunds`).
+rimborso Stripe); euro e centesimi si convertono con `common.money`. Le usa
+anche sales per sapere quanta caparra resta in cassa (`deposit_retained`) e
+quanto esce dall'incasso del giorno (`sync_deposit_refunds`).
 """
-
-from decimal import Decimal
 
 
 # Stati Stripe di un rimborso: solo «succeeded» è denaro tornato alla cliente.
@@ -23,10 +21,6 @@ REFUND_FLOOR_KEY = "charge.refunded"
 # faceva tornare «in corso» un rimborso già riuscito (05-14). Da riuscito si
 # può ancora passare a fallito: Stripe lo fa, di rado.
 _REFUND_STATUS_RANK = {"pending": 0, "requires_action": 0, "succeeded": 1, "failed": 2, "canceled": 2}
-
-
-def _to_cents(amount) -> int:
-    return int((Decimal(str(amount or 0)) * 100).quantize(Decimal("1")))
 
 
 def _refund_sums(refunds: dict) -> tuple[int, int, int, int]:

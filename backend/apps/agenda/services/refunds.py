@@ -5,23 +5,22 @@ scrive lo stato del deposito, sotto lock salone → riga come ogni altra
 scrittura sull'agenda.
 """
 
-from decimal import Decimal
-
 from django.db import transaction
 from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from common.money import from_cents, to_cents
 
 from ..models import Appointment
-from .locking import lock_salon
+from .locking import _lock_row
 from .refund_ledger import (
     _REFUND_STATUS_RANK,
     REFUND_DONE,
     REFUND_FLOOR_KEY,
-    REFUND_IN_FLIGHT,
+    REFUND_GONE,
+    _refund_sums,
     _refunds_done_cents,
-    _to_cents,
 )
 
 
@@ -47,7 +46,7 @@ def settle_deposit_refund(appointment: Appointment, *, actor=None) -> Appointmen
         record_deposit_refund(
             appointment,
             refund_id=refund.get("id") or f"deposit-refund-{appointment.id}",
-            cents=int(refund.get("amount") or 0) or _to_cents(appointment.deposit_amount),
+            cents=int(refund.get("amount") or 0) or to_cents(appointment.deposit_amount),
             status=refund.get("status") or REFUND_DONE,
             actor=actor,
         )
@@ -101,20 +100,12 @@ def record_deposit_refund(
     # Prima il salone, poi la riga: lo stesso ordine di chi modifica l'agenda.
     # Al contrario, su PostgreSQL un rimborso e uno spostamento dello stesso
     # appuntamento potevano aspettarsi a vicenda (18-08).
-    lock_salon(appointment.salon)
     # Lock di riga PRIMA della rilettura: `deposit_refunds` si legge, si
     # modifica e si riscrive per intero. Stripe consegna gli eventi in
     # parallelo, e due rimborsi parziali finivano per sovrascriversi a vicenda —
     # il secondo commit cancellava la voce del primo e al checkout si detraeva
     # denaro già tornato alla cliente.
-    locked = list(
-        Appointment.objects.select_for_update()
-        .filter(pk=appointment.pk)
-        .values_list("id", flat=True)
-    )
-    if not locked:
-        raise HttpError(404, "Appuntamento non trovato")
-    appointment.refresh_from_db()
+    _lock_row(appointment)
     refunds = dict(appointment.deposit_refunds or {})
     ignored_update = False
     if refund_id:
@@ -129,16 +120,9 @@ def record_deposit_refund(
         if int(floor_cents) > int(floor.get("amount_cents") or 0):
             refunds[REFUND_FLOOR_KEY] = {"amount_cents": int(floor_cents), "status": "floor"}
 
-    def _sum(predicate) -> int:
-        return sum(
-            int(row.get("amount_cents") or 0)
-            for key, row in refunds.items()
-            if key != REFUND_FLOOR_KEY and predicate(row.get("status") or "")
-        )
-
     done = _refunds_done_cents(refunds)
-    in_flight = _sum(lambda st: st in REFUND_IN_FLIGHT)
-    deposit_cents = _to_cents(appointment.deposit_amount)
+    in_flight = _refund_sums(refunds)[1]
+    deposit_cents = to_cents(appointment.deposit_amount)
 
     previous = appointment.deposit_status
     if deposit_cents > 0 and done >= deposit_cents:
@@ -164,7 +148,7 @@ def record_deposit_refund(
         new_status = previous
 
     appointment.deposit_refunds = refunds
-    appointment.deposit_refunded_amount = (Decimal(done) / 100).quantize(Decimal("0.01"))
+    appointment.deposit_refunded_amount = from_cents(done)
     appointment.deposit_status = new_status
     appointment.save(
         update_fields=[
@@ -178,7 +162,7 @@ def record_deposit_refund(
     failed_meanwhile = (
         not ignored_update
         and refund_id
-        and status in ("failed", "canceled")
+        and status in REFUND_GONE
         and new_status == previous == Appointment.DepositStatus.REFUNDED
     )
     if new_status != previous or failed_meanwhile:
@@ -225,18 +209,10 @@ def mark_deposit_refunded(appointment: Appointment, *, actor=None) -> Appointmen
     arrivava su una copia letta all'inizio della richiesta e poteva cancellare
     un rimborso registrato un istante prima dal webhook.
     """
-    lock_salon(appointment.salon)
-    locked = list(
-        Appointment.objects.select_for_update()
-        .filter(pk=appointment.pk)
-        .values_list("id", flat=True)
-    )
-    if not locked:
-        raise HttpError(404, "Appuntamento non trovato")
-    appointment.refresh_from_db()
+    _lock_row(appointment)
     if appointment.deposit_status != Appointment.DepositStatus.REFUND_DUE:
         raise HttpError(400, "La caparra di questo appuntamento non è in attesa di rimborso")
-    deposit_cents = _to_cents(appointment.deposit_amount)
+    deposit_cents = to_cents(appointment.deposit_amount)
     refunds = dict(appointment.deposit_refunds or {})
     # Quello che resta da coprire: se una parte era già tornata da Stripe, la
     # conferma manuale vale solo per la differenza.
@@ -249,9 +225,7 @@ def mark_deposit_refunded(appointment: Appointment, *, actor=None) -> Appointmen
         }
     appointment.deposit_status = Appointment.DepositStatus.REFUNDED
     appointment.deposit_refunds = refunds
-    appointment.deposit_refunded_amount = (Decimal(_refunds_done_cents(refunds)) / 100).quantize(
-        Decimal("0.01")
-    )
+    appointment.deposit_refunded_amount = from_cents(_refunds_done_cents(refunds))
     appointment.save(
         update_fields=[
             "deposit_status",
