@@ -11,9 +11,10 @@ from apps.core.models import ActivityLog, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
 from common.testing import aware, bearer
 
-from .. import services as S
 from ..models import Appointment, Pause
-from ..services import cancel_appointment, create_appointment, move_appointment
+from ..services import appointments as S
+from ..services.appointments import create_appointment, move_appointment
+from ..services.transitions import cancel_appointment
 from .base import AgendaTestBase, RealShiftsTestBase, _aware, hm
 
 
@@ -102,7 +103,7 @@ class MoveWholeVisitToAnotherOperatorTests(AgendaTestBase):
 
 class SplitAppointmentTests(AgendaTestBase):
     def test_split_moves_one_service_to_its_own_appointment(self):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             appointment = create_appointment(
@@ -122,7 +123,7 @@ class SplitAppointmentTests(AgendaTestBase):
         self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="appointment.split").exists())
 
     def test_split_refuses_single_service_and_busy_slot(self):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             single = create_appointment(
@@ -151,7 +152,7 @@ class SplitCollisionTests(AgendaTestBase):
     restano nella visita, né con altre clienti quando la catena residua scala."""
 
     def test_detached_service_cannot_overlap_the_services_that_stay(self):
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         with self._windows({self.op1.id: [(9 * 60, 18 * 60)]}):
             appointment = create_appointment(
@@ -178,7 +179,7 @@ class SplitCollisionTests(AgendaTestBase):
         """
         from apps.clients.models import Client
 
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         other = Client.objects.create(salon=self.salon, first_name="Altra", last_name="Cliente", phone="+390000000009")
         self.op2.services.add(self.svc30)
@@ -214,7 +215,7 @@ class SplitCollisionTests(AgendaTestBase):
         cliente di op2 (caccia ai bug del 22/09, 02-02 e 12-01)."""
         from apps.clients.models import Client
 
-        from ..services import split_appointment
+        from ..services.appointments import split_appointment
 
         other = Client.objects.create(salon=self.salon, first_name="Terza", last_name="Cliente", phone="+390000000008")
         self.op2.services.add(self.svc30)
@@ -365,7 +366,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
     # ---- B24 -------------------------------------------------------------
 
     def test_a_manual_refund_writes_the_amount_it_gave_back(self):
-        from ..services import mark_deposit_refunded
+        from ..services.refunds import mark_deposit_refunded
 
         appointment = self._visit(
             [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
@@ -382,7 +383,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
         self.assertTrue(entry["manual"])
 
     def test_a_manual_refund_after_a_partial_one_only_covers_the_rest(self):
-        from ..services import mark_deposit_refunded, record_deposit_refund
+        from ..services.refunds import mark_deposit_refunded, record_deposit_refund
 
         appointment = self._visit(
             [{"service_id": self.svc30.id, "operator_id": self.op1.id}],
@@ -406,7 +407,7 @@ class BugHunt21SeptemberTests(AgendaTestBase):
     # ---- Pause a cavallo della mezzanotte --------------------------------
 
     def test_a_break_that_runs_past_midnight_still_blocks_the_next_day(self):
-        from ..services import _busy_map
+        from ..services.occupancy import _busy_map
 
         Pause.objects.create(
             salon=self.salon, operator=self.op1,

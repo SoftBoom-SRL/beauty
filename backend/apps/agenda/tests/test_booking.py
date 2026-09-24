@@ -12,7 +12,7 @@ from apps.core.models import OutboxEvent
 from common.testing import aware, bearer, client_bearer, post_json
 
 from ..models import Appointment, Pause
-from ..services import create_appointment, move_appointment
+from ..services.appointments import create_appointment, move_appointment
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 STAFF_ONLY_FIELDS = ("note", "forced", "created_via", "cancel_reason", "client", "location_id")

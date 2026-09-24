@@ -9,9 +9,10 @@ from ninja.errors import HttpError
 from apps.core.models import OutboxEvent
 from common.testing import aware, bearer, put_json
 
-from .. import services as S
 from ..models import Appointment
-from ..services import cancel_appointment, create_appointment
+from ..services import appointments as S
+from ..services.appointments import create_appointment
+from ..services.transitions import cancel_appointment
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
@@ -330,7 +331,7 @@ class StaleCopyEditTests(AgendaTestBase):
         )
 
     def test_editing_a_note_cannot_resurrect_an_appointment_cancelled_meanwhile(self):
-        from ..services import edit_appointment
+        from ..services.appointments import edit_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)  # copia entrata con la richiesta
@@ -344,7 +345,7 @@ class StaleCopyEditTests(AgendaTestBase):
         self.assertEqual(appointment.cancel_reason, "chiuso per lutto")
 
     def test_editing_a_note_does_not_undo_a_deposit_paid_meanwhile(self):
-        from ..services import edit_appointment
+        from ..services.appointments import edit_appointment
 
         appointment = self._appointment(
             deposit_status=Appointment.DepositStatus.REQUIRED,
@@ -368,7 +369,7 @@ class StaleCopyEditTests(AgendaTestBase):
 
     def test_editing_the_services_keeps_the_price_agreed_with_the_client(self):
         """Il listino può cambiare: la visita vale quello che valeva quando è stata presa."""
-        from ..services import create_appointment, edit_appointment
+        from ..services.appointments import create_appointment, edit_appointment
 
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
             appointment = create_appointment(
@@ -401,7 +402,7 @@ class StaleCopyEditTests(AgendaTestBase):
         self.svc60.save(update_fields=["price", "soak_min"])
 
     def test_a_service_added_now_takes_todays_price(self):
-        from ..services import create_appointment, edit_appointment
+        from ..services.appointments import create_appointment, edit_appointment
 
         self._no_automation_delay()
         with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):

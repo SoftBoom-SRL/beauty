@@ -18,14 +18,9 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import DepositRule, OutboxEvent, SalonSettings
 
 from ..models import Appointment, WaitlistEntry
-from ..services import (
-    appointment_event_key,
-    cancel_appointment,
-    create_appointment,
-    edit_appointment,
-    mark_no_show,
-    move_appointment,
-)
+from ..services.appointments import create_appointment, edit_appointment, move_appointment
+from ..services.messages import appointment_event_key
+from ..services.transitions import cancel_appointment, mark_no_show
 from .base import WIDE, AgendaTestBase, MessagesTestBase, _aware
 
 
@@ -124,7 +119,7 @@ class AutomationDelayTests(AgendaTestBase):
 
     def test_the_hold_does_not_stretch_forever(self):
         """Chi continua a ritoccare non rimanda il messaggio all'infinito."""
-        from ..services import MAX_HOLD_FACTOR
+        from ..services.messages import MAX_HOLD_FACTOR
 
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"automation_delay_seconds": 30}
@@ -318,7 +313,7 @@ class ReleaseForUnpaidDepositTests(MessagesTestBase):
         self.salon.refresh_from_db()
 
     def test_no_move_message_is_left_behind_the_release(self):
-        from ..services import process_deposit_holds
+        from ..services.deposit_holds import process_deposit_holds
 
         with patch("apps.clients.services.client_facts", return_value={}):
             appointment = self._book(10, via="app")

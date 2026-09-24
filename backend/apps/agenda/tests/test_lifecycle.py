@@ -15,15 +15,9 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 
 from ..models import Appointment, AppointmentService, UndoEntry
-from ..services import (
-    _lock_and_reload,
-    cancel_appointment,
-    check_in,
-    create_appointment,
-    lock_salon,
-    mark_no_show,
-    start_appointment,
-)
+from ..services.appointments import create_appointment
+from ..services.locking import _lock_and_reload, lock_salon
+from ..services.transitions import cancel_appointment, check_in, mark_no_show, start_appointment
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
@@ -82,7 +76,7 @@ class CancelAppointmentTests(AgendaTestBase):
 
     def test_mark_deposit_refunded_also_writes_how_much_came_back(self):
         # La scheda diceva «Caparra 15 · Rimborsato 0 · Stato: rimborsata».
-        from ..services import mark_deposit_refunded
+        from ..services.refunds import mark_deposit_refunded
 
         appointment = self._make(timezone.now() + dt.timedelta(hours=72))
         cancel_appointment(appointment)
@@ -119,7 +113,7 @@ class CancelAppointmentTests(AgendaTestBase):
         )
 
     def test_mark_deposit_refunded_manually(self):
-        from ..services import mark_deposit_refunded
+        from ..services.refunds import mark_deposit_refunded
 
         appointment = self._make(timezone.now() + dt.timedelta(hours=72))
         cancel_appointment(appointment)
@@ -163,7 +157,8 @@ class ConcurrentTransitionTests(AgendaTestBase):
         return appointment
 
     def test_a_move_on_a_stale_copy_cannot_undo_a_cancellation(self):
-        from ..services import cancel_appointment, move_appointment
+        from ..services.appointments import move_appointment
+        from ..services.transitions import cancel_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)  # copia letta prima
@@ -177,7 +172,7 @@ class ConcurrentTransitionTests(AgendaTestBase):
         self.assertEqual(appointment.status, Appointment.Status.CANCELLED)
 
     def test_a_move_does_not_overwrite_a_deposit_paid_meanwhile(self):
-        from ..services import move_appointment
+        from ..services.appointments import move_appointment
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)
@@ -192,7 +187,7 @@ class ConcurrentTransitionTests(AgendaTestBase):
         self.assertEqual(appointment.deposit_amount, Decimal("20.00"))
 
     def test_check_in_is_refused_on_an_appointment_cancelled_meanwhile(self):
-        from ..services import cancel_appointment, check_in
+        from ..services.transitions import cancel_appointment, check_in
 
         appointment = self._appointment()
         stale = Appointment.objects.get(pk=appointment.pk)

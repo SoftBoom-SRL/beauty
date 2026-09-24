@@ -45,6 +45,8 @@ class Appointment(TimeStampedModel):
 
     # Stati che NON occupano lo slot in agenda.
     INACTIVE_STATUSES = (Status.CANCELLED, Status.NO_SHOW)
+    # Stati in cui l'appuntamento è ancora "aperto" e quindi modificabile.
+    OPEN_STATUSES = (Status.CONFIRMED, Status.CHECKED_IN, Status.IN_PROGRESS)
 
     salon = models.ForeignKey(
         "core.Salon", on_delete=models.CASCADE, related_name="appointments"
