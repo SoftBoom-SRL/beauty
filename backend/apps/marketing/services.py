@@ -1,7 +1,7 @@
 """Modulo di compatibilità: il marketing ora sta nei moduli per argomento.
 
 `codes` (codici al portatore), `coupons`, `gift_cards`, `loyalty`,
-`communications` e `consent`. Qui restano importabili, con lo stesso
+`communications`, `consent` e `wallet`. Qui restano importabili, con lo stesso
 oggetto, i nomi che questo modulo esponeva: li usano ancora altre app mentre
 il refactoring è in corso — la scheda cliente chiama `marketing_consent_changed`
 e `drop_from_pending_sends` con `getattr(apps.marketing.services, nome)` a ogni
