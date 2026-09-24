@@ -8,10 +8,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar, Icon, fmtDateIt, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
-  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, openingFor, hoverPlacement,
+  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, hoverPlacement,
   isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek, firstName, opDisplay, aStartMin,
-  ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, LIVE_DEBOUNCE_DAY_MS, zoomStep,
-  plausibleDate,
+  ZOOM_MIN, ZOOM_MAX, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, LIVE_DEBOUNCE_DAY_MS, zoomStep,
 } from './lib.js';
 import { useAgendaNav } from './hooks/useAgendaNav.js';
 import { useStoredFlag } from './hooks/useStoredFlag.js';
@@ -25,7 +24,11 @@ import { useAgendaColors } from './hooks/useAgendaColors.js';
 import { useUndo } from './hooks/useUndo.js';
 import { useAgendaShortcuts } from './hooks/useAgendaShortcuts.js';
 import { useAgendaMutations } from './hooks/useAgendaMutations.js';
-import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
+import DayGrid from './DayGrid.jsx';
+import ApptHoverCard from './grid/ApptHoverCard.jsx';
+import DaySkeleton from './grid/DaySkeleton.jsx';
+import JumpPopover from './parts/JumpPopover.jsx';
+import SalonHoursChip from './parts/SalonHoursChip.jsx';
 import WeekView from './WeekView.jsx';
 import MonthView from './MonthView.jsx';
 import RightRail from './RightRail.jsx';
@@ -501,71 +504,5 @@ export default function AgendaSection() {
         <GroupBookingDrawer date={date} onClose={() => setGroupOpen(false)} onCreated={refetchAll} />
       )}
     </div>
-  );
-}
-
-/* ---- month/date jump popover ---- */
-function JumpPopover({ t, MONTHS, curM, curY, onClose, onMonth, onDate }) {
-  return (
-    <React.Fragment>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-      <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 41, padding: 12, width: 260, boxShadow: 'var(--sh-pop)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <button className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} onClick={() => onMonth(curM, curY - 1)}><Icon name="chevL" size={14} /></button>
-          <span style={{ fontWeight: 700, fontSize: 14 }}>{curY}</span>
-          <button className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8 }} onClick={() => onMonth(curM, curY + 1)}><Icon name="chevR" size={14} /></button>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 12 }}>
-          {MONTHS.map((mo, mi) => {
-            const on = mi === curM;
-            return (
-              <button key={mi} onClick={() => onMonth(mi, curY)} style={{ padding: '8px 4px', borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>{mo.slice(0, 3)}</button>
-            );
-          })}
-        </div>
-        <div style={{ borderTop: '1px solid var(--hair)', paddingTop: 10 }}>
-          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Vai a una data', 'Jump to a date')}</div>
-          {/* Si salta solo con una data piena: scrivendo l'anno a tastiera il
-              primo tasto dava «0002» e l'agenda finiva nel 1902. */}
-          <input type="date" onChange={(e) => { if (plausibleDate(e.target.value)) onDate(e.target.value); }} style={{ width: '100%', border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 13.5, padding: '8px 10px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' }} />
-        </div>
-      </div>
-    </React.Fragment>
-  );
-}
-
-/* ---- day grid loading skeleton ---- */
-function DaySkeleton() {
-  return (
-    <div style={{ flex: 1, overflow: 'hidden', padding: '14px 26px' }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <div style={{ width: DAY_HOURS_W, flexShrink: 0 }} />
-        {[...Array(5)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 54, borderRadius: 12 }} />)}
-      </div>
-      <div style={{ display: 'flex', gap: 6, height: '100%' }}>
-        <div style={{ width: DAY_HOURS_W, flexShrink: 0 }} />
-        {[...Array(5)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 520, borderRadius: 12 }} />)}
-      </div>
-    </div>
-  );
-}
-
-
-/* ---- orari del centro per il giorno mostrato (Impostazioni → Orari di apertura) ---- */
-function SalonHoursChip({ settings, date, t, isOwner, onOpen }) {
-  const week = settings?.opening_hours_week;
-  const has = week && Object.keys(week).length > 0;
-  const ranges = has ? openingFor(settings, date) : null;
-  const label = !has
-    ? (isOwner ? t('Orari del centro: imposta', 'Salon hours: set') : t('Orari del centro non impostati', 'Salon hours not set'))
-    : ranges.length
-      ? t('Centro', 'Salon') + ' ' + ranges.map(([a, b]) => `${a.replace(/^0/, '')}–${b.replace(/^0/, '')}`).join(' · ')
-      : t('Centro chiuso', 'Salon closed');
-  return (
-    <button type="button" onClick={onOpen} title={t('Orari di apertura del centro · clicca per modificarli', 'Salon opening hours · click to edit')}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px', borderRadius: 99, border: '1px solid ' + (has ? 'var(--hair)' : 'var(--warn)'), background: has ? 'var(--surface)' : 'var(--warn-tint)', color: has ? (ranges.length ? 'var(--ink-2)' : 'var(--muted)') : 'var(--warn)', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-      <Icon name="clock" size={13} color="currentColor" />
-      <span className="tabnum">{label}</span>
-    </button>
   );
 }

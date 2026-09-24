@@ -124,7 +124,7 @@ export async function loadComponent(entry, { stubs = [] } = {}) {
         b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => {
           if (a.path.startsWith('stub:')) {
             const name = a.path.slice(5).replace(/\.jsx$/, '');
-            return { contents: `export default function ${name}() { return null; }\nexport function ApptHoverCard() { return null; }`, loader: 'js' };
+            return { contents: `export default function ${name}() { return null; }`, loader: 'js' };
           }
           return { contents: { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared: SHARED, ctx: CTX }[a.path], loader: 'js', resolveDir: FRONT };
         });

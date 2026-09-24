@@ -38,6 +38,10 @@ export const WEEK_HOURS_W = 46;
 /** La riga rossa dell'ora attuale, in giorno e settimana. */
 export const NOW_LINE_COLOR = '#F4708A';
 
+/** Bordo del blocco trascinato in vista giorno, secondo l'esito del rilascio
+ *  (verdictTone): verde se va bene, ambra se si forzerà. */
+export const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };
+
 /** Ultimo inizio che il pannello di dettaglio accetta scrivendo o spostando
  *  l'orario a mano: le 23:55, l'ultimo passo di cinque minuti del giorno. */
 export const LAST_START_MIN = 23 * 60 + 55;
