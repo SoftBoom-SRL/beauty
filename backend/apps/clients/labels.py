@@ -132,15 +132,28 @@ def update_label(ctx, category: ClientCategory, payload: dict) -> ClientCategory
     """Applica il corpo già controllato; se il nome cambia, lo riscrive nelle condizioni.
 
     Tutto nella stessa transazione: etichetta, regole caparra, automazioni e
-    registro attività.
+    registro attività, dopo lo stesso lock di `delete_label` (il salone, poi la
+    riga dell'etichetta, riletta). Si salvava con save() completo la copia letta
+    a inizio richiesta: in gara con una cancellazione la riga non c'era più e
+    Django la reinseriva, e l'etichetta tornava senza più le sue clienti; e il
+    nome da riscrivere nelle condizioni era quello di prima di un rinomina
+    fatto nel frattempo. Ora si scrivono solo le colonne del corpo, sulla riga
+    di adesso; se è stata eliminata, 404. Il lock del salone è quello di chi
+    salva regole caparra e automazioni: il rinomina ne riscrive le condizioni.
     """
-    old_name = category.name
+    from apps.agenda.services.locking import lock_salon  # lazy
+
     with transaction.atomic():
+        lock_salon(ctx.salon)
+        category = ClientCategory.objects.select_for_update().filter(pk=category.pk).first()
+        if category is None:
+            raise HttpError(404, "Etichetta non trovata")
+        old_name = category.name
         for name, value in payload.items():
             setattr(category, name, value)
         try:
             with transaction.atomic():
-                category.save()
+                category.save(update_fields=list(payload))
         except IntegrityError:
             raise HttpError(400, DUPLICATE_LABEL)
         rules = automations = 0
