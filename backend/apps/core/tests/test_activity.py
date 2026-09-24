@@ -13,9 +13,9 @@ from django.utils import timezone
 
 from common.auth import create_staff_tokens
 
-from . import views
-from .models import ActivityLog, Salon
-from .services import log_activity
+from .. import views
+from ..models import ActivityLog, Salon
+from ..services import log_activity
 
 
 def _frames_events(frames):

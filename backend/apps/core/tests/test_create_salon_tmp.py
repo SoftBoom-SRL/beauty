@@ -9,7 +9,7 @@ from django.test import TestCase
 
 from apps.accounts.models import Membership, User
 
-from .models import Salon
+from ..models import Salon
 
 
 def _create(slug="secondo", email="anna@x.it", **extra):

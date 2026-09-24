@@ -14,9 +14,9 @@ from django.test import TestCase, override_settings
 
 from common.auth import create_staff_tokens
 
-from .admin import SalonSettingsAdminForm
-from .models import DepositRule, Salon, SalonSettings
-from .services import log_activity
+from ..admin import SalonSettingsAdminForm
+from ..models import DepositRule, Salon, SalonSettings
+from ..services import log_activity
 
 # PNG 1x1 valido
 PNG = (
@@ -39,7 +39,7 @@ class _StaleSettings:
     del salvataggio, il callback di Stripe Connect scrive l'account collegato."""
 
     def __init__(self):
-        from . import api as core_api
+        from .. import api as core_api
 
         self.core_api = core_api
         self.real = core_api._settings

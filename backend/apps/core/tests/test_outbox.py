@@ -9,8 +9,8 @@ from django.db import connection
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from .models import OutboxEvent, Salon, SalonSettings
-from .services import emit_event
+from ..models import OutboxEvent, Salon, SalonSettings
+from ..services import emit_event
 
 
 def _insert_without(model, instance, missing: tuple[str, ...]) -> None:
@@ -121,7 +121,7 @@ class DeliveryOrderPerObjectTests(TestCase):
     def _flush(self, sent, **kwargs):
         from unittest.mock import patch
 
-        from .management.commands.flush_outbox import flush_pending
+        from ..management.commands.flush_outbox import flush_pending
 
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent, **kwargs)):
             return flush_pending()
@@ -170,7 +170,7 @@ class ClaimRereadsTheEventTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
 
     def test_a_hold_extended_after_the_listing_is_respected(self):
-        from .management.commands.flush_outbox import _claim
+        from ..management.commands.flush_outbox import _claim
 
         event = emit_event(self.salon, "appointment.created", {"start": "x"}, delay_seconds=30)
         OutboxEvent.objects.filter(pk=event.pk).update(next_attempt_at=timezone.now())
@@ -185,7 +185,7 @@ class ClaimRereadsTheEventTests(TestCase):
     def test_what_leaves_is_what_is_in_the_database(self):
         from unittest.mock import MagicMock
 
-        from .management.commands.flush_outbox import _claim, deliver_event
+        from ..management.commands.flush_outbox import _claim, deliver_event
 
         event = emit_event(self.salon, "appointment.created", {"start": "10:00"})
         stale = OutboxEvent.objects.select_related("salon").get(pk=event.pk)
@@ -219,7 +219,7 @@ class StaleMessagesExpireTests(TestCase):
     def _flush(self):
         from unittest.mock import patch
 
-        from .management.commands.flush_outbox import flush_pending
+        from ..management.commands.flush_outbox import flush_pending
 
         sent = []
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent)):
@@ -261,7 +261,7 @@ class StaleMessagesExpireTests(TestCase):
         self.assertEqual(self._flush(), {campaign.id})
 
     def test_expired_messages_are_purged_like_the_superseded_ones(self):
-        from .management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
+        from ..management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
 
         event = emit_event(self.salon, "client.otp", {"code": "1"})
         OutboxEvent.objects.filter(pk=event.pk).update(
@@ -282,8 +282,8 @@ class HousekeepingWithoutDeliveryUrlTests(TestCase):
         from apps.agenda.models import UndoEntry
         from common import ratelimit
 
-        from .management.commands.flush_outbox import Command
-        from .models import RateLimitCounter
+        from ..management.commands.flush_outbox import Command
+        from ..models import RateLimitCounter
 
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         old = emit_event(salon, "appointment.created", {"phone": "+393331234567"})
@@ -315,7 +315,7 @@ class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
     è ciò che la cliente sa, e l'agenda lo confronta prima di rettificare."""
 
     def test_only_the_last_message_about_an_upcoming_visit_is_kept(self):
-        from .management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
+        from ..management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
 
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         future = (timezone.now() + dt.timedelta(days=20)).isoformat()
@@ -341,7 +341,7 @@ class OpeningHoursNotSetTests(TestCase):
     """Segnalato da CORE-INSIGHTS: `{}` è «non impostati», non «chiuso tutti i giorni»."""
 
     def test_an_empty_week_stays_not_set(self):
-        from .services import normalize_opening_hours_week
+        from ..services import normalize_opening_hours_week
 
         self.assertEqual(normalize_opening_hours_week({}), {})
         # sette giorni vuoti scritti per esteso restano invece «chiuso»
@@ -359,7 +359,7 @@ class HeldEventsDoNotBlockTests(TestCase):
     def _flush(self, sent, **kwargs):
         from unittest.mock import patch
 
-        from .management.commands.flush_outbox import flush_pending
+        from ..management.commands.flush_outbox import flush_pending
 
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent, **kwargs)):
             return flush_pending()

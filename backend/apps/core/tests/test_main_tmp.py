@@ -11,8 +11,8 @@ from django.utils import timezone
 from common.auth import create_staff_tokens
 from common.conditions import evaluate
 
-from .models import Location, Salon, SalonSettings
-from .services import emit_event, log_activity
+from ..models import Location, Salon, SalonSettings
+from ..services import emit_event, log_activity
 
 
 class CoreTests(TestCase):
@@ -662,7 +662,7 @@ class FlushOutboxTests(TestCase):
 
         from apps.core.management.commands.flush_outbox import MAX_ATTEMPTS, flush_pending
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         ok = emit_event(self.salon, "client.otp", {"code": "123456"})
         bad = emit_event(self.salon, "appointment.created", {"appointment_id": 1})
@@ -715,7 +715,7 @@ class FlushOutboxTests(TestCase):
 
         from apps.core.management.commands.flush_outbox import flush_pending
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         event = emit_event(self.salon, "client.otp", {"code": "123456"})
         calls = []
@@ -751,7 +751,7 @@ class FlushOutboxTests(TestCase):
             release_stale_claims,
         )
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         first = emit_event(self.salon, "client.otp", {"code": "1"})
         last = emit_event(self.salon, "client.otp", {"code": "2"})
@@ -789,7 +789,7 @@ class FlushOutboxTests(TestCase):
             release_stale_claims,
         )
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         event = emit_event(self.salon, "client.otp", {"code": "123456"})
         OutboxEvent.objects.filter(pk=event.pk).update(
@@ -824,7 +824,7 @@ class FlushOutboxTests(TestCase):
             purge_delivered,
         )
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         old = emit_event(self.salon, "client.otp", {})
         recent = emit_event(self.salon, "client.otp", {})
@@ -850,7 +850,7 @@ class FlushOutboxTests(TestCase):
 
         from apps.core.management.commands.flush_outbox import flush_pending
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         event = emit_event(self.salon, "client.otp", {"code": "123456"})
         with patch("httpx.Client.post", side_effect=OSError("rete sparita")):
@@ -904,7 +904,7 @@ class OutboxStatusApiTests(TestCase):
     def test_configured_reports_delivered_messages(self):
         from django.utils import timezone
 
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         event = emit_event(self.salon, "client.otp", {"code": "1"})
         OutboxEvent.objects.filter(pk=event.pk).update(status=OutboxEvent.Status.SENT, sent_at=timezone.now())
@@ -919,7 +919,7 @@ class OutboxStatusApiTests(TestCase):
     @override_settings(YOURANG_API_URL="https://yourang.example/events")
     def test_scheduled_and_expired_are_counted_apart(self):
         """Una campagna programmata non è una coda ferma; gli scaduti si vedono."""
-        from .models import OutboxEvent
+        from ..models import OutboxEvent
 
         emit_event(self.salon, "communication.send", {"communication_id": 1}, delay_seconds=3 * 86400)
         late = emit_event(self.salon, "appointment.created", {"appointment_id": 1})
@@ -1002,7 +1002,7 @@ class RateLimitCounterTests(TestCase):
         self.ratelimit = ratelimit
 
     def test_the_window_lasts_exactly_what_was_asked(self):
-        from .models import RateLimitCounter
+        from ..models import RateLimitCounter
 
         before = timezone.now()
         self.ratelimit.hit("finestra", 5, 3600)
@@ -1018,7 +1018,7 @@ class RateLimitCounterTests(TestCase):
         # Si riproduce l'intreccio fra due processi: la seconda richiesta entra
         # mentre la prima sta ancora decidendo. L'incremento è una sola UPDATE
         # del database, quindi nessuno dei due conteggi va perso.
-        from .models import RateLimitCounter
+        from ..models import RateLimitCounter
 
         self.ratelimit.hit("gara", 1, 3600)
         original = RateLimitCounter.objects.filter
@@ -1039,7 +1039,7 @@ class RateLimitCounterTests(TestCase):
     def test_an_expired_window_starts_over(self):
         from datetime import timedelta
 
-        from .models import RateLimitCounter
+        from ..models import RateLimitCounter
 
         self.assertFalse(self.ratelimit.hit("scaduta", 0, 3600))
         RateLimitCounter.objects.filter(key="scaduta").update(
@@ -1051,7 +1051,7 @@ class RateLimitCounterTests(TestCase):
     def test_purge_removes_only_the_expired_windows(self):
         from datetime import timedelta
 
-        from .models import RateLimitCounter
+        from ..models import RateLimitCounter
 
         self.ratelimit.hit("viva", 5, 3600)
         self.ratelimit.hit("morta", 5, 3600)

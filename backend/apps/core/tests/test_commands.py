@@ -13,8 +13,8 @@ from django.test import TestCase, override_settings
 from apps.accounts.models import Membership, User
 from apps.clients.models import Client
 
-from .management.commands.seed_demo import DEMO_OWNER_EMAIL, DEMO_SLUG, _teardown
-from .models import Salon
+from ..management.commands.seed_demo import DEMO_OWNER_EMAIL, DEMO_SLUG, _teardown
+from ..models import Salon
 
 
 def _seed(*args, **kwargs):
