@@ -12,7 +12,7 @@ from apps.core.services import log_activity
 from .. import undo as undo_log
 from ..models import Appointment, UndoEntry
 from .deposits import _close_deposit_link_after_commit
-from .freed_slots import _appointment_spans, _slot_knowledge, _sync_freed_slots
+from .freed_slots import _appointment_spans, emit_with_freed_slots
 from .locking import _lock_and_reload
 from .messages import _event_payload, _withdraw_deposit_messages, emit_appointment_event
 from .refunds import settle_deposit_refund
@@ -107,12 +107,10 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         actor=actor,
         payload={"appointment_id": appointment.id, "reason": reason},
     )
-    occupied = _appointment_spans(appointment)
-    knowledge = _slot_knowledge(appointment, occupied)
-    emit_appointment_event(
-        appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason}
+    emit_with_freed_slots(
+        appointment, "appointment.no_show", {**_event_payload(appointment), "reason": reason},
+        before=_appointment_spans(appointment), after={},
     )
-    _sync_freed_slots(appointment, occupied, {}, knowledge)
     undo_log.record(
         appointment.salon,
         kind=UndoEntry.Kind.NO_SHOW,
@@ -201,14 +199,13 @@ def cancel_appointment(
             # ancora partito non parte, quello già inviato si chiude su Stripe.
             _withdraw_deposit_messages(appointment)
             _close_deposit_link_after_commit(appointment)
-        occupied = _appointment_spans(appointment)
-        knowledge = _slot_knowledge(appointment, occupied)
-        emit_appointment_event(
+        emit_with_freed_slots(
             appointment,
             "appointment.cancelled",
             {**_event_payload(appointment), "reason": reason, "late": late, "by_client": by_client},
+            before=_appointment_spans(appointment),
+            after={},
         )
-        _sync_freed_slots(appointment, occupied, {}, knowledge)
         # L'annullamento della CLIENTE dall'app non entra nello storico della
         # postazione: chi sta al banco non deve poter rimettere in agenda una
         # visita che la cliente ha disdetto (vedi `undoable`).

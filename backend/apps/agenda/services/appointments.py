@@ -19,7 +19,7 @@ from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, UndoEntry
 from .deposit_holds import schedule_deposit_hold
 from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_total
-from .freed_slots import _appointment_spans, _chain_spans, _slot_knowledge, _sync_freed_slots
+from .freed_slots import _appointment_spans, _chain_spans, emit_with_freed_slots
 from .locking import _lock_and_reload, lock_salon
 from .messages import _event_payload, emit_appointment_event
 from .resolution import (
@@ -391,16 +391,17 @@ def move_appointment(
             "forced": force,
         },
     )
-    knowledge = _slot_knowledge(appointment, before_spans)
-    emit_appointment_event(
+    # Alla lista d'attesa va solo ciò che si è liberato: prima si annunciava
+    # l'intera visita al vecchio orario, con l'operatrice principale, anche per
+    # un ritocco di un quarto d'ora (ancora occupato) o per un cambio di
+    # colonna, dove a liberarsi era la collega di partenza.
+    emit_with_freed_slots(
         appointment,
         "appointment.moved",
         {**_event_payload(appointment), "old_start": old_start.isoformat()},
+        before=before_spans,
+        after=_appointment_spans(appointment),
     )
-    # Prima si annunciava l'intera visita al vecchio orario, con l'operatrice
-    # principale: anche per un ritocco di un quarto d'ora (ancora occupato) o
-    # per un cambio di colonna, dove a liberarsi era la collega di partenza.
-    _sync_freed_slots(appointment, before_spans, _appointment_spans(appointment), knowledge)
     undo_log.record(
         appointment.salon,
         kind=UndoEntry.Kind.MOVE,

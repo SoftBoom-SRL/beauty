@@ -26,6 +26,7 @@ from .messages import (
     _told_event,
     _when,
     appointment_event_key,
+    emit_appointment_event,
     slot_event_key,
 )
 
@@ -248,6 +249,24 @@ def _sync_freed_slots(
         else:
             _emit_freed_slot(appointment, *piece, since=since)
     supersede_events([e for e in held if e.id not in kept])
+
+
+def emit_with_freed_slots(
+    appointment: Appointment, event_type: str, payload: dict | None = None, *, before: dict, after: dict
+):
+    """Il messaggio di un gesto alla cliente, poi gli annunci alla lista d'attesa.
+
+    L'ordine è quello che conta: ciò che si sapeva occupato (`_slot_knowledge`)
+    va chiesto PRIMA di emettere il messaggio del gesto, perché col ritardo
+    spento quel messaggio è «già consegnato» un istante dopo e diventerebbe ciò
+    che la cliente sa. `before`/`after` sono gli orari occupati
+    dall'appuntamento prima e dopo il gesto ({} se si è liberato del tutto).
+    Ritorna l'evento del gesto, come `emit_appointment_event`.
+    """
+    knowledge = _slot_knowledge(appointment, before)
+    event = emit_appointment_event(appointment, event_type, payload)
+    _sync_freed_slots(appointment, before, after, knowledge)
+    return event
 
 
 def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):

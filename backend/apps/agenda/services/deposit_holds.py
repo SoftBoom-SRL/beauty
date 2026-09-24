@@ -17,7 +17,7 @@ from apps.core.services import emit_event, log_activity
 
 from ..models import Appointment
 from .deposits import _close_deposit_link_after_commit
-from .freed_slots import _appointment_spans, _slot_knowledge, _sync_freed_slots
+from .freed_slots import _appointment_spans, _sync_freed_slots, emit_with_freed_slots
 from .locking import _lock_and_reload, _lock_row, lock_salon
 from .messages import _event_payload, _withdraw_deposit_messages, appointment_event_key, emit_appointment_event
 from .resolution import _validate_segments
@@ -180,9 +180,7 @@ def release_for_unpaid_deposit(appointment: Appointment) -> Appointment:
         },
     )
     _withdraw_deposit_messages(appointment)
-    knowledge = _slot_knowledge(appointment, before_spans)
-    emit_appointment_event(appointment, "appointment.released_unpaid")
-    _sync_freed_slots(appointment, before_spans, {}, knowledge)
+    emit_with_freed_slots(appointment, "appointment.released_unpaid", before=before_spans, after={})
     _close_deposit_link_after_commit(appointment)
     return appointment
 

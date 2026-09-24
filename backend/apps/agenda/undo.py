@@ -36,15 +36,9 @@ from apps.core.services import log_activity
 
 from .models import Appointment, AppointmentService, Pause, UndoEntry
 from .services.deposits import _close_deposit_link_after_commit
-from .services.freed_slots import (
-    _appointment_spans,
-    _chain_spans,
-    _slot_knowledge,
-    _spans_minus,
-    _sync_freed_slots,
-)
+from .services.freed_slots import _appointment_spans, _chain_spans, _spans_minus, emit_with_freed_slots
 from .services.locking import lock_salon
-from .services.messages import _event_payload, _withdraw_deposit_messages, emit_appointment_event
+from .services.messages import _event_payload, _withdraw_deposit_messages
 from .services.resolution import _validate_segments
 from .services.undo_messages import revert_held_events
 
@@ -568,12 +562,13 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             # un appuntamento che non esisteva più.
             _withdraw_deposit_messages(appointment)
             _close_deposit_link_after_commit(appointment)
-            knowledge = _slot_knowledge(appointment, freed)
             # Poi si passa dall'emissione normale, che sa da sola se c'è
             # qualcosa da dire alla cliente: se la conferma è ancora ferma in
             # coda sparisce tutto e nessuno riceve niente, se invece era già
             # partita (o la cliente ha in mano il link) parte l'annullamento.
-            emit_appointment_event(
+            # E la lista d'attesa sente dello slot solo se qualcuno lo sapeva
+            # occupato: con la conferma già partita, lo slot si è liberato.
+            emit_with_freed_slots(
                 appointment,
                 "appointment.cancelled",
                 {
@@ -581,10 +576,9 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
                     "reason": "annullato dal salone",
                     "late": False,
                 },
+                before=freed,
+                after={},
             )
-            # E la lista d'attesa sente dello slot solo se qualcuno lo sapeva
-            # occupato: con la conferma già partita, lo slot si è liberato.
-            _sync_freed_slots(appointment, freed, {}, knowledge)
             _delete_appointment(appointment, entry.label)
         Pause.objects.filter(id__in=entry.created.get("pauses", [])).delete()
 
