@@ -2,12 +2,13 @@
 // Reperti della caccia ai bug del 22/09/2026: 12-10 (ricarico senza guardia),
 // 12-14 / 12-15 / 12-18 (secondo dito, rotella, Esc durante il trascinamento),
 // 12-21 (sotto-colonne di tutte le sedi), 13-08 (clic su un blocco con la
-// prenotazione aperta).
+// prenotazione aperta). Bug sospetti del 24/09/2026: n. 48 (pinch e
+// ⌘-rotella).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
-import { weekDayOps } from '../src/sections/agenda/lib.js';
+import { WHEEL_ZOOM_FACTOR, weekDayOps } from '../src/sections/agenda/lib.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
 
 // i pezzi senza hook della griglia, che per i test fanno parte di WeekView
@@ -203,4 +204,34 @@ test('con la prenotazione aperta il clic su un blocco non apre il dettaglio', as
   assert.equal(g.api.gets.filter((x) => x.url.startsWith('/api/agenda/appointments/')).length, 0);
   // la sezione (index.jsx) riceve il blocco e decide: con la prenotazione aperta avvisa e basta
   assert.equal(g.cb.onOpenAppt.calls.length, 1);
+});
+
+test('in settimana pinch e ⌘/ctrl + rotella zoomano la griglia, anche dopo il cambio di settimana', async () => {
+  const onZoom = spy();
+  const g = setup({ onZoom });
+  // i listener della rotella registrati sul contenitore
+  const wheel = [];
+  g.scrollEl.addEventListener = (type, fn, opts) => { if (type === 'wheel') wheel.push({ fn, opts }); };
+  g.scrollEl.removeEventListener = (type, fn) => { const i = wheel.findIndex((w) => w.fn === fn); if (i >= 0) wheel.splice(i, 1); };
+  const pinch = () => {
+    const ev = { ctrlKey: true, metaKey: false, deltaY: -10, clientY: 500, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    [...wheel].forEach((w) => w.fn(ev));
+    return ev;
+  };
+  // il primo disegno è lo scheletro, senza contenitore: la griglia arriva dopo
+  await loadWeek(g, W1);
+  assert.equal(wheel.length, 1, 'la griglia ascolta la rotella');
+  assert.equal(wheel[0].opts?.passive, false, 'non passivo, altrimenti il browser ingrandisce la pagina');
+  const ev = pinch();
+  assert.equal(ev.defaultPrevented, true, 'la pagina non si ingrandisce');
+  assert.equal(onZoom.calls.length, 1);
+  assert.equal(onZoom.calls[0][0](1), WHEEL_ZOOM_FACTOR, 'la griglia si ingrandisce di un passo');
+  // la settimana dopo passa dallo scheletro, poi arriva la griglia nuova
+  g.m.render({ ...g.m.props, weekStart: W2[0] });
+  g.m.render();
+  assert.equal(wheel.length, 0, 'lo scheletro non ha niente da zoomare');
+  await loadWeek(g, W2);
+  assert.equal(wheel.length, 1, 'la griglia nuova ascolta la rotella');
+  pinch();
+  assert.equal(onZoom.calls.length, 2);
 });
