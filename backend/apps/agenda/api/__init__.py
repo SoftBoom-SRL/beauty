@@ -22,9 +22,9 @@ from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
-from . import undo as undo_log
-from .models import Appointment, Pause, WaitlistEntry
-from .presenters import (
+from .. import undo as undo_log
+from ..models import Appointment, Pause, WaitlistEntry
+from ..presenters import (
     _appointment_out,
     _client_appointment_out,
     _codes_hidden,
@@ -36,7 +36,7 @@ from .presenters import (
     _waitlist_out,
     gift_index,
 )
-from .schemas import (
+from ..schemas import (
     MAX_ITEMS_PER_REQUEST,
     MAX_YEAR,
     MIN_YEAR,
@@ -65,10 +65,10 @@ from .schemas import (
 )
 # `appointments` e `availability` sono anche nomi di queryset e di una vista: i
 # due moduli dei servizi si importano col suffisso.
-from .services import appointments as appointment_services
-from .services import availability as availability_services
-from .services import deposit_holds, deposits, margin, refunds, transitions, waitlist
-from .services import pauses as pause_services  # «pauses» è anche il nome dei queryset
+from ..services import appointments as appointment_services
+from ..services import availability as availability_services
+from ..services import deposit_holds, deposits, margin, refunds, transitions, waitlist
+from ..services import pauses as pause_services  # «pauses» è anche il nome dei queryset
 
 router = Router(tags=["agenda"])
 
