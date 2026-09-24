@@ -35,6 +35,11 @@ export const DEFAULT_SLOT_MIN = 15;
 export const DAY_HOURS_W = 64;
 export const WEEK_HOURS_W = 46;
 
+/** Vista settimana: la tinta di oggi (discreta, derivata dal tema: era
+ *  #D6E4F7 fisso) e il bordo fra un giorno e l'altro, più leggero di --clay. */
+export const WEEK_TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
+export const WEEK_DAY_BORDER = '1px solid var(--hair)';
+
 /** La riga rossa dell'ora attuale, in giorno e settimana. */
 export const NOW_LINE_COLOR = '#F4708A';
 

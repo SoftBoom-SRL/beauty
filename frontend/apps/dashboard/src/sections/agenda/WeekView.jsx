@@ -8,15 +8,16 @@
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
-import React, { useRef, useState } from 'react';
-import { toastApiError, Icon, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
+import { useRef, useState } from 'react';
+import { toastApiError, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
-import WeekBlock from './grid/WeekBlock.jsx';
+import WeekDayHeader from './grid/WeekDayHeader.jsx';
+import HourGutter from './grid/HourGutter.jsx';
+import WeekDayColumn from './grid/WeekDayColumn.jsx';
+import WeekDragBadge from './grid/WeekDragBadge.jsx';
 import {
-  PXM, WEEK_HOURS_W, NOW_LINE_COLOR, HOVER_CLEAR_WEEK, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, visibleMarks, apptRevenue, weekGridRange,
-  slotStep, openApptIdOf, hoverPlacement,
+  PXM, WEEK_HOURS_W, HOVER_CLEAR_WEEK, isoAtMin, gridMarks, weekGridRange, slotStep, openApptIdOf, hoverPlacement,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
 import { retryForced } from './lib/retry.js';
@@ -30,9 +31,6 @@ import { useGridZoom } from './hooks/useGridZoom.js';
 import { useScrollMemo } from './hooks/useScrollMemo.js';
 import { useGridDrag } from './hooks/useGridDrag.js';
 
-// oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
-const TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
-const DAY_BORDER = '1px solid var(--hair)';
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
@@ -65,7 +63,6 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * non arrivano: la vista giorno li vede. Si calcola prima degli hook che la
    * leggono (zoom, scroll), anche durante il caricamento. */
   const { start: G0, end: G1 } = weekGridRange(days, settings?.opening_hours_week, ghost);
-  const hours = []; for (let h = G0 / 60; h <= G1 / 60; h++) hours.push(h);
   const marks = gridMarks(step, G0, G1);   // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (G1 - G0) * pxm;
 
@@ -297,63 +294,17 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       {/* sticky header: day + per-operator sub-columns */}
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', borderBottom: '1px solid var(--hair)', width: 'max-content', minWidth: '100%' }}>
         <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, background: 'var(--paper)', zIndex: 10 }} />
-        {dayData.map((d, i) => {
-          const isToday = d.date === today;
-          const isTargetDay = dragging && dg.dayIdx === i;
-          const rev = apptRevenue(d.list);   // il no-show non entra, come nel mese
-          const dayW = dayWidth(d);
-          const num = parseISO(d.date).getDate();
-          const statuses = Object.entries(d.by_status || {});
-          return (
-            <div key={i} style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', boxShadow: isTargetDay ? 'inset 0 -2px 0 var(--ink)' : 'none', transition: 'box-shadow 100ms' }}>
-              <button onClick={() => onOpenDay(d.date)} style={{ display: 'block', width: '100%', textAlign: 'center', padding: '8px 4px 5px', background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--muted)' }}>{t(DOW_IT[i], DOW_EN[i])}</span>
-                  <span className="t-num" style={{ fontSize: 14, color: isToday ? '#fff' : 'var(--ink)', background: isToday ? 'var(--clay)' : 'transparent', width: 24, height: 24, borderRadius: 99, display: 'grid', placeItems: 'center' }}>{num}</span>
-                </div>
-                <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 10, marginTop: 2 }}>
-                  {d.count ? `${d.count}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}` : t('Libero', 'Free')}
-                </div>
-                {statuses.length > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
-                    {statuses.map(([st, n]) => {
-                      const sm = statusMeta(st, t);
-                      return (
-                        <span key={st} title={sm.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                          <span style={{ width: 6, height: 6, borderRadius: 99, background: sm.color }} />
-                          <span className="tabnum" style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--muted)' }}>{n}</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </button>
-              {/* operator sub-column headers: striscia colorata in alto, stessa tinta dei blocchi */}
-              {d.dayOps.length > 0 && (
-                <div style={{ display: 'flex' }}>
-                  {d.dayOps.map((o) => (
-                    <div key={o.id} title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: 1, minWidth: 0, padding: '4px 2px 5px', textAlign: 'center', borderLeft: '1px solid var(--hair-2)', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: `color-mix(in srgb, ${colorOf(o.id)} 14%, var(--paper))` }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {dayData.map((d, i) => (
+          <WeekDayHeader
+            key={i} day={d} index={i} width={dayWidth(d)} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
+            showRevenue={showRevenue} t={t} lang={lang} onOpenDay={onOpenDay} colorOf={colorOf} opFirsts={opFirsts} setOpTip={setOpTip}
+          />
+        ))}
       </div>
       {/* grid — `data-span-min`: quanti minuti copre, per «Adatta» */}
       <div data-span-min={G1 - G0} style={{ display: 'flex', height: gridH, position: 'relative', width: 'max-content', minWidth: '100%' }}>
         {/* colonna delle ore: etichette in grassetto centrate sulla riga, ":30" in piccolo, tacca allineata */}
-        <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
-          {hours.map((h) => (
-            <React.Fragment key={h}>
-              <div className="tabnum" style={{ position: 'absolute', top: (h * 60 - G0) * pxm - 7, right: 7, fontSize: 10, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }}>{String(h).padStart(2, '0')}:00</div>
-              <div style={{ position: 'absolute', top: (h * 60 - G0) * pxm, right: 0, width: 5, ...GRID_LINE_STYLE.hour }} />
-              {h < G1 / 60 && 30 * pxm > 16 && <div className="tabnum" style={{ position: 'absolute', top: (h * 60 + 30 - G0) * pxm - 6, right: 7, fontSize: 8.5, lineHeight: '12px', fontWeight: 600, color: 'var(--muted-2)' }}>:30</div>}
-            </React.Fragment>
-          ))}
-        </div>
+        <HourGutter g0={G0} g1={G1} pxm={pxm} variant="week" />
         {dayData.map((d, i) => {
           const isToday = d.date === today;
           const dayW = dayWidth(d);
@@ -361,80 +312,20 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
           // destinazione senza sotto-colonna per l'operatrice (giorno vuoto): il blocco si mostra a tutta larghezza
           const looseTarget = isTargetDay && !d.dayOps.some((o) => o.id === dg.nop);
           return (
-            <div key={i} data-daycol={i} className={looseTarget ? 'dk-col--target' : ''}
-              onClick={(e) => { if (e.target === e.currentTarget) onDayAreaClick(e, d.date); }}
-              onDoubleClick={(e) => onDayAreaClick(e, d.date)}
-              style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, position: 'relative', borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
-              {/* righe orarie: sotto i blocchi (z 2), sopra lo sfondo; pointer-events none per non disturbare drag e click */}
-              {visibleMarks(marks, pxm)
-                .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - G0) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
-              {isToday && nowMinLive >= G0 && nowMinLive <= G1 && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - G0) * pxm, height: 2, background: NOW_LINE_COLOR, zIndex: 6, pointerEvents: 'none' }} />}
-              {d.dayOps.map((o) => {
-                // il blocco trascinato esce dalla sua corsia: al suo posto la traccia, e riappare dove punta il cursore
-                const opList = d.list.filter((a) => a.operator_id === o.id && !(dragging && a.id === dg.id));
-                const isTarget = isTargetDay && dg.nop === o.id;
-                const isOrigin = dragging && dg.origDayIdx === i && dg.origOp === o.id;
-                return (
-                  <div
-                    key={o.id}
-                    data-subcol=""
-                    data-day={i}
-                    data-op={o.id}
-                    className={isTarget ? 'dk-col--target' : ''}
-                    onClick={(e) => onEmptyClick(e, o.id, d.date)}
-                    style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
-                  >
-                    {isOrigin && <div className="dk-drag-ghost" style={{ top: (dg.orig - G0) * pxm + 1, height: (dg.obj.endMin - dg.obj.startMin) * pxm - 2, left: 1, right: 1, borderRadius: 6 }} />}
-                    {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
-                        che si sta guardando: dove finirebbe, alla sua ora. Non
-                        intercetta il puntatore — il clic passa sotto. */}
-                    {ghost && d.date === ghostDate && ghostSpans.filter((g) => g.opId === o.id).map((g) => (
-                      <div key={'ghost' + g.key} style={{
-                        position: 'absolute', left: 1, right: 1,
-                        top: (g.startMin - G0) * pxm + 1, height: g.dur * pxm - 2,
-                        borderRadius: 6, border: '2px dashed var(--clay)',
-                        background: 'color-mix(in srgb, var(--clay) 14%, transparent)',
-                        pointerEvents: 'none', zIndex: 5, overflow: 'hidden', padding: '2px 4px',
-                      }}>
-                        <div className="tabnum" style={{ fontSize: 9, fontWeight: 800, color: 'var(--clay-ink)' }}>{timeLabel(g.startMin)}</div>
-                      </div>
-                    ))}
-                    {weekLayout(opList).map((a) => {
-                      const lc = a._laneCount || 1, lane = a._lane || 0;
-                      return (
-                        <WeekBlock pxm={pxm} g0={G0}
-                          key={a.id} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
-                          left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
-                          onDown={(e) => onBlockDown(e, a, i)}
-                          onHover={openHover} onLeave={closeHover}
-                        />
-                      );
-                    })}
-                    {isTarget && <WeekBlock pxm={pxm} g0={G0} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
-                  </div>
-                );
-              })}
-              {looseTarget && <WeekBlock pxm={pxm} g0={G0} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
-            </div>
+            <WeekDayColumn
+              key={i} day={d} index={i} width={dayW} isToday={isToday} isTargetDay={isTargetDay} looseTarget={looseTarget}
+              dragging={dragging} dg={dg} movingObj={movingObj} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
+              ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
+              colorOf={colorOf} itemColor={itemColor}
+              onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onHover={openHover} onLeave={closeHover}
+            />
           );
         })}
       </div>
       {hover && <ApptHoverCard hover={hover} t={t} lang={lang} operators={operators} colorOf={colorOf} hints="week" />}
       {opTip && <div style={{ position: 'fixed', top: opTip.y, left: opTip.x, transform: 'translateX(-50%)', zIndex: 90, background: 'var(--ink)', color: '#fff', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: 'var(--sh-pop)' }}>{opTip.name}</div>}
       {/* badge che segue il cursore: giorno + operatrice + orario di arrivo */}
-      {dragging && (() => {
-        const day = dayData[dg.dayIdx];
-        const op = operators.find((o) => o.id === dg.nop);
-        return (
-          <div className="dk-drag-badge" style={{ top: dg.cy + 18, left: dg.cx + 18 }}>
-            <Icon name="calendar" size={14} color="#fff" stroke={2.4} />
-            {day && <span>{t(DOW_IT[dg.dayIdx], DOW_EN[dg.dayIdx])} {parseISO(day.date).getDate()}</span>}
-            {op && <span>· {op.first_name}</span>}
-            <span className="tabnum">· {timeLabel(movingObj.startMin)}–{timeLabel(movingObj.endMin)}</span>
-            {dg.snap && <small>· {t(`attaccato a ${dg.snap.label}`, `snapped to ${dg.snap.label}`)}</small>}
-          </div>
-        );
-      })()}
+      {dragging && <WeekDragBadge dg={dg} dayData={dayData} operators={operators} movingObj={movingObj} t={t} />}
     </div>
   );
 }

@@ -7,7 +7,9 @@ import { test } from 'node:test';
 
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, textOf } from './grid-harness.mjs';
 
-const { default: DayGrid } = await loadComponent('apps/dashboard/src/sections/agenda/DayGrid.jsx');
+// i pezzi senza hook della griglia, che per i test fanno parte di DayGrid
+const DAY_PARTS = ['OperatorHeaderCell', 'OpColorPicker', 'HourGutter', 'GridLines', 'NowLine', 'ClosedHours', 'GhostBlocks', 'VisitBlocks', 'DayDragBadge'];
+const { default: DayGrid } = await loadComponent('apps/dashboard/src/sections/agenda/DayGrid.jsx', { expand: DAY_PARTS });
 
 const PXM = 1.35;   // px per minuto a zoom 1
 const DATE = '2026-10-01';                       // giovedì

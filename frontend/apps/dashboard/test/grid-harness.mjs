@@ -103,8 +103,11 @@ const CTX = 'export const useDash = () => globalThis.__dash;';
 
 /** Compila `entry` (percorso dal frontend/) e ne restituisce i moduli esportati.
  *  `stubs`: nomi di file (es. 'RightRail.jsx') da sostituire con componenti muti
- *  che portano lo stesso nome — si guardano le props che ricevono. */
-export async function loadComponent(entry, { stubs = [] } = {}) {
+ *  che portano lo stesso nome — si guardano le props che ricevono.
+ *  `expand`: nomi di sotto-componenti senza hook che findAll, find e textOf
+ *  attraversano come se fossero scritti nel padre (vedi EXPAND). */
+export async function loadComponent(entry, { stubs = [], expand = [] } = {}) {
+  expand.forEach((name) => EXPAND.add(name));
   const res = await build({
     entryPoints: [join(FRONT, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
@@ -164,12 +167,23 @@ export function mount(Comp, props, { attach } = {}) {
 }
 
 /* ---- albero degli elementi ---- */
+/* Sotto-componenti «trasparenti»: i pezzi senza hook di una vista (la colonna
+ * delle ore, il badge del trascinamento, le testate…). Nel browser li disegna
+ * il React vero; qui l'albero si ferma ai componenti funzione, e per i test
+ * quei pezzi fanno parte del padre: findAll, find e textOf li attraversano
+ * chiamandoli come funzioni, e l'elemento del componente resta trovabile. Li
+ * elenca loadComponent({ expand }); gli altri componenti (i blocchi, che i
+ * test chiamano da sé) non si attraversano. */
+const EXPAND = new Set();
 const kids = (el) => {
-  const c = el && typeof el === 'object' ? el.props?.children : null;
+  if (!el || typeof el !== 'object') return [];
+  if (typeof el.type === 'function' && EXPAND.has(el.type.name)) return [el.type(el.props)].flat(Infinity);
+  const c = el.props?.children;
   if (c == null || c === false || c === true) return [];
   return (Array.isArray(c) ? c : [c]).flat(Infinity);
 };
-/** Tutti gli elementi (non espande i componenti funzione) che soddisfano `pred`. */
+/** Tutti gli elementi (non espande i componenti funzione, tranne quelli di
+ *  `expand`) che soddisfano `pred`. */
 export function findAll(tree, pred) {
   const out = [];
   const walk = (el) => {

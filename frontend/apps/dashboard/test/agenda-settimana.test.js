@@ -10,7 +10,9 @@ import { isoAtMin } from '@youty/shared';
 import { weekDayOps } from '../src/sections/agenda/lib.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
 
-const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx');
+// i pezzi senza hook della griglia, che per i test fanno parte di WeekView
+const WEEK_PARTS = ['WeekDayHeader', 'HourGutter', 'WeekDayColumn', 'GridLines', 'NowLine', 'WeekDragBadge'];
+const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx', { expand: WEEK_PARTS });
 
 const PXM = 1.35;
 const W1 = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
