@@ -14,6 +14,7 @@ from ninja.pagination import LimitOffsetPagination, paginate
 from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import client_auth, staff_auth
+from common.money import CENT, MAX_MONEY
 from common.permissions import require_scope
 from common.utils import salon_get
 
@@ -56,11 +57,6 @@ _ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_pla
 def _get_client(ctx, client_id):
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
     return salon_get(Client, ctx, client_id)
-
-
-# Tetto compatibile con DecimalField(max_digits=10, decimal_places=2): oltre
-# questa cifra il salvataggio esplode in 500 invece di dire cosa non va.
-MAX_MONEY = Decimal("99999999.99")
 
 
 def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
@@ -852,7 +848,7 @@ def client_create_gift_card(request, data: ClientGiftCardIn):
     """Acquisto gift card dall'app: nasce unpaid, pagamento in salone
     (Stripe checkout in fase 2)."""
     ctx = request.auth
-    value = Decimal(str(data.value)).quantize(Decimal("0.01"))
+    value = Decimal(str(data.value)).quantize(CENT)
     if not CLIENT_GIFT_CARD_MIN <= value <= CLIENT_GIFT_CARD_MAX:
         raise HttpError(
             422,

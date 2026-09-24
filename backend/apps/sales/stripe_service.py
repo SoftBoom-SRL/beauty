@@ -15,6 +15,8 @@ from django.db import transaction
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from common.money import CENT, to_cents
+
 logger = logging.getLogger("youty.stripe")
 
 CONNECT_AUTHORIZE_URL = "https://connect.stripe.com/oauth/authorize"
@@ -184,10 +186,6 @@ def connect_disconnect(salon) -> None:
     salon_settings.save(update_fields=["stripe_account_id", "stripe_connected_at", "updated_at"])
 
 
-def _to_cents(amount) -> int:
-    return int((Decimal(str(amount)) * 100).quantize(Decimal("1")))
-
-
 def _currency(salon) -> str:
     return (getattr(salon, "currency", "") or "EUR").lower()
 
@@ -318,7 +316,7 @@ def create_deposit_checkout(appointment) -> dict:
                 "quantity": 1,
                 "price_data": {
                     "currency": _currency(appointment.salon),
-                    "unit_amount": _to_cents(amount),
+                    "unit_amount": to_cents(amount),
                     "product_data": {"name": f"Caparra appuntamento {when} · {appointment.salon.name}"},
                 },
             }
@@ -589,7 +587,7 @@ def no_show_charge_amount(appointment) -> Decimal:
             str(appointment.deposit_refunded_amount or 0)
         )
         amount -= max(kept, Decimal("0.00"))
-    return max(amount, Decimal("0.00")).quantize(Decimal("0.01"))
+    return max(amount, Decimal("0.00")).quantize(CENT)
 
 
 def charge_full_amount(appointment):
@@ -624,7 +622,7 @@ def charge_full_amount(appointment):
     try:
         intent = as_dict(
             stripe.PaymentIntent.create(
-                amount=_to_cents(amount),
+                amount=to_cents(amount),
                 currency=_currency(appointment.salon),
                 customer=customer_id,
                 payment_method=client.stripe_payment_method_id,

@@ -20,6 +20,7 @@ from django.db import IntegrityError, transaction
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from common.money import CENT
 
 # compat refactoring: rimuovere dopo l'integrazione — l'agenda chiama queste
 # tre funzioni come `apps.sales.services.<nome>`, anche con `getattr(...,
@@ -28,7 +29,8 @@ from apps.core.services import log_activity
 from .deposits import deposit_retained, settle_deposit_excess, sync_deposit_refunds  # noqa: F401
 from .models import Payment, Sale, SaleLine
 
-TWO_PLACES = Decimal("0.01")
+# Scarto ammesso fra pagamenti e dovuto: vale un centesimo come `CENT`, ma è
+# una tolleranza, non un arrotondamento.
 PAYMENT_TOLERANCE = Decimal("0.01")
 # Tetti di sanità su una riga di vendita: un errore di battitura (o una
 # richiesta costruita a mano) non deve poter scrivere a registro una cifra
@@ -44,7 +46,7 @@ def line_amount(qty, unit_price, discount_pct: int = 0, is_gift: bool = False) -
     gross = Decimal(qty) * Decimal(str(unit_price))
     if discount_pct:
         gross = gross * (Decimal(100) - Decimal(discount_pct)) / Decimal(100)
-    return gross.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+    return gross.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
@@ -93,7 +95,7 @@ def _prepare_lines(blocks: list[dict]) -> tuple[list[dict], Decimal]:
                 "service_id": raw.get("service_id"),
                 "product_id": raw.get("product_id"),
                 "qty": qty,
-                "unit_price": Decimal(str(unit_price)).quantize(TWO_PLACES),
+                "unit_price": Decimal(str(unit_price)).quantize(CENT),
                 "discount_pct": discount_pct,
                 "is_gift": is_gift,
                 "amount": amount,
@@ -189,7 +191,7 @@ def _spread_coupon(prepared: list[dict], discount: Decimal) -> None:
     ordered = sorted(eligible, key=lambda d: d["amount"])
     remaining = discount
     for data in ordered[:-1]:
-        share = min((discount * data["amount"] / base).quantize(TWO_PLACES, rounding=ROUND_HALF_UP), data["amount"])
+        share = min((discount * data["amount"] / base).quantize(CENT, rounding=ROUND_HALF_UP), data["amount"])
         data["coupon_share"] = share
         remaining -= share
     for data in reversed(ordered):  # la più grande assorbe l'arrotondamento
@@ -223,7 +225,7 @@ def finalize_sale(
     payments = [{"method": cash|card|other|gift_card, "amount": Decimal, "gift_card_code"?: str}]
     coupon_code = buono sconto presentato al banco, facoltativo (vedi `_coupon_for_sale`)
     """
-    deposit_deducted = Decimal(str(deposit_deducted or 0)).quantize(TWO_PLACES)
+    deposit_deducted = Decimal(str(deposit_deducted or 0)).quantize(CENT)
     if deposit_deducted < 0:
         raise HttpError(422, "Acconto detratto non valido")
 
@@ -318,7 +320,7 @@ def finalize_sale(
                 line.save(update_fields=["gift_card"])
 
         for payment in payments:
-            amount = Decimal(str(payment.get("amount") or 0)).quantize(TWO_PLACES)
+            amount = Decimal(str(payment.get("amount") or 0)).quantize(CENT)
             card = None
             if payment["method"] == Payment.Method.GIFT_CARD:
                 code = (payment.get("gift_card_code") or "").strip()
@@ -376,7 +378,7 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
     """
     if SaleLine.objects.filter(gift_card=card).exists():
         return None  # già venduta al banco: sarebbe un doppio conteggio
-    amount = Decimal(str(card.initial_value)).quantize(TWO_PLACES)
+    amount = Decimal(str(card.initial_value)).quantize(CENT)
     if amount <= 0:
         return None
     if method not in Payment.Method.values:
@@ -456,7 +458,7 @@ def record_deposit_cashed(salon, appointment, *, method: str, actor=None):
     la caparra portata in salone. Ritorna la Sale creata, o None se quella
     caparra ha già la sua vendita.
     """
-    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(TWO_PLACES)
+    amount = Decimal(str(appointment.deposit_amount or 0)).quantize(CENT)
     if amount <= 0:
         return None
     if Sale.objects.filter(deposit_appointment=appointment).exists():
@@ -471,7 +473,7 @@ def record_no_show_charge(salon, appointment, *, amount, actor=None):
     corrispondente un no-show da 80 € lasciava il riepilogo di giornata e i KPI
     a zero. Ritorna la Sale creata, o None se l'appuntamento ne ha già una.
     """
-    amount = Decimal(str(amount or 0)).quantize(TWO_PLACES)
+    amount = Decimal(str(amount or 0)).quantize(CENT)
     if amount <= 0:
         return None
     if Sale.objects.filter(appointment=appointment).exists():

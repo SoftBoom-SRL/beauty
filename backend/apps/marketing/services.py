@@ -16,6 +16,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity, supersede_events
+from common.money import CENT
 from common.utils import human_code
 
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
@@ -470,7 +471,7 @@ def coupon_discount(coupon, base) -> Decimal:
     value = Decimal(str(coupon.value))
     if coupon.kind == Coupon.Kind.PERCENT:
         value = base * value / Decimal(100)
-    return min(value, base).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return min(value, base).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def mark_coupon_redeemed(coupon, sale) -> bool:

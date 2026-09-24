@@ -19,7 +19,7 @@ from django.db import transaction
 
 from apps.agenda.models import Appointment
 from apps.core.services import log_activity
-from common.money import CENT
+from common.money import CENT, from_cents, to_cents
 
 from . import stripe_service
 from .models import DepositRefund, Payment, Sale
@@ -40,7 +40,7 @@ def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
     excess = Decimal(str(excess or 0)).quantize(CENT)
     if excess <= 0:
         return
-    cents = int((excess * 100).quantize(Decimal("1")))
+    cents = to_cents(excess)
     refund = stripe_service.refund_payment_intent(
         appointment.salon,
         appointment.deposit_payment_intent_id,
@@ -80,7 +80,7 @@ def deposit_retained(appointment) -> Decimal:
     né detratto né restituito, e la cliente lo perdeva (02-21, 05-14). Il
     checkout ne restituisce la parte che non ha detratto.
     """
-    from apps.agenda.services import _refund_sums, _refunds_committed_cents, _to_cents  # lazy
+    from apps.agenda.services import _refund_sums, _refunds_committed_cents  # lazy
 
     if appointment.deposit_status not in ("paid", "refunding"):
         return Decimal("0.00")
@@ -93,10 +93,10 @@ def deposit_retained(appointment) -> Decimal:
     # soldi che la cliente ha già riavuto.
     committed = max(
         _refunds_committed_cents(refunds),
-        _to_cents(appointment.deposit_refunded_amount) + in_flight,
+        to_cents(appointment.deposit_refunded_amount) + in_flight,
     )
-    left = _to_cents(appointment.deposit_amount) - committed
-    return (Decimal(max(left, 0)) / 100).quantize(CENT)
+    left = to_cents(appointment.deposit_amount) - committed
+    return from_cents(max(left, 0))
 
 
 def sync_deposit_refunds(appointment) -> None:
@@ -140,7 +140,7 @@ def sync_deposit_refunds(appointment) -> None:
         for row in DepositRefund.objects.filter(salon_id=appointment.salon_id, key__startswith=f"{appointment.id}:")
     }
     for key, (cents, method) in wanted.items():
-        amount = (Decimal(cents) / 100).quantize(CENT)
+        amount = from_cents(cents)
         row = existing.pop(key, None)
         if row is None:
             DepositRefund.objects.create(
@@ -244,7 +244,7 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
                 payload={"appointment_id": appointment.id, "payment_intent_id": intent_id},
             )
             return "ignored", 0
-        expected = stripe_service._to_cents(appointment.deposit_amount or 0)
+        expected = to_cents(appointment.deposit_amount)
         received = amount_received(obj)
         if received is not None and int(received) < expected:
             log_activity(
@@ -267,7 +267,7 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
             # (05-07, 02-06). La caparra vale quanto è arrivato davvero — così
             # vendita-caparra, rimborsi e quota detraibile tornano con Stripe —
             # e l'eccedenza si restituisce subito dopo, a lock rilasciato.
-            appointment.deposit_amount = (Decimal(int(received)) / 100).quantize(Decimal("0.01"))
+            appointment.deposit_amount = from_cents(int(received))
             fields.append("deposit_amount")
         appointment.deposit_status = "paid"
         appointment.deposit_payment_intent_id = intent_id
@@ -301,7 +301,7 @@ def refund_overpaid_deposit(appointment, intent_id: str, cents: int, account: st
         amount_cents=cents,
         account=account or "",
     )
-    excess = (Decimal(int(cents)) / 100).quantize(Decimal("0.01"))
+    excess = from_cents(int(cents))
     if refund is not None:
         # Registrato come ogni rimborso: la quota detraibile al checkout torna
         # la caparra chiesta, e il denaro restituito esce dall'incasso.

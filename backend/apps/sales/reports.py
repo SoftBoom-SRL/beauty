@@ -12,6 +12,8 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
+from common.money import CENT
+
 from . import serializers
 from .models import DepositRefund, Payment, Sale, SaleLine
 
@@ -115,7 +117,7 @@ def sales_history(salon, *, kind, date_from, date_to, q, client_id, operator_id,
     return {
         "count": agg["count"] or 0,
         "kpi": {
-            "revenue": revenue.quantize(Decimal("0.01")),
+            "revenue": revenue.quantize(CENT),
             "count": agg["count"] or 0,
             "items_count": items_count,
         },
