@@ -8,11 +8,12 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.testing import staff_context
+from common.testing import post_json, put_json, staff_context
 
 from ..api import send_order, update_order
 from ..models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
 from ..orders import generate_draft_orders, receive_order
+from .base import _InventorySetup
 
 
 class ReceiveOrderConcurrencyTests(TestCase):
@@ -170,3 +171,27 @@ class OrderWorkflowTests(TestCase):
                 OrderUpdateIn(lines=[OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("1"))]),
             )
         self.assertEqual(caught.exception.status_code, 400)
+
+
+class OrderQuantityLimitsTests(_InventorySetup):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09: le quantità delle
+    righe d'ordine sono numeric(10,2), e oltre i cento milioni PostgreSQL
+    rifiutava la riga, 500 invece di un errore che dice quale campo
+    correggere."""
+
+    def test_ordered_and_received_quantities_stay_within_the_column(self):
+        shampoo = self._product("Shampoo")
+        draft = PurchaseOrder.objects.create(salon=self.salon, supplier=self.sup_a)
+        line = PurchaseOrderLine.objects.create(order=draft, product=shampoo, qty_ordered=Decimal("4"))
+        body = {"lines": [{"id": line.id, "qty_ordered": "100000000.00"}]}
+        res = put_json(self.client, f"/api/inventory/orders/{draft.id}", body, **self.auth)
+        self.assertEqual(res.status_code, 422, res.content)
+        sent = PurchaseOrder.objects.create(salon=self.salon, supplier=self.sup_a, status=PurchaseOrder.Status.SENT)
+        sent_line = PurchaseOrderLine.objects.create(order=sent, product=shampoo, qty_ordered=Decimal("4"))
+        body = {"lines": [{"id": sent_line.id, "qty_received": "100000000.00"}]}
+        res = post_json(self.client, f"/api/inventory/orders/{sent.id}/receive", body, **self.auth)
+        self.assertEqual(res.status_code, 422, res.content)
+        line.refresh_from_db()
+        sent_line.refresh_from_db()
+        shampoo.refresh_from_db()
+        self.assertEqual((line.qty_ordered, sent_line.qty_received, shampoo.stock_qty), (4, 0, 0))

@@ -5,6 +5,8 @@ from typing import Optional
 from ninja import Schema
 from pydantic import Field
 
+from common.money import MAX_MONEY
+
 
 # ---- Operatrici ----------------------------------------------------------------
 
@@ -13,7 +15,8 @@ class OperatorIn(Schema):
     # Testi lunghi al massimo quanto la colonna del modello: un ruolo di 121
     # caratteri su PostgreSQL faceva rifiutare la riga, 500 invece di un errore
     # che dice quale campo correggere (bug sospetti del 24/09, voce 21). Colore,
-    # ciclo, ordine e costo orario li controlla `validate_operator_payload` (400).
+    # ciclo, ordine e costo orario negativo li controlla `validate_operator_payload`
+    # (400); il costo orario ha qui il massimo della colonna, numeric(10,2).
     first_name: str = Field(max_length=80)
     last_name: str = Field(max_length=80)
     color: str = "#A5B4FC"
@@ -21,7 +24,7 @@ class OperatorIn(Schema):
     location_id: Optional[int] = None
     user_id: Optional[int] = None
     service_ids: list[int] = []
-    hourly_cost: Decimal = Decimal("0")
+    hourly_cost: Decimal = Field(Decimal("0"), le=MAX_MONEY)
     cycle_weeks: int = 1
     active: bool = True
     order: int = 0
@@ -41,7 +44,7 @@ class OperatorPatchIn(Schema):
     location_id: Optional[int] = None
     user_id: Optional[int] = None
     service_ids: Optional[list[int]] = None
-    hourly_cost: Optional[Decimal] = None
+    hourly_cost: Optional[Decimal] = Field(None, le=MAX_MONEY)
     cycle_weeks: Optional[int] = None
     active: Optional[bool] = None
     order: Optional[int] = None

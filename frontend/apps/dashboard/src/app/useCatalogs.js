@@ -17,8 +17,8 @@ export function useCatalogs() {
   const [salon, setSalon] = useState(null);                       // SalonOut {id,name,slug,locations,settings,...}
   const [operators, setOperators] = useState([]);                 // [OperatorStatusOut]
   const [services, setServices] = useState([]);                   // [ServiceOut]
-  const [serviceCategories, setServiceCategories] = useState([]); // [catalog CategoryOut]
-  const [clientCategories, setClientCategories] = useState([]);   // [clients CategoryOut]
+  const [serviceCategories, setServiceCategories] = useState([]); // [ServiceCategoryOut]
+  const [clientCategories, setClientCategories] = useState([]);   // [ClientCategoryOut]
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState(null);
 

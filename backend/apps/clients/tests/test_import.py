@@ -392,3 +392,26 @@ class ImplausiblePhoneTests(_Base):
         self.assertEqual(result["created"], 2)
         self.assertEqual([w["row"] for w in result["warnings"]], [0])
         self.assertIn("Telefono non riconosciuto", result["warnings"][0]["reason"])
+
+
+class LongLabelNameTests(_Base):
+    """Un nome d'etichetta oltre i 60 caratteri della colonna: l'import lo creava
+    troncato ma lo cercava (e lo teneva in cache) intero. Al secondo import, o
+    con due nomi che cominciano con gli stessi 60 caratteri, non lo ritrovava, e
+    la nuova creazione urtava il vincolo (salone, nome): ogni riga con
+    quell'etichetta finiva fra gli errori con «UNIQUE constraint failed»."""
+
+    LONG = "Clienti arrivate con la promozione di settembre del salone del centro"
+
+    def test_the_truncated_label_is_found_again(self):
+        first = import_rows(self.salon, [{"first_name": "Anna", "phone": "+393330009901", "categories": [self.LONG]}])
+        second = import_rows(self.salon, [
+            {"first_name": "Bea", "phone": "+393330009902", "categories": [self.LONG]},
+            {"first_name": "Carla", "phone": "+393330009903", "categories": [self.LONG[:60] + " (bis)"]},
+        ])
+        self.assertEqual((first["errors"], second["errors"]), ([], []))
+        self.assertEqual(second["created"], 2)
+        label = ClientCategory.objects.get(salon=self.salon)
+        self.assertEqual(label.name, self.LONG[:60])
+        for name in ("Anna", "Bea", "Carla"):
+            self.assertEqual(list(Client.objects.get(salon=self.salon, first_name=name).categories.all()), [label])

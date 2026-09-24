@@ -284,6 +284,37 @@ class ServiceColumnLimitsTests(_CatalogSetup):
         res = self._send("post", "/api/catalog/services", at_the_limit)
         self.assertEqual(res.status_code, 200, res.content)
 
+    def test_price_and_costs_stay_within_the_column(self):
+        """Stessa classe: prezzo e costi sono numeric(10,2), e oltre i cento
+        milioni PostgreSQL rifiutava la riga."""
+        base = {"category_id": self.cat.id, "name_it": "Piega", "duration_min": 30, "price": "25.00"}
+        for field in ("price", "product_cost", "supplier_cost"):
+            body = {**base, field: "100000000.00"}
+            self.assertEqual(self._send("post", "/api/catalog/services", body).status_code, 422, field)
+            res = self._send("put", f"/api/catalog/services/{self.color.id}", body)
+            self.assertEqual(res.status_code, 422, field)
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.price, Decimal("60"))
+        top = {**base, "price": "99999999.99", "product_cost": "99999999.99", "supplier_cost": "99999999.99"}
+        self.assertEqual(self._send("post", "/api/catalog/services", top).status_code, 200)
+
+    def test_package_name_price_and_quantity_stay_within_their_columns(self):
+        """Stessa classe: il nome del pacchetto (120 caratteri), il prezzo
+        (numeric(10,2)) e la quantità di una riga (PositiveIntegerField)."""
+        base = {"name": "Mani perfette", "price": "40.00", "items": [{"service_id": self.color.id, "qty": 2}]}
+        refused = [
+            {"name": "x" * 121},
+            {"price": "100000000.00"},
+            {"items": [{"service_id": self.color.id, "qty": 2147483648}]},
+        ]
+        for change in refused:
+            res = self._send("post", "/api/catalog/packages", {**base, **change})
+            self.assertEqual(res.status_code, 422, change)
+        self.assertFalse(Package.objects.exists())
+        top = {"name": "x" * 120, "price": "99999999.99", "items": [{"service_id": self.color.id, "qty": 2147483647}]}
+        res = self._send("post", "/api/catalog/packages", top)
+        self.assertEqual(res.status_code, 200, res.content)
+
 
 class YourangLinkSurvivesEditsTests(_CatalogSetup):
     """18-07: la sincronizzazione collega la voce mentre il titolare modifica il prezzo."""

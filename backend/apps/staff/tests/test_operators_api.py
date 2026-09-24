@@ -185,6 +185,19 @@ class ColumnLimitsTests(StaffApiTestCase):
         res = self._send("put", f"{url}/{created.json()['id']}", body)
         self.assertEqual(res.status_code, 422, res.content)
 
+    def test_the_hourly_cost_stays_within_the_column(self):
+        """Stessa classe: il costo orario è numeric(10,2), e oltre i cento
+        milioni PostgreSQL rifiutava la riga (un costo negativo era già un 400)."""
+        operator = Operator.objects.create(salon=self.salon, first_name="Anna", last_name="Bianchi")
+        res = self._send("post", "/api/staff/", self.operator_payload(hourly_cost="100000000.00"))
+        self.assertEqual(res.status_code, 422, res.content)
+        res = self._send("put", f"/api/staff/{operator.id}", {"hourly_cost": "100000000.00"})
+        self.assertEqual(res.status_code, 422, res.content)
+        operator.refresh_from_db()
+        self.assertEqual(operator.hourly_cost, 0)
+        res = self._send("post", "/api/staff/", self.operator_payload(hourly_cost="99999999.99"))
+        self.assertEqual(res.status_code, 200, res.content)
+
 
 class OperatorListQueryCountTests(StaffApiTestCase):
     """La lista operatrici è la pagina che il salone tiene aperta tutto il

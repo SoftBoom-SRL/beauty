@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from django.test import TestCase
 from ninja.errors import HttpError
@@ -12,6 +12,7 @@ from common.testing import staff_context
 from config.api import api
 
 from ..api import client_counts, create_category, delete_category, update_category
+from ..labels import update_label
 from ..models import Client, ClientCategory
 from ..schemas import ClientCategoryIn
 from .base import ClientsTestCase, _staff_http
@@ -179,6 +180,22 @@ class DeleteLabelTests(_Base):
         self.assertFalse(ClientCategory.objects.filter(id=label.id).exists())
 
 
+def _other_station_first(other_station):
+    """`lock_salon` sostituito: mentre si aspetta il lock, `other_station` salva e
+    committa per prima; poi il lock arriva."""
+    from apps.agenda.services.locking import lock_salon as real_lock
+
+    state = {"done": False}
+
+    def lock_after_the_other_station(salon):
+        if not state["done"]:
+            state["done"] = True
+            other_station()
+        return real_lock(salon)
+
+    return patch("apps.agenda.services.locking.lock_salon", side_effect=lock_after_the_other_station)
+
+
 class DeleteLabelRaceTests(_Base):
     """Bug sospetti del 24/09, voce 26: controllo e cancellazione non erano
     atomici. Una regola salvata da un'altra postazione fra i due passi citava
@@ -186,23 +203,9 @@ class DeleteLabelRaceTests(_Base):
     proprio il caso che il controllo vuole evitare. Ora il controllo si fa
     nella transazione della cancellazione, dopo il lock del salone."""
 
-    def _deleting_after(self, other_station):
-        """Elimina l'etichetta mentre `other_station` salva e committa per prima."""
-        from apps.agenda.services.locking import lock_salon as real_lock
-
-        state = {"done": False}
-
-        def lock_after_the_other_station(salon):
-            if not state["done"]:
-                state["done"] = True
-                other_station()
-            return real_lock(salon)
-
-        return patch("apps.agenda.services.locking.lock_salon", side_effect=lock_after_the_other_station)
-
     def test_a_rule_saved_while_waiting_for_the_lock_is_seen(self):
         label = create_category(self.request, ClientCategoryIn(name="A rischio"))
-        with self._deleting_after(lambda: self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")) as lock:
+        with _other_station_first(lambda: self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")) as lock:
             with self.assertRaises(HttpError) as caught:
                 delete_category(self.request, label.id)
         lock.assert_called_once_with(self.salon)
@@ -218,13 +221,49 @@ class DeleteLabelRaceTests(_Base):
             # rinomina e riscrive la regola: «A rischio» non la cita più nessuno
             update_category(self.request, label.id, ClientCategoryIn(name="Rischio alto"))
 
-        with self._deleting_after(rename) as lock:
+        with _other_station_first(rename) as lock:
             with self.assertRaises(HttpError) as caught:
                 delete_category(self.request, label.id)
-        lock.assert_called_once_with(self.salon)
+        # la cancellazione, poi il rinomina dell'altra postazione, che prende lo stesso lock
+        self.assertEqual(lock.call_args_list, [call(self.salon), call(self.salon)])
         self.assertEqual(caught.exception.status_code, 400)
         self.assertIn("«Rischio alto»", caught.exception.message)
         self.assertTrue(ClientCategory.objects.filter(id=label.id).exists())
+
+
+class UpdateLabelRaceTests(_Base):
+    """La modifica salvava con save() completo la copia dell'etichetta letta a
+    inizio richiesta. In gara con una cancellazione la riga non c'era più, e
+    Django la reinseriva: l'etichetta tornava, senza più le sue clienti. E il
+    nome da riscrivere nelle condizioni era quello di prima di un rinomina
+    fatto nel frattempo da un'altra postazione."""
+
+    def test_an_edit_arriving_after_the_delete_does_not_bring_the_label_back(self):
+        label = create_category(self.request, ClientCategoryIn(name="VIP"))
+        stale = ClientCategory.objects.get(pk=label.pk)  # letta dalla modifica prima della cancellazione
+        delete_category(self.request, label.id)
+        with self.assertRaises(HttpError) as caught:
+            update_label(self.request.auth, stale, {"name": "Clienti VIP", "color": "#FF0000", "order": 0})
+        self.assertEqual(caught.exception.status_code, 404)
+        self.assertFalse(ClientCategory.objects.filter(salon=self.salon).exists())
+
+    def test_the_conditions_are_renamed_from_the_name_it_has_now(self):
+        label = create_category(self.request, ClientCategoryIn(name="A rischio"))
+        rule = self.deposit_rule(_label_rule("A rischio"), name="Caparra a rischio")
+        stale = ClientCategory.objects.get(pk=label.pk)
+        update_category(self.request, label.id, ClientCategoryIn(name="Rischio alto"))  # l'altra postazione
+        update_label(self.request.auth, stale, {"name": "Rischio altissimo", "color": stale.color, "order": 0})
+        rule.refresh_from_db()
+        self.assertEqual(rule.conditions["rules"][0]["value"], "Rischio altissimo")
+
+    def test_a_rule_saved_while_waiting_for_the_lock_is_renamed_too(self):
+        label = create_category(self.request, ClientCategoryIn(name="A rischio"))
+        saved = []
+        with _other_station_first(lambda: saved.append(self.deposit_rule(_label_rule("A rischio")))) as lock:
+            update_category(self.request, label.id, ClientCategoryIn(name="Rischio alto"))
+        lock.assert_called_once_with(self.salon)
+        saved[0].refresh_from_db()
+        self.assertEqual(saved[0].conditions["rules"][0]["value"], "Rischio alto")
 
 
 class LabelCountsTests(TestCase):
@@ -281,3 +320,25 @@ class LabelCountsTests(TestCase):
         with self.assertNumQueries(2):
             body = client_counts(request)
         self.assertEqual(len(body["categories"]), 13)
+
+
+class LabelOrderLimitTests(TestCase):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09: l'ordine
+    dell'etichetta aveva il minimo nello schema ma non il massimo della colonna
+    (PositiveIntegerField), e su PostgreSQL un valore più grande era un 500."""
+
+    def test_the_order_stays_within_the_column(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        _, auth = _staff_http(salon, ["clients"])
+        label = ClientCategory.objects.create(salon=salon, name="Nuova")
+
+        def send(method, url, body):
+            return getattr(self.client, method)(url, data=body, content_type="application/json", **auth)
+
+        self.assertEqual(send("post", "/api/clients/categories", {"name": "VIP", "order": 2147483648}).status_code, 422)
+        res = send("put", f"/api/clients/categories/{label.id}", {"name": "Nuova", "order": 2147483648})
+        self.assertEqual(res.status_code, 422, res.content)
+        label.refresh_from_db()
+        self.assertEqual(label.order, 0)
+        res = send("post", "/api/clients/categories", {"name": "VIP", "order": 2147483647})
+        self.assertEqual(res.status_code, 200, res.content)
