@@ -1,4 +1,6 @@
-// DayGrid — multi-operator day timeline 08:00–20:00.
+// DayGrid — la giornata, una colonna per operatrice, sulla fascia oraria del
+// giorno (orari del centro e turni, allargata per quello che c'è: vedi
+// dayGridRange; non più fissa 08:00–20:00).
 // Ogni SERVIZIO di una visita è un blocco a sé, nella colonna della sua operatrice,
 // all'orario concatenato dallo start della visita, colorato per categoria di servizio.
 // Drag di un blocco = sposta QUEL servizio, da solo: un'operatrice in ritardo
@@ -740,7 +742,6 @@ export default function DayGrid({
               <div
                 key={o.id}
                 className={isTarget ? (tone === 'warn' ? 'dk-col--target-warn' : 'dk-col--target') : ''}
-                title={undefined}
                 onClick={(e) => {
                   if (e.target !== e.currentTarget) return;
                   if (justDragged.current || drag.current) return;

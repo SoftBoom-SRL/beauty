@@ -6,8 +6,8 @@
 // arriva anche fuori dall'area; il blocco trascinato viene tolto dalla sua corsia e
 // ridisegnato dove si trova il puntatore (giorno + operatrice + orario snappato),
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
-// che segue il cursore. Il 409 del server («occupato / fuori turno») apre un popover
-// di conferma che ripete la POST con `force: true`, come nella vista giorno.
+// che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
+// niente: la POST si ripete con `force: true`, come nella vista giorno.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiError, toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
@@ -24,8 +24,8 @@ const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, onShowDate, ghost, ghostDate, zoom = 1, onZoom }) {
-  const { t, lang, showRevenue, fireToast, openModal, hasScope, settings, live, locationId, modal } = useDash();
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom }) {
+  const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
   const canWrite = hasScope('agenda');
@@ -343,19 +343,6 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     return `${day ? `${t(DOW_IT[dayIdx], DOW_EN[dayIdx])} ${parseISO(day.date).getDate()} · ` : ''}${op ? op.first_name + ' · ' : ''}${timeLabel(ns)}`;
   }
 
-  /* «Torna indietro» del server, lo stesso del tasto in barra: rimette
-   * l'appuntamento dov'era e, se il messaggio alla cliente non è ancora
-   * partito, lo ferma. Rifare lo spostamento al contrario lo lasciava invece
-   * partire. Di norma passa dalla sezione (`undoAfter`): annulla QUEL gesto,
-   * con la stessa guardia del tasto in barra; questo resta solo di riserva. */
-  async function undoLast() {
-    try {
-      const res = await api.post('/api/agenda/undo', {});
-      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
-    } catch (err) { toastApiError(err, fireToast, t); }
-    await refetchWeek();
-  }
-
   /* Uno spostamento su un orario occupato o fuori turno NON si ferma a chiedere
    * conferma: chi usa l'agenda tutti i giorni sa quando sta incastrando una
    * cliente. Si sposta e basta, con «Annulla» nell'avviso per rimettere tutto
@@ -368,19 +355,20 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     const body = { start: isoAtMin(day.date, d.ns) };
     if (d.nop != null && d.nop !== d.origOp) { body.operator_id = d.nop; body.from_operator_id = d.origOp; }
     if (opts.force) body.force = true;
-    const mark = undoMark?.();   // voce più recente di «torna indietro» prima del gesto
+    const mark = undoMark();   // voce più recente di «torna indietro» prima del gesto
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
       await api.post(`/api/agenda/appointments/${d.id}/move`, body);
-      if (opts.undo !== false) {
-        fireToast({
-          msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns),
-          icon: 'calendar',
-          undo: t('Annulla', 'Undo'),
-          // annulla questo spostamento (la voce scritta dal gesto), poi ricarica la settimana
-          undoFn: undoAfter ? undoAfter(mark, () => refetchWeekRef.current()) : () => undoLast(),
-        });
-      }
+      fireToast({
+        msg: t('Spostato · ', 'Moved · ') + whereLabel(d.dayIdx, d.nop, d.ns),
+        icon: 'calendar',
+        undo: t('Annulla', 'Undo'),
+        // «Torna indietro» del server, lo stesso del tasto in barra, per la
+        // voce scritta da QUESTO gesto (vedi undoAfter nella sezione): rimette
+        // l'appuntamento dov'era e, se il messaggio alla cliente non è ancora
+        // partito, lo ferma. Poi ricarica la settimana.
+        undoFn: undoAfter(mark, () => refetchWeekRef.current()),
+      });
       await refetchWeek();
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
@@ -398,15 +386,13 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   async function openDetail(appt) {
     // Con la prenotazione aperta il dettaglio non si apre (la sostituirebbe):
     // lo dice la sezione, senza nemmeno caricarlo.
-    if (pickMode && onOpenAppt) { onOpenAppt(appt); return; }
+    if (pickMode) { onOpenAppt(appt); return; }
     try {
       const full = await api.get(`/api/agenda/appointments/${appt.id}`);
-      // `onShowDate`: sfogliando i giorni dal pannello, la settimana mostrata
-      // segue (la vista si ricava dalla stessa data della sezione).
-      // Il ricarico passa dalla ref: quello catturato all'apertura rileggeva
-      // la settimana di allora anche dopo averne sfogliata un'altra.
-      if (onOpenAppt) onOpenAppt(full, () => refetchWeekRef.current());
-      else openModal('apptdetail', { appointment: full, onMutate: () => refetchWeekRef.current(), onShowDate });
+      // Il pannello lo apre la sezione, che gli passa anche il ricarico della
+      // settimana. Il ricarico passa dalla ref: quello catturato all'apertura
+      // rileggeva la settimana di allora anche dopo averne sfogliata un'altra.
+      onOpenAppt(full, () => refetchWeekRef.current());
     } catch (err) { toastApiError(err, fireToast, t); }
   }
 
@@ -631,7 +617,6 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
           </div>
         );
       })()}
-      {/* 409 allo spostamento: conferma per forzare (stesse regole della vista giorno) */}
     </div>
   );
 }

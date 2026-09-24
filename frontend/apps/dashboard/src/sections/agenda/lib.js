@@ -23,7 +23,7 @@ export {
   clampZoom, zoomStep, weekLayout, GRID_LINE_STYLE, gridRange, dayGridRange, weekGridRange, openingFor, gridMarks,
 } from './lib/grid.js';
 
-export { moveIsNoop, ghostBlockAt, moveHereTarget, explainSlot, nextFreeSlots } from './lib/slots.js';
+export { moveIsNoop, ghostBlockAt, moveHereTarget, explainSlot } from './lib/slots.js';
 
 export { prefLabel, apptOperatorIds, wlMatches, wlRank, wlDaysWaiting, wlWhatsAppMsg } from './lib/waitlist.js';
 

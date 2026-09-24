@@ -52,7 +52,9 @@ function setup(extra = {}) {
     settings: { slot_interval_min: 15 }, locationId: 1, modal: null,
     live: { subscribe: (fn) => { liveFn = fn; return () => {}; } },
   };
-  const cb = { onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy() };
+  // «torna indietro» come lo passa la sezione (index.jsx): la voce più recente
+  // prima del gesto e l'«Annulla» del suo avviso
+  const cb = { onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), undoMark: spy(0), undoAfter: spy(() => () => {}) };
   const scrollEl = {
     scrollTop: 0, clientHeight: 800,
     getBoundingClientRect: () => rect(0, 100, 1000, 800),

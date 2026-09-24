@@ -3,7 +3,6 @@
 // spostamento («Sposta qui», l'ombra dell'appuntamento aperto).
 // Logica pura: la caricano anche i test con `node --test`.
 import { timeLabel } from '@youty/shared';
-import { DK_END } from '../constants.js';
 import { aStartMin, firstName, itemBlocks } from './appt.js';
 import { hmToMin } from './calendar.js';
 
@@ -144,13 +143,4 @@ export function explainSlot(row, startMin, durMin, opts = {}) {
     };
   }
   return { ok: true, code: 'ok', label: t('Disponibile', 'Available'), detail: '' };
-}
-
-/** Prossimi orari liberi (max `n`) per l'operatrice a partire da `fromMin`, a passi di `step`. */
-export function nextFreeSlots(row, fromMin, durMin, step, n = 4, opts = {}) {
-  const out = [];
-  for (let m = fromMin; m < DK_END && out.length < n; m += step) {
-    if (explainSlot(row, m, durMin, opts).ok) out.push(m);
-  }
-  return out;
 }

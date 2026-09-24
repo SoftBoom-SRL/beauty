@@ -1,10 +1,10 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, toastApiError, Avatar, Icon, fmtDateIt, minutesOfDay, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { api, ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
-  isoAtMin, mondayOf, addMonths, firstName, opDisplay,
+  isoAtMin, mondayOf, addMonths, firstName, opDisplay, aStartMin,
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
   moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
@@ -387,7 +387,7 @@ export default function AgendaSection() {
    * diversa dalla colonna di partenza) passa di mano i servizi di quella
    * colonna. Ritorna true se il server ha scritto lo spostamento. */
   const moveAppt = async (a, startMin, opId, opts = {}) => {
-    const fromMin = aMin(a.start);
+    const fromMin = aStartMin(a);
     /* Colonna di PARTENZA del gesto: non è per forza quella dell'operatrice
      * principale. Una visita può avere i servizi divisi fra due colleghe, e
      * trascinando il gruppo di una devono cambiare mano i SUOI servizi — è
@@ -423,12 +423,11 @@ export default function AgendaSection() {
           ? t('Spostato a ' + when, 'Moved to ' + when)
           : t('Spostato alle ' + when, 'Moved to ' + when);
       // `undoAfter` rilegge anche la pila di «torna indietro»
-      const undoFn = opts.undo === false ? undefined : undoAfter(mark);
-      if (!undoFn) fetchUndo();   // la pila di «torna indietro» segue ogni gesto
+      const undoFn = undoAfter(mark);
       fireToast({
-        msg: where + (opts.warn ? ' · ' + opts.warn : ''),
-        icon: opts.warn ? 'alert' : 'calendar',
-        undo: undoFn ? t('Annulla', 'Undo') : undefined,
+        msg: where,
+        icon: 'calendar',
+        undo: t('Annulla', 'Undo'),
         // Passa dal «torna indietro» del server, non da uno spostamento al
         // contrario: così l'orario torna quello di prima E il messaggio alla
         // cliente, se non è ancora partito, non parte affatto. Rifare la strada
@@ -464,7 +463,7 @@ export default function AgendaSection() {
     const iso = opts.dateIso || date;
     const otherDay = iso !== date;
     const mark = undoMark();
-    setPending({ kind: 'appt', id: appt.id, startMin: aMin(appt.start), opId: appt.operator_id });
+    setPending({ kind: 'appt', id: appt.id, startMin: aStartMin(appt), opId: appt.operator_id });
     try {
       await api.post(`/api/agenda/appointments/${appt.id}/split`, {
         item_id: item.id,
@@ -477,9 +476,8 @@ export default function AgendaSection() {
         ? t(`${DOW_IT[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`)
         : timeLabel(startMin);
       fireToast({
-        msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`)
-          + (opts.warn ? ' · ' + opts.warn : ''),
-        icon: opts.warn ? 'alert' : 'scissors',
+        msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`),
+        icon: 'scissors',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
       });
@@ -518,7 +516,7 @@ export default function AgendaSection() {
     let cur = a;
     try { cur = await api.get(`/api/agenda/appointments/${a.id}`); } catch { /* si prova con la copia che c'è */ }
     const target = moveHereTarget(cur, slot);
-    const from = { startMin: aMin(cur.start), opId: target.fromOp, date: toDateStr(cur.start) };
+    const from = { startMin: aStartMin(cur), opId: target.fromOp, date: toDateStr(cur.start) };
     if (moveIsNoop(target.startMin, target.opId ?? target.fromOp, from, date)) {
       // niente da mandare: lo si dice, invece di riaprire il pannello come
       // se lo spostamento fosse avvenuto
@@ -543,9 +541,8 @@ export default function AgendaSection() {
       await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(iso, startMin), force: !!opts.force });
       const d = parseISO(iso);
       fireToast({
-        msg: t(`Spostato a ${DOW_IT[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`, `Moved to ${DOW_EN[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`)
-          + (opts.warn ? ' · ' + opts.warn : ''),
-        icon: opts.warn ? 'alert' : 'calendar',
+        msg: t(`Spostato a ${DOW_IT[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`, `Moved to ${DOW_EN[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`),
+        icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),
       });
@@ -603,19 +600,17 @@ export default function AgendaSection() {
     }
   };
 
-  const movePause = async (p, startMin, opId, opts = {}) => {
+  const movePause = async (p, startMin, opId) => {
     const mark = undoMark();
     setPending({ kind: 'pause', id: p.id, startMin, opId });
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
-      if (opts.undo !== false) {
-        fireToast({
-          msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)) + (opts.warn ? ' · ' + opts.warn : ''),
-          icon: opts.warn ? 'alert' : 'clock',
-          undo: t('Annulla', 'Undo'),
-          undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
-        });
-      } else fetchUndo();   // la pila di «torna indietro» segue ogni gesto
+      fireToast({
+        msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)),
+        icon: 'clock',
+        undo: t('Annulla', 'Undo'),
+        undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
+      });
       await fetchDay();
     } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
@@ -623,7 +618,7 @@ export default function AgendaSection() {
 
   const resizePause = async (p, dur) => {
     if (dur === p.duration_min) return;
-    setPending({ kind: 'pause', id: p.id, startMin: aMin(p.start), opId: p.operator_id, dur });
+    setPending({ kind: 'pause', id: p.id, startMin: aStartMin(p), opId: p.operator_id, dur });
     try {
       await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
       await fetchDay();
@@ -860,7 +855,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} onShowDate={setDate} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
@@ -1013,7 +1008,7 @@ export default function AgendaSection() {
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="calendar" size={15} color="var(--clay-ink)" /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t(`Sposta qui ${firstName(openAppt.client?.full_name)}`, `Move ${firstName(openAppt.client?.full_name)} here`)}</div>
-                      <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t(`da ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aMin(openAppt.start))}`, `from ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aMin(openAppt.start))}`)}</div>
+                      <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t(`da ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aStartMin(openAppt))}`, `from ${fmtDateIt(toDateStr(openAppt.start), { weekday: false })} ${timeLabel(aStartMin(openAppt))}`)}</div>
                     </div>
                   </button>
                 )}
@@ -1045,9 +1040,6 @@ export default function AgendaSection() {
     </div>
   );
 }
-
-/* minuti dalla mezzanotte di un ISO, nel fuso del salone (vedi shared/format.js) */
-const aMin = (iso) => minutesOfDay(iso);
 
 function isTodayInWeek(weekDays) {
   const today = todayStr();
