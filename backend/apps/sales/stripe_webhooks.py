@@ -173,20 +173,14 @@ def on_payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") ->
         )
         settle_deposit_refund(appointment)
     elif outcome == "paid":
-        from apps.agenda.services.messages import appointment_event_key  # lazy
+        from apps.agenda.services.messages import appointment_event_key, deposit_paid_payload  # lazy
 
+        # Lo stesso payload dell'incasso al banco: scritto qui a mano non
+        # portava le preferenze WhatsApp della cliente (vedi deposit_paid_payload).
         emit_event(
             appointment.salon,
             "deposit.paid",
-            {
-                "appointment_id": appointment.id,
-                "client_id": appointment.client_id,
-                "client_name": client_name,
-                "phone": appointment.client.phone,
-                "lang": appointment.client.lang,
-                "amount": str(appointment.deposit_amount),
-                "start": appointment.start.isoformat(),
-            },
+            deposit_paid_payload(appointment),
             coalesce_key=appointment_event_key(appointment.id),
         )
         if excess_cents > 0:

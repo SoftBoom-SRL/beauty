@@ -188,6 +188,35 @@ class DuplicateDepositPaymentTests(TestCase):
         )
 
 
+class DepositPaidEventTests(StripeTestBase):
+    """Bug sospetto 2 (24/09): `deposit.paid` ha la stessa forma online e al banco."""
+
+    def test_the_webhook_and_the_counter_tell_yourang_the_same_things(self):
+        from apps.agenda.services.deposit_holds import mark_deposit_cashed
+        from apps.core.models import OutboxEvent
+
+        from ..stripe_webhooks import on_payment_intent_succeeded
+
+        Client.objects.filter(pk=self.client_obj.pk).update(whatsapp_reminders=False, wa=False)
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata())
+        at_the_counter = self.make_appointment()
+        mark_deposit_cashed(at_the_counter, method="cash")
+
+        def payload(appointment):
+            return OutboxEvent.objects.get(
+                event_type="deposit.paid", payload__appointment_id=appointment.id
+            ).payload
+
+        online, cashed = payload(self.appointment), payload(at_the_counter)
+        self.assertEqual(set(online), set(cashed))
+        # le preferenze della cliente arrivano anche col pagamento online
+        self.assertIs(online["whatsapp_reminders"], False)
+        self.assertIs(online["wa"], False)
+        self.assertEqual(online["services"][0]["id"], self.service.id)
+        # e l'importo anche con l'incasso al banco
+        self.assertEqual((online["amount"], cashed["amount"]), ("30.00", "30.00"))
+
+
 @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
 class OrphanPaymentTests(StripeTestBase):
     """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
