@@ -12,6 +12,8 @@ import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harn
 
 const { default: NewApptModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/NewApptModal.jsx', {
   stubs: ['ClientPicker.jsx'],
+  // i pezzi senza hook del drawer, che per i test fanno parte del drawer
+  expand: ['BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
 });
 
 const TODAY = todayStr();
