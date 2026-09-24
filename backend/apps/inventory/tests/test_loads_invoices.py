@@ -19,7 +19,7 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.auth import StaffContext
+from common.testing import staff_context
 
 from .. import api as inventory_api
 from ..api import load_product
@@ -48,7 +48,7 @@ class InvoiceUrlTests(TestCase):
             invoice=SimpleUploadedFile("fattura.pdf", b"%PDF-1.4", content_type="application/pdf"),
         )
         # Il link esce solo a titolare e cassa (10-09): lo chiede il titolare.
-        owner = StaffContext(user=None, salon=salon, membership=None, scopes=set(), is_owner=True)
+        owner = staff_context(salon, is_owner=True)
         url = MovementOut.resolve_invoice_url(movement, {"request": SimpleNamespace(auth=owner)})
         self.assertIn(f"?{TOKEN_PARAM}=", url)
         self.assertTrue(verify_media_token(movement.invoice.name, url.split(f"{TOKEN_PARAM}=")[1]))
@@ -67,9 +67,7 @@ class InvoiceUploadValidationTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         supplier = Supplier.objects.create(salon=self.salon, name="Davines")
         self.product = Product.objects.create(salon=self.salon, name="Shampoo", supplier=supplier)
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
+        ctx = staff_context(self.salon, {"inventory"})
         self.request = SimpleNamespace(auth=ctx)
 
     def test_executable_attachment_is_refused(self):

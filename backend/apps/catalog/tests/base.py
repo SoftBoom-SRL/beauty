@@ -14,7 +14,7 @@ from django.test import TestCase
 
 from apps.accounts.models import Membership, User
 from apps.core.models import Salon
-from common.auth import StaffContext, create_staff_tokens
+from common.testing import bearer, staff_context
 
 from ..models import Service, ServiceCategory
 
@@ -27,9 +27,7 @@ def fake_request(auth=None):
 class CatalogTestCase(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"pricing"}, is_owner=False
-        )
+        ctx = staff_context(self.salon, {"pricing"})
         self.request = fake_request(ctx)
 
 
@@ -43,4 +41,4 @@ class _CatalogSetup(TestCase):
         )
         owner = User.objects.create_user(email="titolare@parlour.it", password="x-Segreta-1")
         Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(owner, self.salon)['access']}"}
+        self.auth = bearer(owner, self.salon)

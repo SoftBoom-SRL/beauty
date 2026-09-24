@@ -14,7 +14,7 @@ from ninja.errors import HttpError
 
 from apps.core.models import Salon
 from apps.staff.models import Operator
-from common.auth import StaffContext
+from common.testing import bearer, staff_context
 
 from .. import api as inventory_api
 from ..api import (
@@ -40,13 +40,7 @@ class InventoryApiTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
-        ctx = StaffContext(
-            user=None,
-            salon=self.salon,
-            membership=None,
-            scopes={"inventory"},
-            is_owner=False,
-        )
+        ctx = staff_context(self.salon, {"inventory"})
         self.request = SimpleNamespace(auth=ctx)
 
     def _product(self, name, *, stock=0):
@@ -127,9 +121,7 @@ class ProductCrudTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
         self.category = ProductCategory.objects.create(salon=self.salon, name="Cura")
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
+        ctx = staff_context(self.salon, {"inventory"})
         self.request = SimpleNamespace(auth=ctx)
 
     def _payload(self, **overrides):
@@ -196,9 +188,7 @@ class ProductCrudTests(TestCase):
 class CategoryValidationTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
+        ctx = staff_context(self.salon, {"inventory"})
         self.request = SimpleNamespace(auth=ctx)
 
     def test_invalid_color_is_a_400(self):
@@ -224,16 +214,13 @@ class InventoryHttpSmokeTests(TestCase):
 
     def setUp(self):
         from apps.accounts.models import Membership, Role, User
-        from common.auth import create_staff_tokens
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
         user = User.objects.create_user(email="magazzino@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Magazzino", scopes=["inventory"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
+        self.auth = bearer(user, self.salon)
 
     def test_product_create_list_and_update_over_http(self):
         created = self.client.post(
@@ -282,7 +269,7 @@ class StableOrderingTests(_InventorySetup):
     """09-10: con LIMIT/OFFSET l'ordine deve essere univoco."""
 
     def _request(self):
-        ctx = StaffContext(user=None, salon=self.salon, membership=None, scopes={"inventory"})
+        ctx = staff_context(self.salon, {"inventory"})
         return SimpleNamespace(auth=ctx)
 
     def test_products_end_with_the_id(self):

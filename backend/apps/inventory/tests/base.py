@@ -11,7 +11,7 @@ from django.test import TestCase
 
 from apps.accounts.models import Membership, Role, User
 from apps.core.models import Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..models import Product, Supplier
 
@@ -27,7 +27,7 @@ class _InventorySetup(TestCase):
         user = User.objects.create_user(email=email, password="x-Segreta-1")
         role = Role.objects.create(salon=self.salon, name=email, scopes=scopes) if scopes else None
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
-        return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        return bearer(user, self.salon)
 
     def _load_csv(self, rows, supplier_id=None, auth=None):
         res = self.client.post(

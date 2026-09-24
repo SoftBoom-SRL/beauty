@@ -8,7 +8,7 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.auth import StaffContext
+from common.testing import staff_context
 
 from ..api import send_order, update_order
 from ..models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
@@ -86,9 +86,7 @@ class OrderWorkflowTests(TestCase):
         self.l2 = PurchaseOrderLine.objects.create(
             order=self.order, product=self.p2, qty_ordered=Decimal("2")
         )
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
+        ctx = staff_context(self.salon, {"inventory"})
         self.request = SimpleNamespace(auth=ctx)
 
     def test_update_order_is_all_or_nothing(self):

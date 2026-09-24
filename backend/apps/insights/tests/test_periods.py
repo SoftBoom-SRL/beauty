@@ -12,7 +12,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..services import custom_range, period_range, resolve_range
 
@@ -99,7 +99,7 @@ class ImpossibleDatesTests(TestCase):
         self.salon = Salon.objects.create(name="S", slug="s")
         user = User.objects.create_user(email="own@x.it", password="pw-lunga-123")
         Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        self.auth = bearer(user, self.salon)
         self.client.raise_request_exception = False
 
     def test_the_endpoints_answer_400(self):

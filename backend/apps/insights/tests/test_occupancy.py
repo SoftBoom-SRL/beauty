@@ -15,7 +15,7 @@ from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.staff.models import Operator, WeeklyShift
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..services import kpis, occupancy_by_weekday
 from .base import _Base, _aware
@@ -177,7 +177,7 @@ class ClosedWeekdaysTests(_Base):
 
         user = User.objects.create_user(email="own@x.it", password="pw-lunga-123")
         Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        auth = bearer(user, self.salon)
         resp = self.client.get("/api/insights/occupancy-by-weekday?period=month&date=2025-07-01", **auth)
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual([row["occupancy_pct"] for row in resp.json()], [None] * 7)

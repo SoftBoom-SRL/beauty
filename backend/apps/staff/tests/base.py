@@ -16,7 +16,7 @@ from apps.agenda.models import Appointment, AppointmentService
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..models import Operator
 
@@ -28,15 +28,12 @@ class StaffApiTestCase(TestCase):
 
     def setUp(self):
         from apps.accounts.models import Membership, Role, User
-        from common.auth import create_staff_tokens
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Team", scopes=self.scopes)
         Membership.objects.create(user=self.user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
+        self.auth = bearer(self.user, self.salon)
 
     def operator_payload(self, **overrides):
         payload = {
@@ -56,10 +53,6 @@ class StaffApiTestCase(TestCase):
             content_type="application/json",
             **self.auth,
         )
-
-
-def bearer(user, salon):
-    return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
 
 
 class _StaffSetup(TestCase):

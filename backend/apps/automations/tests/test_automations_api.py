@@ -14,7 +14,7 @@ from django.test import TestCase
 
 from apps.accounts.models import Membership, Role, User
 from apps.core.models import OutboxEvent, Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..models import Automation
 
@@ -29,8 +29,7 @@ class AutomationsApiTests(TestCase):
         Membership.objects.create(
             user=self.user, salon=self.salon, role=self.role, is_owner=True
         )
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
     def _post(self, path, payload=None):
         return self.client.post(
@@ -108,8 +107,7 @@ class AutomationsApiTests(TestCase):
         Membership.objects.create(
             user=other_user, salon=self.salon, role=other_role, is_owner=False
         )
-        tokens = create_staff_tokens(other_user, self.salon)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        auth = bearer(other_user, self.salon)
         resp = self.client.post(
             "/api/automations/",
             data=json.dumps({"name": "X", "event": "birthday"}),
@@ -165,8 +163,7 @@ class AutomationsApiTests(TestCase):
         user = User.objects.create_user(email="ops@the-parlour.test", password="pw12345!")
         role = Role.objects.create(salon=self.salon, name="Solo agenda", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
-        tokens = create_staff_tokens(user, self.salon)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        auth = bearer(user, self.salon)
 
         Automation.objects.create(
             salon=self.salon, name="Promemoria", event="appointment_upcoming"
@@ -251,8 +248,7 @@ class AutomationsReadableWithoutMarketingTests(TestCase):
         Membership.objects.create(
             user=user, salon=self.salon, role=role, is_owner=is_owner
         )
-        tokens = create_staff_tokens(user, self.salon)
-        return {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        return bearer(user, self.salon)
 
     def test_front_desk_still_reads_the_list(self):
         auth = self._auth_for(["agenda", "clients", "sales"], email="fd@the-parlour.test")
@@ -287,7 +283,7 @@ class StaleCopyTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
         Membership.objects.create(user=user, salon=self.salon, is_owner=True)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        self.auth = bearer(user, self.salon)
         self.automation = Automation.objects.create(
             salon=self.salon, name="Auguri", event="birthday", active=True
         )

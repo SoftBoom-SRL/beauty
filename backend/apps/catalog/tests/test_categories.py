@@ -9,6 +9,7 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
+from common.testing import bearer
 
 from ..api import create_category, reorder_categories, update_category
 from ..models import ServiceCategory
@@ -89,15 +90,12 @@ class CatalogHttpSmokeTests(TestCase):
 
     def setUp(self):
         from apps.accounts.models import Membership, Role, User
-        from common.auth import create_staff_tokens
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Listino", scopes=["pricing"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"
-        }
+        self.auth = bearer(user, self.salon)
 
     def test_post_categories_reorder_is_routed_and_persists_the_order(self):
         first = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")

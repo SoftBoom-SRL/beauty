@@ -21,7 +21,7 @@ from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
 from apps.staff.models import Operator
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
 from ..services import kpis, occupancy_by_weekday, revenue_by_category, revenue_series
 from .base import _Base, _aware
@@ -431,7 +431,7 @@ class InsightsScopeTests(TestCase):
             user = User.objects.create_user(email=email, password="pw-lunga-123")
             role = Role.objects.create(salon=self.salon, name=email, scopes=scopes) if scopes is not None else None
             Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
-            return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+            return bearer(user, self.salon)
 
         self.owner = member("own@x.it", owner=True)
         self.manager = member("manager@x.it", ["insights"])
