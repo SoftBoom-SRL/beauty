@@ -9,13 +9,16 @@ Caccia del 22/09:
 - 10-09: il link della fattura solo a titolare e cassa.
 """
 
+import shutil
+import tempfile
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import DataError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
@@ -29,9 +32,15 @@ from ..services import apply_movement
 from .base import _InventorySetup
 
 
+# La fattura del carico si scrive davvero su disco: in una MEDIA_ROOT
+# temporanea, come gli allegati negli altri test, non in backend/media.
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-fatture-"))
 class InvoiceUrlTests(TestCase):
     """Il link alla fattura del carico deve essere firmato: `inventory/invoices/`
     è un prefisso riservato e senza token la vista /media/ risponde 403."""
+
+    def tearDown(self):
+        shutil.rmtree(settings.MEDIA_ROOT, ignore_errors=True)
 
     def test_invoice_url_carries_the_signature(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
@@ -206,12 +215,17 @@ class LoadCsvRowIsolationTests(_InventorySetup):
         self.assertFalse(StockMovement.objects.exists())
 
 
+# Anche qui la fattura finisce su disco: MEDIA_ROOT temporanea, come sopra.
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="youty-test-fatture-"))
 class InvoiceUploadTests(_InventorySetup):
     """10-16 + 10-09: la fattura del carico."""
 
     def setUp(self):
         super().setUp()
         self.gel = self._product("Gel")
+
+    def tearDown(self):
+        shutil.rmtree(settings.MEDIA_ROOT, ignore_errors=True)
 
     def _load(self, upload, auth=None):
         return self.client.post(
