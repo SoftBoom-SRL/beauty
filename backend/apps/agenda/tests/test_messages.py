@@ -358,6 +358,55 @@ class CancelClosesTheDepositLinkTests(MessagesTestBase):
         self.assertEqual(link.status, OutboxEvent.Status.SUPERSEDED)
 
 
+class NoShowClosesTheDepositLinkTests(MessagesTestBase):
+    """Bug sospetto 1 (24/09): col no-show il link della caparra non incassa più.
+
+    Annullamento e rilascio lo facevano già; il no-show lasciava il link
+    pagabile, la cliente pagava a visita saltata e la caparra le tornava in
+    automatico, con le commissioni Stripe perse dal salone.
+    """
+
+    def _started(self, deposit_status):
+        appointment = create_appointment(
+            self.salon, self.client_obj,
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+            timezone.now() - dt.timedelta(minutes=20), via="dashboard", force=True,
+        )
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=deposit_status, deposit_amount=Decimal("20.00"),
+            deposit_checkout_session_id="cs_1", deposit_payment_link="https://pay.test/cs_1",
+        )
+        appointment.refresh_from_db()
+        return appointment
+
+    def _no_show(self, appointment):
+        calls = []
+        with patch(
+            "apps.sales.stripe_service.expire_deposit_checkout",
+            side_effect=lambda a: calls.append(a.deposit_checkout_session_id),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                mark_no_show(appointment, reason="non venuta", actor=self.user)
+                self.assertEqual(calls, [], "Stripe va chiamato solo a transazione chiusa")
+        return calls
+
+    def test_an_unpaid_deposit_link_is_withdrawn_and_closed(self):
+        appointment = self._started(Appointment.DepositStatus.REQUIRED)
+        link = OutboxEvent.objects.create(
+            salon=self.salon, event_type="deposit.payment_link",
+            payload={"appointment_id": appointment.id},
+        )
+        self.assertEqual(self._no_show(appointment), ["cs_1"])
+        link.refresh_from_db()
+        self.assertEqual(link.status, OutboxEvent.Status.SUPERSEDED)
+
+    def test_a_paid_deposit_leaves_the_link_alone(self):
+        appointment = self._started(Appointment.DepositStatus.PAID)
+        self.assertEqual(self._no_show(appointment), [])
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.FORFEITED)
+
+
 class PayloadCarriesThePreferencesTests(MessagesTestBase):
     """06-09: chi ha spento i promemoria WhatsApp lo dice anche a Yourang."""
 

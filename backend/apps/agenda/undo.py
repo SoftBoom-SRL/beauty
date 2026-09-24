@@ -460,13 +460,15 @@ def _restore_pause(snap: dict) -> None:
 
 
 def _reissue_deposit_links(appointments) -> None:
-    """Dopo aver annullato un annullamento: un link di pagamento nuovo per la caparra.
+    """Dopo aver annullato un annullamento o un no-show: un link di pagamento nuovo per la caparra.
 
-    L'annullamento ha chiuso su Stripe la sessione del link (vedi
-    services.deposits.close_deposit_link_after_commit): rimessa in agenda con la
-    caparra ancora da pagare, la cliente si ritroverebbe con una pagina già
-    chiusa e allo scadere il posto si libererebbe da solo. Svuotato l'indirizzo,
-    `ensure_deposit_link` ne crea uno nuovo e lo manda, a transazione chiusa.
+    L'annullamento e il no-show hanno chiuso su Stripe la sessione del link
+    (vedi services.deposits.close_deposit_link_after_commit): rimessa in agenda
+    con la caparra ancora da pagare, la cliente si ritroverebbe con una pagina
+    già chiusa, che l'app le riproponeva come valida finché non scadeva, e dopo
+    un annullamento allo scadere il posto si libererebbe da solo. Svuotato
+    l'indirizzo, `ensure_deposit_link` ne crea uno nuovo e lo manda, a
+    transazione chiusa.
     """
     from apps.sales.stripe_service import ensure_deposit_link, payments_enabled  # lazy
 
@@ -605,7 +607,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             days.append(appointment.start)
         for snap in entry.before.get("pauses", []):
             _restore_pause({**snap, "salon_id": salon.id})
-        if entry.kind == UndoEntry.Kind.CANCEL:
+        if entry.kind in (UndoEntry.Kind.CANCEL, UndoEntry.Kind.NO_SHOW):
             _reissue_deposit_links(touched)
         else:
             _renew_links_for_restored_amount(touched, entry.after.get("appointments", []))

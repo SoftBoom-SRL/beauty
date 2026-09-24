@@ -584,3 +584,29 @@ class UndoOfACancellationSendsANewLinkTests(UndoTestBase):
         self.assertEqual(sent, [""])  # link svuotato: ensure_deposit_link ne crea uno nuovo
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+
+class UndoOfANoShowSendsANewLinkTests(UndoTestBase):
+    """Bug sospetto 1 (24/09), lato undo: il no-show chiude il link, «Indietro» ne manda uno nuovo."""
+
+    def test_the_link_is_reissued_after_commit(self):
+        appointment = self._book(timezone.now() - dt.timedelta(minutes=30), force=True)
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.REQUIRED, deposit_amount=Decimal("10.00"),
+            deposit_checkout_session_id="cs_1", deposit_payment_link="https://pay.test/cs_1",
+        )
+        appointment.refresh_from_db()
+        with patch("apps.sales.stripe_service.expire_deposit_checkout") as expire:
+            with self.captureOnCommitCallbacks(execute=True):
+                mark_no_show(appointment, actor=self.user)
+        expire.assert_called_once()
+        sent = []
+        with patch("apps.sales.stripe_service.payments_enabled", return_value=True), patch(
+            "apps.sales.stripe_service.ensure_deposit_link",
+            side_effect=lambda a, **kw: sent.append(a.deposit_payment_link) or "https://pay.test/cs_2",
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(sent, [""])  # la sessione di prima è chiusa: se ne apre una nuova
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
