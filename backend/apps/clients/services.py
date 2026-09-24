@@ -8,7 +8,6 @@ funzioni: clients non importa le altre app di dominio a livello di modulo.
 
 import datetime as dt
 import re
-import unicodedata
 from decimal import Decimal
 
 from django.db import DataError, IntegrityError, transaction
@@ -19,6 +18,7 @@ from ninja.errors import HttpError
 from common.phone import canonical_phone, normalize_phone, phone_key as _phone_key
 
 from .models import Client
+from .search import APOSTROPHE_CLASS, strip_accents
 
 
 def client_stats(client: Client) -> dict:
@@ -160,9 +160,8 @@ def phone_key(phone: str) -> str:
 
 def _folded(text: str) -> str:
     """Testo confrontabile: senza accenti né maiuscole, apostrofi e spazi uniformi."""
-    decomposed = unicodedata.normalize("NFKD", text or "")
-    plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    plain = re.sub(r"[’‘ʼ`´]", "'", plain)
+    # Le stesse varianti dell'apostrofo della ricerca in anagrafica.
+    plain = re.sub(APOSTROPHE_CLASS, "'", strip_accents(text or ""))
     return " ".join(plain.casefold().split())
 
 

@@ -6,13 +6,10 @@ GET (lista) e POST (creazione), nessun endpoint di update/delete.
 """
 
 import logging
-import re
-import unicodedata
 from decimal import Decimal
 from typing import Optional
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -28,7 +25,7 @@ from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
 from common.media import signed_media_url, stored_upload_name, validate_upload
-from common.phone import canonical_phone, find_client_by_phone, phone_key
+from common.phone import canonical_phone, find_client_by_phone
 from common.schemas import OkOut
 from common.utils import salon_get
 
@@ -57,6 +54,7 @@ from .schemas import (
     TechnicalSheetIn,
     TechnicalSheetOut,
 )
+from .search import search_filter
 from .services import client_stats, import_rows, normalize_gender, parse_birthday
 
 logger = logging.getLogger("youty.clients")
@@ -290,86 +288,6 @@ def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) ->
     raise HttpError(400, DUPLICATE_PHONE)
 
 
-# Ricerca senza accenti: «nicolo» deve trovare «Nicolò» e «d'amico» la
-# «D’Amico» scritta con l'apostrofo tipografico (quello che mettono iPhone e
-# Word). `icontains` confronta i caratteri come sono, su PostgreSQL come su
-# SQLite (06-16, 13-22). Ogni lettera della ricerca diventa la classe delle sue
-# varianti accentate e la parola si cerca con `iregex`: in produzione è `~*`
-# di PostgreSQL, nei test la REGEXP che Django registra su SQLite, senza
-# estensioni da installare (unaccent vorrebbe i privilegi per crearla).
-_APOSTROPHES = "'’‘ʼ`´"
-_APOSTROPHE_CLASS = f"[{_APOSTROPHES}]"
-# Lettere senza scomposizione Unicode che si leggono come la lettera base.
-_EXTRA_VARIANTS = {"o": "øØ", "l": "łŁ", "d": "đĐ", "i": "ı"}
-
-
-def _letter_classes() -> dict[str, str]:
-    variants: dict[str, set] = {}
-    for code in range(0x00C0, 0x0250):  # Latin-1, Latin esteso A e B
-        ch = chr(code)
-        base = unicodedata.normalize("NFKD", ch)[0]
-        if base.isascii() and base.isalpha() and ch != base:
-            variants.setdefault(base.lower(), set()).add(ch)
-    for base, extra in _EXTRA_VARIANTS.items():
-        variants.setdefault(base, set()).update(extra)
-    return {
-        base: "[" + base + base.upper() + "".join(sorted(chars)) + "]"
-        for base, chars in variants.items()
-    }
-
-
-_LETTER_CLASSES = _letter_classes()
-
-
-def _accent_insensitive(word: str) -> str:
-    """Espressione regolare che trova `word` con o senza accenti e apostrofi tipografici."""
-    plain = "".join(
-        ch for ch in unicodedata.normalize("NFKD", word) if not unicodedata.combining(ch)
-    ).lower()
-    parts = []
-    for ch in plain:
-        for base, extra in _EXTRA_VARIANTS.items():
-            if ch in extra:
-                ch = base
-        if ch in _APOSTROPHES:
-            parts.append(_APOSTROPHE_CLASS)
-        elif ch in _LETTER_CLASSES:
-            parts.append(_LETTER_CLASSES[ch])
-        else:
-            parts.append(re.escape(ch))
-    return "".join(parts)
-
-
-def _search_filter(q: str) -> Q:
-    """Filtro della ricerca in anagrafica: nome completo e numero formattato.
-
-    Il filtro campo per campo non trovava né «Sofia Ricci» (nessuna colonna
-    contiene nome e cognome insieme) né «+39 333 123 4567» (in archivio il
-    numero è E.164 senza separatori). Chi non trova la cliente ne crea una
-    seconda e si vede rifiutare il telefono senza capire perché.
-
-    Ogni parola deve comparire da qualche parte nella scheda (AND fra le
-    parole, OR fra i campi): «Sofia Ricci» trova solo Sofia Ricci, non tutte
-    le Sofia. Nome e cognome si confrontano senza accenti né apostrofi
-    tipografici. Il numero si cerca sulla chiave normalizzata, la stessa che
-    riconosce la cliente al login.
-    """
-    words = [w for w in q.split() if w]
-    condition = Q()
-    for word in words:
-        pattern = _accent_insensitive(word)
-        condition &= (
-            Q(first_name__iregex=pattern)
-            | Q(last_name__iregex=pattern)
-            | Q(phone__icontains=word)
-            | Q(email__icontains=word)
-        )
-    key = phone_key(q)
-    if key:
-        condition |= Q(phone_key__contains=key)
-    return condition
-
-
 @router.get("/", auth=staff_auth, response=list[ClientOut])
 @paginate(LimitOffsetPagination)
 def list_clients(
@@ -383,7 +301,7 @@ def list_clients(
     ctx = request.auth
     qs = Client.objects.filter(salon=ctx.salon).prefetch_related("categories")
     if q:
-        qs = qs.filter(_search_filter(q))
+        qs = qs.filter(search_filter(q))
     if category_id is not None:
         qs = qs.filter(categories__id=category_id)
     if reliability_min is not None:
