@@ -18,6 +18,13 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from .codes import COUPON_CODE_LENGTH, codes_hidden, status_q, unique_code
+from .communications import (
+    already_sent,
+    cancel_pending_send,
+    check_audience_type,
+    send_communication,
+    settle_due_communications,
+)
 from .coupons import validate_coupon_value
 from .gift_cards import (
     CLIENT_GIFT_CARD_MAX,
@@ -49,12 +56,7 @@ from .schemas import (
     MarkPaidIn,
     WalletOut,
 )
-from .services import (
-    cancel_pending_send,
-    marketing_consent_changed,
-    send_communication,
-    settle_due_communications,
-)
+from .services import marketing_consent_changed
 
 router = Router(tags=["marketing"])
 
@@ -446,30 +448,11 @@ def _locked_communication(ctx, comm_id: int) -> Communication:
     return Communication.objects.select_for_update().get(pk=comm.pk)
 
 
-def _already_sent(comm: Communication) -> bool:
-    """Inviata, o programmata con la data già passata: l'evento è partito."""
-    if comm.status == Communication.Status.SENT:
-        return True
-    return (
-        comm.status == Communication.Status.SCHEDULED
-        and comm.scheduled_at is not None
-        and comm.scheduled_at <= timezone.now()
-    )
-
-
-def _check_audience(data: CommunicationIn):
-    """Un audience_type sconosciuto veniva letto come «lista di id cliente»:
-    un refuso su «labels» e la promozione pensata per le VIP partiva a due
-    persone a caso, quelle con l'id uguale all'id dell'etichetta."""
-    if data.audience_type not in Communication.AudienceType.values:
-        raise HttpError(422, "Destinatari non validi: scegli etichette o clienti")
-
-
 @router.post("/communications", auth=staff_auth, response=CommunicationOut)
 def create_communication(request, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    _check_audience(data)
+    check_audience_type(data)
     comm = Communication.objects.create(salon=ctx.salon, **data.dict())
     log_activity(
         ctx.salon,
@@ -485,11 +468,11 @@ def create_communication(request, data: CommunicationIn):
 def update_communication(request, comm_id: int, data: CommunicationIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    _check_audience(data)
+    check_audience_type(data)
     fields = data.dict()
     with transaction.atomic():
         comm = _locked_communication(ctx, comm_id)
-        if _already_sent(comm):
+        if already_sent(comm):
             raise HttpError(422, "Comunicazione già inviata: non modificabile")
         # Modificare una comunicazione già programmata annulla l'invio in coda
         # (o presso Yourang, se l'ha già ricevuto) e la riporta in bozza:
@@ -548,7 +531,7 @@ def send_communication_endpoint(request, comm_id: int, data: CommunicationSendIn
         # cliente. Per cambiarle data si passa dalla modifica, che la riporta in
         # bozza.
         if comm.status != Communication.Status.DRAFT:
-            if _already_sent(comm):
+            if already_sent(comm):
                 raise HttpError(422, "Comunicazione già inviata")
             raise HttpError(
                 422, "Comunicazione già programmata: modificala per cambiarle data"
