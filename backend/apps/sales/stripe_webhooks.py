@@ -229,7 +229,6 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
         idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
         account=account or "",
     )
-    refund = stripe_service.as_dict(refund) if refund is not None else None
     status = (refund or {}).get("status") or ""
     if refund is None:
         outcome = "da rimborsare a mano su Stripe"

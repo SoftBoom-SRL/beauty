@@ -151,7 +151,7 @@ def charge_no_show(request, appointment_id: int):
     # ricalcolava qui il totale della visita, e con una caparra trattenuta la
     # carta veniva addebitata di 70 mentre risposta e registro dicevano 100.
     intent, amount = stripe_service.charge_full_amount(appointment)
-    intent_id = stripe_service.as_dict(intent).get("id") or ""
+    intent_id = intent.get("id") or ""
     # L'addebito è denaro davvero incassato: senza la vendita corrispondente un
     # no-show da 80 € lasciava a zero il riepilogo di giornata e tutti i KPI.
     record_no_show_charge(ctx.salon, appointment, amount=amount, actor=ctx.user)
@@ -171,7 +171,7 @@ def charge_no_show(request, appointment_id: int):
 
 @router.post("/client/setup-intent", auth=client_auth, response=SetupIntentOut)
 def client_setup_intent(request):
-    intent = stripe_service.as_dict(stripe_service.create_setup_intent(request.auth.client))
+    intent = stripe_service.create_setup_intent(request.auth.client)
     return {"setup_intent_id": intent.get("id") or "", "client_secret": intent.get("client_secret")}
 
 

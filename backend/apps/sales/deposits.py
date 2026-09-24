@@ -51,7 +51,6 @@ def settle_deposit_excess(appointment, excess, *, actor=None) -> None:
     if refund is not None:
         from apps.agenda.services import record_deposit_refund  # lazy
 
-        refund = stripe_service.as_dict(refund)
         # Lo stato lo decide Stripe: un rimborso «pending» non è ancora denaro
         # tornato indietro. Registrandolo qui la quota detraibile si aggiorna.
         record_deposit_refund(
@@ -293,7 +292,6 @@ def refund_overpaid_deposit(appointment, intent_id: str, cents: int, account: st
         amount_cents=cents,
         account=account or "",
     )
-    refund = stripe_service.as_dict(refund) if refund is not None else None
     excess = (Decimal(int(cents)) / 100).quantize(Decimal("0.01"))
     if refund is not None:
         # Registrato come ogni rimborso: la quota detraibile al checkout torna
@@ -334,7 +332,6 @@ def refund_duplicate_deposit(appointment, intent_id: str, obj: dict, account: st
         idempotency_key=f"duplicate-deposit-{appointment.salon_id}-{appointment.id}-{intent_id}",
         account=account or "",
     )
-    refund = stripe_service.as_dict(refund) if refund is not None else None
     log_activity(
         appointment.salon,
         "deposit.duplicate_payment",

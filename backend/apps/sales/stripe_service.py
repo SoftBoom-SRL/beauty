@@ -256,30 +256,6 @@ def create_setup_intent(client):
     )
 
 
-def create_deposit_intent(appointment):
-    """PaymentIntent per l'acconto di un appuntamento (metadata.appointment_id, kind=deposit)."""
-    stripe = _client()
-    amount = Decimal(str(appointment.deposit_amount or 0))
-    if amount <= 0:
-        raise HttpError(400, "Nessun acconto richiesto per questo appuntamento")
-    customer_id = ensure_customer(appointment.client)
-    return as_dict(
-        stripe.PaymentIntent.create(
-            amount=_to_cents(amount),
-            currency=_currency(appointment.salon),
-            customer=customer_id,
-            metadata={
-                "appointment_id": appointment.id,
-                "kind": "deposit",
-                "salon_id": appointment.salon_id,
-                "acct": account_token(appointment.salon),
-            },
-            idempotency_key=f"deposit-{appointment.salon_id}-{appointment.id}",
-            **_account_opts(appointment.salon),
-        )
-    )
-
-
 def _deposit_return_urls(appointment) -> tuple[str, str]:
     base = (settings.CLIENT_APP_ORIGIN or settings.FRONTEND_ORIGIN).rstrip("/")
     slug = appointment.salon.slug

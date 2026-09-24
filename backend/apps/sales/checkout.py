@@ -17,7 +17,7 @@ from apps.agenda.models import Appointment
 from apps.core.services import emit_event, log_activity
 
 from . import stripe_service
-from .deposits import deposit_retained, settle_deposit_excess
+from .deposits import settle_deposit_excess
 from .models import Sale
 from .services import finalize_sale
 
@@ -65,13 +65,10 @@ def checkout_appointment(salon, appointment_id: int, payload: dict, *, actor=Non
         if Sale.objects.filter(appointment=appointment).exists():
             raise HttpError(400, "Appuntamento già incassato")
 
-        # Non `deposit_amount`: quello che si detrae è la quota ancora in cassa,
-        # cioè al netto dei rimborsi già fatti su quella caparra.
+        # Non `deposit_amount`: quello che si detrae è la quota ancora del
+        # salone, al netto dei rimborsi già fatti su quella caparra e di quelli
+        # ancora in volo (`deposits.deposit_retained`, 02-21, 05-14).
         deposit_credit = appointment.deposit_credit
-        # Quanto della caparra è ancora del salone, contando anche i rimborsi
-        # in volo: con un rimborso parziale «pending» la quota detraibile è
-        # zero, ma il resto va comunque restituito qui sotto (02-21, 05-14).
-        deposit_retained_amount = deposit_retained(appointment)
         try:
             sale = finalize_sale(
                 salon,
@@ -111,12 +108,7 @@ def checkout_appointment(salon, appointment_id: int, payload: dict, *, actor=Non
     _close_deposit_link(appointment)
     # Caparra più alta del conto: `finalize_sale` ha detratto solo fino al
     # totale, la differenza va restituita (prima il conto era impossibile).
-    # Si parte da quanto il salone ha ancora, non dalla sola quota detraibile.
-    settle_deposit_excess(
-        appointment,
-        max(deposit_retained_amount, deposit_credit) - sale.deposit_deducted,
-        actor=actor,
-    )
+    settle_deposit_excess(appointment, deposit_credit - sale.deposit_deducted, actor=actor)
     _emit_visit_completed(salon, appointment, sale)
     return sale
 
