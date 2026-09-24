@@ -35,6 +35,18 @@ from ninja.errors import HttpError
 from apps.core.services import log_activity
 
 from .models import Appointment, AppointmentService, Pause, UndoEntry
+from .services.deposits import _close_deposit_link_after_commit
+from .services.freed_slots import (
+    _appointment_spans,
+    _chain_spans,
+    _slot_knowledge,
+    _spans_minus,
+    _sync_freed_slots,
+)
+from .services.locking import lock_salon
+from .services.messages import _event_payload, _withdraw_deposit_messages, emit_appointment_event
+from .services.resolution import _validate_segments
+from .services.undo_messages import revert_held_events
 
 logger = logging.getLogger("youty.agenda")
 
@@ -48,7 +60,7 @@ _FROZEN_STATUSES = (Appointment.Status.CLOSED,)
 
 # Messaggio da mandare alla cliente quando l'annullamento arriva TARDI e non
 # c'è nessun messaggio consegnato a cui confrontare lo stato ripristinato
-# (appuntamento importato, storico già cancellato): vedi services.revert_held_events.
+# (appuntamento importato, storico già cancellato): vedi services.undo_messages.revert_held_events.
 _FALLBACK_EVENT = {
     UndoEntry.Kind.MOVE: "appointment.moved",
     UndoEntry.Kind.EDIT: "appointment.updated",
@@ -210,7 +222,7 @@ def purge_expired(now=None) -> int:
 
 
 def _live_appointment(snap: dict) -> Appointment:
-    # Riga bloccata (dopo il salone, come in services._lock_and_reload): il
+    # Riga bloccata (dopo il salone, come in services.locking._lock_and_reload): il
     # webhook della caparra e il rilascio automatico lavorano sulla riga.
     appointment = (
         Appointment.objects.select_for_update(of=("self",))
@@ -298,25 +310,23 @@ def _ensure_slot_free(snap: dict, appointment: Appointment) -> None:
     """
     from apps.staff.models import Operator  # lazy
 
-    from . import services  # lazy: services importa questo modulo
-
     if snap.get("forced") or snap.get("status") in Appointment.INACTIVE_STATUSES:
         return
     start = parse_datetime(snap["start"])
     items = snap.get("items") or []
-    wanted = services._chain_spans(
+    wanted = _chain_spans(
         start, [(it["operator_id"], it["duration_min"], it["soak_min"]) for it in items]
     )
     held = (
         {}
         if appointment.status in Appointment.INACTIVE_STATUSES
-        else services._appointment_spans(appointment)
+        else _appointment_spans(appointment)
     )
-    if not services._spans_minus(wanted, held):
+    if not _spans_minus(wanted, held):
         return
     operators = Operator.objects.in_bulk({it["operator_id"] for it in items})
     try:
-        services._validate_segments(
+        _validate_segments(
             appointment.salon,
             start,
             [(it["duration_min"], it["soak_min"], operators[it["operator_id"]]) for it in items],
@@ -437,7 +447,7 @@ def _reissue_deposit_links(appointments) -> None:
     """Dopo aver annullato un annullamento: un link di pagamento nuovo per la caparra.
 
     L'annullamento ha chiuso su Stripe la sessione del link (vedi
-    services._close_deposit_link_after_commit): rimessa in agenda con la
+    services.deposits._close_deposit_link_after_commit): rimessa in agenda con la
     caparra ancora da pagare, la cliente si ritroverebbe con una pagina già
     chiusa e allo scadere il posto si libererebbe da solo. Svuotato l'indirizzo,
     `ensure_deposit_link` ne crea uno nuovo e lo manda, a transazione chiusa.
@@ -471,7 +481,7 @@ def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
     """Dopo aver annullato un gesto che aveva cambiato la caparra ancora da pagare.
 
     Modificare o staccare servizi riduce anche la caparra richiesta e rifà il
-    link con il nuovo importo (services.shrink_deposit_to_total). «Indietro»
+    link con il nuovo importo (services.deposits.shrink_deposit_to_total). «Indietro»
     rimetteva l'importo di prima ma lasciava il link nuovo: la cliente pagava
     20 € su una caparra tornata a 70, il webhook lo registrava come importo
     sbagliato, la caparra restava «richiesta» e alla scadenza il posto si
@@ -480,8 +490,6 @@ def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
     chiude su Stripe.
     """
     from apps.sales.stripe_service import ensure_deposit_link, payments_enabled  # lazy
-
-    from . import services  # lazy: services importa questo modulo
 
     amount_after = {snap["id"]: snap.get("deposit_amount") for snap in after_snapshots}
     for appointment in appointments:
@@ -494,7 +502,7 @@ def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
         ):
             continue
         # il link con l'importo del gesto annullato, se non è ancora partito, non parte
-        services._withdraw_deposit_messages(appointment)
+        _withdraw_deposit_messages(appointment)
 
         def send(appointment_id=appointment.id):
             fresh = (
@@ -522,8 +530,6 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
     Solleva HttpError(409) quando non si può più: il gesto è scaduto, qualcuno
     ha toccato le stesse righe nel frattempo, il conto è già in cassa.
     """
-    from . import services  # lazy: services importa questo modulo
-
     if entry.undone_at is not None:
         raise HttpError(409, "Questa azione è già stata annullata")
     if entry.created_at < timezone.now() - dt.timedelta(minutes=UNDO_WINDOW_MINUTES):
@@ -533,7 +539,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
     touched: list[Appointment] = []
     days: list[dt.datetime] = []
     with transaction.atomic():
-        services.lock_salon(salon)
+        lock_salon(salon)
 
         # 1. Le righe devono essere ancora come le abbiamo lasciate.
         for snap in entry.after.get("appointments", []):
@@ -545,7 +551,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
 
         # 2. Quello che il gesto ha creato se ne va — ma prima si avvisa la
         #    cliente, se la conferma era già partita: la fusione degli eventi
-        #    decide da sola se c'è davvero qualcosa da dire (services).
+        #    decide da sola se c'è davvero qualcosa da dire (services.messages).
         for appointment_id in entry.created.get("appointments", []):
             appointment = (
                 Appointment.objects.filter(id=appointment_id)
@@ -555,30 +561,30 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             if appointment is None:
                 continue
             days.append(appointment.start)
-            freed = services._appointment_spans(appointment)
+            freed = _appointment_spans(appointment)
             # Il link della caparra partito con la prenotazione: se non è ancora
             # uscito non esce più, se è uscito la sessione si chiude su Stripe
             # a transazione chiusa. Restava pagabile, e il pagamento finiva su
             # un appuntamento che non esisteva più.
-            services._withdraw_deposit_messages(appointment)
-            services._close_deposit_link_after_commit(appointment)
-            knowledge = services._slot_knowledge(appointment, freed)
+            _withdraw_deposit_messages(appointment)
+            _close_deposit_link_after_commit(appointment)
+            knowledge = _slot_knowledge(appointment, freed)
             # Poi si passa dall'emissione normale, che sa da sola se c'è
             # qualcosa da dire alla cliente: se la conferma è ancora ferma in
             # coda sparisce tutto e nessuno riceve niente, se invece era già
             # partita (o la cliente ha in mano il link) parte l'annullamento.
-            services.emit_appointment_event(
+            emit_appointment_event(
                 appointment,
                 "appointment.cancelled",
                 {
-                    **services._event_payload(appointment),
+                    **_event_payload(appointment),
                     "reason": "annullato dal salone",
                     "late": False,
                 },
             )
             # E la lista d'attesa sente dello slot solo se qualcuno lo sapeva
             # occupato: con la conferma già partita, lo slot si è liberato.
-            services._sync_freed_slots(appointment, freed, {}, knowledge)
+            _sync_freed_slots(appointment, freed, {}, knowledge)
             _delete_appointment(appointment, entry.label)
         Pause.objects.filter(id__in=entry.created.get("pauses", [])).delete()
 
@@ -590,7 +596,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             previous_spans[live.id] = (
                 {}
                 if live.status in Appointment.INACTIVE_STATUSES
-                else services._appointment_spans(live)
+                else _appointment_spans(live)
             )
             appointment = _restore_appointment(snap)
             touched.append(appointment)
@@ -604,11 +610,11 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
 
         # 4. I messaggi: spariscono se erano ancora trattenuti e per la
         #    cliente non cambia niente, si rettificano se ciò che sa è diverso
-        #    dallo stato ripristinato (services.revert_held_events).
+        #    dallo stato ripristinato (services.undo_messages.revert_held_events).
         fallback = _FALLBACK_EVENT.get(entry.kind, "appointment.updated")
         for appointment in touched:
             appointment.refresh_from_db()
-            services.revert_held_events(
+            revert_held_events(
                 appointment,
                 fallback_event=fallback,
                 previous_spans=previous_spans.get(appointment.id, {}),

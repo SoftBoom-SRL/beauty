@@ -8,7 +8,7 @@ comando serve al cron per i saloni in cui nessuno ha la dashboard aperta:
 
 from django.core.management.base import BaseCommand
 
-from apps.agenda.services import process_deposit_holds
+from apps.agenda.services.deposit_holds import process_deposit_holds
 from apps.core.models import Salon
 
 
