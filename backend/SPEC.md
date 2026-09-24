@@ -1,7 +1,7 @@
 # youty backend — SPEC (contratto di implementazione)
 
 Backend Django per: **dashboard gestionale** (staff salone) + **web app cliente** (clienti finali).
-Riferimento funzionale: `../yourang - Manuale flussi.doc`. Salone demo: The Parlour (Firenze).
+Riferimento funzionale: `../docs/manuale-flussi.html`. Salone demo: The Parlour (Firenze).
 
 **WhatsApp e l'esecuzione delle automazioni sono delegate alla piattaforma esterna Yourang**:
 il backend NON invia messaggi; accoda eventi in `core.OutboxEvent` via `core.services.emit_event`.
