@@ -140,6 +140,27 @@ test('Gift card: acquisto da pagare in salone, poi il portafoglio ricaricato', a
   } finally { s.unmount(); }
 });
 
+test('Gift card e lista d\'attesa: l\'errore arrivato a schermata chiusa non compare su quella dopo (voce 33)', async () => {
+  for (const [Screen, path] of [[GiftCard, '/api/marketing/client/wallet'], [Waitlist, '/api/agenda/client/waitlist']]) {
+    const { toasts } = fakeCtx({});
+    const s = mount(Screen);
+    // la cliente torna indietro prima della risposta, che poi fallisce
+    s.unmount();
+    await lost(pending('get', path)[0]);
+    assert.deepEqual(toasts, [], path);
+    // a schermata aperta invece l'errore si dice
+    const again = fakeCtx({});
+    const t = mount(Screen);
+    try {
+      await lost(pending('get', path)[0]);
+      t.render();
+      assert.deepEqual(again.toasts, [{ msg: 'Errore di rete', icon: 'alert' }], path);
+      // e lo scheletro del caricamento se ne va
+      assert.equal(findAll(t.tree, (el) => el.props.className === 'skel').length, 0, path);
+    } finally { t.unmount(); }
+  }
+});
+
 test('Lista d\'attesa: rimuovere una richiesta non blocca le altre', async () => {
   const { toasts, views } = fakeCtx({});
   const s = mount(Waitlist);
