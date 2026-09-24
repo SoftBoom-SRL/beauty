@@ -22,8 +22,8 @@ from ninja.files import UploadedFile
 from ninja.pagination import LimitOffsetPagination, paginate
 
 from apps.agenda.schemas import AppointmentOut
-from apps.core.models import Salon, SalonSettings
-from apps.core.services import emit_event, log_activity
+from apps.core.models import SalonSettings
+from apps.core.services import emit_event, get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
@@ -1173,10 +1173,7 @@ def public_hook(request, data: HookLeadIn):
     if not first_name or not phone:
         raise HttpError(400, "Nome e telefono sono obbligatori")
 
-    try:
-        salon = Salon.objects.get(slug=data.salon_slug)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
+    salon = get_salon_by_slug(data.salon_slug)
 
     # Il modulo raccoglie anche se il salone non ha configurato l'informativa:
     # bloccarlo spegnerebbe la raccolta contatti alla maggior parte dei saloni

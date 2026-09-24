@@ -9,8 +9,8 @@ from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Location, Salon
-from apps.core.services import log_activity
+from apps.core.models import Location
+from apps.core.services import default_location, get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
@@ -90,13 +90,6 @@ def _operators_qs(ctx):
         .select_related("salon", "salon__settings")
         .prefetch_related("services", "shifts", "absences")
     )
-
-
-def _get_salon_by_slug(slug: str) -> Salon:
-    try:
-        return Salon.objects.get(slug=slug)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
 
 
 def _sees_cash(ctx) -> bool:
@@ -546,17 +539,12 @@ def public_operators(request, salon: str):
     «Operatrice non idonea»: con lei dall'app non si prenotava mai (09-03,
     16-04, 04-04).
     """
-    from apps.agenda.services import default_location  # lazy: agenda è caricata dopo staff
-
-    s = _get_salon_by_slug(salon)
+    s = get_salon_by_slug(salon)
     # Endpoint senza auth: come la disponibilità pubblica in agenda, va limitato
     # per IP, altrimenti chiunque può sfogliare il team di ogni salone a raffica.
-    if not ratelimit.hit(
-        f"public-operators:{s.id}:{ratelimit.client_ip(request)}",
-        PUBLIC_OPERATORS_MAX_PER_WINDOW,
-        PUBLIC_OPERATORS_WINDOW_SECONDS,
-    ):
-        raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
+    ratelimit.enforce_public(
+        request, s, "operators", PUBLIC_OPERATORS_MAX_PER_WINDOW, PUBLIC_OPERATORS_WINDOW_SECONDS
+    )
     operators = Operator.objects.filter(salon=s, active=True)
     location = default_location(s)
     if location is not None:

@@ -13,8 +13,7 @@ from django.db.models.deletion import ProtectedError
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Salon
-from apps.core.services import log_activity
+from apps.core.services import get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
@@ -42,25 +41,9 @@ DEFAULT_CATEGORY_COLOR = "#E0E7FF"
 # client arriva un 500 invece del 400 che gli dice cosa correggere.
 MAX_CATEGORY_ORDER = MAX_POSITIVE_INT
 
+# Endpoint pubblici senza auth: stesso tetto per IP della disponibilità in agenda.
 PUBLIC_CATALOG_MAX_PER_WINDOW = 120
 PUBLIC_CATALOG_WINDOW_SECONDS = 300
-
-
-def _get_salon_by_slug(slug: str) -> Salon:
-    try:
-        return Salon.objects.get(slug=slug)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
-
-
-def _public_ratelimit(request, salon: Salon, bucket: str) -> None:
-    """Endpoint pubblici senza auth: stesso tetto per IP della disponibilità in agenda."""
-    if not ratelimit.hit(
-        f"public-{bucket}:{salon.id}:{ratelimit.client_ip(request)}",
-        PUBLIC_CATALOG_MAX_PER_WINDOW,
-        PUBLIC_CATALOG_WINDOW_SECONDS,
-    ):
-        raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
 
 
 # ---- Categorie servizi -------------------------------------------------------
@@ -347,8 +330,10 @@ def delete_package(request, package_id: int):
 @router.get("/public/services", response=list[PublicCategoryOut])
 def public_services(request, salon: str):
     """Listino pubblico raggruppato per categoria (ordinata), solo servizi attivi."""
-    s = _get_salon_by_slug(salon)
-    _public_ratelimit(request, s, "services")
+    s = get_salon_by_slug(salon)
+    ratelimit.enforce_public(
+        request, s, "services", PUBLIC_CATALOG_MAX_PER_WINDOW, PUBLIC_CATALOG_WINDOW_SECONDS
+    )
     categories = ServiceCategory.objects.filter(salon=s).order_by("order", "id").prefetch_related(
         Prefetch(
             "services",
@@ -370,8 +355,10 @@ def public_services(request, salon: str):
 @router.get("/public/packages", response=list[PublicPackageOut])
 def public_packages(request, salon: str):
     """Pacchetti pubblici attivi, con dettaglio dei servizi inclusi."""
-    s = _get_salon_by_slug(salon)
-    _public_ratelimit(request, s, "packages")
+    s = get_salon_by_slug(salon)
+    ratelimit.enforce_public(
+        request, s, "packages", PUBLIC_CATALOG_MAX_PER_WINDOW, PUBLIC_CATALOG_WINDOW_SECONDS
+    )
     packages = Package.objects.filter(salon=s, active=True).prefetch_related("items__service")
     return [
         {
