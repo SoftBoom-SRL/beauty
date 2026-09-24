@@ -31,3 +31,6 @@ dist-check*/
 .claude/settings.local.json
 .vercel/
 .superpowers/
+
+# ─── Test di fumo ──────────────────────────────────────────
+tools/smoke/pylib/
