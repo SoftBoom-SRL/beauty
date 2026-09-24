@@ -194,7 +194,7 @@ class MovementOut(Schema):
         op = obj.operator
         if not op:
             return ""
-        return f"{op.first_name} {op.last_name}".strip()
+        return op.full_name
 
 
 # ---- Ordini ------------------------------------------------------------------

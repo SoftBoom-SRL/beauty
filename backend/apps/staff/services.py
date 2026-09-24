@@ -17,6 +17,8 @@ from django.db.models import Count, Max, Q, Sum
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
+from common.intervals import merge_intervals
+
 # Tetto ai mesi della serie di rendimento: il parametro arriva dalla query
 # string di un GET senza scope richiesto, e senza limite superiore
 # `?months=50000000` diventava una scansione di cinquant'anni di vendite.
@@ -71,22 +73,6 @@ def _week_index(date: date_cls, cycle_weeks: int) -> int:
     lunedì, quindi il conto cambia esattamente al cambio di settimana.
     """
     return ((date.toordinal() - 1) // 7) % max(cycle_weeks, 1)
-
-
-def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Unisce le finestre che si toccano o si sovrappongono.
-
-    Due righe di turno contigue (9–13 e 13–18) sono lo stesso turno diviso in
-    due: lasciandole separate un servizio che attraversa le 13 non entrerebbe
-    per intero in nessuna delle due e l'orario non verrebbe mai proposto.
-    """
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(windows):
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
 
 
 def _subtract(windows: list[tuple[int, int]], cuts: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -150,12 +136,14 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
             break_end = min(shift.break_end_min, end)
             if break_start < break_end:
                 breaks.append((break_start, break_end))
-    # Prima si fondono le righe contigue, POI si tolgono le pause: al contrario
-    # la fusione richiudeva il buco appena ritagliato (vedi `_subtract`).
-    windows = _subtract(_merge_windows(windows), breaks)
+    # Prima si fondono le righe contigue (9–13 e 13–18 sono lo stesso turno
+    # diviso in due: separate, un servizio che attraversa le 13 non entrerebbe
+    # per intero in nessuna delle due), POI si tolgono le pause: al contrario la
+    # fusione richiudeva il buco appena ritagliato (vedi `_subtract`).
+    windows = _subtract(merge_intervals(windows), breaks)
     bounds = opening_windows(operator.salon, date)
     if bounds is not None:
-        windows = _merge_windows(_intersect(windows, bounds))
+        windows = merge_intervals(_intersect(windows, bounds))
     return windows
 
 

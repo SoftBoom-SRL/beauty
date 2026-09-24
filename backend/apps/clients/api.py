@@ -854,7 +854,7 @@ def client_history(request, client_id: int):
                 "date": a.start,
                 "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
                 "appointment": _appointment_out(a, gifts, viewer=ctx),
-                "operator_name": f"{a.operator.first_name} {a.operator.last_name}".strip() if a.operator_id else "",
+                "operator_name": a.operator.full_name if a.operator_id else "",
                 "sale": _sale_out(sale) if sale else None,
                 "deposit_sale": _sale_out(deposit) if deposit else None,
                 "notes": [_note_out(n) for n in notes_by_appt.get(a.id, [])],
