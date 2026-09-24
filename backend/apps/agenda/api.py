@@ -31,7 +31,6 @@ from .presenters import (
     _fmt_min,
     _gifts_out,
     _item_out,  # noqa: F401 — compat refactoring: rimuovere dopo l'integrazione (i test lo cercano qui)
-    _operator_name,
     _pause_label,
     _pause_out,
     _undo_out,
@@ -222,7 +221,7 @@ def agenda_day(request, date: str, location_id: int = None):
         {
             "operator": {
                 "id": operator.id,
-                "name": _operator_name(operator),
+                "name": operator.full_name,
                 "color": operator.color,
                 "role_title": operator.role_title,
                 "inactive": not operator.active,
@@ -749,7 +748,7 @@ def create_pause(request, data: PauseIn):
     log_activity(
         ctx.salon,
         "pause.created",
-        f"Pausa per {_operator_name(operator)}",
+        f"Pausa per {operator.full_name}",
         actor=ctx.user,
         payload={"pause_id": pause.id, "start": pause.start.isoformat()},
     )
@@ -784,7 +783,7 @@ def update_pause(request, pause_id: int, data: PauseIn):
     log_activity(
         ctx.salon,
         "pause.updated",
-        f"Pausa di {_operator_name(pause.operator)} aggiornata",
+        f"Pausa di {pause.operator.full_name} aggiornata",
         actor=ctx.user,
         payload={"pause_id": pause.id, "start": pause.start.isoformat()},
     )
@@ -804,7 +803,7 @@ def delete_pause(request, pause_id: int):
     ctx = request.auth
     require_scope(ctx, "agenda")
     pause = salon_get(Pause, ctx, pause_id)
-    operator_name = _operator_name(pause.operator)
+    operator_name = pause.operator.full_name
     start = pause.start.isoformat()
     label = _pause_label("Pausa rimossa", pause)
     before = undo_log.pause_snapshot(pause)

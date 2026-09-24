@@ -18,17 +18,13 @@ def _fmt_min(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
-def _operator_name(operator) -> str:
-    return f"{operator.first_name} {operator.last_name}".strip()
-
-
 def _item_out(item) -> dict:
     return {
         "id": item.id,
         "service_id": item.service_id,
         "service_name": item.service.name_it,
         "operator_id": item.operator_id,
-        "operator_name": _operator_name(item.operator),
+        "operator_name": item.operator.full_name,
         "duration_min": item.duration_min,
         "soak_min": item.soak_min,
         "price": item.price,
@@ -136,14 +132,14 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
 
 def _pause_label(action: str, pause) -> str:
     """«Pausa spostata · Laura, 13:00» — la frase che compare in «torna indietro»."""
-    return f"{action} · {_operator_name(pause.operator)}, {timezone.localtime(pause.start):%H:%M}"
+    return f"{action} · {pause.operator.full_name}, {timezone.localtime(pause.start):%H:%M}"
 
 
 def _pause_out(pause) -> dict:
     return {
         "id": pause.id,
         "operator_id": pause.operator_id,
-        "operator_name": _operator_name(pause.operator),
+        "operator_name": pause.operator.full_name,
         "start": pause.start,
         "duration_min": pause.duration_min,
         "note": pause.note,
@@ -158,7 +154,7 @@ def _waitlist_out(entry) -> dict:
         "service_id": entry.service_id,
         "service_name": entry.service.name_it,
         "operator_id": entry.operator_id,
-        "operator_name": _operator_name(entry.operator) if entry.operator else None,
+        "operator_name": entry.operator.full_name if entry.operator else None,
         "preference": entry.preference,
         "exact_days": entry.exact_days,
         "exact_time": entry.exact_time,
@@ -186,7 +182,7 @@ def _client_appointment_out(appointment, gifts_by_client=None) -> dict:
         "status": appointment.status,
         "operator": {
             "id": appointment.operator_id,
-            "name": _operator_name(appointment.operator),
+            "name": appointment.operator.full_name,
         },
         "services": [
             {
