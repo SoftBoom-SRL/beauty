@@ -38,6 +38,21 @@ class ClientCategoryIn(Schema):
     order: int = Field(0, ge=0)
 
 
+class ClientCategoryCountOut(Schema):
+    """Schede attive con questa etichetta."""
+
+    id: int
+    count: int
+
+
+class ClientCountsOut(Schema):
+    """Schede attive del salone: `active` in tutto, `categories` per etichetta
+    (una voce per ogni etichetta del salone, anche a zero, nel loro ordine)."""
+
+    active: int
+    categories: list[ClientCategoryCountOut]
+
+
 # ---- Cliente ------------------------------------------------------------------
 
 

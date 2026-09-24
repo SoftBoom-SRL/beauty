@@ -36,7 +36,7 @@ from .fields import client_payload
 from .history import build_history, client_appointments
 from .hook import record_lead
 from .importer import import_rows
-from .labels import create_label, delete_label, label_payload, update_label
+from .labels import create_label, delete_label, label_counts, label_payload, update_label
 from .models import (
     Client,
     ClientCategory,
@@ -62,6 +62,7 @@ from .records import (
 from .schemas import (
     ClientCategoryIn,
     ClientCategoryOut,
+    ClientCountsOut,
     HookLeadIn,
     HookLeadOut,
     ClientDetailOut,
@@ -143,6 +144,18 @@ def list_clients(
     if is_active is not None:
         qs = qs.filter(is_active=is_active)
     return qs.distinct()
+
+
+@router.get("/counts", auth=staff_auth, response=ClientCountsOut)
+def client_counts(request):
+    """Schede attive del salone, in tutto e per etichetta, in una risposta sola.
+
+    Sono i numeri delle card in cima alla sezione Clienti della dashboard:
+    `active` è il `count` della lista con `is_active=true`, ogni voce di
+    `categories` quello della lista con `is_active=true&category_id=<id>`.
+    Stesso permesso della lista.
+    """
+    return label_counts(request.auth.salon)
 
 
 @router.post("/", auth=staff_auth, response=ClientOut)

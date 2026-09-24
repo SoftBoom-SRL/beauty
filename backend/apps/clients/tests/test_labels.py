@@ -11,10 +11,10 @@ from apps.core.models import OutboxEvent, Salon
 from common.testing import staff_context
 from config.api import api
 
-from ..api import create_category, delete_category, update_category
+from ..api import client_counts, create_category, delete_category, update_category
 from ..models import Client, ClientCategory
 from ..schemas import ClientCategoryIn
-from .base import ClientsTestCase
+from .base import ClientsTestCase, _staff_http
 
 
 class CategoryTests(ClientsTestCase):
@@ -225,3 +225,59 @@ class DeleteLabelRaceTests(_Base):
         self.assertEqual(caught.exception.status_code, 400)
         self.assertIn("«Rischio alto»", caught.exception.message)
         self.assertTrue(ClientCategory.objects.filter(id=label.id).exists())
+
+
+class LabelCountsTests(TestCase):
+    """Bug sospetti del 24/09, voce 43: le card in cima alla sezione Clienti si
+    contavano con una lista `limit=1` per «Attivi» e una per ogni etichetta, a
+    ogni evento del feed dal vivo: con 10 etichette 12 richieste per evento, su
+    ogni postazione aperta. GET /api/clients/counts dà tutti i numeri in una
+    risposta, con il permesso e il filtro per salone della lista."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        other = Salon.objects.create(name="Altro salone", slug="altro-salone")
+        self.vip = ClientCategory.objects.create(salon=self.salon, name="VIP")
+        self.form = ClientCategory.objects.create(salon=self.salon, name="Da form")
+        self.expat = ClientCategory.objects.create(salon=self.salon, name="Expat")
+        foreign = ClientCategory.objects.create(salon=other, name="VIP")
+
+        def card(salon, phone, labels=(), active=True):
+            Client.objects.create(salon=salon, first_name="Anna", phone=phone, is_active=active).categories.add(*labels)
+
+        card(self.salon, "+393330000001", [self.vip, self.form])
+        card(self.salon, "+393330000002", [self.vip])
+        card(self.salon, "+393330000003", [self.vip], active=False)  # archiviata: non conta
+        card(self.salon, "+393330000004")
+        card(other, "+393330000005", [foreign])  # di un altro salone
+        # nessun permesso: la lista clienti la legge ogni membro dello staff
+        _, self.auth = _staff_http(self.salon, [])
+
+    def test_one_answer_with_the_numbers_of_the_list(self):
+        res = self.client.get("/api/clients/counts", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body, {
+            "active": 3,
+            "categories": [
+                {"id": self.vip.id, "count": 2},
+                {"id": self.form.id, "count": 1},
+                {"id": self.expat.id, "count": 0},
+            ],
+        })
+
+        def listed(**params):
+            res = self.client.get("/api/clients/", {"is_active": "true", "limit": 1, **params}, **self.auth)
+            return res.json()["count"]
+
+        self.assertEqual(body["active"], listed())
+        for entry in body["categories"]:
+            self.assertEqual(entry["count"], listed(category_id=entry["id"]))
+
+    def test_the_queries_do_not_grow_with_the_labels(self):
+        for n in range(10):
+            ClientCategory.objects.create(salon=self.salon, name=f"Etichetta {n}")
+        request = SimpleNamespace(auth=staff_context(self.salon))
+        with self.assertNumQueries(2):
+            body = client_counts(request)
+        self.assertEqual(len(body["categories"]), 13)

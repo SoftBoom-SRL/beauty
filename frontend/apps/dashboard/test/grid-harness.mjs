@@ -85,6 +85,7 @@ import * as apiErrors from ${JSON.stringify(join(FRONT, 'packages', 'shared', 's
 export * from ${JSON.stringify(FORMAT)};
 export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
 export const Avatar = () => null;
+export const EmptyState = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
 export const Toggle = () => null;

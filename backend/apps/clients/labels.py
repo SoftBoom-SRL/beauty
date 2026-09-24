@@ -1,4 +1,4 @@
-"""Etichette cliente (ClientCategory): nomi unici nel salone e condizioni che li citano.
+"""Etichette cliente (ClientCategory): nomi unici nel salone, condizioni che li citano, conteggi.
 
 Le regole caparra (core.DepositRule) e le automazioni salvano nelle condizioni
 il NOME dell'etichetta, che è quello che confronta `client_facts`: rinominare o
@@ -10,6 +10,7 @@ chiama queste funzioni.
 from typing import Optional
 
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from ninja.errors import HttpError
 
 from apps.core.models import DepositRule
@@ -207,6 +208,26 @@ def delete_label(ctx, category: ClientCategory) -> None:
             actor=ctx.user,
             payload={"category_id": category_id},
         )
+
+
+def label_counts(salon) -> dict:
+    """Schede attive del salone, in tutto e per etichetta (anche a zero): {active, categories}.
+
+    Sono i numeri delle card in cima alla sezione Clienti, che la dashboard
+    ricavava da una lista `limit=1` per «Attivi» e una per ogni etichetta, a
+    ogni evento del feed dal vivo: 1+N richieste su ogni postazione aperta
+    (voce 43 dei bug sospetti del 24/09). Qui gli stessi conteggi della lista
+    con `is_active=true` (e `category_id`), in due query.
+    """
+    categories = ClientCategory.objects.filter(salon=salon).annotate(
+        active_clients=Count(
+            "clients", filter=Q(clients__salon=salon, clients__is_active=True), distinct=True
+        )
+    )
+    return {
+        "active": Client.objects.filter(salon=salon, is_active=True).count(),
+        "categories": [{"id": c.id, "count": c.active_clients} for c in categories],
+    }
 
 
 # ---- Etichette di una scheda --------------------------------------------------

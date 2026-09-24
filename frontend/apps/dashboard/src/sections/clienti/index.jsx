@@ -95,16 +95,20 @@ export default function ClientiSection() {
     } finally { setLoadingMore(false); }
   };
 
-  /* ---- category summary counts ----
-   * One `limit=1` request per card, reading the pagination `count`: payloads
-   * stay tiny and the number of requests is bounded by the category catalog
-   * (small), while a full unfiltered fetch would grow with the client base
-   * and duplicate the paginated list query. All counts are active-only. */
+  /* ---- conteggi delle card (sole schede attive) ----
+   * Tutti in una risposta (GET /api/clients/counts). Prima una lista
+   * `limit=1` per «Attivi» e una per ogni etichetta: 1+N richieste a ogni
+   * evento del feed dal vivo, su ogni postazione aperta sulla sezione (voce 43
+   * dei bug sospetti del 24/09). Se la risposta non arriva, le card restano in
+   * caricamento. */
   useEffect(() => {
     let dead = false;
-    const cards = [{ key: '__active', params: {} }, ...clientCategories.map((c) => ({ key: c.id, params: { category_id: c.id } }))];
-    Promise.all(cards.map((c) => clientsApi.list({ ...c.params, is_active: true, limit: 1 }).then((r) => [c.key, r.count]).catch(() => [c.key, null])))
-      .then((pairs) => { if (!dead) setCatCounts(Object.fromEntries(pairs)); });
+    clientsApi.counts()
+      .then((res) => {
+        if (dead) return;
+        setCatCounts(Object.fromEntries([['__active', res.active], ...res.categories.map((c) => [c.id, c.count])]));
+      })
+      .catch(() => { if (!dead) setCatCounts({}); });
     return () => { dead = true; };
   }, [clientCategories, refreshKey]);
 
