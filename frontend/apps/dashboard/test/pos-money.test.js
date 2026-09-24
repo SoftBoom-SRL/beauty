@@ -1,7 +1,7 @@
 // Il denaro della cassa: carrello (POS) e check-out devono arrivare al
 // centesimo allo stesso totale del server — Decimal con ROUND_HALF_UP in
 // backend/apps/sales/services.py `line_amount` e nello sconto del buono di
-// backend/apps/marketing/services.py `coupon_discount`. In virgola mobile la
+// backend/apps/marketing/coupons.py `coupon_discount`. In virgola mobile la
 // cassa arrotondava per difetto i mezzi centesimi e la vendita tornava 422
 // «I pagamenti non corrispondono al totale» (caccia del 22/09: 05-09, 14-04,
 // 17-02); con la caparra più alta del conto «Incassa» restava spento (14-02,

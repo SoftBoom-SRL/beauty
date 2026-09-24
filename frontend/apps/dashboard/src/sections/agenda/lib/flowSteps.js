@@ -6,7 +6,7 @@ import { aEndMin, aStartMin, fmtMoney } from './appt.js';
 
 /* --- Anteprima passo-passo del flusso no-show / cancellazione -------------
  * Restituiscono l'array di passi per <FlowSteps>. I contenuti rispecchiano
- * l'esito reale del backend (apps/agenda/services.py): no-show → caparra
+ * l'esito reale del backend (apps/agenda/services/transitions.py): no-show → caparra
  * trattenuta; annullamento dal gestionale → caparra SEMPRE da rimborsare, a
  * qualunque ora (la penale vale solo per la cliente che disdice tardi
  * dall'app); senza caparra nulla. L'importo è `deposit_credit`, la quota che

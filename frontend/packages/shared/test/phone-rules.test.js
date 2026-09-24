@@ -1,7 +1,7 @@
 // Caccia 22/09 — regole dei numeri di telefono (06-04, 06-11, 16-11).
 //
 // Una sola tabella di casi, una riga per regola, IDENTICA a CASES di
-// backend/apps/clients/tests_caccia22_telefono.py: il numero normalizzato è la
+// backend/apps/clients/tests/test_phone.py: il numero normalizzato è la
 // chiave con cui si riconosce una cliente già in rubrica, e se frontend e
 // backend lo scrivono in due modi la stessa persona diventa due schede.
 //

@@ -93,7 +93,7 @@ export function countryOf(iso2) {
  * rubrica: se frontend e backend lo scrivono in due modi, la stessa persona
  * diventa due schede e l'OTP parte verso un numero che non esiste. I casi di
  * prova sono una tabella sola, uguale nei due lati
- * (backend/apps/clients/tests_caccia22_telefono.py e
+ * (backend/apps/clients/tests/test_phone.py e
  * packages/shared/test/phone-rules.test.js).
  * R1 «+» o «00» = internazionale: dopo il prefisso cade UNO 0 interurbano,
  *    tranne in Italia, San Marino, Vaticano e Costa d'Avorio.
