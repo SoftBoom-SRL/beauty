@@ -1,13 +1,17 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
 import { useState } from 'react';
-import { Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
+import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
 import CouponField from './CouponField.jsx';
 import ConfirmPaymentModal from './ConfirmPaymentModal.jsx';
-import SaleDone from './SaleDone.jsx';
+import SaleDone from './cart/SaleDone.jsx';
+import ProductGrid from './cart/ProductGrid.jsx';
+import GiftCardBuilder from './cart/GiftCardBuilder.jsx';
+import CartLine from './cart/CartLine.jsx';
+import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
 import { counterDiscountPct, counterGiftLine, counterProductLine, toApiLine } from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
@@ -16,12 +20,6 @@ import {
   centsToEur, emptyPayments, lineCents, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
-
-const stockMeta = (state, t) => {
-  if (state === 'low') return { label: t('Scorta bassa', 'Low stock'), color: 'var(--danger)', tint: 'var(--danger-tint)' };
-  if (state === 'warning') return { label: t('In esaurimento', 'Running low'), color: 'var(--warn)', tint: 'var(--warn-tint)' };
-  return { label: t('Disponibile', 'In stock'), color: 'var(--muted)', tint: 'var(--paper-2)' };
-};
 
 export default function CartTab({ onGoHistory }) {
   const { t, lang, operators, opColors, fireToast, hasScope } = useDash();
@@ -169,56 +167,10 @@ export default function CartTab({ onGoHistory }) {
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
 
-        {products === null ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            {[...Array(6)].map((_, i) => <div key={i} className="skel" style={{ height: 128, borderRadius: 16 }} />)}
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            {prodList.map((p) => {
-              const inCart = cart.find((l) => l.line_type === 'product' && l.product_id === p.id);
-              const sm = stockMeta(p.stock_state, t);
-              return (
-                <button key={p.id} onClick={() => addProduct(p)} className="dk-card"
-                  style={{ padding: 16, textAlign: 'left', cursor: 'pointer', border: '1px solid ' + (inCart ? 'var(--clay)' : 'var(--hair)'), position: 'relative', transition: 'border-color 140ms' }}>
-                  {inCart && <span style={{ position: 'absolute', top: 10, right: 10, minWidth: 22, height: 22, padding: '0 6px', borderRadius: 99, background: 'var(--clay)', color: '#fff', fontSize: 12, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{inCart.qty}</span>}
-                  <div style={{ width: 40, height: 40, borderRadius: 11, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>
-                    <Icon name="box" size={20} color="var(--clay-ink)" />
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.25 }}>{p.name}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7 }}>
-                    <span className="t-num" style={{ fontSize: 16, fontWeight: 700 }}>{money(p.sale_price, lang)}</span>
-                    <span title={sm.label} style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.tint, padding: '2px 8px', borderRadius: 99, marginLeft: 'auto' }}>
-                      {Number(p.stock_qty)} {t('pz', 'pcs')}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-            {!prodList.length && <div className="t-sm" style={{ color: 'var(--muted-2)', gridColumn: '1 / -1', textAlign: 'center', padding: 32 }}>{searching ? t('Ricerca nel catalogo…', 'Searching the catalogue…') : t('Nessun prodotto trovato', 'No products found')}</div>}
-          </div>
-        )}
+        <ProductGrid products={products} list={prodList} cart={cart} searching={searching} onAdd={addProduct} t={t} lang={lang} />
 
         {/* gift-card line builder */}
-        <div className="dk-card" style={{ marginTop: 16, padding: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 11, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-            <Icon name="gift" size={20} color="var(--ok)" />
-          </div>
-          <div style={{ flex: 1, minWidth: 130 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{t('Gift card', 'Gift card')}</div>
-            <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Emetti una carta prepagata', 'Issue a prepaid card')}</div>
-          </div>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 10, padding: '8px 10px', background: 'var(--surface)', width: 86, boxSizing: 'border-box' }}>
-            <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-            <NumInput min={1} value={giftAmt} onChange={setGiftAmt}
-              style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, width: '100%' }} />
-          </div>
-          <input value={giftName} onChange={(e) => setGiftName(e.target.value)} placeholder={t('Destinatario (facolt.)', 'Recipient (optional)')}
-            style={{ border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13, fontWeight: 600, padding: '9px 12px', fontFamily: 'var(--sans)', background: 'var(--surface)', width: 160 }} />
-          <button className="dk-btn dk-btn--ghost" style={{ height: 38 }} disabled={!(toCents(giftAmt) > 0)} onClick={addGiftCard}>
-            <Icon name="plus" size={15} />{t('Aggiungi', 'Add')}
-          </button>
-        </div>
+        <GiftCardBuilder amt={giftAmt} setAmt={setGiftAmt} name={giftName} setName={setGiftName} onAdd={addGiftCard} t={t} />
       </div>
 
       {/* RIGHT — cart / checkout */}
@@ -257,53 +209,9 @@ export default function CartTab({ onGoHistory }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {cart.map((l) => {
-                const val = lineVal(l);
-                const d = effDisc(l);
-                return (
-                  <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: l.is_gift ? '1px solid var(--ok)' : '1px solid transparent' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                      <Icon name={l.line_type === 'gift_card' ? 'gift' : 'box'} size={16} color={l.is_gift ? 'var(--ok)' : 'var(--clay-ink)'} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {l.name}{l.line_type === 'gift_card' && l.recipient_name ? ' · ' + l.recipient_name : ''}
-                      </div>
-                      <div className="t-sm" style={{ color: l.is_gift ? 'var(--ok)' : 'var(--muted)', fontWeight: l.is_gift ? 700 : 400 }}>
-                        {l.is_gift ? t('Omaggio', 'Free gift') : money(val, lang)}
-                        {!l.is_gift && d > 0 ? ` · −${d}%` : ''}
-                        {!l.is_gift && l.qty > 1 ? ' × ' + l.qty : ''}
-                      </div>
-                    </div>
-                    {l.line_type === 'product' && !l.is_gift && (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid ' + (l.disc > 0 ? 'var(--clay)' : 'var(--hair)'), borderRadius: 7, padding: '2px 5px', background: 'var(--surface)', flexShrink: 0 }} title={t('Sconto riga', 'Line discount')}>
-                        <NumInput integer min={0} max={100} value={l.disc}
-                          onChange={(disc) => patchLine(l.key, { disc })}
-                          style={{ width: 24, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
-                        <span style={{ color: 'var(--muted-2)', fontWeight: 700, fontSize: 11 }}>%</span>
-                      </div>
-                    )}
-                    {l.line_type === 'product' && (
-                      <button onClick={() => patchLine(l.key, { is_gift: !l.is_gift })} title={t('Ometti pagamento', 'Comp this item')} className="dk-iconbtn"
-                        style={{ width: 26, height: 26, flexShrink: 0, background: l.is_gift ? 'var(--ok-tint)' : 'transparent', borderRadius: 7 }}>
-                        <Icon name="gift" size={14} color={l.is_gift ? 'var(--ok)' : 'var(--muted-2)'} />
-                      </button>
-                    )}
-                    {l.line_type === 'product' ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                        <button className="dk-iconbtn" style={{ width: 26, height: 26, fontSize: 16, fontWeight: 700, lineHeight: 1, color: 'var(--ink-2)' }}
-                          onClick={() => (l.qty === 1 ? removeLine(l.key) : stepQty(l, -1))}>
-                          {l.qty === 1 ? <Icon name="x" size={13} /> : '−'}
-                        </button>
-                        <span className="t-num" style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: 13.5 }}>{l.qty}</span>
-                        <button className="dk-iconbtn" style={{ width: 26, height: 26 }} onClick={() => stepQty(l, 1)}><Icon name="plus" size={13} /></button>
-                      </div>
-                    ) : (
-                      <button className="dk-iconbtn" style={{ width: 26, height: 26, flexShrink: 0 }} onClick={() => removeLine(l.key)}><Icon name="x" size={13} /></button>
-                    )}
-                  </div>
-                );
-              })}
+              {cart.map((l) => (
+                <CartLine key={l.key} l={l} val={lineVal(l)} d={effDisc(l)} onPatch={patchLine} onStep={stepQty} onRemove={removeLine} t={t} lang={lang} />
+              ))}
             </div>
           )}
 
@@ -321,23 +229,7 @@ export default function CartTab({ onGoHistory }) {
           )}
 
           {/* sale-level discount */}
-          <div className="t-meta" style={{ margin: '18px 0 8px' }}>{t('Sconto sulla vendita', 'Sale discount')}</div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {[0, 10, 15, 20].map((p) => {
-              const on = globalDisc === p;
-              return (
-                <button key={p} onClick={() => setGlobalDisc(p)} style={{ flex: 1, padding: '9px 0', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  {p === 0 ? t('No', 'No') : p + '%'}
-                </button>
-              );
-            })}
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid ' + (globalDisc && ![10, 15, 20].includes(globalDisc) ? 'var(--clay)' : 'var(--hair)'), borderRadius: 9, padding: '0 9px', height: 36, background: 'var(--surface)' }}>
-              <NumInput integer min={0} max={100} value={globalDisc}
-                onChange={setGlobalDisc}
-                style={{ width: 34, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 13.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
-              <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>
-            </div>
-          </div>
+          <SaleDiscount value={globalDisc} onChange={setGlobalDisc} t={t} />
 
           {/* buono sconto — prima del pagamento, così il dovuto è già quello giusto */}
           <CouponField cp={cp} onApply={applyCoupon} discount={couponAmt}

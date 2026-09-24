@@ -2,7 +2,7 @@
 // pagamenti, a chi è accreditata, gift card emesse; da qui una nuova vendita
 // o lo storico.
 import { Icon } from '@youty/shared';
-import { methodLabel, money, opName } from './lib.js';
+import { methodLabel, money, opName } from '../lib.js';
 
 export default function SaleDone({ done, seller, onNew, onGoHistory, t, lang }) {
   const hasGift = done.lines.some((l) => l.line_type === 'gift_card');

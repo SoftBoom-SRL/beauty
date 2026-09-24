@@ -2,8 +2,8 @@
 // detratta o da restituire, pagamenti e ripartizione per operatrice
 // (CheckoutOut.breakdown).
 import { Avatar, Icon } from '@youty/shared';
-import DkModal from '../../ui/DkModal.jsx';
-import { centsToEur, methodLabel, money, toCents } from './lib.js';
+import DkModal from '../../../ui/DkModal.jsx';
+import { centsToEur, methodLabel, money, toCents } from '../lib.js';
 
 /* `depositCents`: la caparra che il conto detraeva (saleTotals); gli aiuti
  * op* sono quelli della modale, per nome, colore e iniziali. */
