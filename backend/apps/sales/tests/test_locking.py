@@ -14,7 +14,7 @@ from django.utils import timezone
 
 from apps.agenda.models import Appointment
 from apps.clients.models import Client
-from apps.core.models import SalonSettings
+from apps.core.models import Salon, SalonSettings
 
 from .base import StripeTestBase, event_payload
 
@@ -25,20 +25,19 @@ class LockOrderTests(StripeTestBase):
     def _spy(self):
         order = []
 
-        def lock_salon(salon):
-            order.append(("salon", salon.pk))
-
+        # Il lock del salone (`lock_salon`, FOR NO KEY UPDATE sulla riga del
+        # salone) si riconosce dal modello della query: così la spia non dipende
+        # dal modulo dell'agenda da cui ciascun chiamante prende `lock_salon`.
         def select_for_update(queryset, *args, **kwargs):
-            order.append(("row", queryset.model.__name__, kwargs.get("of")))
+            if queryset.model is Salon:
+                order.append(("salon", kwargs.get("no_key")))
+            else:
+                order.append(("row", queryset.model.__name__, kwargs.get("of")))
             return _real_select_for_update(queryset, *args, **kwargs)
 
-        patches = [
-            patch("apps.agenda.services.lock_salon", side_effect=lock_salon),
-            patch.object(QuerySet, "select_for_update", select_for_update),
-        ]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
+        spy = patch.object(QuerySet, "select_for_update", select_for_update)
+        spy.start()
+        self.addCleanup(spy.stop)
         return order
 
     def assertSalonFirst(self, order):
