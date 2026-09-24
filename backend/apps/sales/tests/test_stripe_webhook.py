@@ -2,7 +2,8 @@
 
 Caccia del 22/09: 05-02 (l'endpoint della piattaforma e quello Connect firmano
 con segreti diversi), 02-07/03-02/05-08/18-01 (pagamento di un appuntamento
-che non c'è più). Bug sospetti del 24/09: voce 8 (account della carta salvata).
+che non c'è più). Bug sospetti del 24/09: voce 8 (account della carta salvata),
+voce 10 (pagamento orfano: controllo e riga sotto il lock del salone).
 """
 
 from decimal import Decimal
@@ -223,6 +224,49 @@ class OrphanPaymentTests(StripeTestBase):
         self.assertEqual(self.post_event(self._ghost_event(account="acct_estraneo")).status_code, 200)
         self.assertEqual(http.calls_to("/v1/refunds"), [])
         self.assertFalse(ActivityLog.objects.filter(type="deposit.orphan_payment").exists())
+
+    def test_a_session_arriving_during_the_refund_waits_for_the_intent(self):
+        """Bug sospetti del 24/09, voce 10: intent e sessione insieme, un rimborso e una riga.
+
+        Controllo e riga stavano fuori da ogni lock: la sessione, arrivata
+        mentre l'intent rimborsava, passava anche lei il controllo e le righe
+        erano due (la seconda poteva dire «da rimborsare a mano» se Stripe le
+        rifiutava la chiave ancora in uso). Su SQLite il lock del salone non
+        ferma nessuno: qui, se l'intent lo tiene, la sessione aspetta che
+        l'intent abbia finito, come su PostgreSQL.
+        """
+        import json
+
+        from apps.agenda.services import locking
+
+        from .. import stripe_service, stripe_webhooks
+
+        session = json.loads(self._ghost_event("checkout.session.completed", event_id="evt_2"))
+        real_refund = stripe_service.refund_payment_intent
+        arrived, waiting = [], []
+
+        def refund_while_the_session_arrives(*args, **kwargs):
+            if not arrived:
+                arrived.append(session)
+                if lock.called:
+                    waiting.append(session)  # aspetta il commit dell'intent
+                else:
+                    stripe_webhooks.handle_event(session)
+            return real_refund(*args, **kwargs)
+
+        self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        with patch("apps.agenda.services.locking.lock_salon", wraps=locking.lock_salon) as lock, \
+                patch("apps.sales.stripe_service.refund_payment_intent",
+                      side_effect=refund_while_the_session_arrives) as refunds:
+            self.assertEqual(self.post_event(self._ghost_event()).status_code, 200)
+            for event in waiting:
+                stripe_webhooks.handle_event(event)
+        self.assertEqual(arrived, [session])
+        self.assertEqual(ActivityLog.objects.filter(type="deposit.orphan_payment").count(), 1)
+        self.assertEqual(refunds.call_count, 1)
+        lock.assert_called()
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
+        self.assertEqual((log.payload["refund_id"], log.payload["refund_status"]), ("re_ghost", "succeeded"))
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_x")
