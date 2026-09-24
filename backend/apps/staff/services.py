@@ -40,6 +40,11 @@ def _hm_to_min(value: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def min_to_hm(minutes: int) -> str:
+    """Minuti da mezzanotte → «HH:MM» (le finestre di turno nelle risposte)."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 def opening_windows(salon, date: date_cls) -> list[tuple[int, int]] | None:
     """Fasce di apertura del salone per quella data, o None se gli orari non sono configurati.
 

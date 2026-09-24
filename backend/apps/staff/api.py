@@ -1,24 +1,26 @@
 """Endpoint /api/staff — operatrici, turni, assenze, performance, clienti serviti."""
 
 from decimal import Decimal
-from typing import Optional
 
-from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from ninja import Router
-from ninja.errors import HttpError
 
-from apps.core.models import Location
 from apps.core.services import default_location, get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
-from common.validation import MAX_POSITIVE_INT, require_hex_color
+from common.validation import require_hex_color
 
-from .models import Absence, Operator, WeeklyShift
+from .models import Absence, Operator
+from .operators import (
+    absence_or_404,
+    replace_operator_shifts,
+    save_operator,
+    validate_absence,
+)
 from .schemas import (
     AbsenceIn,
     AbsenceOut,
@@ -35,6 +37,7 @@ from .schemas import (
     WeeklyShiftOut,
 )
 from .services import (
+    min_to_hm,
     month_revenue_by_operator,
     performance_series,
     served_clients,
@@ -44,41 +47,11 @@ from .services import (
 
 router = Router(tags=["staff"])
 
-# Un ciclo di turni più lungo di un anno non esiste in un salone, e il campo a
-# database è PositiveSmallIntegerField: senza tetto (e senza minimo) il valore
-# diventava un errore del database (500) invece di un errore della richiesta.
-MAX_CYCLE_WEEKS = 52
-MAX_OPERATOR_ORDER = MAX_POSITIVE_INT  # limite di PositiveIntegerField
-
 PUBLIC_OPERATORS_MAX_PER_WINDOW = 120
 PUBLIC_OPERATORS_WINDOW_SECONDS = 300
 
 
 # ---- Helpers -----------------------------------------------------------------
-
-
-def _fmt_min(minutes: int) -> str:
-    return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-def _catalog_service_model():
-    from apps.catalog.models import Service  # lazy: catalog è caricata dopo staff
-
-    return Service
-
-
-def _resolve_user(ctx, user_id: Optional[int]):
-    """L'utente staff associato all'operatrice deve appartenere allo stesso team."""
-    if not user_id:
-        return None
-    from apps.accounts.models import Membership  # lazy: accounts è caricata prima, ma per coerenza di stile
-
-    membership = (
-        Membership.objects.filter(salon=ctx.salon, user_id=user_id).select_related("user").first()
-    )
-    if membership is None:
-        raise HttpError(404, "Utente non trovato nel team")
-    return membership.user
 
 
 def _operators_qs(ctx):
@@ -129,129 +102,6 @@ def _operator_out(op: Operator, ctx) -> dict:
     }
 
 
-# Colonne che accettano null nel corpo: nessuna sede, nessun utente collegato.
-_NULLABLE_OPERATOR_FIELDS = {"location_id", "user_id"}
-
-
-def _validate_operator_payload(payload: dict) -> None:
-    """Colore, ciclo e ordine arrivano dal client e finiscono grezzi a database.
-
-    Senza questi controlli un ciclo a zero o negativo, o un colore che non è un
-    esadecimale, non erano un 400 ma un errore del database: 500, e chi compila
-    la scheda non sapeva quale campo rifare. Si controllano i campi presenti:
-    in modifica il corpo porta solo quelli cambiati.
-    """
-    for name, value in payload.items():
-        if value is None and name not in _NULLABLE_OPERATOR_FIELDS:
-            raise HttpError(400, f"Campo obbligatorio: {name}")
-    if "color" in payload:
-        require_hex_color(payload["color"].strip())
-    if "cycle_weeks" in payload and not (1 <= payload["cycle_weeks"] <= MAX_CYCLE_WEEKS):
-        raise HttpError(400, f"Settimane di ciclo non valide (da 1 a {MAX_CYCLE_WEEKS})")
-    if "order" in payload and not (0 <= payload["order"] <= MAX_OPERATOR_ORDER):
-        raise HttpError(400, "Ordine dell'operatrice non valido")
-    if "hourly_cost" in payload and payload["hourly_cost"] < 0:
-        raise HttpError(400, "Il costo orario non può essere negativo")
-
-
-def _apply_operator_payload(operator: Operator, ctx, payload: dict) -> Operator:
-    """Applica `payload` (i soli campi da scrivere) e salva.
-
-    In creazione arriva il corpo completo. In modifica solo i campi presenti
-    nella richiesta (C19): la scheda costruiva la PUT dal modulo letto
-    all'apertura e sostituiva tutto, quindi il colore cambiato dall'agenda o
-    l'abilitazione a un servizio data dal listino nel frattempo tornavano
-    indietro al primo «Salva» (09-09). Per lo stesso motivo in modifica si
-    scrivono solo quelle colonne, e i servizi solo se `service_ids` c'è.
-    """
-    _validate_operator_payload(payload)
-    payload = dict(payload)
-    creating = operator.pk is None
-    service_ids = payload.pop("service_ids", None)
-    if "color" in payload:
-        payload["color"] = payload["color"].strip().upper()
-    fields = []
-    if "location_id" in payload:
-        location_id = payload.pop("location_id")
-        operator.location = salon_get(Location, ctx, location_id) if location_id else None
-        fields.append("location")
-    if "user_id" in payload:
-        user = _resolve_user(ctx, payload.pop("user_id"))
-        if user is not None:
-            # `Operator.user` è OneToOne: collegare a un'operatrice un utente già
-            # legato a un'altra faceva saltare l'insert con un 500 anonimo.
-            taken = Operator.objects.filter(user=user).exclude(pk=operator.pk).first()
-            if taken is not None:
-                raise HttpError(400, f"Utente già collegato a {taken.first_name} {taken.last_name}")
-        operator.user = user
-        fields.append("user")
-    for name, value in payload.items():
-        setattr(operator, name, value)
-        fields.append(name)
-
-    # Abbassare `cycle_weeks` lasciava a database i turni delle settimane
-    # scomparse: `_week_index` non li seleziona più da nessuna data, quindi
-    # l'operatrice risultava a riposo per metà delle settimane senza che nulla
-    # lo mostrasse. Si cancellano nella stessa transazione del salvataggio.
-    orphans = 0
-    with transaction.atomic():
-        if creating:
-            operator.salon = ctx.salon
-            operator.save()
-        else:
-            # Stesso lock di `replace_shifts`: la pulizia dei turni fuori ciclo
-            # e una sostituzione dei turni in corsa non si incrociano.
-            Operator.objects.select_for_update().filter(pk=operator.pk).first()
-            if fields:
-                operator.save(update_fields=fields)
-            if "cycle_weeks" in payload:
-                orphans = operator.shifts.filter(week_index__gte=operator.cycle_weeks).delete()[0]
-        if service_ids is not None:
-            Service = _catalog_service_model()
-            operator.services.set(Service.objects.filter(salon=ctx.salon, id__in=service_ids))
-    if orphans:
-        log_activity(
-            ctx.salon,
-            "operator.shifts_updated",
-            f"Ciclo turni ridotto a {operator.cycle_weeks} settimane: "
-            f"{orphans} righe di turno fuori ciclo rimosse",
-            actor=ctx.user,
-            payload={"operator_id": operator.id, "removed_shifts": orphans},
-        )
-    return operator
-
-
-def _validate_shift_row(operator: Operator, row) -> None:
-    if row.weekday not in range(7):
-        raise HttpError(400, "Giorno della settimana non valido")
-    if not (0 <= row.week_index < (operator.cycle_weeks or 1)):
-        raise HttpError(400, "Settimana del ciclo non valida per questa operatrice")
-    if not (0 <= row.start_min < row.end_min <= 1440):
-        raise HttpError(400, "Orario di turno non valido")
-    if (row.break_start_min is None) != (row.break_end_min is None):
-        raise HttpError(400, "La pausa richiede sia l'inizio sia la fine")
-    if row.break_start_min is not None:
-        if not (row.start_min <= row.break_start_min < row.break_end_min <= row.end_min):
-            raise HttpError(400, "Orario di pausa non valido")
-
-
-def _reject_overlapping_shifts(rows) -> None:
-    """Due righe dello stesso giorno e della stessa settimana non si sovrappongono.
-
-    Righe contigue (9–13 e 13–18) restano ammesse: sono lo stesso turno spezzato.
-    Sovrapporle invece non significa nulla — quale delle due pause vale? — e
-    faceva sparire la pausa pranzo dalle finestre lavorabili.
-    """
-    by_day: dict[tuple[int, int], list[tuple[int, int]]] = {}
-    for row in rows:
-        by_day.setdefault((row.week_index, row.weekday), []).append((row.start_min, row.end_min))
-    for spans in by_day.values():
-        spans.sort()
-        for (_, previous_end), (start, _) in zip(spans, spans[1:]):
-            if start < previous_end:
-                raise HttpError(400, "Due righe di turno si sovrappongono nello stesso giorno")
-
-
 # ---- Lista operatrici con stato di oggi ----------------------------------------
 
 
@@ -282,7 +132,7 @@ def list_operators(request, include_inactive: bool = False):
         out.update(
             {
                 "on_shift": status["on_shift"],
-                "windows": [(_fmt_min(a), _fmt_min(b)) for a, b in status["windows"]],
+                "windows": [(min_to_hm(a), min_to_hm(b)) for a, b in status["windows"]],
                 "absence_type": status["absence_type"],
                 "month_revenue": revenues.get(op.id, Decimal("0")) if sees_cash else None,
                 "today_clients": clients.get(op.id, 0),
@@ -300,7 +150,7 @@ def list_operators(request, include_inactive: bool = False):
 def create_operator(request, data: OperatorIn):
     ctx = request.auth
     require_scope(ctx, "team")
-    operator = _apply_operator_payload(Operator(), ctx, data.dict())
+    operator = save_operator(Operator(), ctx, data.dict())
     log_activity(
         ctx.salon,
         "operator.created",
@@ -324,7 +174,7 @@ def update_operator(request, operator_id: int, data: OperatorPatchIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    operator = _apply_operator_payload(operator, ctx, data.dict(exclude_unset=True))
+    operator = save_operator(operator, ctx, data.dict(exclude_unset=True))
     log_activity(
         ctx.salon,
         "operator.updated",
@@ -386,32 +236,7 @@ def replace_shifts(request, operator_id: int, data: ShiftsReplaceIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    with transaction.atomic():
-        # Cancella-e-ricrea sotto lock sulla riga dell'operatrice: su PostgreSQL
-        # il DELETE del secondo di due salvataggi simultanei non vedeva le righe
-        # appena inserite dal primo, e restavano entrambe le serie sovrapposte —
-        # proprio ciò che `_reject_overlapping_shifts` vieta (18-14). Le righe si
-        # validano sull'operatrice riletta sotto lock: il ciclo ridotto nel
-        # frattempo non lascia turni fuori ciclo.
-        operator = Operator.objects.select_for_update().get(pk=operator.pk)
-        for row in data.shifts:
-            _validate_shift_row(operator, row)
-        _reject_overlapping_shifts(data.shifts)
-        operator.shifts.all().delete()
-        shifts = WeeklyShift.objects.bulk_create(
-            [
-                WeeklyShift(
-                    operator=operator,
-                    week_index=row.week_index,
-                    weekday=row.weekday,
-                    start_min=row.start_min,
-                    end_min=row.end_min,
-                    break_start_min=row.break_start_min,
-                    break_end_min=row.break_end_min,
-                )
-                for row in data.shifts
-            ]
-        )
+    operator, shifts = replace_operator_shifts(operator, data.shifts)
     log_activity(
         ctx.salon,
         "operator.shifts_updated",
@@ -436,10 +261,7 @@ def create_absence(request, operator_id: int, data: AbsenceIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    if data.type not in Absence.Type.values:
-        raise HttpError(400, "Tipo di assenza non valido")
-    if data.date_from > data.date_to:
-        raise HttpError(400, "L'intervallo di assenza non è valido")
+    validate_absence(data)
     absence = Absence.objects.create(operator=operator, **data.dict())
     log_activity(
         ctx.salon,
@@ -456,13 +278,8 @@ def update_absence(request, operator_id: int, absence_id: int, data: AbsenceIn):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    absence = operator.absences.filter(pk=absence_id).first()
-    if absence is None:
-        raise HttpError(404, "Assenza non trovata")
-    if data.type not in Absence.Type.values:
-        raise HttpError(400, "Tipo di assenza non valido")
-    if data.date_from > data.date_to:
-        raise HttpError(400, "L'intervallo di assenza non è valido")
+    absence = absence_or_404(operator, absence_id)
+    validate_absence(data)
     for name, value in data.dict().items():
         setattr(absence, name, value)
     absence.save()
@@ -481,9 +298,7 @@ def delete_absence(request, operator_id: int, absence_id: int):
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    absence = operator.absences.filter(pk=absence_id).first()
-    if absence is None:
-        raise HttpError(404, "Assenza non trovata")
+    absence = absence_or_404(operator, absence_id)
     absence.delete()
     log_activity(
         ctx.salon,
