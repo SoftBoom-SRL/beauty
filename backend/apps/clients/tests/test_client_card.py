@@ -81,9 +81,10 @@ class ClientCrudTests(ClientsTestCase):
         data = ClientIn(first_name="Altra", phone="+39 333 777 8888")
         # find_client_by_phone cieco = le due richieste simultanee che superano
         # entrambe il controllo e arrivano insieme alla INSERT.
-        with patch("apps.clients.api.find_client_by_phone", return_value=None):
+        with patch("apps.clients.profiles.find_client_by_phone", return_value=None) as finder:
             with self.assertRaises(HttpError) as exc:
                 create_client(self.request, data)
+        finder.assert_called_once()
         self.assertEqual(exc.exception.status_code, 400)
 
 

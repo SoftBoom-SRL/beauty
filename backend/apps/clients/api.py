@@ -28,10 +28,18 @@ from common.phone import canonical_phone, find_client_by_phone
 from common.schemas import OkOut
 from common.utils import salon_get
 
-from .fields import client_payload, stamped_consents
+from .fields import client_payload
 from .history import build_history, client_appointments
 from .importer import import_rows
-from .labels import create_label, delete_label, label_payload, set_categories, update_label
+from .labels import create_label, delete_label, label_payload, update_label
+from .profiles import (
+    archive_profile,
+    archived_phone_message,
+    check_phone_unique,
+    create_profile,
+    notify_marketing,
+    update_profile,
+)
 from .records import (
     appointment_for,
     attach_files,
@@ -46,7 +54,6 @@ from .models import (
     ClientNote,
     ClientNoteAttachment,
     TechnicalSheet,
-    default_consents,
 )
 from .schemas import (
     CategoryIn,
@@ -109,32 +116,6 @@ def delete_category(request, category_id: int):
 # ---- Cliente ------------------------------------------------------------------
 
 
-DUPLICATE_PHONE = "Telefono già registrato per un altro cliente"
-
-
-def _archived_phone_message(holder: Client, *, creating: bool = True) -> str:
-    if creating:
-        return (
-            f"Il numero è di una scheda archiviata: {holder.full_name}. "
-            "Riattivala invece di crearne un'altra."
-        )
-    return f"Il numero è già di una scheda archiviata: {holder.full_name}."
-
-
-def _check_phone_unique(ctx, phone: str, *, exclude_id: Optional[int] = None) -> Optional[Client]:
-    """Il numero è unico per salone comunque sia scritto (+39 / spazi / 0039).
-
-    Ritorna la scheda ARCHIVIATA che ha già quel numero (il chiamante decide
-    come indicarla), solleva 400 se il numero è di una scheda attiva.
-    """
-    holder = find_client_by_phone(ctx.salon, phone, exclude_id=exclude_id)
-    if holder is None:
-        return None
-    if not holder.is_active:
-        return holder
-    raise HttpError(400, DUPLICATE_PHONE)
-
-
 @router.get("/", auth=staff_auth, response=list[ClientOut])
 @paginate(LimitOffsetPagination)
 def list_clients(
@@ -166,7 +147,7 @@ def create_client(request, data: ClientIn):
     require_scope(ctx, "clients")
     payload, category_ids = client_payload(data)
     phone = payload["phone"]
-    archived = _check_phone_unique(ctx, phone)
+    archived = check_phone_unique(ctx, phone)
     if archived is not None:
         # Cliente archiviata che richiama per prenotare: la ricerca della
         # dashboard mostra solo le attive e la creazione rispondeva «già
@@ -177,36 +158,13 @@ def create_client(request, data: ClientIn):
         # staff: PUT {"is_active": true}.
         return JsonResponse(
             {
-                "detail": _archived_phone_message(archived),
+                "detail": archived_phone_message(archived),
                 "archived_client_id": archived.id,
                 "archived_client_name": archived.full_name,
             },
             status=409,
         )
-    # Le date dei consensi le scrive il server, come sul PUT (14-14).
-    payload["consents"] = stamped_consents(default_consents(), payload.get("consents") or {})
-    if not payload.get("since"):
-        # Cliente dal giorno in cui è entrata in rubrica. Nessuna via di
-        # creazione la valorizzava e il KPI «nuovi clienti» restava a zero per
-        # sempre; chi importa uno storico può sempre correggerla dopo.
-        payload["since"] = timezone.localdate()
-    try:
-        with transaction.atomic():
-            client = Client.objects.create(salon=ctx.salon, **payload)
-    except IntegrityError:
-        # Il controllo qui sopra non è atomico: due salvataggi simultanei dello
-        # stesso numero lo superano entrambi e a fermarli è il vincolo del
-        # database. Meglio il 400 «già registrato» di un 500 sulla violazione.
-        raise HttpError(400, DUPLICATE_PHONE)
-    set_categories(client, category_ids or [])
-    log_activity(
-        ctx.salon,
-        "client.created",
-        f"Cliente creato: {client.full_name}",
-        actor=ctx.user,
-        payload={"client_id": client.id},
-    )
-    return client
+    return create_profile(ctx, payload, category_ids)
 
 
 @router.get("/{int:client_id}", auth=staff_auth, response=ClientDetailOut)
@@ -248,46 +206,10 @@ def update_client(request, client_id: int, data: ClientUpdateIn):
     payload, category_ids = client_payload(data, partial=True)
     phone = payload.get("phone")
     if phone and phone != client.phone:
-        archived = _check_phone_unique(ctx, phone, exclude_id=client.id)
+        archived = check_phone_unique(ctx, phone, exclude_id=client.id)
         if archived is not None:
-            raise HttpError(400, _archived_phone_message(archived, creating=False))
-    with transaction.atomic():
-        # Riletta sotto lock: i consensi si fondono con quelli salvati, e una
-        # revoca arrivata dall'app un istante prima non deve tornare indietro.
-        client = Client.objects.select_for_update().get(pk=client.pk)
-        marketing_before = bool((client.consents or {}).get("marketing"))
-        if "consents" in payload:
-            payload["consents"] = stamped_consents(client.consents, payload["consents"])
-        changed = [name for name, value in payload.items() if getattr(client, name) != value]
-        for name in changed:
-            setattr(client, name, payload[name])
-        if changed:
-            try:
-                with transaction.atomic():
-                    client.save(update_fields=changed)
-            except IntegrityError:
-                raise HttpError(400, DUPLICATE_PHONE)
-        if category_ids is not None and set_categories(client, category_ids):
-            changed.append("category_ids")
-        if changed:
-            reactivated = "is_active" in changed and client.is_active
-            log_activity(
-                ctx.salon,
-                "client.updated",
-                f"Cliente {'riattivato' if reactivated else 'aggiornato'}: {client.full_name}",
-                actor=ctx.user,
-                payload={"client_id": client.id, "fields": changed},
-            )
-        # Il consenso marketing tolto dalla scheda vale anche per le campagne
-        # già programmate, e una scheda disattivata esce dagli invii in coda
-        # (07-03, GDPR art. 7.3): la destinataria fissata al «Programma» di
-        # lunedì riceveva comunque la promozione di sabato.
-        marketing_after = bool((client.consents or {}).get("marketing"))
-        if marketing_after != marketing_before:
-            _marketing_hook("marketing_consent_changed", client, accepted=marketing_after)
-        if payload.get("is_active") is False:
-            _marketing_hook("drop_from_pending_sends", client)
-    return client
+            raise HttpError(400, archived_phone_message(archived, creating=False))
+    return update_profile(ctx, client, payload, category_ids)
 
 
 @router.delete("/{int:client_id}", auth=staff_auth, response=OkOut)
@@ -295,36 +217,8 @@ def delete_client(request, client_id: int):
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    with transaction.atomic():
-        client.is_active = False
-        client.save(update_fields=["is_active"])
-        log_activity(
-            ctx.salon,
-            "client.deleted",
-            f"Cliente disattivato: {client.full_name}",
-            actor=ctx.user,
-            payload={"client_id": client.id},
-        )
-        # Archiviata = fuori anche dagli invii marketing non ancora partiti (07-03).
-        _marketing_hook("drop_from_pending_sends", client)
+    archive_profile(ctx, client)
     return OkOut()
-
-
-def _marketing_hook(name: str, *args, **kwargs) -> None:
-    """Chiama `apps.marketing.services.<name>`, se c'è.
-
-    Le due funzioni (marketing_consent_changed, drop_from_pending_sends)
-    appartengono al marketing: un'installazione che non le ha ancora non deve
-    perdere il salvataggio della scheda, ma deve lasciarne traccia nei log.
-    """
-    try:
-        from apps.marketing import services as marketing_services  # lazy: evita cicli
-
-        hook = getattr(marketing_services, name)
-    except (ImportError, AttributeError):
-        logger.warning("clients: apps.marketing.services.%s non disponibile", name)
-        return
-    hook(*args, **kwargs)
 
 
 @router.post("/import", auth=staff_auth, response=ImportOut)
@@ -718,7 +612,7 @@ def public_hook(request, data: HookLeadIn):
     client.save(update_fields=fields)
     if bool(client.consents["marketing"]) != marketing_before:
         # Consenso ridato dopo una revoca: Yourang deve togliere il blocco.
-        _marketing_hook("marketing_consent_changed", client, accepted=True)
+        notify_marketing("marketing_consent_changed", client, accepted=True)
     # Con il suo id la scheda aperta in dashboard si ricarica: senza, la
     # reception continuava a vedere i consensi di prima (06-10).
     log_activity(
