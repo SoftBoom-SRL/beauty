@@ -1,9 +1,9 @@
 // Utility.jsx — floating top utility bar: language toggle + logout.
-import { Icon, clientAuth } from '@youty/shared';
-import { useApp } from './ctx.jsx';
+import { Icon } from '@youty/shared';
+import { useApp } from '../ctx.jsx';
 
 export default function Utility() {
-  const { t, lang, setLang, fireToast, session, openAuth, setView } = useApp();
+  const { t, lang, setLang, session, openAuth, logout } = useApp();
   const btnCss = {
     display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 99,
     background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(8px)', fontSize: 12, fontWeight: 700,
@@ -14,13 +14,10 @@ export default function Utility() {
       <button className="press" onClick={() => setLang(lang === 'it' ? 'en' : 'it')} style={btnCss}>
         <Icon name="globe" size={14} />{lang.toUpperCase()}
       </button>
-      {/* Uscita: prima la home, poi il logout. Uscendo DA una schermata
-        * personale il gate la riconosceva subito come vietata e rilanciava la
-        * schermata d'accesso a tutto schermo, insieme al toast «Sei uscita».
-        * React applica i due aggiornamenti insieme, quindi il gate non scatta. */}
+      {/* uscita: prima la home, poi il logout (vedi logout in ctx.jsx) */}
       {session ? (
         <button className="press" title={t('Esci', 'Log out')}
-          onClick={() => { setView('home'); clientAuth.logout(); fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' }); }}
+          onClick={() => logout()}
           style={btnCss}>
           <Icon name="x" size={14} />
         </button>

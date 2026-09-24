@@ -2,12 +2,15 @@
 // chips; upcoming items expose sposta/annulla actions.
 // Data: GET /api/agenda/client/appointments.
 import React from 'react';
-import { Icon, fmtEur, fmtDur, statusMeta, depositMeta } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import {
-  ClientSubHead, Meta, DashedEmpty, DepositDue, useClientAppointments,
-  fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
-} from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
+import { DepositDue } from '../components/DepositDue.jsx';
+import { useClientAppointments } from '../hooks/useClientAppointments.js';
+import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
+import { fmtDayMed } from '../lib/dates.js';
 
 function StatusChip({ status, t }) {
   const m = statusMeta(status, t);
@@ -28,8 +31,8 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast, 
         <StatusChip status={appt.status} t={t} />
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px' }}>
-        <Meta icon="calendar" text={fmtApptDate(appt.start, lang)} />
-        <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
+        <Meta icon="calendar" text={fmtDayMed(appt.start, lang)} />
+        <Meta icon="clock" text={fmtTime(appt.start) + ' · ' + fmtDur(apptMinutes(appt))} />
         {appt.operator?.name && <Meta icon="user" text={appt.operator.name} />}
       </div>
       {(appt.gifts || []).length > 0 && (
@@ -66,7 +69,7 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast, 
 export default function Prenotazioni() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const { data, error, reload } = useClientAppointments();
-  React.useEffect(() => { if (error) errToast(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (error) toastApiError(error, fireToast, t); }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loading = !data && !error;
   const upcoming = data?.upcoming || [];

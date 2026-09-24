@@ -1,7 +1,8 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
-// Screen agents CONSUME this via useApp() — never edit it.
+// Gli schermi lo leggono con useApp().
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
+import { clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
+import { getBranding } from './api/client.js';
 import { makeBrand } from './theme.js';
 
 /* Il salone servito da questa pagina è il primo segmento del path
@@ -30,7 +31,7 @@ export function AppProvider({ children }) {
   const loadBrand = useCallback(async () => {
     setBrandError(null);
     try {
-      const b = await api.get('/api/core/public/branding', { params: { salon: SALON_SLUG }, auth: false });
+      const b = await getBranding(SALON_SLUG);
       // Orari sempre quelli del salone: dall'estero la cliente leggeva l'ora
       // del proprio telefono e si presentava all'ora sbagliata.
       setSalonTz(b.timezone);
@@ -101,13 +102,25 @@ export function AppProvider({ children }) {
   /* ---- toast ---- */
   const { fireToast, toastProps } = useToastHost();
 
-  /* ---- view routing (state-based, like the prototype) ---- */
+  /* ---- viste: stato in memoria, non URL (vedi shared/src/salon.js) ---- */
   const [view, setViewRaw] = useState('home');
   const [viewParams, setViewParams] = useState({});
   const setView = useCallback((v, params = {}) => {
     setViewRaw(v);
     setViewParams(params);
   }, []);
+
+  /* ---- uscita (Utility e Profilo) ----
+   * Prima la home, poi il logout, poi il toast. Uscendo DA una schermata
+   * personale il gate la riconosceva subito come vietata e rilanciava la
+   * schermata d'accesso a tutto schermo, insieme al toast «Sei uscita», con la
+   * ripresa sulla schermata appena lasciata (16-09). Chiamata dal tocco su
+   * «Esci», React applica i due aggiornamenti insieme e il gate non scatta. */
+  const logout = useCallback(() => {
+    setView('home');
+    clientAuth.logout();
+    fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' });
+  }, [setView, fireToast, t]);
 
   const ctx = {
     t, lang, setLang: setLangChosen,
@@ -116,6 +129,7 @@ export function AppProvider({ children }) {
     authOpen, openAuth, closeAuth,
     fireToast, toastProps,
     view, setView, viewParams,
+    logout,
   };
 
   return <AppCtx.Provider value={ctx}>{children}</AppCtx.Provider>;

@@ -1,9 +1,7 @@
 // NavBar.jsx — bottom navigation (Home / Prenotazioni / Prenota FAB / Wallet / Profilo).
 import { Icon } from '@youty/shared';
-import { useApp } from './ctx.jsx';
-
-/** Views where the bottom nav is visible. */
-export const NAV_VIEWS = ['home', 'prenotazioni', 'wallet', 'profilo', 'waitlist', 'pacchetti', 'giftcard'];
+import { useApp } from '../ctx.jsx';
+import { navOn } from '../routes.js';
 
 export default function NavBar() {
   const { t, view, setView, session } = useApp();
@@ -23,7 +21,7 @@ export default function NavBar() {
     <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 60, paddingBottom: 'var(--safe-bottom)', background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(16px)', borderTop: '1px solid var(--hair)' }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', padding: '8px 8px 6px' }}>
         {items.map((it) => {
-          const on = view === it.key || (it.key === 'profilo' && ['waitlist'].includes(view)) || (it.key === 'wallet' && ['giftcard'].includes(view));
+          const on = navOn(it.key, view);   // vedi navParent in routes.js
           if (it.center) {
             return (
               <div key={it.key} style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>

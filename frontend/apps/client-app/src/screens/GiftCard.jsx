@@ -2,12 +2,13 @@
 // form (POST /api/marketing/client/gift-cards — unpaid, si paga in salone;
 // Stripe checkout arriverà in fase 2).
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur, NumInput } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur, NumInput, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import { headFont } from '../theme.js';
-import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
-import { fmtExpiry } from './Wallet.jsx';
-import { fmtCredit, giftCardTotals, isUnpaid } from './walletLib.js';
+import { buyGiftCard, getWallet } from '../api/client.js';
+import { headFont, headWeight } from '../theme.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
+import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 const PRESETS = [25, 50, 75, 100];
 
@@ -24,9 +25,9 @@ export default function GiftCard() {
   const [bought, setBought] = React.useState(null); // GiftCardOut
 
   const load = React.useCallback(() => {
-    api.get('/api/marketing/client/wallet')
+    getWallet()
       .then(setWallet)
-      .catch((e) => { setError(e); errToast(e, fireToast, t); });
+      .catch((e) => { setError(e); toastApiError(e, fireToast, t); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => { load(); }, [load]);
 
@@ -45,7 +46,7 @@ export default function GiftCard() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const card = await api.post('/api/marketing/client/gift-cards', {
+      const card = await buyGiftCard({
         value: Number(value).toFixed(2),
         recipient_name: recipient.trim(),
       });
@@ -56,7 +57,7 @@ export default function GiftCard() {
       fireToast({ msg: t('Gift card creata!', 'Gift card created!'), icon: 'gift' });
       load();
     } catch (err) {
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }
@@ -146,7 +147,7 @@ export default function GiftCard() {
               </React.Fragment>
             ) : (
               <div className="card slide-up" style={{ padding: 18, boxShadow: 'none', border: '1px solid var(--hair)' }}>
-                <div style={{ fontFamily: headFont(brand), fontSize: 18, fontWeight: brand.type === 'serif' ? 500 : 700, marginBottom: 14 }}>
+                <div style={{ fontFamily: headFont(brand), fontSize: 18, fontWeight: headWeight(brand, 700), marginBottom: 14 }}>
                   {t('Nuova gift card', 'New gift card')}
                 </div>
                 {/* amount presets */}

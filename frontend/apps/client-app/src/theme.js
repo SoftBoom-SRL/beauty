@@ -1,5 +1,5 @@
-// theme.js — white-label theming utils (ported from prototype app.jsx +
-// screen-cliente.jsx, plus the previously-missing onColor helper).
+// theme.js — il white-label dell'app cliente: dal colore del salone i toni
+// derivati, il colore leggibile sopra il brand e il font dei titoli.
 
 export function hex2rgb(h) {
   const n = parseInt(h.slice(1), 16);
@@ -54,3 +54,7 @@ export function brandVars(brand) {
 }
 
 export const headFont = (brand) => (brand.type === 'serif' ? 'var(--serif)' : 'var(--sans)');
+
+/** Il peso dei titoli: 500 col serif, `heavy` (800, o 700 per i titoli più
+ *  piccoli) col grotesk. Va con headFont. */
+export const headWeight = (brand, heavy = 800) => (brand.type === 'serif' ? 500 : heavy);

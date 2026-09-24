@@ -1,27 +1,25 @@
 // Pacchetti.jsx — public packages with included services + price and the
-// phone-only booking CTA (as prototype).
+// phone-only booking CTA.
 // Data: GET /api/catalog/public/packages (+ public services to compute the
 // original price → discount badge). Il numero per il `tel:` arriva dal branding
 // pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.
 import React from 'react';
-import { Icon, api, fmtEur } from '@youty/shared';
+import { Icon, fmtEur, toastApiError } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
-import { headFont } from '../theme.js';
-import { ClientSubHead, DashedEmpty, usePublicServices, svcLangName, errToast } from './lib.jsx';
+import { getPublicPackages } from '../api/client.js';
+import { headFont, headWeight } from '../theme.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
+import { useApiData } from '../hooks/useApiData.js';
+import { usePublicServices } from '../hooks/usePublicCatalog.js';
+import { svcLangName } from '../lib/catalog.js';
 
 export default function Pacchetti() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const { cats } = usePublicServices(SALON_SLUG);
-  const [pkgs, setPkgs] = React.useState(null);
-  const [error, setError] = React.useState(null);
-
-  React.useEffect(() => {
-    let alive = true;
-    api.get('/api/catalog/public/packages', { params: { salon: SALON_SLUG }, auth: false })
-      .then((d) => { if (alive) setPkgs(d); })
-      .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: pkgs, error } = useApiData(() => getPublicPackages(SALON_SLUG), [], {
+    onError: (e) => toastApiError(e, fireToast, t),
+  });
 
   /* price lookup: service_id → price (from the public price list) */
   const priceById = React.useMemo(() => {
@@ -59,7 +57,7 @@ export default function Pacchetti() {
               return (
                 <div key={p.id} className="card" style={{ padding: 18, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 4 }}>
-                    <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: brand.type === 'serif' ? 500 : 700, lineHeight: 1.15, flex: 1, minWidth: 0 }}>{p.name}</div>
+                    <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: headWeight(brand, 700), lineHeight: 1.15, flex: 1, minWidth: 0 }}>{p.name}</div>
                     {off > 0 && <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 800, color: 'var(--brand-on)', background: 'var(--brand)', padding: '4px 10px', borderRadius: 99 }}>-{off}%</span>}
                   </div>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 10px', borderRadius: 99 }}>

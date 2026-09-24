@@ -2,12 +2,15 @@
 // POST /api/agenda/client/appointments/{id}/cancel. 400 policy errors are
 // surfaced inline + toast.
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, fmtDur, depositMeta } from '@youty/shared';
+import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import { headFont } from '../theme.js';
-import {
-  ClientSubHead, Meta, fmtApptDate, apptTime, apptDur, apptServiceNames, errToast,
-} from './lib.jsx';
+import { cancelAppointment } from '../api/client.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
+import { MissingAppt } from '../components/MissingAppt.jsx';
+import { SuccessScreen } from '../components/SuccessScreen.jsx';
+import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
+import { fmtDayMed } from '../lib/dates.js';
 
 export default function Annulla() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -18,28 +21,18 @@ export default function Annulla() {
 
   if (!appt) {
     return (
-      <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, textAlign: 'center' }}>
-        <div className="t-body" style={{ color: 'var(--muted)', marginBottom: 18 }}>
-          {t('Seleziona prima l’appuntamento da annullare.', 'First pick the appointment to cancel.')}
-        </div>
-        <button className="btn btn--brand press" onClick={() => setView('prenotazioni')}>{t('Le tue prenotazioni', 'Your bookings')}</button>
-      </div>
+      <MissingAppt t={t} onBookings={() => setView('prenotazioni')}
+        text={t('Seleziona prima l’appuntamento da annullare.', 'First pick the appointment to cancel.')} />
     );
   }
 
   if (done) {
     return (
-      <div style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 30, textAlign: 'center' }}>
-        <div className="pop-in" style={{ width: 86, height: 86, borderRadius: 99, background: 'var(--paper-2)', display: 'grid', placeItems: 'center', marginBottom: 20 }}>
-          <Icon name="check" size={44} color="var(--muted)" stroke={2.2} />
-        </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 26, fontWeight: brand.type === 'serif' ? 500 : 800 }}>{t('Appuntamento annullato', 'Appointment cancelled')}</div>
-        <div className="t-body" style={{ color: 'var(--muted)', marginTop: 8, maxWidth: 280 }}>
-          {t('Ci dispiace non vederti! Prenota quando vuoi, ti aspettiamo 💫', 'Sorry to miss you! Book again anytime, we’ll be here 💫')}
-        </div>
+      <SuccessScreen brand={brand} muted title={t('Appuntamento annullato', 'Appointment cancelled')}
+        text={t('Ci dispiace non vederti! Prenota quando vuoi, ti aspettiamo 💫', 'Sorry to miss you! Book again anytime, we’ll be here 💫')}>
         <button className="btn btn--brand press" style={{ marginTop: 26 }} onClick={() => setView('prenota')}>{t('Prenota di nuovo', 'Book again')}</button>
         <button className="press" style={{ marginTop: 12, fontSize: 14, fontWeight: 600, color: 'var(--muted)' }} onClick={() => setView('home')}>{t('Torna alla home', 'Back to home')}</button>
-      </div>
+      </SuccessScreen>
     );
   }
 
@@ -53,14 +46,14 @@ export default function Annulla() {
     setBusy(true);
     setPolicyErr(null);
     try {
-      await api.post(`/api/agenda/client/appointments/${appt.id}/cancel`);
+      await cancelAppointment(appt.id);
       setDone(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
         setPolicyErr(err.message); // preavviso minimo non rispettato — contatta il salone
         fireToast({ msg: err.message, icon: 'alert' });
       } else {
-        errToast(err, fireToast, t);
+        toastApiError(err, fireToast, t);
       }
     } finally {
       setBusy(false);
@@ -97,8 +90,8 @@ export default function Annulla() {
         <div className="card" style={{ padding: 16, marginBottom: 24, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           <div style={{ fontSize: 17, fontWeight: 700, lineHeight: 1.2 }}>{apptServiceNames(appt)}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 12 }}>
-            <Meta icon="calendar" text={fmtApptDate(appt.start, lang)} />
-            <Meta icon="clock" text={apptTime(appt.start) + ' · ' + fmtDur(apptDur(appt), lang)} />
+            <Meta icon="calendar" text={fmtDayMed(appt.start, lang)} />
+            <Meta icon="clock" text={fmtTime(appt.start) + ' · ' + fmtDur(apptMinutes(appt))} />
             {appt.operator?.name && <Meta icon="user" text={appt.operator.name} />}
           </div>
           {dm && (

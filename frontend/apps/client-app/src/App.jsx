@@ -2,10 +2,10 @@ import React, { useEffect } from 'react';
 import { LangProvider, Toast } from '@youty/shared';
 import { AppProvider, useApp } from './ctx.jsx';
 import { brandVars } from './theme.js';
-import { SCREENS } from './screens/registry.js';
+import { hasNav, isPersonal, screenFor } from './routes.js';
 import AuthFlow from './screens/auth/AuthFlow.jsx';
-import NavBar, { NAV_VIEWS } from './NavBar.jsx';
-import Utility from './Utility.jsx';
+import NavBar from './components/NavBar.jsx';
+import Utility from './components/Utility.jsx';
 import Hook from './screens/Hook.jsx';
 
 /* Il primo segmento del path è lo slug del salone (vedi shared/salon.js), il
@@ -41,8 +41,7 @@ function Root() {
     window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const PERSONAL_VIEWS = ['prenotazioni', 'wallet', 'profilo', 'waitlist', 'waitlist-new', 'sposta', 'annulla', 'giftcard'];
-  const gated = !session && PERSONAL_VIEWS.includes(view);
+  const gated = !session && isPersonal(view);   // vedi routes.js
   useEffect(() => {
     if (!gated) return;
     // La destinazione va RICORDATA: `openAuth()` senza callback buttava via
@@ -94,8 +93,8 @@ function Root() {
     );
   }
 
-  const Screen = SCREENS[view] || SCREENS.home;
-  const showNav = NAV_VIEWS.includes(view);
+  const Screen = screenFor(view);
+  const showNav = hasNav(view);
 
   return (
     <div className="app-viewport">

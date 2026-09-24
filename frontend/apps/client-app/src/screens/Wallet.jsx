@@ -2,47 +2,17 @@
 // expiry), loyalty programs (points/threshold/progress bar).
 // Data: GET /api/marketing/client/wallet. Gift card detail → view 'giftcard'.
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur, parseISO, salonTzOpts } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
-import { fmtCredit, fmtPct, giftCardTotals, isUnpaid } from './walletLib.js';
-
-export function fmtExpiry(iso, lang, t) {
-  if (!iso) return t('Senza scadenza', 'No expiry');
-  // Le scadenze sono ISTANTI (DateTime lato server): vanno lette sul calendario
-  // del SALONE. Sull'orologio del telefono una gift card che scade a mezzanotte
-  // risultava scaduta il giorno prima a chi la guardava da ovest, e valida un
-  // giorno in più a chi la guardava da est.
-  const d = parseISO(iso);
-  const s = d.toLocaleDateString(
-    lang === 'en' ? 'en-GB' : 'it-IT',
-    salonTzOpts({ day: 'numeric', month: 'short', year: 'numeric' }),
-  ).replace(/\./g, '');
-  return t('Scade il ', 'Expires ') + s;
-}
-
-export function couponLabel(c, lang, t) {
-  return c.kind === 'percent'
-    ? t(`Sconto del ${fmtPct(c.value, lang)}%`, `${fmtPct(c.value, lang)}% off`)
-    : t(`Buono da ${fmtEur(Number(c.value), lang)}`, `${fmtEur(Number(c.value), lang)} voucher`);
-}
-
-export function couponOrigin(origin, t) {
-  return origin === 'loyalty' ? t('Premio fedeltà', 'Loyalty reward') : t('Sconto', 'Discount');
-}
+import { getWallet } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
+import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 export default function Wallet() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const [wallet, setWallet] = React.useState(null);
-  const [error, setError] = React.useState(null);
-
-  React.useEffect(() => {
-    let alive = true;
-    api.get('/api/marketing/client/wallet')
-      .then((d) => { if (alive) setWallet(d); })
-      .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: wallet, error } = useApiData(getWallet, [], { onError: (e) => toastApiError(e, fireToast, t) });
 
   const loading = !wallet && !error;
   const cards = wallet?.gift_cards || [];

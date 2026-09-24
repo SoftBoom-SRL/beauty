@@ -1,15 +1,17 @@
 // WaitlistNew.jsx — join the waiting list: service picker (public catalog) +
 // time preference (any/morning/afternoon/weekend/exact days+time).
 // POST /api/agenda/client/waitlist {service_id, preference, exact_days, exact_time}.
-// NOTE: no stylist picker — no public/client operators endpoint (API gap).
+// Niente scelta dell'operatrice: la richiesta non manda `operator_id` e vale
+// per chiunque si liberi (il campo c'è, e /api/staff/public/operators pure).
 import React from 'react';
-import { Icon, api, fmtEur, fmtDur } from '@youty/shared';
+import { Icon, fmtEur, fmtDur, toastApiError } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
-import {
-  ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon,
-  WEEKDAYS_SHORT, errToast,
-} from './lib.jsx';
-import { svcMinutes } from './visitLib.js';
+import { joinWaitlist } from '../api/client.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { StickyCta } from '../components/StickyCta.jsx';
+import { usePublicServices } from '../hooks/usePublicCatalog.js';
+import { WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../lib/waitlist.js';
+import { svcMinutes, svcLangName, catIcon } from '../lib/catalog.js';
 
 export default function WaitlistNew() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();
@@ -20,7 +22,7 @@ export default function WaitlistNew() {
   const [exactTime, setExactTime] = React.useState('10:00');
   const [busy, setBusy] = React.useState(false);
 
-  React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (catError) toastApiError(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const prefs = [
     ['any', t('Qualsiasi', 'Any time')],
@@ -39,11 +41,11 @@ export default function WaitlistNew() {
         body.exact_days = exactDays;
         body.exact_time = exactTime;
       }
-      await api.post('/api/agenda/client/waitlist', body);
+      await joinWaitlist(body);
       fireToast({ msg: t('Sei in lista! Ti avvisiamo su WhatsApp.', 'You’re on the list! We’ll ping you on WhatsApp.'), icon: 'check' });
       setView('waitlist');
     } catch (err) {
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }
@@ -79,7 +81,7 @@ export default function WaitlistNew() {
                       style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderRadius: 'var(--r-md)', textAlign: 'left', border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand-tint)' : 'var(--paper-0)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{svcLangName(sv, lang)}</div>
-                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(svcMinutes(sv), lang)} · {fmtEur(Number(sv.price), lang)}</div>
+                        <div className="t-sm" style={{ color: 'var(--muted)' }}>{fmtDur(svcMinutes(sv))} · {fmtEur(Number(sv.price), lang)}</div>
                       </div>
                       {on && <Icon name="check" size={18} color="var(--brand)" stroke={2.4} />}
                     </button>
@@ -111,13 +113,13 @@ export default function WaitlistNew() {
                 </div>
                 <div className="t-meta" style={{ marginBottom: 8 }}>{t('Giorni', 'Days')}</div>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-                  {WEEKDAYS_SHORT.map(([, , letterIt, letterEn], idx) => {
+                  {WEEKDAY_LETTERS_IT.map((letterIt, idx) => {
                     const on = exactDays.includes(idx);
                     return (
                       <button key={idx} className="press"
                         onClick={() => setExactDays((d) => (d.includes(idx) ? d.filter((x) => x !== idx) : [...d, idx].sort()))}
                         style={{ flex: 1, aspectRatio: '1', minWidth: 0, borderRadius: 12, fontSize: 14, fontWeight: 800, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)' }}>
-                        {lang === 'en' ? letterEn : letterIt}
+                        {lang === 'en' ? WEEKDAY_LETTERS_EN[idx] : letterIt}
                       </button>
                     );
                   })}

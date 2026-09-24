@@ -2,9 +2,10 @@
 // La registrazione è un'azione della schermata del codice, non una conseguenza
 // della risposta del server: vedi `sendOtp`.
 import React, { useState } from 'react';
-import { ApiError, Icon, PhoneInput, clientAuth, isPlausiblePhone } from '@youty/shared';
-import { useApp, SALON_SLUG } from '../../ctx.jsx';
-import { headFont } from '../../theme.js';
+import { Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
+import { useApp } from '../../ctx.jsx';
+import { BrandHero } from '../../components/BrandHero.jsx';
+import { useOtpFlow } from '../../hooks/useOtpFlow.js';
 
 export default function AuthFlow({ onClose }) {
   const { t, lang, setLang, brand } = useApp();
@@ -12,14 +13,9 @@ export default function AuthFlow({ onClose }) {
   const [phone, setPhone] = useState('');
   const [reg, setReg] = useState({ first_name: '', last_name: '', email: '' });
   const [code, setCode] = useState('');
-  const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  // Numero per cui la registrazione è riuscita: solo lì sappiamo che un codice
-  // è davvero partito. Dopo un semplice «richiedi codice» il server non dice se
-  // il numero esiste, quindi il testo resta al condizionale — e cambiando
-  // numero si torna al condizionale da solo.
-  const [registeredPhone, setRegisteredPhone] = useState(null);
-  const codeSurelySent = !!registeredPhone && registeredPhone === phone.trim();
+  // Gli errori si leggono sotto il campo (vedi useOtpFlow).
+  const { error, setError, codeSurelySent, request, register, verify: verifyCode } = useOtpFlow({ phone, t });
 
   const run = async (fn) => {
     if (busy) return;
@@ -37,56 +33,31 @@ export default function AuthFlow({ onClose }) {
     // Il codice appena rispedito rende invalido quello precedente: lasciarlo
     // nel campo faceva fallire il tocco successivo con «codice non valido».
     setCode('');
-    try {
-      await clientAuth.requestOtp(SALON_SLUG, phone.trim());
-      setStep('otp');
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        setError(t('Troppi codici richiesti. Riprova tra qualche minuto.', 'Too many codes requested. Try again in a few minutes.'));
-      } else {
-        setError(err?.message || t('Errore di rete', 'Network error'));
-      }
-    }
+    if (await request()) setStep('otp');
   });
 
   const doRegister = () => run(async () => {
     setCode('');
-    try {
-      await clientAuth.register({
-        salon_slug: SALON_SLUG,
-        first_name: reg.first_name.trim(),
-        last_name: reg.last_name.trim(),
-        phone: phone.trim(),
-        email: reg.email.trim(),
-        lang,
-      });
-      setRegisteredPhone(phone.trim()); // la registrazione emette il codice: qui lo sappiamo
-      setStep('otp');
-    } catch (err) {
-      // 400 = «numero già registrato». Da quando l'accesso non rivela più chi è
-      // in anagrafica, questo non basta a dire QUALE dei due casi sia: o la
-      // scheda esiste ed è attiva (il codice chiesto poco fa è davvero partito,
-      // basta inserirlo) oppure esiste ma è disattivata, e allora da qui non si
-      // entra. Non potendo distinguerli si mostra lo schermo dedicato, che dice
-      // entrambe le cose e lascia due uscite invece di un vicolo cieco.
-      if (err instanceof ApiError && err.status === 400) setStep('blocked');
-      else setError(err?.message || t('Errore di rete', 'Network error'));
-    }
+    const res = await register({
+      first_name: reg.first_name.trim(),
+      last_name: reg.last_name.trim(),
+      phone: phone.trim(),
+      email: reg.email.trim(),
+      lang,
+    });
+    if (res === 'ok') setStep('otp');
+    // «Numero già registrato». Da quando l'accesso non rivela più chi è in
+    // anagrafica, questo non basta a dire QUALE dei due casi sia: o la scheda
+    // esiste ed è attiva (il codice chiesto poco fa è davvero partito, basta
+    // inserirlo) oppure esiste ma è disattivata, e allora da qui non si entra.
+    // Non potendo distinguerli si mostra lo schermo dedicato, che dice
+    // entrambe le cose e lascia due uscite invece di un vicolo cieco.
+    else if (res === 'blocked') setStep('blocked');
   });
 
   const verify = () => run(async () => {
-    try {
-      await clientAuth.verifyOtp(SALON_SLUG, phone.trim(), code.trim());
-      // AppProvider is subscribed to the session store → app switches to Home.
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
-        setError(t('Codice non valido o scaduto', 'Invalid or expired code'));
-      } else if (err instanceof ApiError && err.status === 429) {
-        setError(t('Troppi tentativi. Riprova tra qualche minuto.', 'Too many attempts. Try again in a few minutes.'));
-      } else {
-        setError(err?.message || t('Errore di rete', 'Network error'));
-      }
-    }
+    await verifyCode(code.trim());
+    // AppProvider is subscribed to the session store → app switches to Home.
   });
 
   return (
@@ -112,17 +83,7 @@ export default function AuthFlow({ onClose }) {
       </div>
 
       {/* brand hero */}
-      <div style={{ background: 'var(--brand)', padding: 'calc(var(--safe-top) + 34px) 24px 30px' }}>
-        <div style={{ width: 62, height: 62, borderRadius: 99, background: 'var(--brand-on)', display: 'grid', placeItems: 'center', overflow: 'hidden', marginBottom: 14, boxShadow: '0 4px 14px rgba(0,0,0,0.18)' }}>
-          {brand.logo
-            ? <img src={brand.logo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <span style={{ fontFamily: 'var(--serif)', fontSize: 28, fontStyle: 'italic', color: 'var(--brand)', lineHeight: 1 }}>{brand.name.charAt(0)}</span>}
-        </div>
-        <div style={{ fontFamily: headFont(brand), fontSize: 30, fontWeight: brand.type === 'serif' ? 500 : 800, color: 'var(--brand-on)', lineHeight: 1.05 }}>{brand.name}</div>
-        <div style={{ color: 'var(--brand-on)', opacity: 0.75, fontSize: 13, fontWeight: 600, marginTop: 6 }}>
-          {t('La tua area personale', 'Your personal area')}
-        </div>
-      </div>
+      <BrandHero brand={brand} subtitle={t('La tua area personale', 'Your personal area')} />
 
       <div style={{ padding: '26px 24px 40px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {step === 'phone' && (

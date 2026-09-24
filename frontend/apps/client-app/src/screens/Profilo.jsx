@@ -1,32 +1,24 @@
 // Profilo.jsx — identity + contacts (GET/PUT /api/auth/client/me), language
 // toggle, WhatsApp reminders toggle, waitlist summary, loyalty snapshot, logout.
 import React from 'react';
-import { Icon, Toggle, api, clientAuth } from '@youty/shared';
+import { Icon, Toggle, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import { headFont } from '../theme.js';
-import { ClientSubHead, errToast } from './lib.jsx';
+import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
+import { headFont, headWeight } from '../theme.js';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
 
 export default function Profilo() {
-  const { t, lang, setLang, brand, client, setView, fireToast } = useApp();
-  const [me, setMe] = React.useState(null);
-  const [wlCount, setWlCount] = React.useState(null);
-  const [points, setPoints] = React.useState(null);
+  const { t, lang, setLang, brand, client, setView, fireToast, logout } = useApp();
+  const { data: me, setData: setMe } = useApiData(getMe, [], { onError: (e) => toastApiError(e, fireToast, t) });
+  // Richieste attive in lista d'attesa e punti fedeltà sono un di più: se non
+  // arrivano si legge 0, senza toast. Il conto si fa appena arriva la risposta.
+  const waitlist = useApiData(() => getWaitlist().then((l) => (l || []).filter((w) => w.status === 'active').length), []);
+  const loyalty = useApiData(() => getWallet().then((w) => (w?.loyalty || []).reduce((s, p) => s + Number(p.points || 0), 0)), []);
+  const wlCount = waitlist.error ? 0 : waitlist.data;
+  const points = loyalty.error ? 0 : loyalty.data;
   const [saving, setSaving] = React.useState(false);
   const [consentBusy, setConsentBusy] = React.useState(false);
-
-  React.useEffect(() => {
-    let alive = true;
-    api.get('/api/auth/client/me')
-      .then((d) => { if (alive) setMe(d); })
-      .catch((e) => { if (alive) errToast(e, fireToast, t); });
-    api.get('/api/agenda/client/waitlist')
-      .then((l) => { if (alive) setWlCount((l || []).filter((w) => w.status === 'active').length); })
-      .catch(() => { if (alive) setWlCount(0); });
-    api.get('/api/marketing/client/wallet')
-      .then((w) => { if (alive) setPoints((w?.loyalty || []).reduce((s, p) => s + Number(p.points || 0), 0)); })
-      .catch(() => { if (alive) setPoints(0); });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMe = async (patch, localToo) => {
     if (saving) return;
@@ -34,12 +26,12 @@ export default function Profilo() {
     const prev = me;
     setMe((m) => (m ? { ...m, ...patch } : m)); // optimistic
     try {
-      const updated = await api.put('/api/auth/client/me', patch);
+      const updated = await updateMe(patch);
       setMe(updated);
       if (localToo) localToo(updated);
     } catch (err) {
       setMe(prev);
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -57,7 +49,7 @@ export default function Profilo() {
     const prev = me.marketing_consent;
     setMe((m) => (m ? { ...m, marketing_consent: accepted } : m)); // optimistic
     try {
-      await api.post('/api/marketing/client/marketing-consent', { accepted });
+      await setMarketingConsent(accepted);
       fireToast({
         msg: accepted
           ? t('Riceverai offerte e novità dal salone', 'You will receive offers and news from the salon')
@@ -66,7 +58,7 @@ export default function Profilo() {
       });
     } catch (err) {
       setMe((m) => (m ? { ...m, marketing_consent: prev } : m));
-      errToast(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setConsentBusy(false);
     }
@@ -88,7 +80,7 @@ export default function Profilo() {
           <div style={{ width: 60, height: 60, borderRadius: 99, background: 'var(--brand)', color: 'var(--brand-on)', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 22, flexShrink: 0 }}>{initials}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {fullName
-              ? <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: brand.type === 'serif' ? 500 : 800, lineHeight: 1.1 }}>{fullName}</div>
+              ? <div style={{ fontFamily: headFont(brand), fontSize: 22, fontWeight: headWeight(brand), lineHeight: 1.1 }}>{fullName}</div>
               : <div className="skel" style={{ height: 24, width: 140 }} />}
             <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('Cliente di', 'Client of')} {brand.name}</div>
           </div>
@@ -162,11 +154,9 @@ export default function Profilo() {
           )}
         </div>
 
-        {/* Prima la home, poi il logout, come in Utility.jsx: uscendo da qui,
-          * schermata personale, il gate la vedeva vietata e riapriva subito
-          * l'accesso a tutto schermo, con la ripresa sul Profilo (16-09). */}
+        {/* uscita: prima la home, poi il logout (vedi logout in ctx.jsx, 16-09) */}
         <button className="press"
-          onClick={() => { setView('home'); clientAuth.logout(); fireToast({ msg: t('Sei uscita dal profilo', 'Logged out'), icon: 'check' }); }}
+          onClick={() => logout()}
           style={{ width: '100%', textAlign: 'center', padding: 13, borderRadius: 'var(--r-pill)', color: 'var(--muted)', fontWeight: 600, fontSize: 14 }}>
           {t('Esci', 'Log out')}
         </button>
