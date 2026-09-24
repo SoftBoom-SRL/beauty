@@ -104,7 +104,7 @@ def cancel_pending_send(comm: Communication) -> int:
     if reached:
         payload = {"communication_id": comm.id, "outbox_event_ids": reached}
         # L'annullamento vale fino alla data dell'invio che ferma: con le dodici
-        # ore contate dalla nascita (flush_outbox.expiry_of) scadeva prima di
+        # ore contate dalla nascita (core.outbox.expiry_of) scadeva prima di
         # una campagna fra qualche giorno, se la consegna restava ferma (Yourang
         # giù, worker spento), e alla data partiva la campagna eliminata.
         latest = _latest_scheduled([e for e in sends if e.pk in reached])

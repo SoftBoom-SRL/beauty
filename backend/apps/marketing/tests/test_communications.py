@@ -292,7 +292,7 @@ class HeldUntilTheDateTests(_Base):
         self.assertEqual(event.status, OutboxEvent.Status.PENDING)
         self.assertGreaterEqual(event.next_attempt_at, when)
         self.assertEqual(event.payload["scheduled_at"], when.isoformat())
-        # Il worker non lo vede: prende solo gli eventi scaduti (flush_outbox._due).
+        # Il worker non lo vede: prende solo gli eventi scaduti (core.outbox._due).
         due = OutboxEvent.objects.filter(status=OutboxEvent.Status.PENDING).filter(_due(timezone.now()))
         self.assertNotIn(event, due)
         self.assertIn(event, OutboxEvent.objects.filter(_due(when + timedelta(seconds=2))))

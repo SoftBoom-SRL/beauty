@@ -13,7 +13,7 @@ from django.db import IntegrityError, transaction
 from ninja.errors import HttpError
 
 from apps.core.models import DepositRule
-from apps.core.services import emit_event, log_activity
+from apps.core.services import log_activity
 
 from .models import Client, ClientCategory
 from .schemas import CategoryIn
@@ -99,16 +99,13 @@ def rename_label_in_conditions(salon, old: str, new: str) -> tuple[int, int]:
         rule.conditions = _renamed(rule.conditions, old, new)
         rule.save(update_fields=["conditions", "updated_at"])
     if automations:
-        # lazy: la definizione e la chiave sono loro
-        from apps.automations.api import _definition, automation_event_key
+        # lazy: la definizione e il suo invio sono delle automazioni
+        from apps.automations.services import definition, publish_definition
 
         for automation in automations:
             automation.conditions = _renamed(automation.conditions, old, new)
             automation.save(update_fields=["conditions", "updated_at"])
-            emit_event(
-                salon, "automation.updated", _definition(automation),
-                coalesce_key=automation_event_key(automation.id),
-            )
+            publish_definition(salon, definition(automation))
     return len(rules), len(automations)
 
 

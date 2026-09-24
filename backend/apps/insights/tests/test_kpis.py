@@ -9,8 +9,10 @@ Caccia del 22/09:
 - 15-17 + 17-11 (contratto C11): «Analisi dati» apre gli insight.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from datetime import timezone as dt_timezone
 from decimal import Decimal
+from unittest import mock
 
 from django.test import TestCase
 from django.utils import timezone
@@ -25,6 +27,27 @@ from common.testing import bearer
 
 from ..services import kpis, occupancy_by_weekday, revenue_by_category, revenue_series
 from .base import _Base, _aware
+
+# Metà giugno, a metà mattina: lontano dall'inizio di un mese e di un anno.
+# I test che mettono visite «oggi alle 10» o «qualche ora fa» e poi contano sul
+# mese o sull'anno IN CORSO spostano qui l'orologio. Con quello vero, lanciati
+# nella prima notte del mese (fra 00:00 e 02:00 ora di Roma: `now()` in UTC è
+# ancora il giorno prima) o nelle prime ore dell'anno, quelle visite cadevano
+# nel periodo precedente e il test falliva senza che nulla fosse rotto.
+MID_PERIOD = datetime(2026, 6, 15, 10, 0, tzinfo=dt_timezone.utc)
+
+
+def _mid_period():
+    """L'orologio parte da MID_PERIOD e poi SCORRE, come quello vero.
+
+    Fermo non va bene: il riaggancio conta le prenotazioni create PRIMA del
+    riferimento (`created_at__lt`), e con l'orologio immobile una prenotazione
+    appena fatta risulta creata nello stesso istante. Il tempo si misura con
+    `datetime.now`, non con `timezone.now`, così scorre anche se qualcuno ha già
+    sostituito quest'ultimo.
+    """
+    started = datetime.now(dt_timezone.utc)
+    return mock.patch("django.utils.timezone.now", new=lambda: MID_PERIOD + (datetime.now(dt_timezone.utc) - started))
 
 
 class KpisMinimalDatasetTests(TestCase):
@@ -147,6 +170,7 @@ class NewClientsTests(TestCase):
         Sale.objects.create(salon=self.salon, kind="pos", client=client, total=30)
         self.assertEqual(kpis(self.salon, "month", self.today)["new_clients"], 1)
 
+    @_mid_period()
     def test_a_client_of_the_past_is_not_new_and_counts_as_returning(self):
         from datetime import timedelta
 
@@ -162,7 +186,7 @@ class NewClientsTests(TestCase):
         Appointment.objects.create(
             salon=self.salon, client=old, operator=operator, start=now, status="closed"
         )
-        result = kpis(self.salon, "month", self.today)
+        result = kpis(self.salon, "month", timezone.localdate())
         self.assertEqual(result["new_clients"], 0)
         self.assertEqual(result["returning_clients"], 1)
 
@@ -200,6 +224,7 @@ class RebookingRateTests(TestCase):
             salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
         )
 
+    @_mid_period()
     def test_a_visit_already_closed_today_is_not_a_future_booking(self):
         from datetime import timedelta
 
@@ -222,6 +247,7 @@ class ClientsByCategoryTests(TestCase):
     """«Clienti per categoria» seguiva l'anagrafica intera e non cambiava mai
     con il periodo scelto, accanto a KPI che invece cambiavano."""
 
+    @_mid_period()
     def test_only_the_clients_of_the_period_are_counted(self):
         from datetime import timedelta
 
@@ -339,6 +365,7 @@ class RebookingOfPastPeriodsTests(_Base):
 class NewClientsAreRealNewCustomersTests(_Base):
     """08-05: import e sync timbravano `since` a oggi e tutti diventavano «nuovi»."""
 
+    @_mid_period()
     def test_an_imported_address_book_is_not_new_and_the_old_client_is_returning(self):
         today = timezone.localdate()
         imported = [self._client(f"C{i}", since=today) for i in range(50)]
@@ -389,6 +416,7 @@ class NewClientsAreRealNewCustomersTests(_Base):
 class RatesOnElapsedAppointmentsTests(_Base):
     """08-06: i futuri del periodo non possono ancora essere no-show."""
 
+    @_mid_period()
     def test_future_appointments_do_not_dilute_the_rates(self):
         anna = self._client()
         now = timezone.now()

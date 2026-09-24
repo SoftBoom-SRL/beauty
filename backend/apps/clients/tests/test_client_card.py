@@ -284,7 +284,7 @@ class InputValidationApiTests(TestCase):
 # ---------------------------------------------------------------------------
 
 
-MARKETING = "apps.marketing.services"
+MARKETING = "apps.marketing.consent"
 
 
 def _reception_auth(salon, scopes=("clients",)):
@@ -428,7 +428,7 @@ class MarketingFollowsTheCardTests(_Base):
 
     def test_revoking_marketing_notifies_the_marketing_side(self):
         client = self.card(consents={"privacy": True, "marketing": True})
-        with patch(f"{MARKETING}.marketing_consent_changed", create=True) as changed:
+        with patch(f"{MARKETING}.marketing_consent_changed") as changed:
             update_client(self.request, client.id, ClientUpdateIn(consents={"marketing": False}))
         changed.assert_called_once()
         self.assertEqual(changed.call_args.args[0].id, client.id)
@@ -436,41 +436,41 @@ class MarketingFollowsTheCardTests(_Base):
 
     def test_granting_marketing_notifies_too(self):
         client = self.card(consents={"privacy": True, "marketing": False})
-        with patch(f"{MARKETING}.marketing_consent_changed", create=True) as changed:
+        with patch(f"{MARKETING}.marketing_consent_changed") as changed:
             update_client(self.request, client.id, ClientUpdateIn(consents={"marketing": True}))
         self.assertEqual(changed.call_args.kwargs, {"accepted": True})
 
     def test_an_unchanged_consent_notifies_nobody(self):
         client = self.card(consents={"privacy": True, "marketing": True})
-        with patch(f"{MARKETING}.marketing_consent_changed", create=True) as changed:
+        with patch(f"{MARKETING}.marketing_consent_changed") as changed:
             update_client(self.request, client.id, ClientUpdateIn(consents={"marketing": True}, last_name="Neri"))
         changed.assert_not_called()
 
     def test_deactivating_drops_her_from_pending_sends(self):
         client = self.card()
-        with patch(f"{MARKETING}.drop_from_pending_sends", create=True) as drop:
+        with patch(f"{MARKETING}.drop_from_pending_sends") as drop:
             update_client(self.request, client.id, ClientUpdateIn(is_active=False))
         drop.assert_called_once()
         self.assertEqual(drop.call_args.args[0].id, client.id)
 
     def test_archiving_drops_her_from_pending_sends(self):
         client = self.card()
-        with patch(f"{MARKETING}.drop_from_pending_sends", create=True) as drop:
+        with patch(f"{MARKETING}.drop_from_pending_sends") as drop:
             delete_client(self.request, client.id)
         drop.assert_called_once()
         self.assertEqual(drop.call_args.args[0].id, client.id)
 
     def test_without_the_marketing_functions_the_card_is_saved_anyway(self):
-        import apps.marketing.services as marketing_services
+        import apps.marketing.consent as marketing_consent
 
         client = self.card(consents={"marketing": True})
         # Tolta per la durata del test, se c'è (dopo l'integrazione col marketing).
-        saved = vars(marketing_services).pop("marketing_consent_changed", None)
+        saved = vars(marketing_consent).pop("marketing_consent_changed", None)
         try:
             update_client(self.request, client.id, ClientUpdateIn(consents={"marketing": False}))
         finally:
             if saved is not None:
-                marketing_services.marketing_consent_changed = saved
+                marketing_consent.marketing_consent_changed = saved
         client.refresh_from_db()
         self.assertFalse(client.consents["marketing"])
 
@@ -526,7 +526,7 @@ class GiftCodesOnTheCardTests(TestCase):
 
         from apps.agenda.models import Appointment, AppointmentService
         from apps.catalog.models import Service, ServiceCategory
-        from apps.marketing.services import create_gift_card
+        from apps.marketing.gift_cards import create_gift_card
         from apps.staff.models import Operator
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")

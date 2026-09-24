@@ -231,7 +231,7 @@ class ExistingCardTests(_HookBase):
             consents={"privacy": True, "marketing": False, "marketing_at": "",
                       "marketing_revoked_at": "2026-09-01T10:00:00"},
         )
-        with patch("apps.marketing.services.marketing_consent_changed", create=True) as changed:
+        with patch("apps.marketing.consent.marketing_consent_changed") as changed:
             self.post(marketing=True)
         card.refresh_from_db()
         self.assertTrue(card.consents["marketing"])
@@ -244,7 +244,7 @@ class ExistingCardTests(_HookBase):
             salon=self.salon, first_name="Sofia", phone="+393331234567",
             consents={"privacy": True, "marketing": True, "marketing_at": "2026-01-01T10:00:00"},
         )
-        with patch("apps.marketing.services.marketing_consent_changed", create=True) as changed:
+        with patch("apps.marketing.consent.marketing_consent_changed") as changed:
             self.post(marketing=False)
         card.refresh_from_db()
         self.assertTrue(card.consents["marketing"])

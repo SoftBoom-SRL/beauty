@@ -12,11 +12,6 @@ from django.utils import timezone
 
 from common.intervals import merge_intervals
 
-# compat refactoring: rimuovere dopo l'integrazione. I KPI ora vivono in
-# staff/stats.py; sales/tests_caccia22_storico.py
-# (CouponOnTheLinesTests.test_the_operator_revenue_matches_the_takings) li
-# importa ancora da questo modulo.
-from .stats import month_revenue, month_revenue_by_operator, performance_series  # noqa: F401
 
 
 def _current_absence(operator, on_date: date_cls):
