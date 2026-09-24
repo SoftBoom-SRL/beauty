@@ -36,13 +36,12 @@ from .schemas import (
     ShiftsReplaceIn,
     WeeklyShiftOut,
 )
-from .services import (
-    min_to_hm,
+from .services import min_to_hm, today_status
+from .stats import (
     month_revenue_by_operator,
     performance_series,
     served_clients,
     today_clients_by_operator,
-    today_status,
 )
 
 router = Router(tags=["staff"])
