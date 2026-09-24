@@ -19,8 +19,9 @@ from django.test.utils import CaptureQueriesContext
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
+from ..gift_cards import create_gift_card
 from ..models import Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
-from ..services import accrue_loyalty, create_gift_card
+from ..services import accrue_loyalty
 from .base import OwnerTestBase, StaffRequestsMixin, _client, _make_client
 
 

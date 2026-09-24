@@ -15,9 +15,9 @@ from ninja.errors import HttpError
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
-from ..models import Coupon
 from ..coupons import mark_coupon_redeemed, validate_coupon
-from ..services import create_gift_card
+from ..gift_cards import create_gift_card
+from ..models import Coupon
 from .base import GiftCardTestBase, OwnerTestBase, _make_client
 
 

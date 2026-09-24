@@ -4,8 +4,7 @@ from typing import Optional
 
 from django.apps import apps as django_apps
 from django.db import transaction
-from django.db.models import Count, DecimalField, F, Q, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Count, Q
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
@@ -21,6 +20,15 @@ from common.utils import salon_get
 
 from .codes import COUPON_CODE_LENGTH, codes_hidden, status_q, unique_code
 from .coupons import validate_coupon_value
+from .gift_cards import (
+    CLIENT_GIFT_CARD_MAX,
+    CLIENT_GIFT_CARD_MIN,
+    CLIENT_GIFT_CARD_PER_DAY,
+    cash_gift_card,
+    create_gift_card,
+    gift_card_kpis,
+    sell_gift_card,
+)
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
     ClientGiftCardIn,
@@ -43,16 +51,12 @@ from .schemas import (
 )
 from .services import (
     cancel_pending_send,
-    create_gift_card,
     marketing_consent_changed,
     send_communication,
     settle_due_communications,
 )
 
 router = Router(tags=["marketing"])
-
-_ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_places=2))
-
 
 def _get_client(ctx, client_id):
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
@@ -238,28 +242,7 @@ def list_gift_cards(
     if client_id:
         # il cliente può comparire come acquirente e/o destinatario della carta
         qs = qs.filter(Q(buyer_client_id=client_id) | Q(recipient_client_id=client_id))
-    # «Venduto» è il denaro davvero incassato: le carte ancora da pagare non
-    # sono ricavi, e i premi fedeltà (paid_method="loyalty") non li ha pagati
-    # nessuno — contarli gonfiava il KPI di soldi mai entrati in cassa.
-    sold = Q(payment_status=GiftCard.PaymentStatus.PAID) & ~Q(paid_method="loyalty")
-    # «Da spendere» è il credito che il salone deve ancora onorare: solo carte
-    # attive, pagate e non scadute.
-    spendable = (
-        Q(status=GiftCard.Status.ACTIVE)
-        & Q(payment_status=GiftCard.PaymentStatus.PAID)
-        & (Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now()))
-    )
-    kpi = qs.aggregate(
-        sold_total=Coalesce(Sum("initial_value", filter=sold), _ZERO),
-        redeemed_total=Coalesce(
-            Sum(
-                F("initial_value") - F("balance"),
-                output_field=DecimalField(max_digits=12, decimal_places=2),
-            ),
-            _ZERO,
-        ),
-        outstanding=Coalesce(Sum("balance", filter=spendable), _ZERO),
-    )
+    kpi = gift_card_kpis(qs)
     # Elenco paginato: i KPI restano calcolati su TUTTE le carte filtrate, ma
     # la risposta non trascina più migliaia di righe in un colpo solo.
     total = qs.count()
@@ -288,42 +271,19 @@ def create_gift_card_staff(request, data: GiftCardIn):
         gift_service = salon_get(Service, ctx, data.gift_service_id)
         value = gift_service.price
     recipient = _get_client(ctx, data.recipient_client_id) if data.recipient_client_id else None
-    # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
-    # sua vendita è esattamente il buco che stiamo chiudendo.
-    with transaction.atomic():
-        card = create_gift_card(
-            ctx.salon,
-            value,
-            gift_service=gift_service,
-            buyer_client=buyer,
-            recipient_client=recipient,
-            recipient_name=data.recipient_name,
-            paid=data.paid,
-            paid_method=data.paid_method,
-            sold_by=ctx.user,
-        )
-        extra = []
-        if data.delivery_date:
-            card.delivery_date = data.delivery_date
-            extra.append("delivery_date")
-        if data.expires_at:
-            card.expires_at = data.expires_at
-            extra.append("expires_at")
-        if extra:
-            card.save(update_fields=extra)
-        if data.paid:
-            # «Vendo e segno pagata subito» è il caso normale al banco (la
-            # maschera manda paid=true di default), ma nasceva una carta
-            # payment_status=paid senza nessuna vendita a registro: quei soldi
-            # non comparivano nei ricavi né nel riepilogo di giornata, e al
-            # riscatto venivano perfino sottratti dall'incasso. La carta faceva
-            # SPARIRE il suo valore dai conti invece di aggiungerlo, e non c'era
-            # modo di rimediare dopo (mark-paid rispondeva «già pagata»).
-            # record_gift_card_cashed si difende da sola dal doppio conteggio.
-            from apps.sales.services import record_gift_card_cashed  # lazy
-
-            record_gift_card_cashed(ctx.salon, card, method=data.paid_method, actor=ctx.user)
-    return card
+    return sell_gift_card(
+        ctx.salon,
+        value,
+        gift_service=gift_service,
+        buyer=buyer,
+        recipient=recipient,
+        recipient_name=data.recipient_name,
+        paid=data.paid,
+        paid_method=data.paid_method,
+        delivery_date=data.delivery_date,
+        expires_at=data.expires_at,
+        actor=ctx.user,
+    )
 
 
 @router.post("/gift-cards/{int:card_id}/mark-paid", auth=staff_auth, response=GiftCardOut)
@@ -333,40 +293,7 @@ def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     # dall'app la paga la cliente al banco, dove c'è chi ha `sales`.
     require_scope(ctx, "sales")
     card = salon_get(GiftCard, ctx, card_id)
-    # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
-    # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
-    if card.status == GiftCard.Status.ACTIVE and card.expires_at and card.expires_at < timezone.now():
-        card.status = GiftCard.Status.EXPIRED
-        card.save(update_fields=["status"])
-        raise HttpError(422, "Gift card scaduta: non può essere incassata")
-    # Tutto l'incasso sta in una transazione con la riga bloccata: il doppio clic
-    # su «Segna come pagata» trovava la carta ancora da pagare in entrambe le
-    # richieste e registrava due vendite (e due pagamenti) per gli stessi soldi.
-    from apps.sales.services import record_gift_card_cashed  # lazy
-
-    with transaction.atomic():
-        card = GiftCard.objects.select_for_update().get(pk=card.pk)
-        if card.payment_status == GiftCard.PaymentStatus.PAID:
-            raise HttpError(422, "Gift card già pagata")
-        # Una carta annullata o scaduta non si incassa: il salone prenderebbe soldi
-        # per un credito che non è più spendibile.
-        if card.status != GiftCard.Status.ACTIVE:
-            raise HttpError(422, "Gift card non attiva: non può essere incassata")
-        card.payment_status = GiftCard.PaymentStatus.PAID
-        card.paid_at = timezone.now()
-        card.paid_method = data.method
-        card.save(update_fields=["payment_status", "paid_at", "paid_method"])
-        # L'incasso diventa una vendita, altrimenti il denaro non entra nei ricavi
-        # e al riscatto viene addirittura sottratto.
-        record_gift_card_cashed(ctx.salon, card, method=data.method, actor=ctx.user)
-    log_activity(
-        ctx.salon,
-        "giftcard.paid",
-        f"Incasso gift card {card.code}: €{card.initial_value} ({data.method})",
-        actor=ctx.user,
-        payload={"gift_card_id": card.id, "amount": str(card.initial_value), "method": data.method},
-    )
-    return card
+    return cash_gift_card(ctx.salon, card, method=data.method, actor=ctx.user)
 
 
 # ---- Programmi fedeltà -------------------------------------------------------
@@ -794,15 +721,6 @@ def client_wallet(request):
             }
         )
     return {"gift_cards": list(cards), "coupons": list(coupons), "loyalty": loyalty}
-
-
-# Una gift card comprata dall'app è un impegno che il salone dovrà onorare: il
-# tetto è quello che una cliente può ragionevolmente regalare. Senza, un POST
-# con value=99999999.99 creava una carta da cento milioni che entrava nei KPI
-# del salone, e in ciclo riempiva la tabella.
-CLIENT_GIFT_CARD_MIN = Decimal("5")
-CLIENT_GIFT_CARD_MAX = Decimal("1000")
-CLIENT_GIFT_CARD_PER_DAY = 5
 
 
 @router.post("/client/gift-cards", auth=client_auth, response=GiftCardOut)

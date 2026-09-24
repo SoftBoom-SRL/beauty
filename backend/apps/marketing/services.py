@@ -17,137 +17,18 @@ from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity, supersede_events
 
-from .codes import COUPON_CODE_LENGTH, GIFT_CARD_CODE_LENGTH, unique_code
+from .codes import COUPON_CODE_LENGTH, unique_code
 # compat refactoring: rimuovere dopo l'integrazione — i nomi dei coupon restano
 # importabili da qui finché i chiamanti non puntano a coupons.py.
 from .coupons import coupon_discount, mark_coupon_redeemed, validate_coupon  # noqa: F401
-from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
+from .gift_cards import create_gift_card, redeem_gift_card  # noqa: F401
+from .models import Communication, Coupon, LoyaltyAccount, LoyaltyProgram
 
 # Sentinella per distinguere «non ho passato scheduled_at» da «l'ho passato a
 # None perché voglio inviare adesso»: senza, una comunicazione già programmata
 # non si poteva più forzare in invio immediato (il None veniva rimpiazzato dalla
 # data salvata a database).
 _UNSET = object()
-
-
-# ---- Gift card ---------------------------------------------------------------
-
-
-def create_gift_card(
-    salon,
-    value,
-    *,
-    gift_service=None,
-    buyer_client=None,
-    recipient_client=None,
-    recipient_name="",
-    paid=False,
-    paid_method="",
-    sold_by=None,
-    sale=None,
-    cash_in=True,
-):
-    """Crea una gift card (usata anche da sales per le righe gift_card vendute).
-
-    Se `gift_service` è valorizzato la carta regala quel trattamento: il valore
-    passato deve già coincidere col prezzo del servizio (garantito dal chiamante).
-
-    `cash_in=False` per le carte che nascono già pagate ma senza che nessuno
-    abbia versato denaro (i premi fedeltà): la carta resta spendibile, ma nel
-    registro attività non compare un incasso che non c'è stato."""
-    value = Decimal(value)
-    if value <= 0:
-        raise HttpError(422, "Valore della gift card non valido")
-    card = GiftCard.objects.create(
-        salon=salon,
-        code=unique_code(GiftCard, salon, GIFT_CARD_CODE_LENGTH),
-        initial_value=value,
-        balance=value,
-        gift_service=gift_service,
-        buyer_client=buyer_client,
-        recipient_client=recipient_client,
-        recipient_name=recipient_name,
-        payment_status=GiftCard.PaymentStatus.PAID if paid else GiftCard.PaymentStatus.UNPAID,
-        paid_at=timezone.now() if paid else None,
-        paid_method=paid_method if paid else "",
-    )
-    log_activity(
-        salon,
-        "giftcard.created",
-        f"Gift card {card.code} da €{card.initial_value}",
-        actor=sold_by,
-        payload={
-            "gift_card_id": card.id,
-            "code": card.code,
-            "value": str(card.initial_value),
-            "paid": paid,
-            "sale_id": sale.id if sale else None,
-        },
-    )
-    if paid and cash_in:
-        log_activity(
-            salon,
-            "giftcard.paid",
-            f"Incasso gift card {card.code}: €{card.initial_value} ({paid_method or 'n/d'})",
-            actor=sold_by,
-            payload={"gift_card_id": card.id, "amount": str(card.initial_value), "method": paid_method},
-        )
-    return card
-
-
-def redeem_gift_card(salon, code, amount):
-    """Scala `amount` dal saldo della gift card `code`. Ritorna la card aggiornata."""
-    amount = Decimal(amount)
-    if amount <= 0:
-        raise HttpError(422, "Importo da scalare non valido")
-    # L'eventuale errore viene sollevato FUORI dal blocco atomico: così la marcatura
-    # EXPIRED sopravvive al rollback che l'eccezione provocherebbe.
-    # Attenzione: quando questa funzione gira dentro finalize_sale l'atomic qui
-    # sotto è solo un savepoint, e il rollback del checkout si porta via anche la
-    # marcatura. Per questo la scadenza NON è mai un'informazione autoritativa in
-    # lettura: ogni elenco che mostra carte spendibili filtra `expires_at` per
-    # conto suo (vedi client_wallet e i KPI in api.py).
-    error = None
-    with transaction.atomic():
-        card = (
-            GiftCard.objects.select_for_update().filter(salon=salon, code=code).first()
-        )
-        if card is None:
-            error = HttpError(404, "Gift card non trovata")
-        elif card.status != GiftCard.Status.ACTIVE:
-            error = HttpError(422, "Gift card non attiva")
-        elif card.expires_at and card.expires_at < timezone.now():
-            card.status = GiftCard.Status.EXPIRED
-            card.save(update_fields=["status"])
-            error = HttpError(422, "Gift card scaduta")
-        elif card.payment_status != GiftCard.PaymentStatus.PAID:
-            # Le carte comprate dall'app nascono "da pagare": finché il salone
-            # non incassa, il saldo non è spendibile.
-            error = HttpError(422, "Gift card non ancora pagata: incassala prima di usarla")
-        elif card.balance < amount:
-            error = HttpError(422, f"Saldo gift card insufficiente (residuo €{card.balance})")
-    if error is not None:
-        raise error
-    with transaction.atomic():
-        card = GiftCard.objects.select_for_update().get(pk=card.pk)
-        if card.balance < amount:
-            raise HttpError(422, f"Saldo gift card insufficiente (residuo €{card.balance})")
-        card.balance -= amount
-        if card.balance == 0:
-            card.status = GiftCard.Status.REDEEMED
-        card.save(update_fields=["balance", "status"])
-        log_activity(
-            salon,
-            "giftcard.redeemed",
-            f"Gift card {card.code}: scalati €{amount} (residuo €{card.balance})",
-            payload={
-                "gift_card_id": card.id,
-                "code": card.code,
-                "amount": str(amount),
-                "balance": str(card.balance),
-            },
-        )
-    return card
 
 
 # ---- Fedeltà -----------------------------------------------------------------

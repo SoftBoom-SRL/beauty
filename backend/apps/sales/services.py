@@ -301,7 +301,7 @@ def finalize_sale(
             if data["line_type"] == SaleLine.LineType.PRODUCT:
                 has_products = True
             if data["line_type"] == SaleLine.LineType.GIFT_CARD:
-                from apps.marketing.services import create_gift_card  # lazy
+                from apps.marketing.gift_cards import create_gift_card  # lazy
 
                 # Una carta per riga: `_prepare_lines` ha già spezzato le
                 # quantità maggiori di uno, così ogni carta emessa ha la sua
@@ -326,7 +326,7 @@ def finalize_sale(
                 code = (payment.get("gift_card_code") or "").strip()
                 if not code:
                     raise HttpError(422, "Codice gift card mancante nel pagamento")
-                from apps.marketing.services import redeem_gift_card  # lazy
+                from apps.marketing.gift_cards import redeem_gift_card  # lazy
 
                 card = redeem_gift_card(salon, code, amount)
             Payment.objects.create(
