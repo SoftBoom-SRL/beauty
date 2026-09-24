@@ -5,10 +5,11 @@
 // Da ogni visita si aggiunge una nota di trattamento (con allegati) o si apre
 // la scheda tecnica, senza uscire dal profilo.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta, toastApiError } from '@youty/shared';
+import { EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
+import { clientsApi } from '../../../api/clients.js';
 
 export default function StoricoTab({ c }) {
   const { t, lang, fireToast, hasScope, openModal, modal } = useDash();
@@ -19,7 +20,7 @@ export default function StoricoTab({ c }) {
   const [showUpcoming, setShowUpcoming] = useState(true);
 
   const load = useCallback(() => (
-    api.get(`/api/clients/${c.id}/history`)
+    clientsApi.history(c.id)
       .then(setHist)
       .catch((err) => { setHist({ entries: [], counts: {} }); toastApiError(err, fireToast, t); })
   ), [c.id]); // eslint-disable-line react-hooks/exhaustive-deps

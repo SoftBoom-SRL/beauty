@@ -3,9 +3,10 @@
 // modifica testo, gestione allegati). Usati dalla scheda Note e dallo Storico
 // (note di trattamento legate alla visita).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, Icon, mediaUrl, toastApiError } from '@youty/shared';
+import { Icon, mediaUrl, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { dateTimeLabel, inputCss } from './helpers.js';
+import { clientNotesApi } from '../../api/clients.js';
 
 const ACCEPT = 'image/*,.pdf,.doc,.docx,.txt';
 const isImg = (f) => /^image\//.test(f.type || '');
@@ -77,9 +78,9 @@ export function NoteComposer({ clientId, appointmentId = null, onSaved, onCancel
         fd.append('visibility', visibility);
         if (appointmentId) fd.append('appointment_id', String(appointmentId));
         files.forEach((f) => fd.append('files', f, f.name));
-        note = await api.postForm(`/api/clients/${clientId}/notes/upload`, fd);
+        note = await clientNotesApi.upload(clientId, fd);
       } else {
-        note = await api.post(`/api/clients/${clientId}/notes`, { text: text.trim(), visibility, appointment_id: appointmentId });
+        note = await clientNotesApi.create(clientId, { text: text.trim(), visibility, appointment_id: appointmentId });
       }
       setText(''); setFiles([]); setShared(false);
       fireToast({ msg: files.length ? t('Nota e allegati salvati', 'Note and attachments saved') : t('Nota aggiunta', 'Note added'), icon: 'check' });
@@ -149,11 +150,11 @@ export function NoteCard({ note, clientId, canWrite, onChanged, onDeleted, compa
   const saveText = async () => {
     if (text.trim() === note.text) { setEditing(false); return; }
     setBusy(true);
-    try { const n = await api.put(`/api/clients/${clientId}/notes/${note.id}`, { text: text.trim() }); onChanged?.(n); setEditing(false); }
+    try { const n = await clientNotesApi.update(clientId, note.id, { text: text.trim() }); onChanged?.(n); setEditing(false); }
     catch (err) { toastErr(err); } finally { setBusy(false); }
   };
   const toggleVisibility = async () => {
-    try { const n = await api.put(`/api/clients/${clientId}/notes/${note.id}`, { visibility: shared ? 'private' : 'ai' }); onChanged?.(n); }
+    try { const n = await clientNotesApi.update(clientId, note.id, { visibility: shared ? 'private' : 'ai' }); onChanged?.(n); }
     catch (err) { toastErr(err); }
   };
   const addFiles = async (list) => {
@@ -161,16 +162,16 @@ export function NoteCard({ note, clientId, canWrite, onChanged, onDeleted, compa
     setBusy(true);
     try {
       const fd = new FormData(); files.forEach((f) => fd.append('files', f, f.name));
-      const n = await api.postForm(`/api/clients/${clientId}/notes/${note.id}/attachments`, fd);
+      const n = await clientNotesApi.addAttachments(clientId, note.id, fd);
       onChanged?.(n); fireToast({ msg: t('Allegati aggiunti', 'Attachments added'), icon: 'check' });
     } catch (err) { toastErr(err); } finally { setBusy(false); }
   };
   const removeAttachment = async (a) => {
-    try { await api.del(`/api/clients/${clientId}/notes/${note.id}/attachments/${a.id}`); onChanged?.({ ...note, attachments: note.attachments.filter((x) => x.id !== a.id) }); }
+    try { await clientNotesApi.removeAttachment(clientId, note.id, a.id); onChanged?.({ ...note, attachments: note.attachments.filter((x) => x.id !== a.id) }); }
     catch (err) { toastErr(err); }
   };
   const remove = async () => {
-    try { await api.del(`/api/clients/${clientId}/notes/${note.id}`); onDeleted?.(note); fireToast({ msg: t('Nota eliminata', 'Note deleted'), icon: 'x' }); }
+    try { await clientNotesApi.remove(clientId, note.id); onDeleted?.(note); fireToast({ msg: t('Nota eliminata', 'Note deleted'), icon: 'x' }); }
     catch (err) { toastErr(err); }
   };
 

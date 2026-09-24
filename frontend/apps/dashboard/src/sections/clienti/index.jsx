@@ -2,13 +2,14 @@
 // filterable, paginated client list (left) and full client profile (right).
 // Ported from desktop-clienti.jsx (DkClienti) onto the real API.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, Avatar, EmptyState, Icon, toastApiError } from '@youty/shared';
+import { Avatar, EmptyState, Icon, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
 import { initialsOf, relRange, daysToBirthday, reactivationRequests } from './helpers.js';
 import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
+import { clientsApi } from '../../api/clients.js';
 
 const PAGE = 50;
 
@@ -72,7 +73,7 @@ export default function ClientiSection() {
     shownParams.current = listParams;
     const loaded = fresh ? 0 : (itemsRef.current?.length || 0);
     if (fresh) setItems(null);
-    api.get('/api/clients/', { params: { ...listParams, limit: Math.max(PAGE, loaded), offset: 0 } })
+    clientsApi.list({ ...listParams, limit: Math.max(PAGE, loaded), offset: 0 })
       .then((res) => { if (seq === reqSeq.current) { setItems(res.items); setCount(res.count); } })
       .catch((err) => {
         if (seq !== reqSeq.current || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
@@ -85,7 +86,7 @@ export default function ClientiSection() {
     const seq = ++reqSeq.current;
     setLoadingMore(true);
     try {
-      const res = await api.get('/api/clients/', { params: { ...listParams, limit: PAGE, offset: items.length } });
+      const res = await clientsApi.list({ ...listParams, limit: PAGE, offset: items.length });
       if (seq !== reqSeq.current) return;
       setItems((l) => [...l, ...res.items]);
       setCount(res.count);
@@ -103,7 +104,7 @@ export default function ClientiSection() {
   useEffect(() => {
     let dead = false;
     const cards = [{ key: '__active', params: {} }, ...clientCategories.map((c) => ({ key: c.id, params: { category_id: c.id } }))];
-    Promise.all(cards.map((c) => api.get('/api/clients/', { params: { ...c.params, is_active: true, limit: 1 } }).then((r) => [c.key, r.count]).catch(() => [c.key, null])))
+    Promise.all(cards.map((c) => clientsApi.list({ ...c.params, is_active: true, limit: 1 }).then((r) => [c.key, r.count]).catch(() => [c.key, null])))
       .then((pairs) => { if (!dead) setCatCounts(Object.fromEntries(pairs)); });
     return () => { dead = true; };
   }, [clientCategories, refreshKey]);

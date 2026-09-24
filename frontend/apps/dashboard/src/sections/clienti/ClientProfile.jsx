@@ -12,6 +12,7 @@ import TechSheetTab from './tabs/TechSheetTab.jsx';
 import NotesTab from './tabs/NotesTab.jsx';
 import WalletTab from './tabs/WalletTab.jsx';
 import ConsensiTab from './tabs/ConsensiTab.jsx';
+import { clientsApi } from '../../api/clients.js';
 
 const catIdsOf = (cl) => (cl?.categories || []).map((x) => x.id);
 
@@ -33,7 +34,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   useEffect(() => {
     let dead = false;
     setC(null); setFailed(false);
-    api.get(`/api/clients/${clientId}`)
+    clientsApi.get(clientId)
       .then((res) => { if (!dead) setC(res); })
       .catch((err) => { if (!dead) { setFailed(true); toastErr(err); } });
     return () => { dead = true; };
@@ -45,11 +46,13 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   // cassa (14-20) e la reception rimandava i consensi vecchi (14-05).
   useLive(/^(client|sale)\./, (events) => {
     if (events.some((e) => e.payload?.client_id === clientId || e.type === 'client.imported')) {
-      api.get(`/api/clients/${clientId}`).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
+      clientsApi.get(clientId).then((res) => setC((prev) => (prev ? { ...prev, ...res } : res))).catch(() => {});
     }
   });
 
-  /* waiting-list badge (needs agenda read scope; fail silently) */
+  /* waiting-list badge (needs agenda read scope; fail silently).
+   * È un endpoint dell'agenda: resta una chiamata diretta ad `api`, perché
+   * gli endpoint dell'agenda li raccoglie la sezione agenda, non src/api/. */
   useEffect(() => {
     let dead = false;
     if (!hasScope('agenda')) return undefined;
@@ -81,7 +84,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       if (!prev) return false;
       const body = typeof patch === 'function' ? patch(prev) : patch;
       try {
-        const res = await api.put(`/api/clients/${clientId}`, body);
+        const res = await clientsApi.update(clientId, body);
         cRef.current = { ...prev, ...res };   // la prossima in coda parte da qui
         setC((cur) => (cur ? { ...cur, ...res } : res));
         if (toast) fireToast(toast);
@@ -96,7 +99,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const doDelete = async () => {
     setDeleting(true);
     try {
-      await api.del(`/api/clients/${clientId}`);
+      await clientsApi.remove(clientId);
       fireToast({ msg: t(`Cliente ${c.full_name} archiviato`, `Client ${c.full_name} archived`), icon: 'check' });
       setConfirmDel(false);
       onDeleted && onDeleted();

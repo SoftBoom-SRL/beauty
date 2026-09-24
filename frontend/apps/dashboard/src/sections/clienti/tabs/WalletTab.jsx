@@ -4,11 +4,12 @@
 // merito in ordine non garantito su PostgreSQL) poteva non trovarla mai, e la
 // cliente a 9 timbri su 10 risultava «non iscritta» (14-06, 07-06).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, Icon, ProgressBar, fmtEurNoFree } from '@youty/shared';
+import { Icon, ProgressBar, fmtEurNoFree } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
 import { dateLabel, rewardLabel } from '../helpers.js';
+import { couponsApi, giftCardsApi, loyaltyApi } from '../../../api/marketing.js';
 
 /* Caricamento fallito: non è «nessun coupon». Prima un errore di rete si
  * leggeva come elenco vuoto, e alla cliente si diceva che non aveva buoni. */
@@ -16,9 +17,7 @@ const FAILED = 'failed';
 
 /** → { points } se la cliente è iscritta, { points: null } se non lo è. */
 async function loyaltyPointsOf(programId, clientId) {
-  const res = await api.get(`/api/marketing/loyalty-programs/${programId}/accounts`, {
-    params: { client_id: clientId },
-  });
+  const res = await loyaltyApi.accounts(programId, { client_id: clientId });
   const mine = (res.items || []).find((a) => a.client_id === clientId);
   return { points: mine ? mine.points : null };
 }
@@ -58,16 +57,16 @@ export default function WalletTab({ c }) {
 
     // filtro lato server: cercare per nome e scremare qui lasciava fuori i
     // coupon oltre il centesimo risultato, e la scheda diceva «nessun coupon»
-    api.get('/api/marketing/coupons', { params: { client_id: c.id } })
+    couponsApi.list({ client_id: c.id })
       .then((res) => { if (!dead) setCoupons(res.items || []); })
       .catch(() => { if (!dead) setCoupons(keepOr); });
 
     // filtro lato server: la cliente come acquirente o destinataria
-    api.get('/api/marketing/gift-cards', { params: { client_id: c.id } })
+    giftCardsApi.list({ client_id: c.id })
       .then((res) => { if (!dead) setGifts(res.items || []); })
       .catch(() => { if (!dead) setGifts(keepOr); });
 
-    api.get('/api/marketing/loyalty-programs', { params: { active: true } })
+    loyaltyApi.list({ active: true })
       .then(async (programs) => {
         const active = (programs || []).filter((p) => p.active);
         const rows = await Promise.all(active.map(async (p) => {

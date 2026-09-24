@@ -4,10 +4,11 @@
 // Props (all optional except clientId): { clientId, apptId, apptLabel,
 // category, viewSheetId }.
 import { useEffect, useState } from 'react';
-import { api, toastApiError } from '@youty/shared';
+import { toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { TechSheetCard, TechSheetForm } from '../TechSheet.jsx';
+import { clientsApi, techSheetsApi } from '../../../api/clients.js';
 
 export default function TechSheetModal({ clientId, apptId = null, apptLabel = '', category, viewSheetId = null, onClose }) {
   const { t, fireToast } = useDash();
@@ -17,14 +18,14 @@ export default function TechSheetModal({ clientId, apptId = null, apptLabel = ''
   useEffect(() => {
     let dead = false;
     if (!clientId) { setSheets([]); return undefined; }
-    api.get(`/api/clients/${clientId}/sheets`)
+    techSheetsApi.list(clientId)
       .then((rows) => { if (!dead) setSheets(rows); })
       .catch((err) => {
         if (dead) return;
         setSheets([]);
         toastApiError(err, fireToast, t);
       });
-    api.get(`/api/clients/${clientId}`)
+    clientsApi.get(clientId)
       .then((c) => { if (!dead) setClientName(c.full_name); })
       .catch(() => {});
     return () => { dead = true; };

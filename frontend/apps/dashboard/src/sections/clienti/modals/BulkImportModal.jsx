@@ -7,10 +7,11 @@
 // → POST /api/clients/import a blocchi → esito con errori e avvisi per riga.
 // Parsing, riconoscimento e normalizzazione stanno in ../importCsv.js.
 import React, { useMemo, useRef, useState } from 'react';
-import { api, Icon, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
+import { Icon, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { inputCss, formatBirthday, dateLabel } from '../helpers.js';
+import { clientsApi } from '../../../api/clients.js';
 import {
   FIELDS, buildRows, decodeCsvBytes, detectDelimiter, fileLineOf, guessMapping,
   looksLikeHeader, looksMojibake, parseCsvLines,
@@ -131,7 +132,7 @@ export default function BulkImportModal({ onClose }) {
     let i = startAt;
     try {
       for (; i < payload.length; i += CHUNK) {
-        const res = await api.post('/api/clients/import', { rows: payload.slice(i, i + CHUNK), update_existing: updateExisting });
+        const res = await clientsApi.importRows({ rows: payload.slice(i, i + CHUNK), update_existing: updateExisting });
         total.created += res.created; total.updated += res.updated; total.skipped += res.skipped || 0;
         // Il server numera le righe dentro il blocco inviato, che salta le
         // righe scartate: chi corregge il file cerca la riga del FILE, la

@@ -5,11 +5,12 @@
 // caparra sempre. Alla creazione: nota iniziale + consensi; in modifica i
 // consensi restano nella scheda Consensi (il server ne registra la data).
 import React, { useState } from 'react';
-import { api, ApiError, Icon, PhoneInput, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { BirthdayInput, Field, GenderPicker } from '../components.jsx';
 import { inputCss, clientChanges } from '../helpers.js';
+import { clientNotesApi, clientsApi } from '../../../api/clients.js';
 
 const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
 
@@ -64,7 +65,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
    * numero): o si apre la scheda, o si torna alla prenotazione con lei scelta. */
   const afterCreate = async (saved) => {
     if (f.note.trim()) {
-      try { await api.post(`/api/clients/${saved.id}/notes`, { text: f.note.trim(), visibility: 'private' }); }
+      try { await clientNotesApi.create(saved.id, { text: f.note.trim(), visibility: 'private' }); }
       catch { /* il cliente esiste: la nota non deve far fallire il flusso */ }
     }
     if (afterSave !== 'book') {
@@ -89,7 +90,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
     if (saving || !archived) return;
     setSaving(true); setErr('');
     try {
-      const saved = await api.put(`/api/clients/${archived.id}`, { is_active: true });
+      const saved = await clientsApi.reactivate(archived.id);
       fireToast({ msg: t(`Scheda di ${saved.full_name} riattivata`, `${saved.full_name}'s profile reactivated`), icon: 'check' });
       await afterCreate(saved);
     } catch (e) {
@@ -120,12 +121,12 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
           onClose();
           return;
         }
-        saved = await api.put(`/api/clients/${client.id}`, changes);
+        saved = await clientsApi.update(client.id, changes);
         fireToast({ msg: t(`Scheda di ${saved.full_name} aggiornata`, `${saved.full_name}'s profile updated`), icon: 'check' });
         onSaved?.(saved);
         onClose();
       } else {
-        saved = await api.post('/api/clients/', {
+        saved = await clientsApi.create({
           ...common,
           origin: common.origin || t('Inserimento manuale', 'Manual entry'),
           consents: { privacy: f.privacy, marketing: f.marketing, card_charge: false },
