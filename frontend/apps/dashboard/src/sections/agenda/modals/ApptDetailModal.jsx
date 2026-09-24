@@ -5,7 +5,7 @@ import { api, ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, tim
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin } from '../lib.js';
+import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
 import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
@@ -216,7 +216,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
    * «Riprogramma» resta per cercare uno slot libero o un altro giorno; spostare
    * di un quarto d'ora o passare la cliente alla collega sono invece gesti da
    * fare sul posto, ed erano dietro un flusso a sé. */
-  const stepMin = settings?.slot_interval_min || 15;
+  const stepMin = slotStep(settings);
   const [timeDraft, setTimeDraft] = useState(null);   // "HH:MM" mentre si digita
   const [movingBusy, setMovingBusy] = useState(false);
   useEffect(() => { setTimeDraft(null); }, [appt?.start]);
@@ -398,7 +398,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (!v || !/^\d{1,2}:\d{2}$/.test(v)) return;
     const m = hmToMin(v);
     if (!Number.isFinite(m) || m === startMin) return;
-    applyMove({ startMin: Math.max(0, Math.min(23 * 60 + 55, m)) });
+    applyMove({ startMin: Math.max(0, Math.min(LAST_START_MIN, m)) });
   };
   const svcOf = (id) => (services || []).find((s) => s.id === id);
   const activeServices = (services || []).filter((s) => s.active !== false);
@@ -497,7 +497,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       // resta in bozza anche dopo lo spostamento (vedi adopt), e si salva
       // quando lo si decide.
       if (wanted === startMin) return;
-      applyMove({ startMin: Math.max(0, Math.min(23 * 60 + 55, wanted)) });
+      applyMove({ startMin: Math.max(0, Math.min(LAST_START_MIN, wanted)) });
       return;
     }
     const prev = editItems[index - 1], prevSpan = itemSpans[index - 1];
@@ -873,7 +873,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                       aria-label={t('Ora di inizio', 'Start time')}
                       style={{ width: 92, border: '1px solid rgba(17,24,39,0.18)', borderRadius: 9, padding: '5px 7px', fontSize: 14, fontWeight: 700, fontFamily: 'var(--mono, monospace)', textAlign: 'center', outline: 'none', background: 'var(--surface)', color: 'var(--ink)' }} />
                     <button className="dk-iconbtn" disabled={movingBusy} title={t(`Posticipa di ${stepMin} minuti`, `${stepMin} minutes later`)} aria-label={t('Posticipa', 'Later')}
-                      onClick={() => applyMove({ startMin: Math.min(23 * 60 + 55, startMin + stepMin) })}
+                      onClick={() => applyMove({ startMin: Math.min(LAST_START_MIN, startMin + stepMin) })}
                       style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(255,255,255,0.65)', border: 'none' }}><Icon name="chevR" size={14} /></button>
                   </div>
                 ) : (

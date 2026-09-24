@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { api, toastApiError, Avatar, Icon, fmtDateIt, toDateStr } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { initialsOf, prefLabel, wlDaysWaiting } from '../lib.js';
+import { initialsOf, prefLabel, wlDaysWaiting, MODAL_SWAP_MS } from '../lib.js';
 
 export default function WaitlistModal({ onClose }) {
   const { t, fireToast, openModal, hasScope } = useDash();
@@ -36,7 +36,7 @@ export default function WaitlistModal({ onClose }) {
     onClose();
     setTimeout(() => openModal('newappt', {
       prefill: { clientId: w.client_id, clientName: w.client_name, serviceIds: [w.service_id], operatorId: w.operator_id || undefined },
-    }), 150);
+    }), MODAL_SWAP_MS);
   }
 
   /* ranking presentation: active first, then longest-waiting first */

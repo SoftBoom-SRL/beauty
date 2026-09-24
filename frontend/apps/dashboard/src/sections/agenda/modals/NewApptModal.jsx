@@ -10,7 +10,7 @@ import { api, ApiError, toastApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, now
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { fmtMoney, explainSlot, firstName, isoAtMin, hmToMin } from '../lib.js';
+import { fmtMoney, explainSlot, firstName, isoAtMin, hmToMin, slotStep, AFTERNOON_MIN } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { copyText, nextSelection, usableCode, usableGiftCards } from './rules.js';
 
@@ -20,7 +20,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const { t, lang, services, serviceCategories, operators, fireToast, hasScope, settings, agendaPick, setAgendaPick, setTab, locationId } = useDash();
   const pf = prefill || {};
   const canWrite = hasScope('agenda');
-  const step = settings?.slot_interval_min || 15;
+  const step = slotStep(settings);
 
   /* ---- cliente ---- */
   const [client, setClient] = useState(pf.clientId ? { id: pf.clientId, full_name: pf.clientName || '…' } : null);
@@ -342,8 +342,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   }
 
   const filteredServices = activeServices.filter((s) => !svcQ || svcName(s, lang).toLowerCase().includes(svcQ.toLowerCase()));
-  const morning = (slots || []).filter((s) => minutesOfDay(s.start) < 13 * 60);
-  const afternoon = (slots || []).filter((s) => minutesOfDay(s.start) >= 13 * 60);
+  const morning = (slots || []).filter((s) => minutesOfDay(s.start) < AFTERNOON_MIN);
+  const afternoon = (slots || []).filter((s) => minutesOfDay(s.start) >= AFTERNOON_MIN);
   const anyRecommended = (slots || []).some((s) => s.recommended) && (slots || []).some((s) => s.recommended === false);
   const SlotChip = ({ s }) => {
     const sel = s.start === selStart;

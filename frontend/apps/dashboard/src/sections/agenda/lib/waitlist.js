@@ -3,7 +3,7 @@
 // Logica pura: la caricano anche i test con `node --test`.
 import { parseISO, timeLabel, toDateStr } from '@youty/shared';
 import { aEndMin, aStartMin, firstName } from './appt.js';
-import { DOW_EN, DOW_IT } from './calendar.js';
+import { DOW_EN, DOW_IT, dowIndex } from './calendar.js';
 
 /* ---- waitlist helpers ---- */
 
@@ -45,7 +45,7 @@ export function wlRank(entries, appt) {
   // dell'API legge il fuso del dispositivo, e da una postazione su un altro
   // fuso (o a cavallo della mezzanotte UTC) il venerdì sera diventava sabato —
   // «weekend» e «giorni precisi» premiavano le voci sbagliate.
-  const dow = (parseISO(toDateStr(appt.start)).getDay() + 6) % 7;
+  const dow = dowIndex(parseISO(toDateStr(appt.start)));
   const opIds = apptOperatorIds(appt);
   const score = (w) => {
     let s = 10;

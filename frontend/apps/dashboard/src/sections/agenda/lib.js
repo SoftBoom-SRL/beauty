@@ -7,7 +7,9 @@
 // '@youty/shared' dei test non ce l'ha) né React.
 
 export {
-  DK_START, DK_END, PXM, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, COLW, AGENDA_LIVE_RE,
+  DK_START, DK_END, PXM, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, WHEEL_ZOOM_FACTOR, COLW, DAY_HOURS_W, WEEK_HOURS_W,
+  NOW_LINE_COLOR, LAST_START_MIN, AFTERNOON_MIN, BREAK_PRESETS, BREAK_DEFAULT_MIN, HOVER_CLEAR_DAY, HOVER_CLEAR_WEEK,
+  MODAL_SWAP_MS, AGENDA_LIVE_RE,
 } from './constants.js';
 
 export {
@@ -16,11 +18,12 @@ export {
 } from './lib/appt.js';
 
 export {
-  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, hmToMin, mondayOf, addMonths, plausibleDate,
+  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, dowIndex, dayLabel, dayTimeLabel, hmToMin, mondayOf, addMonths, plausibleDate,
 } from './lib/calendar.js';
 
 export {
-  clampZoom, zoomStep, weekLayout, GRID_LINE_STYLE, gridRange, dayGridRange, weekGridRange, openingFor, gridMarks,
+  clampZoom, zoomStep, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, gridRange, dayGridRange,
+  weekGridRange, openingFor, gridMarks, visibleMarks, closedIntervals,
 } from './lib/grid.js';
 
 export { moveIsNoop, ghostBlockAt, moveHereTarget, explainSlot } from './lib/slots.js';

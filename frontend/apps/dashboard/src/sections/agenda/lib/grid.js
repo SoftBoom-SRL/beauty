@@ -2,9 +2,25 @@
 // (zoom), fascia oraria, righe delle ore, corsie della settimana.
 // Logica pura: la caricano anche i test con `node --test`.
 import { minutesOfDay, parseISO } from '@youty/shared';
-import { DK_END, DK_START, ZOOM_MAX, ZOOM_MIN, ZOOM_STEPS } from '../constants.js';
+import { DEFAULT_SLOT_MIN, DK_END, DK_START, ZOOM_MAX, ZOOM_MIN, ZOOM_STEPS } from '../constants.js';
 import { aStartMin, apptSpan } from './appt.js';
-import { hmToMin } from './calendar.js';
+import { dowIndex, hmToMin } from './calendar.js';
+
+/** Granularità delle fasce orarie (Impostazioni → intervallo slot). */
+export const slotStep = (settings) => settings?.slot_interval_min || DEFAULT_SLOT_MIN;
+
+/** Appuntamento aperto nel pannello di dettaglio: il suo blocco resta
+ *  cerchiato in agenda, così si vede sempre su cosa si sta intervenendo. */
+export const openApptIdOf = (modal) => (modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null);
+
+/** Dove si apre l'anteprima di un appuntamento al passaggio del mouse: a
+ *  destra del blocco se c'è posto (320 px), altrimenti a sinistra; in alto
+ *  alla sua altezza, ma mai così in basso da lasciare sotto meno di `clear`
+ *  px. `rect` = getBoundingClientRect() del blocco, `view` = la finestra. */
+export function hoverPlacement(rect, view, clear) {
+  const right = rect.right + 320 < view.innerWidth;
+  return { x: right ? rect.right + 10 : rect.left - 10, y: Math.min(rect.top, view.innerHeight - clear), side: right ? 'right' : 'left' };
+}
 
 /* Zoom: vedi ZOOM_STEPS in constants.js. */
 export const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(z) || 1));
@@ -113,7 +129,7 @@ export function weekGridRange(days, openingWeek, ghost = null) {
 export function openingFor(settings, dateStr) {
   const week = settings?.opening_hours_week;
   if (!week || !Object.keys(week).length || !dateStr) return [];
-  return week[String((parseISO(dateStr).getDay() + 6) % 7)] || [];
+  return week[String(dowIndex(parseISO(dateStr)))] || [];
 }
 
 /** Segni orari da disegnare: [{ m, kind }] con kind ∈ hour | half | quarter,
@@ -126,4 +142,23 @@ export function gridMarks(step, start = DK_START, end = DK_END) {
     else if (step === 15) out.push({ m, kind: 'quarter' });
   }
   return out;
+}
+
+/** I segni che si disegnano davvero alla scala `pxm`: rimpicciolendo, quarti
+ *  e mezz'ore diventano un reticolo illeggibile, e sotto una certa altezza
+ *  restano solo le ore. */
+export const visibleMarks = (marks, pxm) =>
+  marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12));
+
+/* closed (off-shift) intervals within the grid (`g0`–`g1`, minuti), from API windows [["09:00","13:00"],...] */
+export function closedIntervals(windows, g0 = DK_START, g1 = DK_END) {
+  const win = (windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
+  const out = [];
+  let cursor = g0;
+  win.forEach(([s, e]) => {
+    if (s > cursor) out.push([cursor, Math.min(s, g1)]);
+    cursor = Math.max(cursor, e);
+  });
+  if (cursor < g1) out.push([cursor, g1]);
+  return out.filter(([s, e]) => e > s);
 }

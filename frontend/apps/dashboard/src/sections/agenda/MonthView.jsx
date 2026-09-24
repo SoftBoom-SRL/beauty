@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, toastApiError, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, fmtMoney, opDisplay, AGENDA_LIVE_RE } from './lib.js';
+import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, dowIndex, fmtMoney, opDisplay, AGENDA_LIVE_RE } from './lib.js';
 import {
   monthGrid, filterDay, monthSummary, loadRatio, loadTone, LOAD_TONES, LOAD_WARN, LOAD_FULL,
   statusCounts, sortByStart, operatorRows, dayLabel, pctLabel, EMPTY_DAY,
@@ -131,7 +131,7 @@ export default function MonthView({ anchor, onOpenDay }) {
         {showRevenue && <StatTile icon="wallet" label={t('Incasso atteso', 'Expected revenue')} value={fmtMoney(summary.revenue, lang)} />}
         <StatTile
           icon="star" label={t('Giorno più pieno', 'Busiest day')}
-          value={summary.busiest ? `${(lang === 'en' ? DOW_EN : DOW_IT)[(parseISO(summary.busiest.date).getDay() + 6) % 7]} ${parseISO(summary.busiest.date).getDate()}` : '—'}
+          value={summary.busiest ? `${(lang === 'en' ? DOW_EN : DOW_IT)[dowIndex(parseISO(summary.busiest.date))]} ${parseISO(summary.busiest.date).getDate()}` : '—'}
           sub={summary.busiest ? `${pctLabel(summary.busiest.ratio)} · ${summary.busiest.count} ${t('app.', 'appts')}` : ''}
           tone={summary.busiest ? LOAD_TONES[loadTone(summary.busiest.ratio)] : null}
           onClick={summary.busiest ? () => onOpenDay(summary.busiest.date) : undefined}

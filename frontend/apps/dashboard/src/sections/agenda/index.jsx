@@ -3,9 +3,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
-  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN,
+  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, dayTimeLabel, openingFor, hoverPlacement,
   isoAtMin, mondayOf, addMonths, firstName, opDisplay, aStartMin,
-  DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, clampZoom, zoomStep,
+  DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, clampZoom, zoomStep,
   moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
@@ -223,9 +223,7 @@ export default function AgendaSection() {
 
   const onHover = (a, el) => {
     if (!a) { setHover(null); return; }
-    const r = el.getBoundingClientRect();
-    const right = r.right + 320 < window.innerWidth;
-    setHover({ a, x: right ? r.right + 10 : r.left - 10, y: Math.min(r.top, window.innerHeight - 260), side: right ? 'right' : 'left' });
+    setHover({ a, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_DAY) });
   };
 
   /* ---- nuova prenotazione: UN solo drawer (modale 'newappt'), da qualunque punto si parta ----
@@ -413,10 +411,7 @@ export default function AgendaSection() {
       const opName = firstName((operators.find((o) => o.id === toOp) || {}).first_name || '');
       // Su un altro giorno l'avviso lo dice: «Spostato alle 10:00» a chi ha
       // appena portato la cliente da martedì a giovedì non spiegava niente.
-      const dd = parseISO(date);
-      const when = otherDay
-        ? t(`${DOW_IT[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`)
-        : timeLabel(startMin);
+      const when = otherDay ? dayTimeLabel(date, startMin, t) : timeLabel(startMin);
       const where = reassigned
         ? t(`Spostato a ${opName}, ${when}`, `Moved to ${opName}, ${when}`)
         : otherDay
@@ -471,10 +466,7 @@ export default function AgendaSection() {
         operator_id: opId && opId !== item.operator_id ? opId : null,
         force: !!opts.force,
       });
-      const dd = parseISO(iso);
-      const when = otherDay
-        ? t(`${DOW_IT[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[(dd.getDay() + 6) % 7]} ${dd.getDate()}, ${timeLabel(startMin)}`)
-        : timeLabel(startMin);
+      const when = otherDay ? dayTimeLabel(iso, startMin, t) : timeLabel(startMin);
       fireToast({
         msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`),
         icon: 'scissors',
@@ -539,9 +531,9 @@ export default function AgendaSection() {
       // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
       // libero non lascia l'appuntamento marcato «forzato» senza motivo.
       await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(iso, startMin), force: !!opts.force });
-      const d = parseISO(iso);
+      const when = dayTimeLabel(iso, startMin, t);
       fireToast({
-        msg: t(`Spostato a ${DOW_IT[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`, `Moved to ${DOW_EN[(d.getDay() + 6) % 7]} ${d.getDate()}, ${timeLabel(startMin)}`),
+        msg: t('Spostato a ' + when, 'Moved to ' + when),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),
@@ -681,7 +673,7 @@ export default function AgendaSection() {
   const addBreak = async (opId, startMin, dur) => {
     setSlotMenu(null);
     try {
-      await api.post('/api/agenda/pauses', { operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || 60 });
+      await api.post('/api/agenda/pauses', { operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
       const o = operators.find((x) => x.id === opId);
       fireToast({
         msg: t(`Pausa aggiunta · ${firstName(o?.first_name)} alle ${timeLabel(startMin)}`, `Break added · ${firstName(o?.first_name)} at ${timeLabel(startMin)}`),
@@ -980,8 +972,8 @@ export default function AgendaSection() {
               <div style={{ padding: '4px 8px 8px' }}>
                 <div className="t-sm" style={{ fontWeight: 700, color: 'var(--muted)', margin: '4px 2px 8px' }}>{t('Durata pausa', 'Break duration')}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginBottom: 8 }}>
-                  {[15, 30, 45, 60, 90, 120].map((d) => {
-                    const on = (slotMenu.dur || 60) === d;
+                  {BREAK_PRESETS.map((d) => {
+                    const on = (slotMenu.dur || BREAK_DEFAULT_MIN) === d;
                     return (
                       <button key={d} onClick={() => setSlotMenu((m) => ({ ...m, dur: d }))} style={{ padding: '8px 0', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{d < 60 ? d + ' min' : (d / 60) + ' h'}</button>
                     );
@@ -989,13 +981,13 @@ export default function AgendaSection() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, padding: '0 2px' }}>
                   <span className="t-sm" style={{ color: 'var(--muted)', flex: 1 }}>{t('Personalizzata', 'Custom')}</span>
-                  <NumInput integer min={5} value={slotMenu.dur || 60} onChange={(dur) => setSlotMenu((m) => ({ ...m, dur }))} style={{ width: 64, textAlign: 'right', border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono, monospace)', outline: 'none' }} />
+                  <NumInput integer min={5} value={slotMenu.dur || BREAK_DEFAULT_MIN} onChange={(dur) => setSlotMenu((m) => ({ ...m, dur }))} style={{ width: 64, textAlign: 'right', border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 13, fontWeight: 700, fontFamily: 'var(--mono, monospace)', outline: 'none' }} />
                   <span className="t-sm" style={{ color: 'var(--muted-2)' }}>min</span>
                 </div>
-                <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 10, padding: '0 2px' }}>{timeLabel(slotMenu.startMin)}–{timeLabel(slotMenu.startMin + (slotMenu.dur || 60))}</div>
+                <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 10, padding: '0 2px' }}>{timeLabel(slotMenu.startMin)}–{timeLabel(slotMenu.startMin + (slotMenu.dur || BREAK_DEFAULT_MIN))}</div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="dk-btn dk-btn--ghost" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => setSlotMenu((m) => ({ ...m, mode: null }))}>{t('Indietro', 'Back')}</button>
-                  <button className="dk-btn dk-btn--clay" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => addBreak(slotMenu.opId, slotMenu.startMin, slotMenu.dur || 60)}><Icon name="check" size={15} color="#fff" />{t('Aggiungi', 'Add')}</button>
+                  <button className="dk-btn dk-btn--clay" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => addBreak(slotMenu.opId, slotMenu.startMin, slotMenu.dur || BREAK_DEFAULT_MIN)}><Icon name="check" size={15} color="#fff" />{t('Aggiungi', 'Add')}</button>
                 </div>
               </div>
             ) : (
@@ -1023,7 +1015,7 @@ export default function AgendaSection() {
                     <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{slotMenu.verdict && !slotMenu.verdict.ok ? t(`alle ${timeLabel(slotMenu.startMin)} anche se occupato, o scegli un'alternativa`, `at ${timeLabel(slotMenu.startMin)} even if busy, or pick an alternative`) : t(`alle ${timeLabel(slotMenu.startMin)}`, `at ${timeLabel(slotMenu.startMin)}`)}</div>
                   </div>
                 </button>
-                <button className="dk-row" onClick={() => setSlotMenu((m) => ({ ...m, mode: 'break', dur: 60 }))} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
+                <button className="dk-row" onClick={() => setSlotMenu((m) => ({ ...m, mode: 'break', dur: BREAK_DEFAULT_MIN }))} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 9, textAlign: 'left', border: 'none', background: 'transparent' }}>
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--surface-2)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="clock" size={15} color="var(--muted)" /></div>
                   <span style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Aggiungi pausa', 'Add break')}</span>
                 </button>
@@ -1081,11 +1073,11 @@ function DaySkeleton() {
   return (
     <div style={{ flex: 1, overflow: 'hidden', padding: '14px 26px' }}>
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        <div style={{ width: 64, flexShrink: 0 }} />
+        <div style={{ width: DAY_HOURS_W, flexShrink: 0 }} />
         {[...Array(5)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 54, borderRadius: 12 }} />)}
       </div>
       <div style={{ display: 'flex', gap: 6, height: '100%' }}>
-        <div style={{ width: 64, flexShrink: 0 }} />
+        <div style={{ width: DAY_HOURS_W, flexShrink: 0 }} />
         {[...Array(5)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 520, borderRadius: 12 }} />)}
       </div>
     </div>
@@ -1097,8 +1089,7 @@ function DaySkeleton() {
 function SalonHoursChip({ settings, date, t, isOwner, onOpen }) {
   const week = settings?.opening_hours_week;
   const has = week && Object.keys(week).length > 0;
-  const idx = (parseISO(date).getDay() + 6) % 7;
-  const ranges = has ? (week[String(idx)] || []) : null;
+  const ranges = has ? openingFor(settings, date) : null;
   const label = !has
     ? (isOwner ? t('Orari del centro: imposta', 'Salon hours: set') : t('Orari del centro non impostati', 'Salon hours not set'))
     : ranges.length

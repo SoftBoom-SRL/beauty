@@ -19,12 +19,10 @@ import { Avatar, Icon, fmtDur, timeLabel, statusMeta, parseISO } from '@youty/sh
 import { useDash } from '../../ctx.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import {
-  DK_START, DK_END, PXM, COLW, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
+  DK_START, PXM, COLW, DAY_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, clampZoom, aStartMin, aEndMin, svcLabel, hmToMin, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
-  ghostBlockAt, apptRevenue, DOW_IT, DOW_EN, dayGridRange, openingFor,
+  ghostBlockAt, apptRevenue, dayGridRange, openingFor, dayLabel, slotStep, openApptIdOf, visibleMarks, closedIntervals,
 } from './lib.js';
-
-const HOURS_W = 64;   // colonna delle ore a sinistra (fissa durante lo scorrimento)
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
@@ -35,8 +33,8 @@ export default function DayGrid({
   const { t, lang, settings, modal, operators: allOperators, services: allServices } = useDash();
   /* Appuntamento aperto nel pannello di dettaglio: il suo blocco resta cerchiato
    * in agenda, così si vede sempre su cosa si sta intervenendo. */
-  const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
-  const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
+  const openApptId = openApptIdOf(modal);
+  const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
   const drag = useRef(null);
   const justDragged = useRef(false);                 // sopprime il click che segue un rilascio
   const [, force] = useState(0);
@@ -136,7 +134,7 @@ export default function DayGrid({
       // valore precedente dallo stato: il pinch manda una raffica di eventi
       // nello stesso istante, e partendo tutti dallo stesso numero se ne
       // sarebbe sentito uno solo
-      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR)));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -221,7 +219,7 @@ export default function DayGrid({
     const v = el.getBoundingClientRect();
     const c = cols.getBoundingClientRect();
     const head = headRef.current?.getBoundingClientRect();
-    const left = Math.max(c.left, v.left + HOURS_W), right = Math.min(c.right, v.right);
+    const left = Math.max(c.left, v.left + DAY_HOURS_W), right = Math.min(c.right, v.right);
     const top = Math.max(c.top, head ? head.bottom : v.top), bottom = Math.min(c.bottom, v.bottom);
     return x >= left && x < right && y >= top && y < bottom;
   }
@@ -645,7 +643,7 @@ export default function DayGrid({
     >
       {/* operator header (sticky top) */}
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingBottom: 8, borderBottom: '1px solid var(--hair)' }}>
-        <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 11, background: 'var(--paper)' }} />
+        <div style={{ width: DAY_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 11, background: 'var(--paper)' }} />
         <div style={{ flex: 1, display: 'flex', gap: 6, paddingRight: 4 }}>
           {rows.map((row) => {
             const o = row.operator;
@@ -705,7 +703,7 @@ export default function DayGrid({
       {/* grid body — `data-span-min`: quanti minuti copre, per «Adatta» */}
       <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH }}>
         {/* hour gutter (sticky left) */}
-        <div style={{ width: 64, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
+        <div style={{ width: DAY_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
           {/* etichette in grassetto centrate sulla riga (line-height 14 → -7) + tacca che la prolunga nel gutter */}
           {hours.map((h) => (
             <React.Fragment key={h}>
@@ -721,16 +719,16 @@ export default function DayGrid({
               sotto i blocchi (z 2); pointer-events none per non disturbare drag e click */}
           {/* rimpicciolendo, quarti e mezz'ore diventano un reticolo illeggibile:
               sotto una certa altezza restano solo le ore */}
-          {marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12))
+          {visibleMarks(marks, pxm)
             .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - G0) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
           {/* passato (solo oggi): velo leggero — non si prenota indietro nel tempo */}
           {nowMin != null && nowMin > G0 && (
             <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, G1) - G0) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
           )}
           {nowMin != null && nowMin >= G0 && nowMin <= G1 && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - G0) * pxm, height: 2, background: '#F4708A', zIndex: 8, pointerEvents: 'none' }}>
-              <span style={{ position: 'absolute', left: -6, top: -5, width: 12, height: 12, borderRadius: 99, background: '#F4708A', boxShadow: '0 0 0 3px rgba(244,112,138,0.2)' }} />
-              <span className="tabnum" style={{ position: 'absolute', right: 6, top: -8, fontSize: 10, fontWeight: 800, color: '#F4708A', background: 'var(--paper)', padding: '0 4px', borderRadius: 4 }}>{timeLabel(nowMin)}</span>
+            <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMin - G0) * pxm, height: 2, background: NOW_LINE_COLOR, zIndex: 8, pointerEvents: 'none' }}>
+              <span style={{ position: 'absolute', left: -6, top: -5, width: 12, height: 12, borderRadius: 99, background: NOW_LINE_COLOR, boxShadow: '0 0 0 3px rgba(244,112,138,0.2)' }} />
+              <span className="tabnum" style={{ position: 'absolute', right: 6, top: -8, fontSize: 10, fontWeight: 800, color: NOW_LINE_COLOR, background: 'var(--paper)', padding: '0 4px', borderRadius: 4 }}>{timeLabel(nowMin)}</span>
             </div>
           )}
           {rows.map((row) => {
@@ -920,7 +918,7 @@ export default function DayGrid({
         // orario e una colonna che non ci sono (vedi track).
         if (d.outside) {
           const dd = d.dayTarget ? parseISO(d.dayTarget) : null;
-          const dayLbl = dd ? `${t(DOW_IT[(dd.getDay() + 6) % 7], DOW_EN[(dd.getDay() + 6) % 7])} ${dd.getDate()}` : '';
+          const dayLbl = dd ? dayLabel(d.dayTarget, t) : '';
           const at = timeLabel(detach ? d.orig : start);
           return (
             <div className="dk-drag-badge" style={{ top: d.cy + 18, left: d.cx + 18 }}>
@@ -946,19 +944,6 @@ export default function DayGrid({
       })()}
     </div>
   );
-}
-
-/* closed (off-shift) intervals within the grid (`g0`–`g1`, minuti), from API windows [["09:00","13:00"],...] */
-function closedIntervals(windows, g0 = DK_START, g1 = DK_END) {
-  const win = (windows || []).map(([a, b]) => [hmToMin(a), hmToMin(b)]).sort((x, y) => x[0] - y[0]);
-  const out = [];
-  let cursor = g0;
-  win.forEach(([s, e]) => {
-    if (s > cursor) out.push([cursor, Math.min(s, g1)]);
-    cursor = Math.max(cursor, e);
-  });
-  if (cursor < g1) out.push([cursor, g1]);
-  return out.filter(([s, e]) => e > s);
 }
 
 const TONE_BORDER = { ok: 'var(--ok)', warn: 'var(--warn)' };

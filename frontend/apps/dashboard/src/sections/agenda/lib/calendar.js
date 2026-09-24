@@ -1,14 +1,34 @@
 // lib/calendar.js — giorni, settimane e mesi dell'agenda (aritmetica di
 // calendario, senza fuso: vedi packages/shared/src/format.js).
 // Logica pura: la caricano anche i test con `node --test`.
-import { parseISO, toDateStr } from '@youty/shared';
-
-/* Nomi dei mesi (0 = gennaio) e dei giorni (0 = lunedì, come l'API): le
- * tabelle condivise di @youty/shared, con i nomi che l'agenda usa da sempre.
- * Sono congelate: qui si leggono e basta. */
-export {
-  MONTHS_LONG_IT as MONTHS_IT, MONTHS_LONG_EN as MONTHS_EN, WEEKDAYS_SHORT_IT as DOW_IT, WEEKDAYS_SHORT_EN as DOW_EN,
+import {
+  MONTHS_LONG_EN, MONTHS_LONG_IT, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, parseISO, timeLabel, toDateStr,
 } from '@youty/shared';
+
+/* Nomi dei mesi (0 = gennaio) e dei giorni (0 = lunedì, come l'API) con i
+ * nomi che l'agenda usa da sempre: sono le tabelle condivise di
+ * @youty/shared, congelate (qui si leggono e basta). */
+export const MONTHS_IT = MONTHS_LONG_IT;
+export const MONTHS_EN = MONTHS_LONG_EN;
+export const DOW_IT = WEEKDAYS_SHORT_IT;
+export const DOW_EN = WEEKDAYS_SHORT_EN;
+
+/** Giorno della settimana di un Date, con lo 0 al LUNEDÌ come l'API e le
+ *  tabelle dei nomi (getDay() parte dalla domenica). */
+export const dowIndex = (d) => (d.getDay() + 6) % 7;
+
+/** «Lun 5»: giorno della settimana e del mese di "YYYY-MM-DD". */
+export function dayLabel(date, t) {
+  const d = parseISO(date);
+  return `${t(DOW_IT[dowIndex(d)], DOW_EN[dowIndex(d)])} ${d.getDate()}`;
+}
+
+/** «Lun 5, 10:00»: il giorno e l'ora di arrivo negli avvisi degli
+ *  spostamenti su un altro giorno. */
+export function dayTimeLabel(date, startMin, t) {
+  const d = parseISO(date);
+  return t(`${DOW_IT[dowIndex(d)]} ${d.getDate()}, ${timeLabel(startMin)}`, `${DOW_EN[dowIndex(d)]} ${d.getDate()}, ${timeLabel(startMin)}`);
+}
 
 /** "HH:MM" → minutes of day (shift windows come as [["09:00","13:00"], ...]) */
 export function hmToMin(hm) {
@@ -19,7 +39,7 @@ export function hmToMin(hm) {
 /** Monday (Date) of the week containing the given date/ISO string */
 export function mondayOf(date) {
   const d = parseISO(date);
-  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  const dow = dowIndex(d); // 0 = Monday
   d.setDate(d.getDate() - dow);
   d.setHours(0, 0, 0, 0);
   return d;

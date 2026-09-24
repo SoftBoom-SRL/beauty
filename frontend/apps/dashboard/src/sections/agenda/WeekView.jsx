@@ -13,23 +13,23 @@ import { api, ApiError, toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
-  DK_START, PXM, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue, weekGridRange,
+  DK_START, PXM, WEEK_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, HOVER_CLEAR_WEEK, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
+  GRID_LINE_STYLE, gridMarks, visibleMarks, opSegments, serviceBands, AGENDA_LIVE_RE, weekDayOps, apptRevenue, weekGridRange,
+  slotStep, openApptIdOf, hoverPlacement,
 } from './lib.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
 const TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
 const DAY_BORDER = '1px solid var(--hair)';
-const GUTTER_W = 46;   // colonna delle ore
 const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 120;
 
 export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
-  const openApptId = modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null;
+  const openApptId = openApptIdOf(modal);
   const canWrite = hasScope('agenda');
-  const step = settings?.slot_interval_min || 15;   // granularità fasce orarie (Impostazioni)
+  const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
   const [days, setDays] = useState(null); // null = loading
   const [opTip, setOpTip] = useState(null); // { name, x, y }
@@ -126,7 +126,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       // valore precedente dallo stato: il pinch manda una raffica di eventi
       // nello stesso istante, e partendo tutti dallo stesso numero se ne
       // sarebbe sentito uno solo
-      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR)));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -455,14 +455,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   });
   const openHover = (a, el) => {
     if (drag.current) return;
-    const r = el.getBoundingClientRect();
-    const right = r.right + 320 < window.innerWidth;
-    setHover({
-      a: hoverShape(a),
-      x: right ? r.right + 10 : r.left - 10,
-      y: Math.min(r.top, window.innerHeight - 280),
-      side: right ? 'right' : 'left',
-    });
+    setHover({ a: hoverShape(a), ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });
   };
   const closeHover = () => setHover(null);
 
@@ -478,7 +471,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     >
       {/* sticky header: day + per-operator sub-columns */}
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', borderBottom: '1px solid var(--hair)', width: 'max-content', minWidth: '100%' }}>
-        <div style={{ width: GUTTER_W, flexShrink: 0, position: 'sticky', left: 0, background: 'var(--paper)', zIndex: 10 }} />
+        <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, background: 'var(--paper)', zIndex: 10 }} />
         {dayData.map((d, i) => {
           const isToday = d.date === today;
           const isTargetDay = dragging && dg.dayIdx === i;
@@ -527,7 +520,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       {/* grid — `data-span-min`: quanti minuti copre, per «Adatta» */}
       <div data-span-min={G1 - G0} style={{ display: 'flex', height: gridH, position: 'relative', width: 'max-content', minWidth: '100%' }}>
         {/* colonna delle ore: etichette in grassetto centrate sulla riga, ":30" in piccolo, tacca allineata */}
-        <div style={{ width: GUTTER_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
+        <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 7, background: 'var(--paper)' }}>
           {hours.map((h) => (
             <React.Fragment key={h}>
               <div className="tabnum" style={{ position: 'absolute', top: (h * 60 - G0) * pxm - 7, right: 7, fontSize: 10, lineHeight: '14px', fontWeight: 700, color: 'var(--muted)' }}>{String(h).padStart(2, '0')}:00</div>
@@ -548,9 +541,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
               onDoubleClick={(e) => onDayAreaClick(e, d.date)}
               style={{ flex: '0 0 ' + dayW + 'px', minWidth: 0, position: 'relative', borderLeft: DAY_BORDER, background: isToday ? TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
               {/* righe orarie: sotto i blocchi (z 2), sopra lo sfondo; pointer-events none per non disturbare drag e click */}
-              {marks.filter(({ kind }) => (kind === 'hour') || (kind === 'half' && 30 * pxm > 12) || (kind === 'quarter' && 15 * pxm > 12))
+              {visibleMarks(marks, pxm)
                 .map(({ m, kind }) => <div key={m} style={{ position: 'absolute', left: 0, right: 0, top: (m - G0) * pxm, zIndex: 1, pointerEvents: 'none', ...GRID_LINE_STYLE[kind] }} />)}
-              {isToday && nowMinLive >= G0 && nowMinLive <= G1 && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - G0) * pxm, height: 2, background: '#F4708A', zIndex: 6, pointerEvents: 'none' }} />}
+              {isToday && nowMinLive >= G0 && nowMinLive <= G1 && <div style={{ position: 'absolute', left: 0, right: 0, top: (nowMinLive - G0) * pxm, height: 2, background: NOW_LINE_COLOR, zIndex: 6, pointerEvents: 'none' }} />}
               {d.dayOps.map((o) => {
                 // il blocco trascinato esce dalla sua corsia: al suo posto la traccia, e riappare dove punta il cursore
                 const opList = d.list.filter((a) => a.operator_id === o.id && !(dragging && a.id === dg.id));
