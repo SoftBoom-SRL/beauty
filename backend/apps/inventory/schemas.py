@@ -8,10 +8,6 @@ from common.media import signed_media_url
 from common.permissions import has_scope
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 # ---- Fornitori ---------------------------------------------------------------
 
 

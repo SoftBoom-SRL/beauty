@@ -19,13 +19,13 @@ from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Package, PackageItem, Service, ServiceCategory
 from .schemas import (
     CategoryIn,
     CategoryOut,
-    OkOut,
     PackageIn,
     PackageOut,
     PublicCategoryOut,

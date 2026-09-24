@@ -15,13 +15,13 @@ from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Absence, Operator, WeeklyShift
 from .schemas import (
     AbsenceIn,
     AbsenceOut,
-    OkOut,
     OperatorColorIn,
     OperatorDetailOut,
     OperatorIn,

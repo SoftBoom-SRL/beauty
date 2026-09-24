@@ -29,6 +29,7 @@ from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
 from common.media import signed_media_url, stored_upload_name, validate_upload
 from common.phone import canonical_phone, find_client_by_phone, phone_key
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import (
@@ -53,7 +54,6 @@ from .schemas import (
     NoteIn,
     NoteOut,
     NoteUpdateIn,
-    OkOut,
     TechnicalSheetIn,
     TechnicalSheetOut,
 )

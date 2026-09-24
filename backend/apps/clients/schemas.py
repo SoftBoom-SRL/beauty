@@ -296,10 +296,6 @@ class TechnicalSheetIn(Schema):
     next_step: str = Field("", max_length=120)
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 class HookLeadIn(Schema):
     """Form pubblico di raccolta contatti (/<slug>/hook nell'app cliente)."""
 

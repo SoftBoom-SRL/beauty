@@ -16,6 +16,7 @@ from apps.core.services import emit_event, log_activity
 from common.auth import staff_auth
 from common.media import stored_upload_name
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
@@ -25,7 +26,6 @@ from .schemas import (
     LoadCsvIn,
     LoadCsvOut,
     MovementOut,
-    OkOut,
     OrderOut,
     OrderReceiveIn,
     OrderReceiveOut,
