@@ -8,10 +8,10 @@ quelli che ha già in mano. La scheda cliente (clients) chiama
 registrazione dall'app, dentro l'endpoint di api.py.
 """
 
-from django.apps import apps as django_apps
 from django.db import transaction
 from django.utils import timezone
 
+from apps.core.models import OutboxEvent
 from apps.core.services import emit_event, log_activity
 
 from .communications import SEND_EVENT
@@ -33,7 +33,6 @@ def drop_from_pending_sends(client) -> int:
     arrivato, parte senza di lei. Quello che Yourang ha già in mano lo copre
     CONSENT_EVENT. Ritorna quanti invii sono stati toccati.
     """
-    OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
     touched = 0
     with transaction.atomic():
         # Sotto lock: il worker che prende in carico l'evento aspetta la

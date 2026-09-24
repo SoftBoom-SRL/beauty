@@ -1,7 +1,15 @@
+"""Endpoint marketing: coupon, gift card, programmi fedeltà, comunicazioni, app cliente.
+
+Qui c'è solo il lato HTTP: permessi, lettura delle righe del salone
+(`salon_get`, che i test patchano in questo modulo), transazioni e lock delle
+modifiche, forma della risposta. Le regole stanno nei moduli per argomento:
+codes.py, coupons.py, gift_cards.py, loyalty.py, communications.py,
+consent.py e wallet.py.
+"""
+
 from decimal import Decimal
 from typing import Optional
 
-from django.apps import apps as django_apps
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -9,7 +17,10 @@ from ninja import Router
 from ninja.errors import HttpError
 from ninja.pagination import LimitOffsetPagination, paginate
 
+from apps.catalog.models import Service
+from apps.clients.models import Client
 from apps.core.services import log_activity
+from apps.sales.models import Sale
 from common import ratelimit
 from common.auth import client_auth, staff_auth
 from common.money import CENT
@@ -61,8 +72,8 @@ from .schemas import (
 
 router = Router(tags=["marketing"])
 
+
 def _get_client(ctx, client_id):
-    Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
     return salon_get(Client, ctx, client_id)
 
 
@@ -183,7 +194,6 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
         raise HttpError(422, "Coupon scaduto")
     sale = None
     if data.sale_id:
-        Sale = django_apps.get_model("sales", "Sale")  # lazy
         sale = salon_get(Sale, ctx, data.sale_id)
     # Il consumo è una sola UPDATE filtrata su status='active': è il database a
     # decidere chi arriva primo. Con il leggi-poi-scrivi di prima, due banchi che
@@ -268,7 +278,6 @@ def create_gift_card_staff(request, data: GiftCardIn):
     gift_service = None
     value = data.value
     if data.gift_service_id:
-        Service = django_apps.get_model("catalog", "Service")  # lazy
         gift_service = salon_get(Service, ctx, data.gift_service_id)
         value = gift_service.price
     recipient = _get_client(ctx, data.recipient_client_id) if data.recipient_client_id else None
@@ -566,8 +575,12 @@ def client_create_gift_card(request, data: ClientGiftCardIn):
     recipient_name = (data.recipient_name or "").strip()[:120]
     # Nessuna carta viene pagata al momento: senza un limite, un ciclo dall'app
     # riempie la tabella di carte fantasma che il salone si ritrova da smaltire.
-    if not ratelimit.hit(f"giftcard:client:{ctx.client.id}", CLIENT_GIFT_CARD_PER_DAY, 24 * 3600):
-        raise HttpError(429, "Troppe gift card richieste oggi: riprova domani")
+    ratelimit.enforce(
+        f"giftcard:client:{ctx.client.id}",
+        CLIENT_GIFT_CARD_PER_DAY,
+        24 * 3600,
+        "Troppe gift card richieste oggi: riprova domani",
+    )
     return create_gift_card(
         ctx.salon,
         value,

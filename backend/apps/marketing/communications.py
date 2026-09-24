@@ -9,11 +9,12 @@ api.py. L'endpoint tiene la lettura della comunicazione sotto lock
 import math
 from datetime import datetime
 
-from django.apps import apps as django_apps
 from django.db.models import F
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from apps.clients.models import Client
+from apps.core.models import OutboxEvent
 from apps.core.services import emit_event, log_activity, supersede_events
 
 from .models import Communication
@@ -71,7 +72,6 @@ def cancel_pending_send(comm: Communication) -> int:
 
     Ritorna quanti invii sono stati fermati o annullati.
     """
-    OutboxEvent = django_apps.get_model("core", "OutboxEvent")  # lazy: evita cicli
     sends = list(
         OutboxEvent.objects.filter(
             salon=comm.salon, event_type=SEND_EVENT, payload__communication_id=comm.id
@@ -158,7 +158,6 @@ def send_communication(comm: Communication, *, scheduled_at=_UNSET, actor=None):
     `scheduled_at` omesso significa «usa la data salvata sulla comunicazione»;
     `scheduled_at=None` esplicito significa «invia adesso»."""
     salon = comm.salon
-    Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
 
     if scheduled_at is _UNSET:
         scheduled_at = comm.scheduled_at
