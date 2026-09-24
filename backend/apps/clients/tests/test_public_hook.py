@@ -13,7 +13,7 @@ from django.test import TestCase
 
 from apps.core.models import ActivityLog, Salon
 
-from .models import Client
+from ..models import Client
 
 
 class _HookBase(TestCase):

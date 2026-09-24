@@ -16,8 +16,8 @@ from django.utils import timezone
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
-from .models import Client, ClientNote
-from .services import import_rows
+from ..models import Client, ClientNote
+from ..services import import_rows
 
 
 class _Base(TestCase):

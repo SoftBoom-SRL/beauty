@@ -20,9 +20,9 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, Salon
 from common.auth import StaffContext, create_staff_tokens
 
-from .api import create_client, delete_client, update_client
-from .models import Client, ClientCategory
-from .schemas import ClientIn, ClientUpdateIn
+from ..api import create_client, delete_client, update_client
+from ..models import Client, ClientCategory
+from ..schemas import ClientIn, ClientUpdateIn
 
 MARKETING = "apps.marketing.services"
 

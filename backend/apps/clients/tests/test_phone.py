@@ -95,7 +95,7 @@ from django.test import TestCase  # noqa: E402
 from apps.core.models import Salon  # noqa: E402
 from common.phone import find_client_by_phone  # noqa: E402
 
-from .models import Client, ClientNote, TechnicalSheet  # noqa: E402
+from ..models import Client, ClientNote, TechnicalSheet  # noqa: E402
 
 MIGRATION = importlib.import_module("apps.clients.migrations.0008_caccia22_clienti_phone_key")
 

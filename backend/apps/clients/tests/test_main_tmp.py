@@ -24,7 +24,7 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, Salon, SalonSettings
 from common.auth import StaffContext, create_staff_tokens
 
-from .api import (
+from ..api import (
     create_category,
     create_client,
     create_note,
@@ -40,9 +40,9 @@ from .api import (
     router,
     update_client,
 )
-from .models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
-from .schemas import CategoryIn, ClientIn, ImportIn, ImportRowIn, NoteIn, TechnicalSheetIn
-from .services import client_facts, client_stats, import_rows
+from ..models import Client, ClientCategory, ClientNote, ClientNoteAttachment, TechnicalSheet
+from ..schemas import CategoryIn, ClientIn, ImportIn, ImportRowIn, NoteIn, TechnicalSheetIn
+from ..services import client_facts, client_stats, import_rows
 
 
 class ClientsTestCase(TestCase):
@@ -353,7 +353,7 @@ class ImportUpsertTests(ClientsTestCase):
         file enorme tiene occupato un worker finché il proxy non chiude."""
         from pydantic import ValidationError
 
-        from .schemas import IMPORT_MAX_ROWS
+        from ..schemas import IMPORT_MAX_ROWS
 
         rows = [{"first_name": f"C{i}", "phone": f"+3933310{i:05d}"} for i in range(IMPORT_MAX_ROWS + 1)]
         with self.assertRaises(ValidationError):
@@ -1067,7 +1067,7 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
         self.request = SimpleNamespace(auth=no_scope)
 
     def test_history_notes_sheets_and_appointments_are_refused(self):
-        from .api import client_history
+        from ..api import client_history
 
         # list_client_appointments non lo chiedeva: le visite di una persona
         # sono un dato della sua scheda, non dell'agenda del giorno, e da lì si
@@ -1078,7 +1078,7 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
             self.assertEqual(caught.exception.status_code, 403, view.__name__)
 
     def test_the_owner_still_reads_everything(self):
-        from .api import client_history
+        from ..api import client_history
 
         owner = SimpleNamespace(
             auth=StaffContext(
@@ -1192,7 +1192,7 @@ class SalesFiguresNeedTheSalesScopeTests(TestCase):
         self.assertFalse(detail.stats_hidden)
 
     def test_the_history_hides_the_takings_too(self):
-        from .api import client_history
+        from ..api import client_history
 
         data = client_history(self._ctx({"clients"}), self.client_obj.id)
         self.assertEqual(data["counts"]["sales"], 0)
@@ -1288,7 +1288,7 @@ class ClientHistoryQueryCountTests(TestCase):
         """_appointment_out senza indice regali interrogava le gift card una
         volta per appuntamento, e `salon` non era in select_related: due query
         in più a visita, oltre 160 per una cliente con 80 visite."""
-        from .api import client_history
+        from ..api import client_history
 
         for view in (list_client_appointments, client_history):
             with self.subTest(view=view.__name__):

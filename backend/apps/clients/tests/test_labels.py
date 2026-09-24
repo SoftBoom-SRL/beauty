@@ -15,9 +15,9 @@ from ninja.errors import HttpError
 from apps.core.models import OutboxEvent, Salon
 from common.auth import StaffContext
 
-from .api import create_category, delete_category, update_category
-from .models import Client, ClientCategory
-from .schemas import CategoryIn
+from ..api import create_category, delete_category, update_category
+from ..models import Client, ClientCategory
+from ..schemas import CategoryIn
 
 
 def _label_rule(name, cmp="contains"):

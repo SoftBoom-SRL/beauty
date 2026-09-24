@@ -12,8 +12,8 @@ from django.test import TestCase
 from apps.core.models import Salon
 from common.auth import StaffContext
 
-from .api import list_clients
-from .models import Client
+from ..api import list_clients
+from ..models import Client
 
 
 class AccentInsensitiveSearchTests(TestCase):

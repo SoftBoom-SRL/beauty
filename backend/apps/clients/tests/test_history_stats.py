@@ -16,9 +16,9 @@ from django.utils import timezone
 from apps.core.models import Salon
 from common.auth import StaffContext
 
-from .api import client_history, get_client
-from .models import Client
-from .services import client_facts, client_stats
+from ..api import client_history, get_client
+from ..models import Client
+from ..services import client_facts, client_stats
 
 
 def _request(salon, scopes=("clients", "sales")):

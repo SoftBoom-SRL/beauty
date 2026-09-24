@@ -16,7 +16,7 @@ from django.test import TestCase, override_settings
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
-from .models import Client
+from ..models import Client
 
 
 @override_settings(MEDIA_ROOT=tempfile.mkdtemp(prefix="caccia22-schede-"))
