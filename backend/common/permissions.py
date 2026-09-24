@@ -44,6 +44,6 @@ def require_owner(ctx) -> None:
         raise HttpError(403, "Funzione riservata al titolare")
 
 # Nota: la mappa «quale permesso serve per vedere quale evento del feed live»
-# vive in apps.core.views (LIVE_FEED_SCOPES), accanto al codice che consegna gli
+# vive in apps.core.livefeed (LIVE_FEED_SCOPES), accanto al codice che consegna gli
 # eventi. Qui ne esisteva una seconda copia, mai chiamata da nessuno e già
 # divergente dalla prima: due verità sullo stesso argomento, di cui una falsa.

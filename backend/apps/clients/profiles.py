@@ -141,18 +141,18 @@ def archive_profile(ctx, client: Client) -> None:
 
 
 def notify_marketing(name: str, *args, **kwargs) -> None:
-    """Chiama `apps.marketing.services.<name>`, se c'è.
+    """Chiama `apps.marketing.consent.<name>`, se c'è.
 
     Le due funzioni (marketing_consent_changed, drop_from_pending_sends)
     appartengono al marketing: un'installazione che non le ha ancora non deve
     perdere il salvataggio della scheda, ma deve lasciarne traccia nei log.
     Si cercano a ogni chiamata: i test le sostituiscono o le tolgono dal modulo.
     """
-    from apps.marketing import services as marketing_services  # lazy: evita cicli
+    from apps.marketing import consent as marketing_consent  # lazy: evita cicli
 
     try:
-        hook = getattr(marketing_services, name)
+        hook = getattr(marketing_consent, name)
     except AttributeError:
-        logger.warning("clients: apps.marketing.services.%s non disponibile", name)
+        logger.warning("clients: apps.marketing.consent.%s non disponibile", name)
         return
     hook(*args, **kwargs)

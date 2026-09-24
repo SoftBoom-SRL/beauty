@@ -21,11 +21,6 @@ from .schemas import (
 )
 from .services import definition, publish_definition
 
-# compat refactoring: rimuovere dopo l'integrazione. clients/api.py
-# (`_rename_label_in_conditions`) li importa ancora da qui, con un import pigro.
-from .services import automation_event_key  # noqa: F401
-from .services import definition as _definition  # noqa: F401
-
 router = Router(tags=["automations"])
 
 

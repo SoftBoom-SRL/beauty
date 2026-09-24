@@ -31,10 +31,11 @@ def to_cents(amount) -> int:
     (Decimal, int, float o stringa), None, "" e 0 valgono 0, e una frazione di
     centesimo si arrotonda come il contesto decimale (0.125 → 12, 0.135 → 14).
 
-    `stripe_service._to_cents` era uguale ma senza `or 0`: con None o "" solleva
-    `decimal.InvalidOperation` invece di dare 0. I suoi chiamanti passano un
-    importo già controllato maggiore di zero, o `deposit_amount or 0` (il
-    webhook delle caparre): per loro non cambia nulla.
+    Ha preso il posto anche della copia di `stripe_service`, che era uguale ma
+    senza `or 0` (con None o "" sollevava `decimal.InvalidOperation`): i suoi
+    chiamanti passano un importo già controllato maggiore di zero, o
+    `deposit_amount or 0` (il webhook delle caparre), quindi per loro non è
+    cambiato nulla.
     """
     return int((Decimal(str(amount or 0)) * 100).quantize(Decimal("1")))
 

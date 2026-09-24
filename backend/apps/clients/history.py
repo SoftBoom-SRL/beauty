@@ -2,7 +2,7 @@
 
 Visite, vendite, note e schede tecniche in una lista sola. Le visite escono con
 la serializzazione dell'agenda (`apps.agenda.api._appointment_out`) e le
-vendite con quella della cassa (`apps.sales.api._sale_out`), importate
+vendite con quella della cassa (`apps.sales.serializers.sale_out`), importate
 pigramente: clients non importa le altre app di dominio a livello di modulo.
 """
 
@@ -45,7 +45,7 @@ def build_history(ctx, client) -> dict:
     (`sales_hidden`), e i codici delle gift card mascherati come in agenda.
     """
     from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione
-    from apps.sales.api import _sale_out  # lazy
+    from apps.sales.serializers import sale_out  # lazy
     from apps.sales.models import Sale  # lazy
 
     # Gli incassi di ogni visita sono dati di cassa: senza il permesso
@@ -97,14 +97,14 @@ def build_history(ctx, client) -> dict:
                 "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
                 "appointment": _appointment_out(a, gifts, viewer=ctx),
                 "operator_name": a.operator.full_name if a.operator_id else "",
-                "sale": _sale_out(sale) if sale else None,
-                "deposit_sale": _sale_out(deposit) if deposit else None,
+                "sale": sale_out(sale) if sale else None,
+                "deposit_sale": sale_out(deposit) if deposit else None,
                 "notes": [note_out(n) for n in notes_by_appt.get(a.id, [])],
                 "sheets": [sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
             }
         )
     for s in counter_sales:
-        entries.append({"kind": "sale", "date": s.created_at, "sale": _sale_out(s)})
+        entries.append({"kind": "sale", "date": s.created_at, "sale": sale_out(s)})
     for n in notes:
         if not n.appointment_id:
             entries.append({"kind": "note", "date": n.created_at, "note": note_out(n)})

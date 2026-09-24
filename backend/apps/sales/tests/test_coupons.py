@@ -179,7 +179,7 @@ class CouponOnTheLinesTests(HistoryTestBase):
         Coupon.objects.create(salon=self.salon, code="BUONO10", kind="amount", value=Decimal("10.00"))
 
     def test_the_operator_revenue_matches_the_takings(self):
-        from apps.staff.services import month_revenue, month_revenue_by_operator, performance_series
+        from apps.staff.stats import month_revenue, month_revenue_by_operator, performance_series
 
         appointment = self._appointment()
         res = self._checkout(
