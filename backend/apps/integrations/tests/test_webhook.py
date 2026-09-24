@@ -1,11 +1,9 @@
-"""Caccia del 22/09 — 11-12: le richieste restano veloci.
+"""Il webhook di Yourang: la rotta pubblica e i webhook dei contatti.
 
-Un webhook contact.* riconcilia solo quel contatto (niente sync completa né
-push di ogni scheda), un giro di sync riusa un solo client httpx, e due sync
-che partono insieme non creano due cataloghi.
-
-Nati sul proxy, portati sul flusso diretto al merge con main (24/09): token
-del salone sulla connessione, segreto del webhook per salone.
+ContactWebhookTests viene dalla caccia del 22/09 (11-12: le richieste restano
+veloci; gli altri casi di 11-12 stanno in test_sync). Nato sul proxy, portato sul
+flusso diretto al merge con main (24/09): token del salone sulla connessione,
+segreto del webhook per salone.
 
     python manage.py test apps.integrations.tests_caccia22_webhook
 """
@@ -14,86 +12,153 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import timedelta
 from unittest import mock
+from unittest.mock import patch
 
-import httpx
+from django.test import Client as HttpClient
 from django.test import TestCase, override_settings
-from django.utils import timezone
 
-from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
-from apps.integrations import crypto, sync
-from apps.integrations.models import YourangConnection
+from apps.integrations import crypto
 
-from .test_main_tmp import TEST_KEY
+from .base import API_SETTINGS, TEST_KEY, FakeHttp, _all_calls, _connection
 
+# Due classi, due connessioni, due segreti: ciascuna firma con quello della sua
+# connessione (WEBHOOK_SECRET per WebhookRouteTests, SECRET per ContactWebhookTests).
+WEBHOOK_SECRET = "s3cret"
 SECRET = "s3cret-22"
-API = "/api/external/v1"
-DIRECT = dict(YOURANG_ISSUER_URL="https://yourang.invalid", ENCRYPTION_KEY=TEST_KEY)
 
 
-def _connection(salon, org, **extra):
-    """Connessione del flusso diretto, con un token ancora valido (niente refresh)."""
-    return YourangConnection.objects.create(
-        salon=salon,
-        yourang_org_id=org,
-        access_token_enc=crypto.encrypt("tok"),
-        refresh_token_enc=crypto.encrypt("ref"),
-        expires_at=timezone.now() + timedelta(hours=1),
-        **extra,
-    )
+def _sign_webhook(body: bytes, ts: str, secret: str = WEBHOOK_SECRET) -> str:
+    return "sha256=" + hmac.new(
+        secret.encode(), f"{ts}.".encode() + body, hashlib.sha256
+    ).hexdigest()
 
 
-class FakeHttp:
-    """httpx.Client finto: registra (metodo, path) e risponde come l'external API."""
+# La chiave vale per i test che cifrano token e segreti: senza, giravano solo
+# con una ENCRYPTION_KEY nell'ambiente di chi li lanciava.
+@override_settings(ENCRYPTION_KEY=TEST_KEY)
+class WebhookRouteTests(TestCase):
+    """La rotta, non solo la firma: è pubblica e ci passa tutto ciò che il
+    proxy consegna, compreso un payload storto."""
 
-    instances: list["FakeHttp"] = []
-    contacts: dict = {}
-    missing_route = False
+    URL = "/api/integrations/yourang/webhook"
 
-    def __init__(self, *args, **kwargs):
-        self.calls = []
-        self.closed = False
-        FakeHttp.instances.append(self)
+    def setUp(self):
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
+        from apps.staff.models import Operator
 
-    def request(self, method, url, headers=None, timeout=None, **kwargs):
-        path = url.split(API, 1)[1]
-        self.calls.append((method, path))
-        status, data = 200, {}
-        if method == "GET" and path.startswith("/contacts?"):
-            data = list(FakeHttp.contacts.values())
-        elif method == "GET" and path.startswith("/contacts/"):
-            rid = path.rsplit("/", 1)[1]
-            if FakeHttp.missing_route or rid not in FakeHttp.contacts:
-                status = 404
-            else:
-                data = FakeHttp.contacts[rid]
-        elif method == "POST" and path == "/contacts":
-            status = 403  # scope contacts:write mancante
-        elif method == "POST" and path == "/catalogues":
-            data = {"id": "cat-new"}
-        else:
-            data = {"id": f"x-{len(self.calls)}"}
-        resp = mock.Mock(status_code=status)
-        resp.json.return_value = {"ok": status == 200, "data": data}
-        if status >= 400:
-            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-                str(status), request=mock.Mock(), response=resp
-            )
-        return resp
+        self.http = HttpClient()
+        self.salon = Salon.objects.create(name="Salone Hook", slug="salone-hook")
+        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-hook")
+        self.conn.webhook_secret_enc = crypto.encrypt(WEBHOOK_SECRET)
+        self.conn.save(update_fields=["webhook_secret_enc"])
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Ada", phone="+393331110000"
+        )
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Anna")
 
-    def close(self):
-        self.closed = True
+    def _post(self, payload, *, ts=None, signature=None, raw=None):
+        body = raw if raw is not None else json.dumps(payload).encode()
+        ts = ts or str(int(time.time()))
+        return self.http.post(
+            self.URL,
+            data=body,
+            content_type="application/json",
+            headers={
+                "x-yourang-signature": signature or _sign_webhook(body, ts),
+                "x-yourang-timestamp": ts,
+            },
+        )
+
+    def _appointment(self, yourang_event_id=""):
+        from datetime import timedelta
+
+        from django.utils import timezone as dj_timezone
+
+        from apps.agenda.models import Appointment
+
+        return Appointment.objects.create(
+            salon=self.salon,
+            client=self.client_obj,
+            operator=self.operator,
+            start=dj_timezone.now() + timedelta(days=1),
+            yourang_event_id=yourang_event_id,
+        )
+
+    def test_unsigned_request_is_rejected(self):
+        body = json.dumps({"type": "event.updated", "organization_id": "org-hook"}).encode()
+        resp = self.http.post(self.URL, data=body, content_type="application/json")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_unknown_org_is_ignored(self):
+        resp = self._post({"type": "event.updated", "organization_id": "org-ignota",
+                           "resource_id": "e-1"})
+        self.assertEqual(resp.status_code, 200)
+
+    def test_deleted_without_resource_id_touches_nothing(self):
+        """Il guasto peggiore dell'integrazione: senza resource_id il filtro
+        cadeva sul default "" di TUTTI gli appuntamenti nativi e una sola
+        UPDATE annullava l'intera agenda del salone."""
+        from apps.agenda.models import Appointment
+
+        native = self._appointment()
+        imported = self._appointment(yourang_event_id="evt-99")
+
+        resp = self._post({"type": "event.deleted", "organization_id": "org-hook"})
+
+        self.assertEqual(resp.status_code, 200)
+        native.refresh_from_db()
+        imported.refresh_from_db()
+        self.assertEqual(native.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(imported.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(
+            Appointment.objects.filter(status=Appointment.Status.CANCELLED).count(), 0
+        )
+
+    def test_deleted_with_resource_id_cancels_only_that_one(self):
+        from apps.agenda.models import Appointment
+
+        native = self._appointment()
+        imported = self._appointment(yourang_event_id="evt-99")
+
+        resp = self._post({"type": "event.deleted", "organization_id": "org-hook",
+                           "resource_id": "evt-99"})
+
+        self.assertEqual(resp.status_code, 200)
+        native.refresh_from_db()
+        imported.refresh_from_db()
+        self.assertEqual(native.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(imported.status, Appointment.Status.CANCELLED)
+
+    def test_json_that_is_not_an_object_is_a_bad_request(self):
+        resp = self._post(None, raw=b"[]")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_broken_json_is_a_bad_request(self):
+        resp = self._post(None, raw=b"{nope")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_non_ascii_signature_is_unauthorized_not_a_crash(self):
+        resp = self._post({"type": "event.updated", "organization_id": "org-hook"},
+                          signature="sha256=dëadbeef")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_processing_failure_asks_for_a_retry(self):
+        with patch("apps.integrations.sync.import_event", side_effect=RuntimeError("boom")):
+            resp = self._post({"type": "event.updated", "organization_id": "org-hook",
+                               "resource_id": "evt-1"})
+        self.assertEqual(resp.status_code, 503)
 
 
-def _all_calls():
-    return [call for http in FakeHttp.instances for call in http.calls]
-
-
-@override_settings(**DIRECT)
+@override_settings(**API_SETTINGS)
 class ContactWebhookTests(TestCase):
+    """11-12: un webhook contact.* riconcilia solo quel contatto, senza sync
+    completa né push di ogni scheda."""
+
     def setUp(self):
         FakeHttp.instances = []
         FakeHttp.contacts = {
@@ -162,46 +227,3 @@ class ContactWebhookTests(TestCase):
                         side_effect=RuntimeError("telefono doppio")):
             r = self._hook("contact.updated")
         self.assertEqual(r.status_code, 200)  # un 503 farebbe ritentare Yourang all'infinito
-
-
-@override_settings(**DIRECT)
-class PooledClientTests(TestCase):
-    def setUp(self):
-        FakeHttp.instances = []
-        FakeHttp.contacts = {}
-        FakeHttp.missing_route = False
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.conn = _connection(self.salon, "org-p")
-
-    def test_a_sync_run_reuses_one_http_client(self):
-        for i in range(3):
-            Client.objects.create(salon=self.salon, first_name=f"C{i}", phone=f"+39333000000{i}")
-        with mock.patch("apps.integrations.client.httpx.Client", FakeHttp), \
-                mock.patch("apps.integrations.client.httpx.request") as one_shot:
-            report = sync.sync_clients(self.conn)
-        one_shot.assert_not_called()
-        self.assertEqual(len(FakeHttp.instances), 1)
-        http = FakeHttp.instances[0]
-        self.assertEqual([m for m, _ in http.calls], ["GET", "POST", "POST", "POST"])
-        self.assertTrue(http.closed)
-        self.assertEqual(len(report.errors), 3)  # i 403 restano nel resoconto
-
-
-@override_settings(**DIRECT)
-class CatalogueRaceTests(TestCase):
-    def test_a_catalogue_created_meanwhile_is_reused(self):
-        FakeHttp.instances = []
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        conn = _connection(salon, "org-k")
-        cat = ServiceCategory.objects.create(salon=salon, name_it="Capelli")
-        Service.objects.create(salon=salon, category=cat, name_it="Piega", duration_min=30, price=20)
-        # l'altra sync (cron o prima sync in background) l'ha appena creato
-        YourangConnection.objects.filter(pk=conn.pk).update(catalogue_id="cat-1")
-        with mock.patch("apps.integrations.client.httpx.Client", FakeHttp):
-            sync.sync_services(conn)
-        calls = _all_calls()
-        self.assertNotIn(("POST", "/catalogues"), calls)
-        self.assertIn(("POST", "/catalogues/items"), calls)  # la voce va nel catalogo trovato
-        self.assertEqual(conn.catalogue_id, "cat-1")
-        conn.refresh_from_db()
-        self.assertEqual(conn.catalogue_id, "cat-1")

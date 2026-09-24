@@ -1,15 +1,17 @@
-"""Caccia del 22/09 — collegamento e accesso Yourang (flusso OAuth diretto).
+"""Collegamento e accesso Yourang (flusso OAuth diretto).
 
+Dalla caccia del 22/09:
 11-01/10-02: il codice va legato alla finestra che ha avviato il flusso (nonce,
 HMAC dello state) e un salone collegato non cambia org senza disconnettersi.
 11-02/10-03: «Accedi con Yourang» collega da solo solo il salone di cui l'utente
 è titolare, e solo se è uno; il collega che accede non ridefinisce una
 connessione che funziona. 11-14: cambio org → riferimenti remoti azzerati.
-18-15: primo accesso atomico. 11-18/17-13 (C9): last_error esposto e scritto dal
-cron. 11-12: la prima sync gira fuori dalla richiesta.
+18-15: primo accesso atomico. 11-18/17-13 (C9): last_error esposto (lo scrivono
+prima sync e cron: test_sync). 11-12: la prima sync gira fuori dalla richiesta.
 
 Nati sul proxy, portati sul flusso diretto al merge con main (24/09), dove il
-proxy è stato tolto (YR-502).
+proxy è stato tolto (YR-502). In coda i test più vecchi dell'accesso: identità
+Yourang, unicità dell'org, disconnessione.
 
     python manage.py test apps.integrations.tests_caccia22_collegamento
 """
@@ -17,10 +19,10 @@ proxy è stato tolto (YR-502).
 import json
 from datetime import timedelta
 from unittest import mock
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 import jwt
-from django.core.management import call_command
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -29,15 +31,17 @@ from apps.accounts.models import Membership, Role, User
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
-from apps.integrations import crypto, sync
+from apps.integrations import crypto
 from apps.integrations.models import YourangConnection, YourangOAuthState
-from apps.integrations.sync import SyncReport
 from common.auth import create_staff_tokens
 
-from .test_main_tmp import TEST_KEY
+from .base import TEST_KEY
 
 EXCHANGE = "/api/integrations/yourang/oauth/exchange"
-DIRECT = dict(
+# Il flusso OAuth diretto: client registrato su Yourang, origin del frontend per il
+# redirect_uri, ricevitore del webhook spento (lo accende il test che lo prova).
+# Diverso da API_SETTINGS di base.py, che basta per parlare con l'external API.
+OAUTH_SETTINGS = dict(
     YOURANG_ISSUER_URL="https://yourang.invalid",
     YOURANG_CLIENT_ID="beauty",
     YOURANG_CLIENT_SECRET="segreto-del-client",
@@ -80,7 +84,7 @@ def _bearer(user, salon):
     return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
 
 
-@override_settings(**DIRECT)
+@override_settings(**OAUTH_SETTINGS)
 class _FlowCase(TestCase):
     def start(self, mode, headers=None):
         url = "/api/integrations/yourang/oauth/" + ("login/start" if mode == "login" else "start")
@@ -492,76 +496,116 @@ class StatusLastErrorTests(TestCase):
         self.assertEqual((body["status"], body["last_error"]), ("error", "Yourang 502"))
 
 
-class CronLastErrorTests(TestCase):
-    def test_partial_errors_stay_written(self):
-        salon = Salon.objects.create(name="Salone Cron", slug="salone-cron")
-        conn = YourangConnection.objects.create(salon=salon, yourang_org_id="org-cron")
-        partial = SyncReport(errors=["push +393331112223: 403 Forbidden"])
-        with mock.patch("apps.integrations.management.commands.sync_yourang.sync_clients",
-                        return_value=partial), \
-                mock.patch("apps.integrations.management.commands.sync_yourang.sync_services",
-                           return_value=SyncReport()):
-            call_command("sync_yourang", verbosity=0, stdout=mock.Mock())
-        conn.refresh_from_db()
-        self.assertEqual(conn.status, YourangConnection.Status.CONNECTED)
-        self.assertIn("403 Forbidden", conn.last_error)
-        self.assertTrue(conn.last_error.startswith("Sincronizzazione parziale"))
-        self.assertIsNotNone(conn.last_sync_at)
+class LoginIdentityTests(TestCase):
+    """Un'org già collegata dà il SALONE, mai l'utente titolare: chi accede
+    entra con la propria identità Yourang."""
 
-    def test_a_disconnect_during_the_run_is_not_resurrected(self):
-        salon = Salon.objects.create(name="Salone Cron", slug="salone-cron")
-        YourangConnection.objects.create(salon=salon, yourang_org_id="org-cron")
+    def test_mapped_org_does_not_return_the_owner(self):
+        from apps.accounts.models import Membership, User
+        from apps.core.models import Salon
+        from apps.integrations.login import _resolve_salon
+        from apps.integrations.models import YourangConnection
 
-        def disconnect_meanwhile(conn):
-            YourangConnection.objects.filter(pk=conn.pk).delete()
-            return SyncReport()
+        salon = Salon.objects.create(name="Salone", slug="salone-org")
+        owner = User.objects.create_user(email="titolare@x.it", password=None)
+        Membership.objects.create(user=owner, salon=salon, is_owner=True)
+        YourangConnection.objects.create(salon=salon, yourang_org_id="org3")
 
-        with mock.patch("apps.integrations.management.commands.sync_yourang.sync_clients",
-                        side_effect=disconnect_meanwhile), \
-                mock.patch("apps.integrations.management.commands.sync_yourang.sync_services",
-                           return_value=SyncReport()):
-            call_command("sync_yourang", verbosity=0, stdout=mock.Mock())
-        self.assertFalse(YourangConnection.objects.exists())
+        self.assertEqual(
+            _resolve_salon("org3", "collega@x.it", True), (salon, None)
+        )
+
+    def test_unverified_email_cannot_take_over_an_existing_account(self):
+        """Guardia anti account-takeover: un'identità Yourang con la stessa
+        email ma NON verificata non entra in un account beauty già esistente."""
+        from apps.accounts.models import User
+        from apps.integrations.login import _get_or_create_user
+
+        User.objects.create_user(email="titolare@salone.it", password=None)
+        with self.assertRaises(ValueError):
+            _get_or_create_user("Titolare@Salone.it", "Mario Rossi", email_verified=False)
+        # Verificata: si adotta l'account esistente, non se ne crea un secondo.
+        adopted = _get_or_create_user("Titolare@Salone.it", "Mario Rossi", email_verified=True)
+        self.assertEqual(adopted.email, "titolare@salone.it")
+        self.assertEqual(User.objects.filter(email__iexact="titolare@salone.it").count(), 1)
+
+    def test_identity_without_org_is_refused(self):
+        """Senza organizzazione il connect rifiuta: il login faceva passare, e
+        ogni accesso provisionava un salone nuovo e vuoto."""
+        from apps.core.models import Salon
+        from apps.integrations.login import login_with_yourang
+
+        before = Salon.objects.count()
+        identity = {"email": "nuovo@x.it", "email_verified": True, "name": "Nuovo"}
+        with patch("apps.integrations.login.yc.exchange_code",
+                   return_value={"access_token": "tok", "id_token": "idt"}), \
+             patch("apps.integrations.login.yc.org_id_from_access_token", return_value=""), \
+             patch("apps.integrations.login.yc.claims_from_token", return_value=identity):
+            with self.assertRaises(ValueError):
+                login_with_yourang("code-1", "verifier-1")
+        self.assertEqual(Salon.objects.count(), before)
 
 
-class InitialSyncTests(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-i")
+class OrgUniquenessTests(TestCase):
+    """Il guard applicativo non basta: due exchange simultanee lo superano e gli
+    eventi finiscono nel salone sbagliato (il webhook risolve il salone dall'org)."""
 
-    def test_outcome_is_written_on_the_connection(self):
-        with mock.patch("apps.integrations.sync.sync_clients",
-                        return_value=SyncReport(errors=["a", "b", "c", "d"])), \
-                mock.patch("apps.integrations.sync.sync_services", return_value=SyncReport()):
-            sync.initial_sync(self.conn.pk)
-        self.conn.refresh_from_db()
-        self.assertIsNotNone(self.conn.last_sync_at)
-        self.assertEqual(self.conn.last_error, "Sincronizzazione parziale: a; b; c (+1 altri)")
+    def test_the_database_refuses_a_second_salon_on_the_same_org(self):
+        from django.db import IntegrityError, transaction
 
-    def test_a_crash_is_written_too(self):
-        with mock.patch("apps.integrations.sync.sync_clients", side_effect=RuntimeError("Yourang giù")):
-            sync.initial_sync(self.conn.pk)
-        self.conn.refresh_from_db()
-        self.assertEqual(self.conn.last_error, "Yourang giù")
-        self.assertIsNone(self.conn.last_sync_at)
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
 
-    def test_the_sync_stops_when_the_salon_is_disconnected_meanwhile(self):
-        """Scollegato a sync in corso: niente contact-id dell'org vecchia sulle
-        schede (la sync della nuova le salterebbe come già collegate)."""
+        first = Salon.objects.create(name="Primo", slug="primo-org")
+        second = Salon.objects.create(name="Secondo", slug="secondo-org")
+        YourangConnection.objects.create(salon=first, yourang_org_id="org-unica")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                YourangConnection.objects.create(salon=second, yourang_org_id="org-unica")
+
+    def test_many_connections_can_stay_unlinked(self):
+        """Il vincolo è parziale: "" significa "non ancora collegata"."""
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
+
         for i in range(3):
-            Client.objects.create(salon=self.salon, first_name=f"C{i}", phone=f"+39333000000{i}")
-        pushed = []
+            salon = Salon.objects.create(name=f"Vuoto {i}", slug=f"vuoto-{i}")
+            YourangConnection.objects.create(salon=salon, yourang_org_id="")
+        self.assertEqual(YourangConnection.objects.filter(yourang_org_id="").count(), 3)
 
-        def create_or_get(phone, payload):
-            pushed.append(phone)
-            if len(pushed) == 1:
-                YourangConnection.objects.filter(pk=self.conn.pk).delete()
-            return {"id": f"c-{len(pushed)}"}
 
-        with mock.patch("apps.integrations.client.YourangClient.list_contacts", return_value=[]), \
-                mock.patch("apps.integrations.client.YourangClient.create_or_get_contact",
-                           side_effect=create_or_get):
-            sync.initial_sync(self.conn.pk)
-        self.assertEqual(len(pushed), 1)
-        linked = Client.objects.filter(salon=self.salon).exclude(yourang_contact_id="")
-        self.assertLessEqual(linked.count(), 1)
+class DisconnectTests(TestCase):
+    """Alla disconnessione i riferimenti remoti devono sparire, o dopo una
+    riconnessione clienti e listino non si sincronizzano mai più."""
+
+    def test_disconnect_clears_remote_ids(self):
+        from apps.catalog.models import Package, Service, ServiceCategory
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from apps.integrations.api import disconnect
+        from apps.integrations.models import YourangConnection
+
+        salon = Salon.objects.create(name="Salone Disc", slug="salone-disc")
+        YourangConnection.objects.create(salon=salon, yourang_org_id="org-disc")
+        client_obj = Client.objects.create(
+            salon=salon, first_name="Ada", phone="+393331110002", yourang_contact_id="c-1"
+        )
+        cat = ServiceCategory.objects.create(salon=salon, name_it="Capelli")
+        svc = Service.objects.create(
+            salon=salon, category=cat, name_it="Piega", duration_min=30, price=20,
+            yourang_item_id="i-1",
+        )
+        pkg = Package.objects.create(salon=salon, name="Pacchetto", price=100,
+                                     yourang_item_id="i-2")
+
+        ctx = Mock(salon=salon, is_owner=True)
+        disconnect(Mock(auth=ctx))
+
+        client_obj.refresh_from_db()
+        svc.refresh_from_db()
+        pkg.refresh_from_db()
+        self.assertEqual(client_obj.yourang_contact_id, "")
+        self.assertEqual(svc.yourang_item_id, "")
+        self.assertEqual(pkg.yourang_item_id, "")
+        self.assertFalse(YourangConnection.objects.filter(salon=salon).exists())
