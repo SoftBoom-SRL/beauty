@@ -40,12 +40,11 @@ from .schemas import (
     StripeConnectStatusOut,
     TodaySummaryOut,
 )
+from .deposits import deposit_retained, settle_deposit_excess
 from .services import (
-    deposit_retained,
     finalize_sale,
     record_deposit_cashed,
     record_no_show_charge,
-    settle_deposit_excess,
     today_summary,
 )
 
