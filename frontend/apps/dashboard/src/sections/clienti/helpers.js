@@ -1,5 +1,5 @@
 // helpers.js — clienti section utilities (pure functions, no React).
-import { fmtTime, nameIn, salonDateParts, todayStr } from '@youty/shared';
+import { MONTHS_LONG_EN, MONTHS_LONG_IT, MONTHS_SHORT_EN, MONTHS_SHORT_IT, fmtTime, nameIn, salonDateParts, todayStr } from '@youty/shared';
 import { composeReward } from '../fedelta/meta.js';
 
 /* Shared input style used across the section's forms (from the prototype). */
@@ -108,11 +108,7 @@ export function consentStamp(consents, key) {
   return isStamp(cs[`${key}_revoked_at`]) ? { kind: 'revoked', at: cs[`${key}_revoked_at`] } : null;
 }
 
-const MONTHS_SHORT = {
-  it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
-  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-};
-const monthShort = (m, lang) => (lang === 'en' ? MONTHS_SHORT.en : MONTHS_SHORT.it)[m - 1];
+const monthShort = (m, lang) => (lang === 'en' ? MONTHS_SHORT_EN : MONTHS_SHORT_IT)[m - 1];
 
 /* "12 mar 2026 · 15:30" from an ISO datetime, localized. */
 export function dateTimeLabel(iso, lang) {
@@ -220,9 +216,11 @@ export function sheetVal(sheet, key) {
 
 /* ---- Compleanno: 'YYYY-MM-DD' (anno noto) oppure '--MM-DD' (solo giorno e mese) ----
  * Alcune clienti non vogliono dire l'età ma dicono volentieri quando festeggiano:
- * l'API accetta e restituisce il formato ISO 8601 senza anno. */
-export const MONTHS_IT = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+ * l'API accetta e restituisce il formato ISO 8601 senza anno.
+ * I mesi italiani sono minuscoli, come dentro una data («15 marzo»); gli
+ * inglesi con la maiuscola («March 15»). */
+export const MONTHS_IT = MONTHS_LONG_IT.map((m) => m.toLowerCase());
+export const MONTHS_EN = MONTHS_LONG_EN;
 
 /** → { d, m, y } (y = null se l'anno non è noto) oppure null */
 export function parseBirthday(v) {

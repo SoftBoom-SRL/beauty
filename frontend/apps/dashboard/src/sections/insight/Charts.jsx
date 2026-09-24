@@ -3,7 +3,7 @@
 // split, clients-by-category breakdown). No chart library — plain divs/SVG, same as the
 // prototype.
 import React from 'react';
-import { ProgressBar, fmtEur, fmtEurNoFree } from '@youty/shared';
+import { ProgressBar, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, fmtEur, fmtEurNoFree } from '@youty/shared';
 import { occupancyStats } from './chartMath.js';
 
 export const CATEGORY_PALETTE = [
@@ -81,10 +81,7 @@ export function CategoryBars({ rows, lang }) {
  *  minimo, massimo e giorno più scarico. */
 export function OccupancyByWeekday({ rows, lang, t }) {
   if (!rows || !rows.length) return null;
-  const WEEKDAY_LABEL = [
-    { it: 'Lun', en: 'Mon' }, { it: 'Mar', en: 'Tue' }, { it: 'Mer', en: 'Wed' },
-    { it: 'Gio', en: 'Thu' }, { it: 'Ven', en: 'Fri' }, { it: 'Sab', en: 'Sat' }, { it: 'Dom', en: 'Sun' },
-  ];
+  const dayLabel = (wd) => t(WEEKDAYS_SHORT_IT[wd], WEEKDAYS_SHORT_EN[wd]);
   const { lo, hi, quietest } = occupancyStats(rows);
   return (
     <div>
@@ -95,7 +92,7 @@ export function OccupancyByWeekday({ rows, lang, t }) {
               <div key={r.weekday} title={t('Nessuna capacità: salone chiuso o nessun turno', 'No capacity: salon closed or no shifts')} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
                 <span className="t-sm" style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-2)' }}>{t('chiuso', 'closed')}</span>
                 <div style={{ width: '64%', maxWidth: 26, height: 5, borderRadius: 6, border: '1px dashed var(--line-strong, var(--hair))', boxSizing: 'border-box' }} />
-                <span className="t-sm" style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-2)' }}>{t(WEEKDAY_LABEL[r.weekday].it, WEEKDAY_LABEL[r.weekday].en)}</span>
+                <span className="t-sm" style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-2)' }}>{dayLabel(r.weekday)}</span>
               </div>
             );
           }
@@ -106,14 +103,14 @@ export function OccupancyByWeekday({ rows, lang, t }) {
             <div key={r.weekday} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
               <span className="t-sm" style={{ fontSize: 10.5, fontWeight: 700, color: numCol }}>{Math.round(v)}</span>
               <div style={{ width: '64%', maxWidth: 26, height: Math.max(v, 2) + '%', minHeight: 5, borderRadius: 6, background: barCol, transition: 'height 600ms var(--ease-emph)' }} />
-              <span className="t-sm" style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>{t(WEEKDAY_LABEL[r.weekday].it, WEEKDAY_LABEL[r.weekday].en)}</span>
+              <span className="t-sm" style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>{dayLabel(r.weekday)}</span>
             </div>
           );
         })}
       </div>
       {hi > 0 && quietest && (
         <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', marginTop: 12 }}>
-          {t(WEEKDAY_LABEL[quietest.weekday].it, WEEKDAY_LABEL[quietest.weekday].en) + ' ' + t('è il giorno più scarico', 'is the quietest day')}
+          {dayLabel(quietest.weekday) + ' ' + t('è il giorno più scarico', 'is the quietest day')}
         </div>
       )}
     </div>

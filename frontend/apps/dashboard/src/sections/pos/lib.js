@@ -1,5 +1,5 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { api, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, api, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 import { centsToEur, lineCents } from './money.js';
 
 // Il denaro si conta in centesimi interi con gli arrotondamenti del server:
@@ -96,9 +96,7 @@ export function saleDateLabel(iso, lang) {
   if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
   const p = salonDateParts(iso);
-  const months = lang === 'en'
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+  const months = lang === 'en' ? MONTHS_SHORT_EN : MONTHS_SHORT_IT;
   return p.day + ' ' + months[p.month - 1] + ' ' + p.year + ' · ' + hm;
 }
 

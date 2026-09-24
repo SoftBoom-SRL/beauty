@@ -4,7 +4,7 @@
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
 import { useMemo, useState } from 'react';
-import { api, ApiError, Icon, todayStr } from '@youty/shared';
+import { api, ApiError, Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
 
@@ -20,7 +20,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
   const [saving, setSaving] = useState(false);
 
   const months = lang === 'en' ? MONTHS_EN : MONTHS_IT;
-  const dows = lang === 'en' ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] : ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+  const dows = lang === 'en' ? WEEKDAYS_SHORT_EN : WEEKDAYS_SHORT_IT;
   const y = cursor.getFullYear(), m = cursor.getMonth();
   const first = new Date(y, m, 1);
   const startDow = (first.getDay() + 6) % 7; // Monday-first

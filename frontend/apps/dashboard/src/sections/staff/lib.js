@@ -1,6 +1,6 @@
 // lib.js — staff section helpers: availability meta (prototype AVAIL_STATUS styling),
 // minutes↔"HH:MM" conversions, weekly-pattern (de)serialization, local GD palette.
-import { todayStr } from '@youty/shared';
+import { WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr } from '@youty/shared';
 
 /* ---- availability / absence meta — ported from prototype AVAIL_STATUS ----
  * Keys follow the API: absence type ∈ vacation | holiday | other, plus the
@@ -14,13 +14,11 @@ export const AVAIL_META = {
 };
 export const ABSENCE_TYPES = ['vacation', 'holiday', 'other'];
 
-/* ---- weekday / month labels (weekday 0 = Monday, as the API) ---- */
-export const WEEKDAYS = [
-  ['Lun', 'Mon'], ['Mar', 'Tue'], ['Mer', 'Wed'], ['Gio', 'Thu'],
-  ['Ven', 'Fri'], ['Sab', 'Sat'], ['Dom', 'Sun'],
-];
-export const MONTHS_IT = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
-export const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/* ---- weekday / month labels (weekday 0 = Monday, as the API) ----
+ * Le tabelle sono quelle di @youty/shared: qui le coppie [it, en] dei giorni
+ * (si leggono come WEEKDAYS[giorno][0|1]) e i mesi con la maiuscola. */
+export const WEEKDAYS = WEEKDAYS_SHORT_IT.map((it, i) => [it, WEEKDAYS_SHORT_EN[i]]);
+export { MONTHS_LONG_IT as MONTHS_IT, MONTHS_LONG_EN as MONTHS_EN } from '@youty/shared';
 
 /** "YYYY-MM" → short localized month label ("Giu" / "Jun") */
 export function monthShort(ym, lang) {
