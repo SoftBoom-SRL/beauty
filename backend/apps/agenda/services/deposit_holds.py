@@ -222,11 +222,16 @@ def process_deposit_holds(salon, *, now=None) -> dict:
     result = {"reminded": 0, "released": 0}
     if hold <= 0:
         return result
+    # Una caparra «richiesta» a 0 € non c'è: le righe rimaste così da prima che
+    # l'azzeramento la portasse a «nessuna» (vedi deposits.shrink_deposit_to_total)
+    # si liberavano allo scadere, con «posto liberato, caparra non versata» alla
+    # cliente, e prendevano anche il sollecito.
     pending = (
         Appointment.objects.filter(
             salon=salon,
             status=Appointment.Status.CONFIRMED,
             deposit_status=Appointment.DepositStatus.REQUIRED,
+            deposit_amount__gt=0,
             deposit_due_at__isnull=False,
         )
         .select_related("client", "salon")

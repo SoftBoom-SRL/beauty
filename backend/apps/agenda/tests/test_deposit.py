@@ -474,6 +474,17 @@ class DepositDownToZeroTests(AgendaTestBase):
         ))
         self._assert_no_deposit_left(closed)
 
+    def test_a_row_left_required_at_zero_is_not_released(self):
+        """Seguito della voce 5: le righe rimaste «richiesta» a 0 € da prima della correzione."""
+        from ..services.deposit_holds import process_deposit_holds
+
+        Appointment.objects.filter(pk=self.appointment.pk).update(deposit_amount=Decimal("0.00"))
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 0)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
+
     def test_going_back_asks_for_it_again_with_a_new_deadline(self):
         """Seguito della voce 5: «Indietro» la rimetteva «richiesta» senza
         scadenza, e senza sollecito né rilascio automatico."""
