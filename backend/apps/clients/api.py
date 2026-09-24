@@ -252,7 +252,7 @@ def import_clients(request, data: ImportIn):
 def list_client_appointments(request, client_id: int):
     """Storico appuntamenti del cliente (passati e futuri), ordinati cronologicamente.
 
-    Riusa la serializzazione di apps.agenda.api._appointment_out; import lazy
+    Riusa la serializzazione di apps.agenda.presenters._appointment_out; import lazy
     per evitare dipendenze a livello di modulo tra le due app di dominio.
     """
     ctx = request.auth

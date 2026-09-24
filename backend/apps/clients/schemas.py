@@ -80,13 +80,11 @@ class ClientDetailOut(ClientOut):
     stats_hidden: bool = False
 
 
-# Il docstring qui sotto è la description dello schema nel contratto OpenAPI,
-# quindi resta com'è: `api._client_payload` che cita è ora `fields.client_payload`.
 class ClientIn(Schema):
     """Corpo del POST cliente (il PUT usa `ClientUpdateIn`, tutto facoltativo).
 
     Sul PUT i campi si applicano solo se presenti nel corpo (`exclude_unset` in
-    api._client_payload): quasi tutti hanno un default e riversarli su una
+    fields.client_payload): quasi tutti hanno un default e riversarli su una
     scheda esistente cancellava la prova del consenso privacy, l'affidabilità e
     perfino la disattivazione di chi mandava solo il campo da correggere.
 
@@ -221,10 +219,8 @@ class AttachmentOut(Schema):
     created_at: datetime
 
 
-# Il docstring è la description OpenAPI e resta com'è: `api._note_out` è ora
-# `records.note_out`.
 class NoteOut(Schema):
-    """Serializzata da api._note_out (dizionari), non da istanze: niente resolver."""
+    """Serializzata da records.note_out (dizionari), non da istanze: niente resolver."""
 
     id: int
     client_id: int
@@ -258,10 +254,8 @@ class NoteUpdateIn(Schema):
 # ---- Schede tecniche (sola lettura dopo la creazione) -------------------------
 
 
-# Il docstring è la description OpenAPI e resta com'è: `api._sheet_out` è ora
-# `records.sheet_out`.
 class TechnicalSheetOut(Schema):
-    """Serializzata da api._sheet_out (dizionari), non da istanze: niente resolver.
+    """Serializzata da records.sheet_out (dizionari), non da istanze: niente resolver.
 
     Dal modello ninja serializzava la foto con il suo `.url` nudo, mentre
     technical_sheets/ si scarica solo con l'URL firmato: nella scheda tecnica

@@ -16,7 +16,7 @@ class ExchangeIn(Schema):
 
     Lo `state` sta a database con il verifier PKCE (YourangOAuthState); il
     `nonce` lo tiene solo la finestra che ha avviato il flusso, e dimostra che
-    il codice torna a chi l'ha chiesto (vedi api.py). Facoltativo nello schema
+    il codice torna a chi l'ha chiesto (vedi oauth.py). Facoltativo nello schema
     solo perché la sua assenza abbia un 400 con un messaggio, non un 422.
     """
 
