@@ -152,12 +152,10 @@ class ContactWebhookTests(TestCase):
     completa né push di ogni scheda."""
 
     def setUp(self):
-        FakeHttp.instances = []
-        FakeHttp.contacts = {
+        FakeHttp.reset(contacts={
             "c-1": {"id": "c-1", "first_name": "Rita", "last_name": "Blu",
                     "phone_number": "+393471112223", "email": "rita@example.it"},
-        }
-        FakeHttp.missing_route = False
+        })
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.conn = _connection(
             self.salon, "org-c", webhook_secret_enc=crypto.encrypt(SECRET)

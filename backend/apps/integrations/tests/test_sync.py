@@ -10,7 +10,7 @@ from unittest import mock
 from unittest.mock import Mock, patch
 
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
@@ -160,9 +160,7 @@ class PooledClientTests(TestCase):
     """11-12: un giro di sync riusa un solo client httpx."""
 
     def setUp(self):
-        FakeHttp.instances = []
-        FakeHttp.contacts = {}
-        FakeHttp.missing_route = False
+        FakeHttp.reset()
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.conn = _connection(self.salon, "org-p")
 
@@ -185,7 +183,7 @@ class CatalogueRaceTests(TestCase):
     """11-12: due sync che partono insieme non creano due cataloghi."""
 
     def test_a_catalogue_created_meanwhile_is_reused(self):
-        FakeHttp.instances = []
+        FakeHttp.reset()
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         conn = _connection(salon, "org-k")
         cat = ServiceCategory.objects.create(salon=salon, name_it="Capelli")
@@ -200,6 +198,25 @@ class CatalogueRaceTests(TestCase):
         self.assertEqual(conn.catalogue_id, "cat-1")
         conn.refresh_from_db()
         self.assertEqual(conn.catalogue_id, "cat-1")
+
+
+class FakeHttpResetTests(SimpleTestCase):
+    """Il client finto riparte da zero tutto insieme: un test che ne azzerava
+    solo una parte ereditava contatti e rotte mancanti dal test precedente."""
+
+    def test_reset_clears_what_a_previous_test_left(self):
+        FakeHttp.instances = [object()]
+        FakeHttp.contacts = {"c-9": {"id": "c-9"}}
+        FakeHttp.missing_route = True
+        FakeHttp.reset()
+        self.assertEqual((FakeHttp.instances, FakeHttp.contacts, FakeHttp.missing_route), ([], {}, False))
+
+    def test_the_contacts_given_are_a_copy(self):
+        contacts = {"c-1": {"id": "c-1"}}
+        FakeHttp.reset(contacts=contacts)
+        FakeHttp.contacts.pop("c-1")
+        self.assertIn("c-1", contacts)
+        FakeHttp.reset()
 
 
 class InitialSyncTests(TestCase):
