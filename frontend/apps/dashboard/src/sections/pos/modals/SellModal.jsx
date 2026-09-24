@@ -10,11 +10,16 @@ import { Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
+import CouponField from '../CouponField.jsx';
+import ConfirmPaymentModal from '../ConfirmPaymentModal.jsx';
+import CheckoutDone from '../CheckoutDone.jsx';
+import { useCoupon, useCouponRoom } from '../useCoupon.js';
+import { apptItemLine, checkoutDiscountPct, checkoutGiftLine, checkoutProductLine, checkoutServiceLine, toApiLine } from '../lines.js';
 import useProductCatalog from '../useProductCatalog.js';
 import { salesApi } from '../../../api/sales.js';
 import {
-  centsToApi, centsToEur, emptyPayments, findCoupon, giftPrefillRows, inputCss, lineAmount, lineCents,
-  methodLabel, money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
+  centsToEur, emptyPayments, giftPrefillRows, inputCss, lineAmount, lineCents,
+  money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
 } from '../lib.js';
 
 /** Caparra detraibile: la quota ancora in cassa (`deposit_credit`, al netto dei
@@ -33,15 +38,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   /* ---- lines, pre-populated from the appointment items ---- */
   // line: { key, operator_id, line_type, service_id|product_id, name, unit_price, qty,
   //         discount_pct, is_gift, value, recipient_name, extra }
-  const [lines, setLines] = useState(() => (appt?.items || []).map((it, i) => ({
-    key: 'ai' + (it.id ?? i) + '_' + i,
-    operator_id: it.operator_id,
-    line_type: 'service',
-    service_id: it.service_id,
-    name: it.service_name,
-    unit_price: Number(it.price),
-    qty: 1, discount_pct: 0, is_gift: false, extra: false,
-  })));
+  const [lines, setLines] = useState(() => (appt?.items || []).map(apptItemLine));
   const blockIds = useMemo(
     () => [...new Set((appt?.items || []).map((it) => it.operator_id))],
     [], // eslint-disable-line react-hooks/exhaustive-deps
@@ -65,13 +62,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
   /* Buono sconto presentato al banco: facoltativo. I premi del programma
    * fedeltà erano emessi ma non spendibili — la cassiera poteva solo scontare
-   * a mano, o dire di no. Il codice si verifica prima di incassare, così il
-   * pagamento parte già dall'importo giusto; la parola definitiva resta del
-   * server, che lo rivalida e lo consuma dentro la transazione della vendita. */
-  const [couponCode, setCouponCode] = useState('');
-  const [coupon, setCoupon] = useState(null);
-  const [couponErr, setCouponErr] = useState(null);
-  const [couponBusy, setCouponBusy] = useState(false);
+   * a mano, o dire di no. Si verifica prima di incassare (useCoupon). */
+  const cp = useCoupon(t);
+  const { coupon } = cp;
 
   /* Gift card «a trattamento» della cliente che coprono servizi di questa visita
    * (AppointmentOut.gifts): il pagamento parte già impostato con la gift card
@@ -95,17 +88,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
     setPay({ split: true, method: 'cash', giftCode: '', rows });
   }, [appt, gifts]);
 
-  /* Buono applicato e conto che cambia sotto di lui: con tutte le righe in
-   * omaggio, o rimasta solo una gift card, non c'è più niente da scontare e il
-   * server rifiuta il buono al Conferma (422). Si toglie subito dicendo
-   * perché; il codice resta nel campo per riapplicarlo (14-12). */
+  /* Buono applicato e conto che cambia sotto di lui: si toglie (14-12, vedi
+   * useCouponRoom). */
   const couponRoomCents = saleTotals(lines, null).couponBaseCents;
-  useEffect(() => {
-    if (coupon && !(couponRoomCents > 0)) {
-      setCoupon(null);
-      setCouponErr(t('Buono tolto: nel conto non resta niente da scontare (le gift card non si scontano)', 'Voucher removed: nothing left to discount (gift cards cannot be discounted)'));
-    }
-  }, [coupon, couponRoomCents]); // eslint-disable-line react-hooks/exhaustive-deps
+  useCouponRoom(cp, couponRoomCents, t);
 
   if (!appt) return null;
 
@@ -129,29 +115,17 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const removeLine = (key) => setLines((ls) => ls.filter((l) => l.key !== key));
 
   const addProduct = (opId, p) => {
-    setLines((ls) => [...ls, {
-      key: 'pl' + Date.now() + Math.round(Math.random() * 1e4), operator_id: opId,
-      line_type: 'product', product_id: p.id, name: p.name, unit_price: Number(p.sale_price),
-      qty: 1, discount_pct: 0, is_gift: false, extra: true,
-    }]);
+    setLines((ls) => [...ls, checkoutProductLine('pl' + Date.now() + Math.round(Math.random() * 1e4), opId, p)]);
     setPick(null); setPickQ('');
   };
   const addService = (opId, s) => {
-    setLines((ls) => [...ls, {
-      key: 'sl' + Date.now() + Math.round(Math.random() * 1e4), operator_id: opId,
-      line_type: 'service', service_id: s.id, name: svcLabel(s, lang), unit_price: Number(s.price),
-      qty: 1, discount_pct: 0, is_gift: false, extra: true,
-    }]);
+    setLines((ls) => [...ls, checkoutServiceLine('sl' + Date.now() + Math.round(Math.random() * 1e4), opId, s, lang)]);
     setPick(null); setPickQ('');
   };
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftForm?.amt));
     if (!(v > 0)) return;
-    setLines((ls) => [...ls, {
-      key: 'gl' + Date.now(), operator_id: giftForm.opId, line_type: 'gift_card',
-      name: 'Gift card · €' + v, value: v, recipient_name: (giftForm.name || '').trim(),
-      qty: 1, discount_pct: 0, is_gift: false, extra: true,
-    }]);
+    setLines((ls) => [...ls, checkoutGiftLine('gl' + Date.now(), giftForm.opId, v, giftForm.name)]);
     setGiftForm(null);
   };
 
@@ -186,22 +160,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
     `Excess deposit to return: ${money(centsToEur(excessCents), 'en')}. If it was paid online it goes back to the client's card, otherwise return it at the desk.`,
   );
 
-  const applyCoupon = async () => {
-    if (couponBusy) return;
-    setCouponBusy(true);
-    setCouponErr(null);
-    try {
-      if (!(couponBaseCents > 0)) {
-        setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
-        return;
-      }
-      const { coupon: found, error } = await findCoupon(couponCode, { clientId: appt.client?.id ?? null, t });
-      if (error) { setCoupon(null); setCouponErr(error); return; }
-      setCoupon(found);
-      setCouponCode(found.code);
-    } finally { setCouponBusy(false); }
-  };
-  const clearCoupon = () => { setCoupon(null); setCouponCode(''); setCouponErr(null); };
+  const applyCoupon = () => cp.applyCoupon({ baseCents: couponBaseCents, clientId: appt.client?.id ?? null });
 
   /* ---- submit ---- */
   const submit = async () => {
@@ -212,14 +171,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
       const body = {
         blocks: blockIds.map((opId) => ({
           operator_id: opId,
-          lines: linesOf(opId).map((l) => (l.line_type === 'gift_card'
-            ? { line_type: 'gift_card', value: centsToApi(toCents(l.value)), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
-            : {
-              line_type: l.line_type,
-              ...(l.line_type === 'service' ? { service_id: l.service_id } : { product_id: l.product_id }),
-              qty: l.qty, unit_price: centsToApi(toCents(l.unit_price)),
-              discount_pct: l.is_gift ? 0 : (l.discount_pct || 0), is_gift: !!l.is_gift,
-            })),
+          lines: linesOf(opId).map((l) => toApiLine(l, checkoutDiscountPct(l))),
         })),
         payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
@@ -239,46 +191,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
   /* ---- completion state: sale summary + per-operator breakdown ---- */
   if (result) {
-    const { sale, breakdown } = result;
-    // Quello che il server non ha detratto della caparra torna alla cliente.
-    const returnedCents = Math.max(0, totals.depositCents - toCents(sale.deposit_deducted));
     return (
-      <DkModal open onClose={onClose} title={t('Check-out completato', 'Check-out complete')} sub={appt.client?.full_name} width={520}
-        foot={<button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>}>
-        <div style={{ textAlign: 'center', padding: '10px 0 6px' }}>
-          <div style={{ width: 62, height: 62, borderRadius: 99, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 14px' }}>
-            <Icon name="check" size={30} color="var(--ok)" stroke={2.4} />
-          </div>
-          <div className="t-num" style={{ fontSize: 28, fontWeight: 800 }}>{money(sale.total, lang)}</div>
-          {Number(sale.deposit_deducted) > 0 && (
-            <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 700, marginTop: 4 }}>
-              {t('Caparra detratta', 'Deposit deducted')} −{money(sale.deposit_deducted, lang)}
-            </div>
-          )}
-          {returnedCents > 0 && (
-            <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 700, marginTop: 4 }}>
-              {t('Caparra eccedente da restituire', 'Excess deposit to return')}: {money(centsToEur(returnedCents), lang)}
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            {sale.payments.map((p) => (
-              <span key={p.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', background: 'var(--surface-2)', border: '1px solid var(--hair)', padding: '4px 10px', borderRadius: 99 }}>
-                {methodLabel(p.method, t)} · {money(p.amount, lang)}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className="t-meta" style={{ margin: '18px 0 8px' }}>{t('Ripartizione per operatrice', 'Split by stylist')}</div>
-        <div style={{ border: '1px solid var(--hair)', borderRadius: 12, padding: '4px 14px', marginBottom: 8 }}>
-          {breakdown.map((b, i) => (
-            <div key={b.operator_id ?? i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: i ? '1px solid var(--hair)' : 'none' }}>
-              <Avatar initials={opInitials(b.operator_id)} size={28} color={opColor(b.operator_id)} />
-              <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{b.operator_name || opLabel(b.operator_id)}</span>
-              <span className="t-num" style={{ fontWeight: 700 }}>{money(b.amount, lang)}</span>
-            </div>
-          ))}
-        </div>
-      </DkModal>
+      <CheckoutDone result={result} depositCents={totals.depositCents} clientName={appt.client?.full_name} onClose={onClose}
+        opInitials={opInitials} opColor={opColor} opLabel={opLabel} t={t} lang={lang} />
     );
   }
 
@@ -441,36 +356,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
             </div>
           )}
           {/* buono sconto: si verifica prima, così il pagamento parte dal dovuto giusto */}
-          <div style={{ marginBottom: 12 }}>
-            <div className="t-meta" style={{ marginBottom: 6 }}>{t('Buono sconto', 'Voucher')}</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input value={couponCode} disabled={!!coupon}
-                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponErr(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !coupon) applyCoupon(); }}
-                placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
-                style={{ ...inputCss, flex: 1, minWidth: 0, letterSpacing: '0.06em', opacity: coupon ? 0.75 : 1 }} />
-              {coupon ? (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={clearCoupon}>
-                  <Icon name="x" size={13} />{t('Togli', 'Remove')}
-                </button>
-              ) : (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={couponBusy || !couponCode.trim()} onClick={applyCoupon}>
-                  <Icon name="coupon" size={13} />{couponBusy ? t('Verifica…', 'Checking…') : t('Applica', 'Apply')}
-                </button>
-              )}
-            </div>
-            {couponErr && (
-              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="alert" size={13} color="var(--danger)" />{couponErr}
-              </div>
-            )}
-            {coupon && (
-              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />
-                {t('Buono applicato', 'Voucher applied')} · −{money(discount, lang)}
-              </div>
-            )}
-          </div>
+          <CouponField cp={cp} onApply={applyCoupon} discount={discount}
+            label={t('Buono sconto', 'Voucher')} placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
+            style={{ marginBottom: 12 }} labelStyle={{ marginBottom: 6 }} t={t} lang={lang} />
           {dueCents > 0 ? (
             <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact />
           ) : (
@@ -526,26 +414,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
     </DkModal>
 
     {/* conferma prima di finalizzare il check-out */}
-    <DkModal open={confirmOpen} onClose={() => { if (!saving) setConfirmOpen(false); }}
-      title={t('Conferma pagamento', 'Confirm payment')} width={440}
-      foot={(
-        <>
-          <button className="dk-btn dk-btn--ghost" onClick={() => setConfirmOpen(false)} disabled={saving}>{t('Torna indietro', 'Go back')}</button>
-          <button className="dk-btn dk-btn--clay" onClick={submit} disabled={saving}>
-            <Icon name="check" size={16} color="#fff" />{saving ? t('Registrazione…', 'Recording…') : t('Conferma', 'Confirm')}
-          </button>
-        </>
-      )}>
-      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
-        {t('Sei sicura di voler completare il pagamento?', 'Are you sure you want to complete the payment?')}
-      </div>
-      <div className="t-sm" style={{ color: 'var(--muted)' }}>
-        {money(Math.max(0, due), lang)}{appt.client?.full_name ? ' · ' + appt.client.full_name : ''}
-      </div>
-      {excessCents > 0 && (
-        <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginTop: 8 }}>{excessNote}</div>
-      )}
-    </DkModal>
+    <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={submit}
+      summary={<>{money(Math.max(0, due), lang)}{appt.client?.full_name ? ' · ' + appt.client.full_name : ''}</>}
+      note={excessCents > 0 ? excessNote : null} t={t} />
     </>
   );
 }

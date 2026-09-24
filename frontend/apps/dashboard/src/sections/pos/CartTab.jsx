@@ -1,15 +1,19 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
-import DkModal from '../../ui/DkModal.jsx';
+import CouponField from './CouponField.jsx';
+import ConfirmPaymentModal from './ConfirmPaymentModal.jsx';
+import SaleDone from './SaleDone.jsx';
+import { useCoupon, useCouponRoom } from './useCoupon.js';
+import { counterDiscountPct, counterGiftLine, counterProductLine, toApiLine } from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
 import { salesApi } from '../../api/sales.js';
 import {
-  centsToApi, centsToEur, emptyPayments, findCoupon, inputCss, lineCents, methodLabel, money, opName,
+  centsToEur, emptyPayments, lineCents, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
 
@@ -41,12 +45,10 @@ export default function CartTab({ onGoHistory }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null); // SaleDetailOut after a successful sale
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
-  /* Buono sconto al banco: stesso campo del check-out (vedi pos/lib.js). Il
+  /* Buono sconto al banco: stesso campo del check-out (useCoupon). Il
    * server lo rivalida e lo consuma; qui serve a mostrare il dovuto giusto. */
-  const [couponCode, setCouponCode] = useState('');
-  const [coupon, setCoupon] = useState(null);
-  const [couponErr, setCouponErr] = useState(null);
-  const [couponBusy, setCouponBusy] = useState(false);
+  const cp = useCoupon(t);
+  const { coupon, setCoupon, setCouponCode, setCouponErr } = cp;
 
   const addProduct = (p) => {
     setCart((c) => {
@@ -63,19 +65,13 @@ export default function CartTab({ onGoHistory }) {
         fireToast({ msg: t('Giacenza insufficiente', 'Not enough stock'), icon: 'alert' });
         return c;
       }
-      return [...c, {
-        key: 'p' + p.id + '_' + Date.now(), line_type: 'product', product_id: p.id,
-        name: p.name, unit_price: Number(p.sale_price), qty: 1, is_gift: false, disc: 0, stock,
-      }];
+      return [...c, counterProductLine('p' + p.id + '_' + Date.now(), p, stock)];
     });
   };
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftAmt));
     if (!(v > 0)) return;
-    setCart((c) => [...c, {
-      key: 'g' + Date.now(), line_type: 'gift_card', name: 'Gift card · €' + v,
-      value: v, recipient_name: giftName.trim(), qty: 1, is_gift: false, disc: 0,
-    }]);
+    setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName)]);
     setGiftName('');
   };
   const patchLine = (key, patch) => setCart((c) => c.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -93,11 +89,9 @@ export default function CartTab({ onGoHistory }) {
   /* ---- totals (global discount maps to per-line discount_pct for lines without their own) ----
    * In centesimi con gli arrotondamenti del server (money.js): è quello che il
    * server ricalcola, e il pagamento deve coincidere al centesimo. */
-  const effDisc = (l) => (l.line_type !== 'product' || l.is_gift ? 0 : (l.disc > 0 ? l.disc : globalDisc || 0));
-  // Si spedisce esattamente il prezzo da cui si è calcolato il conto.
-  const asApiLine = (l) => (l.line_type === 'gift_card'
-    ? { line_type: 'gift_card', value: centsToApi(toCents(l.value)), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
-    : { line_type: 'product', product_id: l.product_id, qty: l.qty, unit_price: centsToApi(toCents(l.unit_price)), discount_pct: effDisc(l), is_gift: !!l.is_gift });
+  const effDisc = (l) => counterDiscountPct(l, globalDisc);
+  // Si spedisce esattamente il prezzo da cui si è calcolato il conto (lines.js).
+  const asApiLine = (l) => toApiLine(l, effDisc(l));
   const lineVal = (l) => centsToEur(lineCents({ ...l, discount_pct: effDisc(l) }));
   // Le gift card vendute restano fuori dal buono: scontarne una da 100
   // incassandone 80 significa regalare la differenza (regola del server).
@@ -112,16 +106,9 @@ export default function CartTab({ onGoHistory }) {
   const payErr = paymentsError(pay, totalCents, t);
   const seller = operators.find((o) => o.id === Number(sellerId)) || null;
 
-  /* Il buono applicato va rivisto quando il conto cambia sotto di lui: prima
-   * restava «Buono applicato» a video e la vendita veniva respinta solo al
-   * Conferma (422), dopo aver tolto i prodotti o cambiato cliente (14-12).
-   * Il codice resta nel campo, per riapplicarlo con un clic. */
-  useEffect(() => {
-    if (coupon && !(couponBaseCents > 0)) {
-      setCoupon(null);
-      setCouponErr(t('Buono tolto: nel conto non resta niente da scontare (le gift card non si scontano)', 'Voucher removed: nothing left to discount (gift cards cannot be discounted)'));
-    }
-  }, [coupon, couponBaseCents]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Il buono applicato va rivisto quando il conto cambia sotto di lui (14-12,
+   * vedi useCouponRoom) o quando cambia la cliente (qui sotto). */
+  useCouponRoom(cp, couponBaseCents, t);
   const changeClient = (c) => {
     setClientSel(c);
     // Un buono intestato vale solo per la sua cliente (come in findCoupon).
@@ -133,22 +120,7 @@ export default function CartTab({ onGoHistory }) {
     }
   };
 
-  const applyCoupon = async () => {
-    if (couponBusy) return;
-    setCouponBusy(true);
-    setCouponErr(null);
-    try {
-      if (!(couponBaseCents > 0)) {
-        setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
-        return;
-      }
-      const { coupon: found, error } = await findCoupon(couponCode, { clientId: clientSel?.id ?? null, t });
-      if (error) { setCoupon(null); setCouponErr(error); return; }
-      setCoupon(found);
-      setCouponCode(found.code);
-    } finally { setCouponBusy(false); }
-  };
-  const clearCoupon = () => { setCoupon(null); setCouponCode(''); setCouponErr(null); };
+  const applyCoupon = () => cp.applyCoupon({ baseCents: couponBaseCents, clientId: clientSel?.id ?? null });
 
   /* ---- submit ---- */
   const complete = async () => {
@@ -181,35 +153,7 @@ export default function CartTab({ onGoHistory }) {
 
   /* ---- completion screen ---- */
   if (done) {
-    const hasGift = done.lines.some((l) => l.line_type === 'gift_card');
-    const methodsUsed = done.payments.map((p) => methodLabel(p.method, t)).join(' + ');
-    return (
-      <div className="dk-card pop-in" style={{ padding: '44px 36px', textAlign: 'center', maxWidth: 540, margin: '0 auto' }}>
-        <div style={{ width: 68, height: 68, borderRadius: 99, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 18px' }}>
-          <Icon name="check" size={34} color="var(--ok)" stroke={2.4} />
-        </div>
-        <div style={{ fontFamily: 'var(--serif)', fontSize: 26, fontWeight: 500 }}>{t('Vendita completata', 'Sale complete')}</div>
-        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>
-          {done.lines.reduce((s, l) => s + (l.qty || 1), 0)} {t('articoli', 'items')} · {money(done.total, lang)} · {methodsUsed}
-        </div>
-        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
-          {seller ? t('Accreditata a', 'Credited to') + ' ' + opName(seller) : ''}
-          {done.client_name ? (seller ? ' · ' : '') + done.client_name : (seller ? ' · ' : '') + t('Da banco', 'Walk-in')}
-        </div>
-        {hasGift && (
-          <div className="t-sm" style={{ color: 'var(--ok)', marginTop: 10, fontWeight: 600 }}>
-            <Icon name="gift" size={15} color="var(--ok)" style={{ verticalAlign: '-2px', marginRight: 5 }} />
-            {t('Gift card emessa', 'Gift card issued')}{done.lines.filter((l) => l.line_type === 'gift_card').map((l) => l.gift_card_code).filter(Boolean).map((c) => ' · ' + c).join('')}
-          </div>
-        )}
-        <button className="dk-btn dk-btn--clay" style={{ marginTop: 24, width: '100%', height: 48 }} onClick={reset}>
-          <Icon name="plus" size={18} color="#fff" />{t('Nuova vendita', 'New sale')}
-        </button>
-        <button className="dk-btn dk-btn--ghost" style={{ marginTop: 10, width: '100%', height: 44 }} onClick={onGoHistory}>
-          <Icon name="clock" size={16} />{t('Vedi storico vendite', 'View sales history')}
-        </button>
-      </div>
-    );
+    return <SaleDone done={done} seller={seller} onNew={reset} onGoHistory={onGoHistory} t={t} lang={lang} />;
   }
 
   return (
@@ -396,35 +340,9 @@ export default function CartTab({ onGoHistory }) {
           </div>
 
           {/* buono sconto — prima del pagamento, così il dovuto è già quello giusto */}
-          <div style={{ margin: '18px 0 0' }}>
-            <div className="t-meta" style={{ marginBottom: 7 }}>{t('Buono sconto (facoltativo)', 'Voucher (optional)')}</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input value={couponCode} disabled={!!coupon}
-                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponErr(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !coupon) applyCoupon(); }}
-                placeholder={t('Codice del buono', 'Voucher code')}
-                style={{ ...inputCss, flex: 1, minWidth: 0, letterSpacing: '0.06em', opacity: coupon ? 0.75 : 1 }} />
-              {coupon ? (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={clearCoupon}>
-                  <Icon name="x" size={13} />{t('Togli', 'Remove')}
-                </button>
-              ) : (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={couponBusy || !couponCode.trim()} onClick={applyCoupon}>
-                  <Icon name="coupon" size={13} />{couponBusy ? t('Verifica…', 'Checking…') : t('Applica', 'Apply')}
-                </button>
-              )}
-            </div>
-            {couponErr && (
-              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="alert" size={13} color="var(--danger)" />{couponErr}
-              </div>
-            )}
-            {coupon && (
-              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Buono applicato', 'Voucher applied')} · −{money(couponAmt, lang)}
-              </div>
-            )}
-          </div>
+          <CouponField cp={cp} onApply={applyCoupon} discount={couponAmt}
+            label={t('Buono sconto (facoltativo)', 'Voucher (optional)')} placeholder={t('Codice del buono', 'Voucher code')}
+            style={{ margin: '18px 0 0' }} labelStyle={{ marginBottom: 7 }} t={t} lang={lang} />
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
@@ -446,23 +364,9 @@ export default function CartTab({ onGoHistory }) {
       </div>
 
       {/* conferma prima di finalizzare la vendita */}
-      <DkModal open={confirmOpen} onClose={() => { if (!saving) setConfirmOpen(false); }}
-        title={t('Conferma pagamento', 'Confirm payment')} width={440}
-        foot={(
-          <>
-            <button className="dk-btn dk-btn--ghost" onClick={() => setConfirmOpen(false)} disabled={saving}>{t('Torna indietro', 'Go back')}</button>
-            <button className="dk-btn dk-btn--clay" onClick={complete} disabled={saving}>
-              <Icon name="check" size={16} color="#fff" />{saving ? t('Registrazione…', 'Recording…') : t('Conferma', 'Confirm')}
-            </button>
-          </>
-        )}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
-          {t('Sei sicura di voler completare il pagamento?', 'Are you sure you want to complete the payment?')}
-        </div>
-        <div className="t-sm" style={{ color: 'var(--muted)' }}>
-          {itemCount} {t('articoli', 'items')} · {money(total, lang)}{seller ? ' · ' + opName(seller) : ''}
-        </div>
-      </DkModal>
+      <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={complete}
+        summary={<>{itemCount} {t('articoli', 'items')} · {money(total, lang)}{seller ? ' · ' + opName(seller) : ''}</>}
+        t={t} />
     </div>
   );
 }
