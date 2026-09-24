@@ -4,7 +4,7 @@
 //        (GET /api/staff/public/operators) → 2 review
 //        → POST /api/agenda/client/appointments → success (deposit messaging).
 import React from 'react';
-import { ApiError, Icon, PhoneInput, clientAuth, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
 import { headFont, headWeight } from '../theme.js';
@@ -16,6 +16,7 @@ import { SlotPicker } from '../components/SlotPicker.jsx';
 import { StickyCta } from '../components/StickyCta.jsx';
 import { SuccessScreen } from '../components/SuccessScreen.jsx';
 import { DepositDue } from '../components/DepositDue.jsx';
+import { useOtpFlow } from '../hooks/useOtpFlow.js';
 import { usePublicOperators, usePublicServices } from '../hooks/usePublicCatalog.js';
 import { useTodayKey } from '../hooks/useTodayKey.js';
 import { giftServiceCards } from '../lib/wallet.js';
@@ -71,19 +72,15 @@ export default function Prenota() {
   const [booked, setBooked] = React.useState(null);     // AppointmentOut on success
   const [ident, setIdent] = React.useState({ first_name: '', last_name: '', phone: '' });
   const [otp, setOtp] = React.useState('');
-  const [otpErr, setOtpErr] = React.useState(null);
+  // Il codice via SMS di chi prenota senza sessione: i rifiuti noti sotto il
+  // campo, gli altri errori nel toast (vedi useOtpFlow).
+  const otpFlow = useOtpFlow({ phone: ident.phone, t, fireToast, otherErrors: 'toast' });
+  const { error: otpErr, setError: setOtpErr, codeSurelySent } = otpFlow;
   const [blocked, setBlocked] = React.useState(false);  // numero già in anagrafica: vedi registerAndOtp
-  // Numero per cui la registrazione è andata a buon fine: solo lì sappiamo che
-  // un codice è davvero partito. Dopo un semplice «richiedi codice» il server
-  // non dice se il numero esiste, quindi il testo resta al condizionale — e
-  // cambiando numero si torna al condizionale da solo.
-  const [registeredPhone, setRegisteredPhone] = React.useState(null);
   const todayKey = useTodayKey();
   // ricalcolata quando cambia il giorno: vedi useTodayKey
   // eslint-disable-next-line react-hooks/exhaustive-deps -- todayKey è il motivo del ricalcolo
   const days = React.useMemo(() => nextDays(14), [todayKey]);
-
-  const codeSurelySent = !!registeredPhone && registeredPhone === ident.phone.trim();
 
   React.useEffect(() => { if (catError) errToast(catError, fireToast, t); }, [catError]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -236,14 +233,7 @@ export default function Prenota() {
     }
     setBooking(true);
     try {
-      await clientAuth.requestOtp(SALON_SLUG, phone);
-      setStep(4);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        setOtpErr(t('Troppi codici richiesti. Riprova tra qualche minuto.', 'Too many codes requested. Try again in a few minutes.'));
-      } else {
-        errToast(err, fireToast, t);
-      }
+      if (await otpFlow.request()) setStep(4);
     } finally { setBooking(false); }
   };
 
@@ -255,21 +245,16 @@ export default function Prenota() {
     setOtp('');
     setBooking(true);
     try {
-      await clientAuth.register({
-        salon_slug: SALON_SLUG,
+      const res = await otpFlow.register({
         first_name: ident.first_name.trim(),
         last_name: ident.last_name.trim(),
         phone: ident.phone.trim(),
         lang,
       });
-      setRegisteredPhone(ident.phone.trim()); // la registrazione emette il codice: qui lo sappiamo
-    } catch (err) {
-      // 400 = «numero già registrato», e non si può sapere quale dei due casi
-      // sia: o la scheda c'è ed è attiva (il codice chiesto poco fa è davvero
-      // partito, basta inserirlo) oppure è disattivata e da qui non si entra.
-      // Si dicono entrambe le cose, e la prenotazione resta dov'è.
-      if (err instanceof ApiError && err.status === 400) setBlocked(true);
-      else errToast(err, fireToast, t);
+      // «Numero già registrato»: o la scheda c'è ed è attiva (il codice
+      // chiesto poco fa è davvero partito) oppure è disattivata e da qui non
+      // si entra. Si dicono entrambe le cose, e la prenotazione resta dov'è.
+      if (res === 'blocked') setBlocked(true);
     } finally { setBooking(false); }
   };
 
@@ -281,12 +266,7 @@ export default function Prenota() {
     // 1) verifica OTP → crea la sessione. Il codice è monouso: se la sessione
     // c'è già (prenotazione fallita al primo tentativo) non si riverifica,
     // altrimenti il secondo tocco direbbe «codice non valido».
-    try {
-      if (!session) await clientAuth.verifyOtp(SALON_SLUG, ident.phone.trim(), otp);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 400) setOtpErr(t('Codice non valido o scaduto', 'Invalid or expired code'));
-      else if (err instanceof ApiError && err.status === 429) setOtpErr(t('Troppi tentativi. Riprova tra qualche minuto.', 'Too many attempts. Try again in a few minutes.'));
-      else errToast(err, fireToast, t);
+    if (!session && !(await otpFlow.verify(otp))) {
       setBooking(false);
       return;
     }
