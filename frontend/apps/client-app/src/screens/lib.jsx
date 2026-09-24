@@ -12,7 +12,7 @@ export { nextDays, dayStripLabel, fmtDayMed, relLabel } from '../lib/dates.js';
 export { fmtApptDate, apptTime, apptDur, apptServiceNames } from '../lib/appointments.js';
 export { mapsUrl, icsDataUrl, downloadIcs } from '../lib/links.js';
 export { errToast } from '../lib/errors.js';
-export { prefLabel, WEEKDAYS_SHORT } from '../lib/waitlist.js';
+export { prefLabel } from '../lib/waitlist.js';
 
 /* ============================== UI bits ============================== */
 

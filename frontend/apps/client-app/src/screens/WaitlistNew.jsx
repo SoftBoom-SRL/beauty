@@ -6,9 +6,9 @@ import React from 'react';
 import { Icon, api, fmtEur, fmtDur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import {
-  ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon,
-  WEEKDAYS_SHORT, errToast,
+  ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon, errToast,
 } from './lib.jsx';
+import { WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../lib/waitlist.js';
 import { svcMinutes } from '../lib/catalog.js';
 
 export default function WaitlistNew() {
@@ -111,13 +111,13 @@ export default function WaitlistNew() {
                 </div>
                 <div className="t-meta" style={{ marginBottom: 8 }}>{t('Giorni', 'Days')}</div>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-                  {WEEKDAYS_SHORT.map(([, , letterIt, letterEn], idx) => {
+                  {WEEKDAY_LETTERS_IT.map((letterIt, idx) => {
                     const on = exactDays.includes(idx);
                     return (
                       <button key={idx} className="press"
                         onClick={() => setExactDays((d) => (d.includes(idx) ? d.filter((x) => x !== idx) : [...d, idx].sort()))}
                         style={{ flex: 1, aspectRatio: '1', minWidth: 0, borderRadius: 12, fontSize: 14, fontWeight: 800, border: '1.5px solid ' + (on ? 'var(--brand)' : 'var(--hair)'), background: on ? 'var(--brand)' : 'var(--paper-0)', color: on ? 'var(--brand-on)' : 'var(--ink)' }}>
-                        {lang === 'en' ? letterEn : letterIt}
+                        {lang === 'en' ? WEEKDAY_LETTERS_EN[idx] : letterIt}
                       </button>
                     );
                   })}

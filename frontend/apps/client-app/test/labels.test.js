@@ -12,7 +12,7 @@ import { apptServiceNames } from '../src/lib/appointments.js';
 import { catIcon, svcLangName } from '../src/lib/catalog.js';
 import { errToast } from '../src/lib/errors.js';
 import { couponLabel, couponOrigin, fmtExpiry } from '../src/lib/wallet.js';
-import { prefLabel, WEEKDAYS_SHORT } from '../src/lib/waitlist.js';
+import { prefLabel, WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../src/lib/waitlist.js';
 
 const tIt = (it) => it;
 const tEn = (it, en) => en;
@@ -38,11 +38,13 @@ test('lista d\'attesa: la preferenza oraria a parole', () => {
   }
 });
 
-test('lista d\'attesa: i giorni della settimana, dal lunedì, con le iniziali', () => {
-  assert.deepEqual(WEEKDAYS_SHORT.map((w) => w[0]), ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom']);
-  assert.deepEqual(WEEKDAYS_SHORT.map((w) => w[1]), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
-  assert.deepEqual(WEEKDAYS_SHORT.map((w) => w[2]).join(''), 'LMMGVSD');
-  assert.deepEqual(WEEKDAYS_SHORT.map((w) => w[3]).join(''), 'MTWTFSS');
+test('lista d\'attesa: le iniziali dei giorni, dal lunedì', () => {
+  assert.equal(WEEKDAY_LETTERS_IT.join(''), 'LMMGVSD');
+  assert.equal(WEEKDAY_LETTERS_EN.join(''), 'MTWTFSS');
+  // e i nomi abbreviati per esteso, uno per ogni giorno dell'API
+  const all = { preference: 'exact', exact_days: [0, 1, 2, 3, 4, 5, 6] };
+  assert.equal(prefLabel(all, tIt, 'it'), 'Lun Mar Mer Gio Ven Sab Dom');
+  assert.equal(prefLabel(all, tEn, 'en'), 'Mon Tue Wed Thu Fri Sat Sun');
 });
 
 test('listino: il nome nella lingua della cliente, l\'italiano se manca l\'inglese', () => {

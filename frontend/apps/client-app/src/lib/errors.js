@@ -1,9 +1,7 @@
 // errors.js — come l'app cliente mostra gli errori dell'API.
 // Logica pura, senza React: la caricano anche i test con `node --test`.
-import { ApiError } from '@youty/shared';
 
-/** Uniform ApiError → toast. */
-export function errToast(err, fireToast, t) {
-  if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-  else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-}
+/** Uniform ApiError → toast: il messaggio del server se una risposta è
+ *  arrivata, altrimenti «Errore di rete». È toastApiError di @youty/shared,
+ *  stessi argomenti (err, fireToast, t). */
+export { toastApiError as errToast } from '@youty/shared';

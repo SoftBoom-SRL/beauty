@@ -1,11 +1,12 @@
 // catalog.js — il listino pubblico visto dalla cliente: nomi nella sua
 // lingua, icona della categoria, durata di un servizio.
 // Logica pura, senza React: la caricano anche i test con `node --test`.
+import { nameIn } from '@youty/shared';
 
-/** Bilingual name for public catalog objects ({name_it, name_en}). */
+/** Bilingual name for public catalog objects ({name_it, name_en}); '' senza
+ *  oggetto (nameIn da solo, con null, sarebbe un TypeError). */
 export function svcLangName(obj, lang) {
-  if (!obj) return '';
-  return (lang === 'en' && obj.name_en) ? obj.name_en : obj.name_it;
+  return obj ? nameIn(obj, lang) : '';
 }
 
 /** Category icon heuristic (prototype BK_CAT_ICON keyed nail/hair/viso/extra). */
