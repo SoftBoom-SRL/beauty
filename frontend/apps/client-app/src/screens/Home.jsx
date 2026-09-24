@@ -12,7 +12,8 @@ import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
 import { relLabel, fmtDayMed } from '../lib/dates.js';
 import { mapsUrl, downloadIcs } from '../lib/links.js';
 
-/* cover with monogram (prototype Cover, data from brand) */
+/* La copertina della Home, col monogramma e il logo del salone. Accesso e
+ * modulo contatti hanno un'altra testata, più bassa: BrandHero. */
 function Cover({ brand, t }) {
   return (
     <div style={{ minHeight: 190, background: 'var(--brand)', position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'flex-end' }}>
