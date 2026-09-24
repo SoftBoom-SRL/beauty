@@ -130,10 +130,11 @@ class DuplicateLabelTests(_Base):
 
     def test_a_double_click_racing_the_check_is_a_400_not_a_500(self):
         create_category(self.request, CategoryIn(name="VIP"))
-        with patch("apps.clients.api.ClientCategory.objects.filter") as filtered:
+        with patch("apps.clients.labels.ClientCategory.objects.filter") as filtered:
             filtered.return_value.exists.return_value = False
             with self.assertRaises(HttpError) as caught:
                 create_category(self.request, CategoryIn(name="VIP"))
+        filtered.assert_called_once()
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_an_empty_name_is_refused(self):

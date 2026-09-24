@@ -1,26 +1,22 @@
-"""Servizi staff: disponibilità (turni/assenze) + KPI operatrice (incasso, clienti).
+"""Servizi staff: disponibilità dell'operatrice (turni, pause, assenze, orari del salone).
 
 `shift_windows` è LA funzione consumata dall'agenda (`apps.agenda.services.get_free_slots`)
 per sapere quando un'operatrice è lavorabile in una data: la firma non va cambiata.
-
-Import cross-app: `sales.SaleLine` e `agenda.Appointment` sono caricate dopo `staff`
-in INSTALLED_APPS e sono implementate da altri agenti in parallelo, quindi ogni
-accesso è lazy (`django.apps.apps.get_model`) con degradazione a 0/[] se il modello
-non è (ancora) disponibile.
+Agenda e insights la importano da qui e i test la patchano qui. I KPI
+dell'operatrice (incassi, clienti) stanno in stats.py.
 """
 
 from datetime import date as date_cls
-from decimal import Decimal
 
-from django.apps import apps
-from django.db.models import Count, Max, Q, Sum
-from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
-# Tetto ai mesi della serie di rendimento: il parametro arriva dalla query
-# string di un GET senza scope richiesto, e senza limite superiore
-# `?months=50000000` diventava una scansione di cinquant'anni di vendite.
-MAX_PERFORMANCE_MONTHS = 36
+from common.intervals import merge_intervals
+
+# compat refactoring: rimuovere dopo l'integrazione. I KPI ora vivono in
+# staff/stats.py; sales/tests_caccia22_storico.py
+# (CouponOnTheLinesTests.test_the_operator_revenue_matches_the_takings) li
+# importa ancora da questo modulo.
+from .stats import month_revenue, month_revenue_by_operator, performance_series  # noqa: F401
 
 
 def _current_absence(operator, on_date: date_cls):
@@ -34,6 +30,11 @@ def _current_absence(operator, on_date: date_cls):
 def _hm_to_min(value: str) -> int:
     hours, minutes = str(value).split(":")
     return int(hours) * 60 + int(minutes)
+
+
+def min_to_hm(minutes: int) -> str:
+    """Minuti da mezzanotte → «HH:MM» (le finestre di turno nelle risposte)."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def opening_windows(salon, date: date_cls) -> list[tuple[int, int]] | None:
@@ -71,22 +72,6 @@ def _week_index(date: date_cls, cycle_weeks: int) -> int:
     lunedì, quindi il conto cambia esattamente al cambio di settimana.
     """
     return ((date.toordinal() - 1) // 7) % max(cycle_weeks, 1)
-
-
-def _merge_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Unisce le finestre che si toccano o si sovrappongono.
-
-    Due righe di turno contigue (9–13 e 13–18) sono lo stesso turno diviso in
-    due: lasciandole separate un servizio che attraversa le 13 non entrerebbe
-    per intero in nessuna delle due e l'orario non verrebbe mai proposto.
-    """
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted(windows):
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
 
 
 def _subtract(windows: list[tuple[int, int]], cuts: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -150,12 +135,14 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
             break_end = min(shift.break_end_min, end)
             if break_start < break_end:
                 breaks.append((break_start, break_end))
-    # Prima si fondono le righe contigue, POI si tolgono le pause: al contrario
-    # la fusione richiudeva il buco appena ritagliato (vedi `_subtract`).
-    windows = _subtract(_merge_windows(windows), breaks)
+    # Prima si fondono le righe contigue (9–13 e 13–18 sono lo stesso turno
+    # diviso in due: separate, un servizio che attraversa le 13 non entrerebbe
+    # per intero in nessuna delle due), POI si tolgono le pause: al contrario la
+    # fusione richiudeva il buco appena ritagliato (vedi `_subtract`).
+    windows = _subtract(merge_intervals(windows), breaks)
     bounds = opening_windows(operator.salon, date)
     if bounds is not None:
-        windows = _merge_windows(_intersect(windows, bounds))
+        windows = merge_intervals(_intersect(windows, bounds))
     return windows
 
 
@@ -169,218 +156,3 @@ def today_status(operator, on_date: date_cls | None = None) -> dict:
         "on_shift": bool(windows),
         "absence_type": absence.type if absence else None,
     }
-
-
-# ---- Import lazy da sales/agenda: degradazione a 0/[] se le app non sono pronte ----
-
-
-def _sale_line_model():
-    try:
-        return apps.get_model("sales", "SaleLine")
-    except LookupError:
-        return None
-
-
-def _appointment_model():
-    try:
-        return apps.get_model("agenda", "Appointment")
-    except LookupError:
-        return None
-
-
-def month_revenue(operator, on_date: date_cls | None = None) -> Decimal:
-    """Incasso del mese (di `on_date`, default oggi) per l'operatrice: somma SaleLine.amount."""
-    SaleLine = _sale_line_model()
-    if SaleLine is None:
-        return Decimal("0")
-    on_date = on_date or timezone.localdate()
-    total = SaleLine.objects.filter(
-        operator=operator,
-        sale__created_at__year=on_date.year,
-        sale__created_at__month=on_date.month,
-    ).aggregate(total=Sum("amount"))["total"]
-    return total or Decimal("0")
-
-
-def today_clients_count(operator, on_date: date_cls | None = None) -> int:
-    """Visite di oggi dell'operatrice (esclusi annullati/no-show), servizi secondari compresi."""
-    return today_clients_by_operator([operator], on_date).get(operator.pk, 0)
-
-
-def month_revenue_by_operator(operators, on_date: date_cls | None = None) -> dict[int, Decimal]:
-    """Incasso del mese per OGNI operatrice, in una sola query.
-
-    La lista operatrici resta aperta tutto il giorno sul banco: chiamare
-    `month_revenue` una volta per riga significava una query per operatrice a
-    ogni ricarica (e altrettante per `today_clients_count`).
-    """
-    SaleLine = _sale_line_model()
-    ids = [op.pk for op in operators]
-    if SaleLine is None or not ids:
-        return {}
-    on_date = on_date or timezone.localdate()
-    rows = (
-        SaleLine.objects.filter(
-            operator_id__in=ids,
-            sale__created_at__year=on_date.year,
-            sale__created_at__month=on_date.month,
-        )
-        .values("operator_id")
-        .annotate(total=Sum("amount"))
-    )
-    return {row["operator_id"]: row["total"] or Decimal("0") for row in rows}
-
-
-def _appointment_item_model():
-    try:
-        return apps.get_model("agenda", "AppointmentService")
-    except LookupError:
-        return None
-
-
-def today_clients_by_operator(operators, on_date: date_cls | None = None) -> dict[int, int]:
-    """Visite di giornata per OGNI operatrice, in due query per l'intera lista.
-
-    Conta chi fa un servizio qualsiasi della visita, non solo l'operatrice
-    principale (`Appointment.operator`, quella del PRIMO servizio): Bea che fa
-    tutto il giorno i tagli dopo i colori di Anna risultava «Clienti oggi: 0»,
-    mentre l'incasso di quei tagli le veniva contato (09-04). Una visita conta
-    una volta per operatrice, anche se lei ne fa due servizi.
-    """
-    Appointment = _appointment_model()
-    AppointmentService = _appointment_item_model()
-    ids = [op.pk for op in operators]
-    if Appointment is None or not ids:
-        return {}
-    on_date = on_date or timezone.localdate()
-    excluded = ["cancelled", "no_show"]
-    pairs = set(
-        Appointment.objects.filter(operator_id__in=ids, start__date=on_date)
-        .exclude(status__in=excluded)
-        .values_list("operator_id", "id")
-    )
-    if AppointmentService is not None:
-        pairs.update(
-            AppointmentService.objects.filter(
-                operator_id__in=ids, appointment__start__date=on_date
-            )
-            .exclude(appointment__status__in=excluded)
-            .values_list("operator_id", "appointment_id")
-        )
-    counts: dict[int, int] = {}
-    for operator_id, _appointment_id in pairs:
-        counts[operator_id] = counts.get(operator_id, 0) + 1
-    return counts
-
-
-def performance_series(operator, months: int = 6) -> list[dict]:
-    """Serie mensile {month, revenue, sales_count} sugli ultimi `months` mesi (incluso quello corrente).
-
-    `months` è limitato a `MAX_PERFORMANCE_MONTHS`: prima accettava qualunque
-    intero e faceva una query di aggregazione PER MESE, quindi bastava un GET
-    con `?months=20000` per tenere occupato un worker. Ora i mesi si contano in
-    una sola query raggruppata.
-    """
-    months = min(max(1, int(months)), MAX_PERFORMANCE_MONTHS)
-    today = timezone.localdate()
-    month_starts: list[tuple[int, int]] = []
-    y, m = today.year, today.month
-    for _ in range(months):
-        month_starts.append((y, m))
-        m -= 1
-        if m == 0:
-            m, y = 12, y - 1
-    month_starts.reverse()
-
-    SaleLine = _sale_line_model()
-    totals: dict[str, tuple[Decimal, int]] = {}
-    if SaleLine is not None:
-        first_year, first_month = month_starts[0]
-        rows = (
-            SaleLine.objects.filter(
-                operator=operator,
-                sale__created_at__date__gte=date_cls(first_year, first_month, 1),
-            )
-            .annotate(month=TruncMonth("sale__created_at"))
-            .values("month")
-            .annotate(revenue=Sum("amount"), sales_count=Count("sale", distinct=True))
-        )
-        for row in rows:
-            if row["month"] is None:
-                continue
-            totals[row["month"].strftime("%Y-%m")] = (
-                row["revenue"] or Decimal("0"),
-                row["sales_count"] or 0,
-            )
-
-    series = []
-    for y, m in month_starts:
-        key = f"{y:04d}-{m:02d}"
-        revenue, sales_count = totals.get(key, (Decimal("0"), 0))
-        series.append({"month": key, "revenue": revenue, "sales_count": sales_count})
-    return series
-
-
-def served_clients(operator, q: str = "") -> list[dict]:
-    """Clienti serviti dall'operatrice (da appuntamenti passati) + storico vendite."""
-    Appointment = _appointment_model()
-    if Appointment is None:
-        return []
-    now = timezone.now()
-    # Le visite in cui l'operatrice ha fatto almeno un servizio, non solo
-    # quelle in cui è la principale: chi fa i servizi secondari perdeva le sue
-    # clienti dall'elenco (09-04). Sottoquery e non join, così ogni visita
-    # resta una riga sola e il conteggio delle visite non si gonfia.
-    involved = Q(operator=operator)
-    AppointmentService = _appointment_item_model()
-    if AppointmentService is not None:
-        involved |= Q(
-            pk__in=AppointmentService.objects.filter(operator=operator).values("appointment_id")
-        )
-    qs = Appointment.objects.filter(involved, start__lt=now).exclude(
-        status__in=["cancelled", "no_show"]
-    )
-    if q:
-        qs = qs.filter(
-            Q(client__first_name__icontains=q)
-            | Q(client__last_name__icontains=q)
-            | Q(client__phone__icontains=q)
-        )
-    rows = (
-        qs.values("client_id", "client__first_name", "client__last_name", "client__phone")
-        .annotate(visits=Count("id"), last_visit=Max("start"))
-        .order_by("-last_visit")
-    )
-
-    rows = list(rows)
-
-    # Speso per cliente in UNA query raggruppata: prima era un aggregate per
-    # riga, quindi seicento clienti serviti volevano seicentouna query e la
-    # scheda dell'operatrice diventava inservibile proprio per chi lavora di più.
-    SaleLine = _sale_line_model()
-    spent_by_client: dict[int, Decimal] = {}
-    if SaleLine is not None and rows:
-        spent_by_client = {
-            item["sale__client_id"]: item["total"] or Decimal("0")
-            for item in SaleLine.objects.filter(
-                operator=operator, sale__client_id__in=[r["client_id"] for r in rows]
-            )
-            .values("sale__client_id")
-            .annotate(total=Sum("amount"))
-        }
-
-    result = []
-    for row in rows:
-        total_spent = spent_by_client.get(row["client_id"], Decimal("0"))
-        result.append(
-            {
-                "client_id": row["client_id"],
-                "first_name": row["client__first_name"],
-                "last_name": row["client__last_name"],
-                "phone": row["client__phone"],
-                "visits": row["visits"],
-                "last_visit": row["last_visit"],
-                "total_spent": total_spent,
-            }
-        )
-    return result

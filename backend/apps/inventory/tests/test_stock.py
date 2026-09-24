@@ -13,7 +13,8 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, Salon
 
 from ..models import Product, PurchaseOrder, StockMovement, Supplier
-from ..services import apply_movement, deduct_stock_for_sale, generate_draft_orders, receive_order
+from ..orders import generate_draft_orders, receive_order
+from ..services import apply_movement, deduct_stock_for_sale
 from .base import _InventorySetup
 
 

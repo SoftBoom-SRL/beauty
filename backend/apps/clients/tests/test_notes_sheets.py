@@ -62,7 +62,7 @@ class TechnicalSheetTests(ClientsTestCase):
             client.id,
             TechnicalSheetIn(category="hair", treatment="Colore", appointment_id=appointment.id),
         )
-        # La view restituisce il dizionario di _sheet_out (foto con URL firmato, 06-03).
+        # La view restituisce il dizionario di records.sheet_out (foto con URL firmato, 06-03).
         self.assertEqual(sheet["appointment_id"], appointment.id)
 
     def test_an_appointment_of_someone_else_is_refused(self):

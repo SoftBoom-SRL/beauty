@@ -24,7 +24,7 @@ from ninja.errors import HttpError
 from apps.core.models import Salon
 from common.testing import staff_context
 
-from .. import api as inventory_api
+from .. import csv_load
 from ..api import load_product
 from ..models import Product, StockMovement, Supplier
 from ..schemas import MovementOut, ProductLoadIn
@@ -168,7 +168,7 @@ class LoadCsvRowIsolationTests(_InventorySetup):
     def test_a_database_error_stays_on_its_row(self):
         gel = self._product("Gel", sku="G1")
         lima = self._product("Lima", sku="L1")
-        real = inventory_api.apply_movement
+        real = csv_load.apply_movement
         calls = {"n": 0}
 
         def flaky(*args, **kwargs):
@@ -178,7 +178,7 @@ class LoadCsvRowIsolationTests(_InventorySetup):
             return real(*args, **kwargs)
 
         self.client.raise_request_exception = False
-        with mock.patch.object(inventory_api, "apply_movement", side_effect=flaky):
+        with mock.patch.object(csv_load, "apply_movement", side_effect=flaky):
             out = self._load_csv([{"sku": "G1", "qty": 5}, {"sku": "L1", "qty": 7}, {"sku": "G1", "qty": 1}])
         self.assertEqual((out["loaded"], out["errors"]), (2, 1))
         self.assertEqual([r["status"] for r in out["results"]], ["loaded", "error", "loaded"])
@@ -188,7 +188,7 @@ class LoadCsvRowIsolationTests(_InventorySetup):
 
     def test_a_failed_row_does_not_leave_a_half_created_product(self):
         self.client.raise_request_exception = False
-        with mock.patch.object(inventory_api, "apply_movement", side_effect=DataError("boom")):
+        with mock.patch.object(csv_load, "apply_movement", side_effect=DataError("boom")):
             out = self._load_csv([{"name": "Nuovo siero", "qty": 3}], supplier_id=self.sup_a.id)
         self.assertEqual((out["created"], out["errors"]), (0, 1))
         self.assertFalse(Product.objects.filter(name="Nuovo siero").exists())

@@ -80,6 +80,8 @@ class ClientDetailOut(ClientOut):
     stats_hidden: bool = False
 
 
+# Il docstring qui sotto è la description dello schema nel contratto OpenAPI,
+# quindi resta com'è: `api._client_payload` che cita è ora `fields.client_payload`.
 class ClientIn(Schema):
     """Corpo del POST cliente (il PUT usa `ClientUpdateIn`, tutto facoltativo).
 
@@ -219,6 +221,8 @@ class AttachmentOut(Schema):
     created_at: datetime
 
 
+# Il docstring è la description OpenAPI e resta com'è: `api._note_out` è ora
+# `records.note_out`.
 class NoteOut(Schema):
     """Serializzata da api._note_out (dizionari), non da istanze: niente resolver."""
 
@@ -254,6 +258,8 @@ class NoteUpdateIn(Schema):
 # ---- Schede tecniche (sola lettura dopo la creazione) -------------------------
 
 
+# Il docstring è la description OpenAPI e resta com'è: `api._sheet_out` è ora
+# `records.sheet_out`.
 class TechnicalSheetOut(Schema):
     """Serializzata da api._sheet_out (dizionari), non da istanze: niente resolver.
 
@@ -294,10 +300,6 @@ class TechnicalSheetIn(Schema):
     advice: str = ""
     protocol: str = ""
     next_step: str = Field("", max_length=120)
-
-
-class OkOut(Schema):
-    ok: bool = True
 
 
 class HookLeadIn(Schema):

@@ -18,7 +18,7 @@ from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
 
 from ..models import Operator
-from ..services import served_clients, today_clients_by_operator
+from ..stats import served_clients, today_clients_by_operator
 from .base import _StaffSetup
 
 
@@ -32,18 +32,18 @@ class PerformanceSeriesTests(TestCase):
         )
 
     def test_months_are_capped(self):
-        from ..services import MAX_PERFORMANCE_MONTHS, performance_series
+        from ..stats import MAX_PERFORMANCE_MONTHS, performance_series
 
         series = performance_series(self.operator, months=5_000_000)
         self.assertEqual(len(series), MAX_PERFORMANCE_MONTHS)
 
     def test_months_below_one_fall_back_to_one(self):
-        from ..services import performance_series
+        from ..stats import performance_series
 
         self.assertEqual(len(performance_series(self.operator, months=0)), 1)
 
     def test_series_is_built_with_a_bounded_number_of_queries(self):
-        from ..services import performance_series
+        from ..stats import performance_series
 
         with self.assertNumQueries(1):
             series = performance_series(self.operator, months=24)

@@ -1,11 +1,6 @@
-import logging
-import re
-from decimal import Decimal
 from typing import Optional
 
-from django.db import DatabaseError, transaction
 from django.db.models import Case, F, IntegerField, ProtectedError, Q, Value, When
-from django.utils import timezone
 from django.utils.dateparse import parse_date
 from ninja import File, Form, Router
 from ninja.errors import HttpError
@@ -16,16 +11,18 @@ from apps.core.services import emit_event, log_activity
 from common.auth import staff_auth
 from common.media import stored_upload_name
 from common.permissions import require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
+from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 
-from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
+from .csv_load import load_rows
+from .models import STOCK_WARNING_FACTOR, Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
     CategoryIn,
     CategoryOut,
     LoadCsvIn,
     LoadCsvOut,
     MovementOut,
-    OkOut,
     OrderOut,
     OrderReceiveIn,
     OrderReceiveOut,
@@ -38,25 +35,25 @@ from .schemas import (
     SupplierIn,
     SupplierOut,
 )
-from .services import apply_movement, generate_draft_orders, receive_order
+from .orders import (
+    generate_draft_orders,
+    mark_order_sent,
+    receive_order,
+    supplier_order_payload,
+    update_draft_order,
+)
+from .services import MAX_LOAD_QTY, UNLOAD_KINDS, apply_movement, save_product
 
 router = Router(tags=["inventory"])
-logger = logging.getLogger(__name__)
 
-UNLOAD_KINDS = {
-    StockMovement.Kind.INTERNAL_USE,
-    StockMovement.Kind.ADJUSTMENT,
-    StockMovement.Kind.TRANSFER,
-}
-
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 # PositiveSmallIntegerField: sopra questo valore il database rifiuta la riga, e
 # al cliente arriva un 500 invece del 400 che gli spiega cosa ha sbagliato.
-MAX_CATEGORY_ORDER = 32767
+MAX_CATEGORY_ORDER = MAX_POSITIVE_SMALL_INT
 
 # La fattura del carico finisce in uno storage servito da noi: senza un tetto
 # alla dimensione e un elenco di formati, il campo «allega fattura» è un
-# caricamento libero di file arbitrari (stesso controllo di clients/api.py).
+# caricamento libero di file arbitrari (stesso controllo degli allegati delle
+# note cliente, clients/records.py).
 INVOICE_TYPES = (
     "application/pdf",
     "image/jpeg",
@@ -66,13 +63,6 @@ INVOICE_TYPES = (
     "image/heif",
 )
 INVOICE_MAX_BYTES = 15 * 1024 * 1024
-
-# Tetto alla quantità di un carico. La colonna è numeric(10,2): oltre i cento
-# milioni PostgreSQL risponde «numeric field overflow», cioè un 500 (su SQLite
-# dei test passa e basta). Il caso vero è l'EAN di tredici cifre che il CSV
-# della bolla mette nell'ultima colonna, letto come quantità (09-06). Nessun
-# salone carica centomila confezioni in una volta.
-MAX_LOAD_QTY = Decimal("100000")
 
 
 def _products_qs(ctx):
@@ -84,36 +74,7 @@ def _apply_product_payload(product: Product, ctx, data: ProductIn) -> Product:
     supplier = salon_get(Supplier, ctx, payload.pop("supplier_id"))
     category_id = payload.pop("category_id")
     category = salon_get(ProductCategory, ctx, category_id) if category_id else None
-    if payload["usage"] not in Product.Usage.values:
-        raise HttpError(400, "Tipo di utilizzo non valido")
-    for name, value in payload.items():
-        setattr(product, name, value)
-    product.supplier = supplier
-    product.category = category
-    if product.pk is None:
-        product.salon = ctx.salon
-        product.save()
-        return product
-    # In modifica si scrivono SOLO i campi anagrafici arrivati nel payload.
-    # `models.Product` dichiara che `stock_qty` non va mai scritta direttamente:
-    # un save() pieno la riportava al valore letto a inizio richiesta, e i
-    # movimenti registrati nel frattempo (una vendita al banco mentre si
-    # correggeva il prezzo) sparivano dalla giacenza pur restando nello storico.
-    product.save(update_fields=[*payload.keys(), "supplier", "category", "updated_at"])
-    return product
-
-
-def _validate_category_in(data: CategoryIn) -> None:
-    """Colore e ordine arrivano dal client e finiscono grezzi in colonne strette.
-
-    Senza questo controllo un colore di venti caratteri o un ordine negativo non
-    sono un errore della richiesta ma un errore del database: 500 e nessuna
-    spiegazione a chi sta compilando il modulo.
-    """
-    if not (0 <= data.order <= MAX_CATEGORY_ORDER):
-        raise HttpError(400, "Ordine della categoria non valido")
-    if data.color is not None and not _HEX_COLOR_RE.match((data.color or "").strip()):
-        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+    return save_product(product, ctx.salon, payload, supplier=supplier, category=category)
 
 
 def _invoice_upload_name(upload: UploadedFile) -> str:
@@ -165,10 +126,10 @@ def list_products(
     elif stock_state == "warning":
         qs = qs.filter(
             stock_qty__gt=F("min_threshold"),
-            stock_qty__lte=F("min_threshold") * Decimal("1.5"),
+            stock_qty__lte=F("min_threshold") * STOCK_WARNING_FACTOR,
         )
     elif stock_state == "ok":
-        qs = qs.filter(stock_qty__gt=F("min_threshold") * Decimal("1.5"))
+        qs = qs.filter(stock_qty__gt=F("min_threshold") * STOCK_WARNING_FACTOR)
     # default: prodotti sotto soglia prima. L'id in coda rende l'ordine univoco:
     # con due omonimi (marche diverse) a cavallo fra due pagine, LIMIT/OFFSET su
     # PostgreSQL poteva ripeterne uno e saltare l'altro (09-10).
@@ -304,63 +265,6 @@ def unload_product(request, product_id: int, data: ProductUnloadIn):
     return movement
 
 
-def _single_active_match(qs, what: str) -> Optional[Product]:
-    """L'unico prodotto ATTIVO che corrisponde, None se nessuno; più di uno = errore di riga.
-
-    Nome e SKU non sono univoci: la marca è un campo a parte e un prodotto
-    sostituito eredita spesso il codice del fornitore. Con `.first()` sui
-    prodotti di ogni stato il carico finiva sull'omonimo di un'altra marca o
-    sul vecchio articolo disattivato, invisibile in elenco, e la risposta
-    diceva «caricato» (09-02, 15-04).
-    """
-    matches = list(qs.filter(active=True).order_by("id")[:2])
-    if len(matches) > 1:
-        raise HttpError(
-            400, f"{what} ambiguo: più prodotti attivi corrispondono, scegli il prodotto dall'elenco"
-        )
-    return matches[0] if matches else None
-
-
-def _csv_row_product(ctx, row, default_supplier_id) -> tuple[Product, str]:
-    """(prodotto, esito) di una riga di carico. HttpError = errore della riga."""
-    if row.qty <= 0:
-        raise HttpError(422, "Quantità non valida")
-    if row.qty > MAX_LOAD_QTY:
-        raise HttpError(422, f"Quantità fuori scala: {row.qty} (controlla le colonne della riga)")
-    if row.product_id is not None:
-        # Il prodotto scelto dall'elenco: l'id vince su SKU e nome (C7).
-        product = Product.objects.filter(salon=ctx.salon, pk=row.product_id).first()
-        if product is None:
-            raise HttpError(400, "Prodotto non trovato")
-        return product, "loaded"
-    if not row.sku and not row.name:
-        raise HttpError(400, "Riga senza nome né SKU")
-    products = Product.objects.filter(salon=ctx.salon)
-    product = None
-    if row.sku:
-        product = _single_active_match(products.filter(sku__iexact=row.sku), "SKU")
-    if product is None and row.name:
-        product = _single_active_match(products.filter(name__iexact=row.name), "Nome")
-    if product is not None:
-        return product, "loaded"
-
-    # Prodotto nuovo. Le lunghezze si controllano qui: oltre il limite della
-    # colonna PostgreSQL risponde «value too long», cioè un 500.
-    name = row.name or row.sku
-    if len(name) > Product._meta.get_field("name").max_length:
-        raise HttpError(400, "Nome del nuovo prodotto troppo lungo")
-    if len(row.sku) > Product._meta.get_field("sku").max_length:
-        raise HttpError(400, "SKU del nuovo prodotto troppo lungo")
-    supplier_id = row.supplier_id or default_supplier_id
-    if not supplier_id:
-        raise HttpError(400, "Fornitore mancante per il nuovo prodotto")
-    supplier = Supplier.objects.filter(salon=ctx.salon, pk=supplier_id).first()
-    if supplier is None:
-        raise HttpError(400, "Fornitore non trovato")
-    product = Product.objects.create(salon=ctx.salon, name=name, sku=row.sku, supplier=supplier)
-    return product, "created"
-
-
 @router.post("/load-csv", auth=staff_auth, response=LoadCsvOut)
 def load_csv(request, data: LoadCsvIn):
     """Carico multiplo da CSV: per `product_id`, altrimenti per SKU poi per nome
@@ -374,40 +278,8 @@ def load_csv(request, data: LoadCsvIn):
     """
     ctx = request.auth
     require_scope(ctx, "inventory")
-    results = []
-    loaded = created = errors = 0
-    for idx, row in enumerate(data.rows, start=1):
-        label = row.name or row.sku
-        try:
-            with transaction.atomic():
-                product, status = _csv_row_product(ctx, row, data.supplier_id)
-                apply_movement(
-                    product,
-                    kind=StockMovement.Kind.LOAD,
-                    qty=row.qty,
-                    reason="Carico CSV",
-                    author=ctx.user,
-                )
-        except HttpError as exc:
-            errors += 1
-            results.append({"row": idx, "name": label, "status": "error", "error": str(exc)})
-            continue
-        except DatabaseError:
-            logger.exception("load-csv: riga %s non salvata (salone=%s)", idx, ctx.salon.id)
-            errors += 1
-            results.append(
-                {
-                    "row": idx,
-                    "name": label,
-                    "status": "error",
-                    "error": "Riga non salvata: valori fuori dai limiti del magazzino",
-                }
-            )
-            continue
-        loaded += 1
-        if status == "created":
-            created += 1
-        results.append({"row": idx, "product_id": product.id, "name": product.name, "status": status})
+    outcome = load_rows(ctx, data.rows, data.supplier_id)
+    loaded, created, errors = outcome["loaded"], outcome["created"], outcome["errors"]
     log_activity(
         ctx.salon,
         "stock.csv_loaded",
@@ -415,7 +287,7 @@ def load_csv(request, data: LoadCsvIn):
         actor=ctx.user,
         payload={"loaded": loaded, "created": created, "errors": errors},
     )
-    return {"results": results, "loaded": loaded, "created": created, "errors": errors}
+    return outcome
 
 
 # ---- Movimenti ---------------------------------------------------------------
@@ -535,7 +407,7 @@ def list_categories(request):
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     return ProductCategory.objects.create(
         salon=ctx.salon,
         name=data.name,
@@ -548,7 +420,7 @@ def create_category(request, data: CategoryIn):
 def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     category = salon_get(ProductCategory, ctx, category_id)
     category.name = data.name
     category.order = data.order
@@ -614,29 +486,7 @@ def update_order(request, order_id: int, data: OrderUpdateIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     order = salon_get(PurchaseOrder, ctx, order_id)
-    # Tutto o niente: prima si risolvono TUTTE le righe, poi si scrive. Applicarle
-    # una per una lasciava l'ordine a metà quando l'ultima riga era sconosciuta —
-    # 404 al client, ma le quantità precedenti già cambiate a magazzino.
-    with transaction.atomic():
-        if (
-            PurchaseOrder.objects.select_for_update()
-            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
-            .first()
-            is None
-        ):
-            raise HttpError(400, "Solo le bozze d'ordine sono modificabili")
-        rows = []
-        for row in data.lines:
-            line = order.lines.filter(pk=row.id).first()
-            if line is None:
-                raise HttpError(404, "Riga d'ordine non trovata")
-            rows.append((line, row.qty_ordered))
-        for line, qty_ordered in rows:
-            if qty_ordered <= 0:
-                line.delete()
-            else:
-                line.qty_ordered = qty_ordered
-                line.save(update_fields=["qty_ordered"])
+    update_draft_order(order, data.lines)
     log_activity(
         ctx.salon,
         "order.updated",
@@ -655,50 +505,8 @@ def send_order(request, order_id: int, data: OrderSendIn):
     method = data.method or order.supplier.order_method
     if method not in Supplier.OrderMethod.values:
         raise HttpError(400, "Metodo d'invio non valido")
-    # Come in `receive_order`: lo stato si guarda sulla riga BLOCCATA e riletta,
-    # non sulla copia arrivata con la richiesta. Due schermate aperte sullo
-    # stesso ordine mandavano altrimenti due volte la stessa ordinazione al
-    # fornitore, che spediva la merce due volte.
-    with transaction.atomic():
-        locked = (
-            PurchaseOrder.objects.select_for_update()
-            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
-            .first()
-        )
-        if locked is None:
-            raise HttpError(400, "L'ordine è già stato inviato")
-        order = locked
-        lines = list(order.lines.select_related("product"))
-        if not lines:
-            raise HttpError(400, "Impossibile inviare un ordine senza righe")
-        order.status = PurchaseOrder.Status.SENT
-        order.sent_method = method
-        order.sent_at = timezone.now()
-        order.save(update_fields=["status", "sent_method", "sent_at", "updated_at"])
-    emit_event(
-        ctx.salon,
-        "supplier.order",
-        {
-            "order_id": order.id,
-            "method": method,
-            "supplier": {
-                "id": order.supplier_id,
-                "name": order.supplier.name,
-                "email": order.supplier.email,
-                "phone": order.supplier.phone,
-            },
-            "lines": [
-                {
-                    "product_id": line.product_id,
-                    "name": line.product.name,
-                    "sku": line.product.sku,
-                    "qty": float(line.qty_ordered),
-                    "package_unit": line.product.package_unit,
-                }
-                for line in lines
-            ],
-        },
-    )
+    order, lines = mark_order_sent(order, method)
+    emit_event(ctx.salon, "supplier.order", supplier_order_payload(order, method, lines))
     log_activity(
         ctx.salon,
         "order.sent",

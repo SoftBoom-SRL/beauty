@@ -5,10 +5,6 @@ from typing import Optional
 from ninja import Schema
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 # ---- Operatrici ----------------------------------------------------------------
 
 

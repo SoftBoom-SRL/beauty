@@ -136,7 +136,3 @@ class PublicPackageOut(Schema):
     description: str
     price: Decimal
     items: list[PublicPackageItemOut]
-
-
-class OkOut(Schema):
-    ok: bool = True
