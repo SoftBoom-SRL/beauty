@@ -2,10 +2,10 @@
 // Port of DkDepositRules / DkDepositRuleCard with the API conditions model:
 // { op: 'and'|'or', rules: [{ field, cmp, value }] } + amount_type pct|fixed.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Icon, Toggle, NumInput } from '@youty/shared';
+import { api, Icon, Toggle, NumInput, toastApiError } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { useDash, useLive } from '../../ctx.jsx';
-import { DkCondRow, amountForType, depositFields, ruleSentence, inputCss, toastErr, LockNote } from './lib.jsx';
+import { DkCondRow, amountForType, depositFields, ruleSentence, inputCss, LockNote } from './lib.jsx';
 
 /* `drafts` (facoltativo): la pagina che ospita le regole ci trova le bozze non
  * salvate delle card, per salvarle col suo «Salva» (vedi BookingsOptimPage). */
@@ -19,7 +19,7 @@ export default function DepositRules({ drafts }) {
 
   const load = useCallback(async () => {
     try { setRules(await api.get('/api/core/deposit-rules')); }
-    catch (err) { toastErr(err, fireToast, t); setRules([]); }
+    catch (err) { toastApiError(err, fireToast, t); setRules([]); }
   }, [fireToast, t]);
   useEffect(() => { if (isOwner) load(); }, [isOwner, load]);
   /* Rinominare un'etichetta riscrive sul server le condizioni che la citano:
@@ -49,7 +49,7 @@ export default function DepositRules({ drafts }) {
       });
       setRules((l) => [...(l || []), created]);
       setOpenId(created.id);
-    } catch (err) { toastErr(err, fireToast, t); } finally { setAdding(false); }
+    } catch (err) { toastApiError(err, fireToast, t); } finally { setAdding(false); }
   };
 
   const save = async (id, payload) => {
@@ -57,7 +57,7 @@ export default function DepositRules({ drafts }) {
       const upd = await api.put(`/api/core/deposit-rules/${id}`, payload);
       setRules((l) => l.map((r) => (r.id === id ? upd : r)));
       return upd;
-    } catch (err) { toastErr(err, fireToast, t); return null; }
+    } catch (err) { toastApiError(err, fireToast, t); return null; }
   };
 
   const del = async (id) => {
@@ -66,7 +66,7 @@ export default function DepositRules({ drafts }) {
       setRules((l) => l.filter((r) => r.id !== id));
       if (openId === id) setOpenId(null);
       fireToast({ msg: t('Regola eliminata', 'Rule deleted'), icon: 'x' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   return (

@@ -3,7 +3,7 @@
 // (desktop-automazioni.jsx). The automazioni section keeps its own copy: flag for
 // a future shared extraction.
 import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, Icon, NumInput } from '@youty/shared';
+import { Icon, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { dropCurrent } from './rules.js';
 
@@ -56,11 +56,6 @@ export const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 14,
   padding: '10px 12px', fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink)',
 };
-
-export function toastErr(err, fireToast, t) {
-  if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-  else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-}
 
 export function LockNote({ t, msg }) {
   return (

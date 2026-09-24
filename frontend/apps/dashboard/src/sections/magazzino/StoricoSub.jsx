@@ -1,9 +1,9 @@
 // StoricoSub.jsx — global movement history: GET /api/inventory/movements
 // (paginated, server-side kind/date filters). MOVE_META styling per kind.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, Icon, mediaUrl } from '@youty/shared';
+import { api, EmptyState, Icon, mediaUrl, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { MOVE_META, errMsg, fmtQty, fmtWhen, num } from './lib.js';
+import { MOVE_META, fmtQty, fmtWhen, num } from './lib.js';
 import { Pager, SkelRows } from './bits.jsx';
 
 const PAGE = 30;
@@ -35,7 +35,7 @@ export default function StoricoSub({ allProds, liveTick }) {
       },
     })
       .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
+      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
   }, [kindF, dateFrom, dateTo, offset, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps

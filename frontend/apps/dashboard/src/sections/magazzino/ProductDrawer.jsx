@@ -2,10 +2,10 @@
 // Ported from the prototype's ProductDrawer (which superseded ProdEditModal); mock state →
 // POST/PUT /api/inventory/products, movements from GET /products/{id}/movements.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, fmtEur, Icon } from '@youty/shared';
+import { api, fmtEur, Icon, toastApiError, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { MOVE_META, STOCK_META, UNIT_OPTIONS, errMsg, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
+import { MOVE_META, STOCK_META, UNIT_OPTIONS, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
 
 /* category colour: fallback + pastel presets offered in the picker */
@@ -202,7 +202,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
               qty: draft.initial_qty, reason: t('Scorta iniziale', 'Initial stock'),
             });
           } catch (err) {
-            fireToast({ msg: t('Prodotto creato, ma la scorta iniziale non è stata caricata: caricala con «+» dalla scheda', 'Product created, but the initial stock was not loaded: add it with “+” from the card') + ' (' + errMsg(err, t) + ')', icon: 'alert' });
+            fireToast({ msg: t('Prodotto creato, ma la scorta iniziale non è stata caricata: caricala con «+» dalla scheda', 'Product created, but the initial stock was not loaded: add it with “+” from the card') + ' (' + apiErrorText(err, t) + ')', icon: 'alert' });
             onSaved();
             if (onCreated) onCreated(created); else onClose();
             return;
@@ -218,7 +218,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
       onSaved();
       onClose();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }
@@ -233,7 +233,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
       onDeleted();
       onClose();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }

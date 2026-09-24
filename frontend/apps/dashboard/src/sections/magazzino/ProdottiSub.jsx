@@ -2,10 +2,10 @@
 // Filters (q, category_id, supplier_id, brand, usage, stock_state) are server-side;
 // the server already sorts below-threshold products first.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, fmtEur, Icon } from '@youty/shared';
+import { api, EmptyState, fmtEur, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
-import { STOCK_META, USAGE_META, errMsg, eur0, fmtQty, num, unitCost } from './lib.js';
+import { STOCK_META, USAGE_META, eur0, fmtQty, num, unitCost } from './lib.js';
 import { MiniMetric, Pager, SearchToolbar, SkelRows, useDebounced } from './bits.jsx';
 import ProductDrawer from './ProductDrawer.jsx';
 import AdjModal from './AdjModal.jsx';
@@ -54,7 +54,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
       },
     })
       .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
+      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
   }, [qDeb, catF, supF, brandF, usageF, stockF, activeF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -91,7 +91,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
     try {
       await api.put(`/api/inventory/categories/${catId}`, { name: c.name, order: c.order, color });
       refreshShared();
-    } catch (err) { fireToast({ msg: errMsg(err, t), icon: 'alert' }); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   /* after a movement, refresh the open drawer's product from the API */

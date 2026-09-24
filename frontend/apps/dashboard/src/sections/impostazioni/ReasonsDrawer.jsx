@@ -2,10 +2,10 @@
 // (settings.cancel_reasons / no_show_reasons). Liste vuote = quelle
 // predefinite della dashboard. Il dettaglio appuntamento le usa nel picker.
 import React, { useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { api, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 
 const DEFAULT_CANCEL = ['Richiesta cliente', 'Malattia', 'Sovrapposizione', 'Altro'];
 const DEFAULT_NOSHOW = ['Mancata presenza', 'Malattia / imprevisto', 'Altro'];
@@ -74,7 +74,7 @@ export default function ReasonsDrawer({ onClose }) {
       fireToast({ msg: t('Motivazioni salvate', 'Reasons saved'), icon: 'check' });
       onClose();
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' }); else toastErr(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 

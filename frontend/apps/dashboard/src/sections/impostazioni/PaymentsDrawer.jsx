@@ -4,11 +4,11 @@
 // caparra non è arrivata, e quando parte il sollecito. Le regole di CHI paga
 // la caparra restano in Prenotazioni & ottimizzazione → Regole deposito.
 import { useEffect, useState } from 'react';
-import { api, ApiError, Icon, NumInput } from '@youty/shared';
+import { api, Icon, NumInput, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { toastErr, LockNote } from './lib.jsx';
+import { LockNote } from './lib.jsx';
 
 const HOLD_PRESETS = [0, 15, 20, 30, 60, 120];
 
@@ -51,7 +51,7 @@ export default function PaymentsDrawer({ onClose }) {
       setConfirmOff(false);
       reload.salon().catch(() => {});
       fireToast({ msg: t('Account Stripe scollegato', 'Stripe account disconnected'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setBusy(false); }
   };
 
@@ -65,7 +65,7 @@ export default function PaymentsDrawer({ onClose }) {
       fireToast({ msg: t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
       onClose();
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' }); else toastErr(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 

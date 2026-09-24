@@ -3,10 +3,10 @@
 // invalida ogni altra sessione dell'utente: ci restituisce token nuovi che
 // applichiamo subito, altrimenti ci sloggheremmo da soli.
 import { useState } from 'react';
-import { api, staffAuth, Icon } from '@youty/shared';
+import { api, staffAuth, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr } from './lib.jsx';
+import { inputCss } from './lib.jsx';
 
 const MIN_LEN = 8;
 
@@ -53,7 +53,7 @@ export default function PasswordDrawer({ onClose }) {
       staffAuth.applySession(data); // i token vecchi non valgono più
       fireToast({ msg: t('Password aggiornata', 'Password updated'), icon: 'check' });
       onClose();
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSaving(false); }
   };
 

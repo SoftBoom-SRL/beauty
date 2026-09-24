@@ -4,11 +4,11 @@
 // so the invite token is displayed with a copy button only.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Avatar, salonTzOpts } from '@youty/shared';
+import { api, Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote, CopyField } from './lib.jsx';
+import { inputCss, LockNote, CopyField } from './lib.jsx';
 
 const initialsOf = (name, email) => {
   const src = (name || '').trim() || (email || '');
@@ -49,7 +49,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
       ]);
       setMembers(m); setRoles(r); setInvitations(i);
       setInv((f) => ({ ...f, role_id: f.role_id ?? (r[0]?.id ?? null) }));
-    } catch (err) { toastErr(err, fireToast, t); setMembers([]); setInvitations([]); }
+    } catch (err) { toastApiError(err, fireToast, t); setMembers([]); setInvitations([]); }
   }, [fireToast, t]);
   useEffect(() => { if (canTeam) load(); }, [canTeam, load]);
 
@@ -58,7 +58,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
       const upd = await api.post(`/api/auth/members/${memberId}/role`, { role_id: roleId });
       setMembers((l) => l.map((m) => (m.id === memberId ? upd : m)));
       fireToast({ msg: t('Ruolo aggiornato', 'Role updated'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   // Rimuovere una persona dal team le toglie l'accesso al gestionale: si chiede
@@ -74,7 +74,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
       setMembers((l) => l.filter((x) => x.id !== m.id));
       fireToast({ msg: t('Membro rimosso', 'Member removed'), icon: 'x' });
       setConfirmRemove(null);
-    } catch (err) { toastErr(err, fireToast, t); } // 400 if owner
+    } catch (err) { toastApiError(err, fireToast, t); } // 400 if owner
     finally { setRemoving(false); }
   };
 
@@ -88,7 +88,7 @@ export default function TeamDrawer({ onClose, onRoles }) {
       setInviting(false);
       setInv({ email: '', role_id: roles[0]?.id ?? null });
       fireToast({ msg: t('Invito creato per ', 'Invite created for ') + email, icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSending(false); }
   };
 

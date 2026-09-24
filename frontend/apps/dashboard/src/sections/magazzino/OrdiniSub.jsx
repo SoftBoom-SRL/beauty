@@ -4,9 +4,9 @@
 // Line prices/VAT are not stored on order lines — they are enriched client-side from
 // the products snapshot (purchase price net of supplier discount).
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, fmtEur, Icon, NumInput } from '@youty/shared';
+import { api, EmptyState, fmtEur, Icon, NumInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, errMsg, eur0, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, round2, unitCost } from './lib.js';
+import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, eur0, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, round2, unitCost } from './lib.js';
 import { Pager, SkelRows, inputCss } from './bits.jsx';
 
 const PAGE = 20;
@@ -37,7 +37,7 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
     setLoading(true);
     api.get('/api/inventory/orders', { params: { status: statusF !== 'all' ? statusF : undefined, limit: PAGE, offset } })
       .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
+      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
       .finally(() => { if (!dead) setLoading(false); });
     return () => { dead = true; };
   }, [statusF, offset, tick, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -57,7 +57,7 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
         fireToast({ msg: t('Nessun riordino necessario · tutti i prodotti sono sopra soglia', 'No reorders needed · all products are above threshold'), icon: 'check' });
       }
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setGenerating(false);
     }
@@ -166,7 +166,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
       await saveLines();
       fireToast({ msg: t('Quantità aggiornate', 'Quantities updated'), icon: 'check' });
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
   const removeLine = async (l) => {
@@ -176,7 +176,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
       await saveLines({ id: l.id, qty_ordered: 0 });
       fireToast({ msg: t('Riga rimossa', 'Line removed'), icon: 'x' });
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 
@@ -191,7 +191,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
       const meta = ORDER_METHODS[method] || ORDER_METHODS.email;
       fireToast({ msg: t(`Ordine inviato a ${order.supplier_name} via ${meta.it}`, `Order sent to ${order.supplier_name} via ${meta.en}`), icon: 'check' });
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 
@@ -241,7 +241,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
         icon: 'check',
       });
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 

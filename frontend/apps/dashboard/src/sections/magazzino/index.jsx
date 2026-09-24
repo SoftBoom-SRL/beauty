@@ -2,9 +2,9 @@
 // Shared reference data (categories, suppliers, full products snapshot) is loaded here and
 // passed to the sub-tabs; each sub-tab fetches its own paginated lists.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '@youty/shared';
+import { api, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
-import { STOCK_META, errMsg } from './lib.js';
+import { STOCK_META } from './lib.js';
 import ProdottiSub from './ProdottiSub.jsx';
 import OrdiniSub from './OrdiniSub.jsx';
 import FornitoriSub from './FornitoriSub.jsx';
@@ -57,7 +57,7 @@ export default function MagazzinoSection() {
       setAllProds(p.items);
       setProdsPartial(p.partial);
     } catch (err) {
-      if (!silent) fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      if (!silent) toastApiError(err, fireToast, t);
       setAllProds((prev) => prev || []);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

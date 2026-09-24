@@ -3,10 +3,10 @@
 // scarico → POST /products/{id}/unload (qty, kind ∈ internal_use/adjustment/transfer, reason)
 // 422 "Giacenza insufficiente" → toast.
 import React, { useState } from 'react';
-import { api, Icon, Avatar } from '@youty/shared';
+import { api, Icon, Avatar, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { errMsg, fmtQty, num } from './lib.js';
+import { fmtQty, num } from './lib.js';
 import { NumBox } from './bits.jsx';
 
 const CARICO_REASONS = [
@@ -57,7 +57,7 @@ export default function AdjModal({ prod, type, onClose, onDone }) {
       onDone();
       onClose();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' }); // 422 → "Giacenza insufficiente"
+      toastApiError(err, fireToast, t); // 422 → "Giacenza insufficiente"
     } finally {
       setBusy(false);
     }

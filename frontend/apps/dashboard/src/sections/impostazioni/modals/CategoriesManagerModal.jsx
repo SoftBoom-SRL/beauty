@@ -8,13 +8,13 @@
 // «category.reordered» nel registro attività. Clienti e magazzino non ce
 // l'hanno e restano con una PUT per categoria.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, EmptyState, nameIn } from '@youty/shared';
+import { api, Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import DkModal from '../../../ui/DkModal.jsx';
 import DkConfirm from '../../../ui/DkConfirm.jsx';
 import HexInput from '../../../ui/HexInput.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { GD_PALETTE, PaletteGrid, inputCss, toastErr, LockNote } from '../lib.jsx';
+import { GD_PALETTE, PaletteGrid, inputCss, LockNote } from '../lib.jsx';
 
 const KINDS = {
   clienti: { base: '/api/clients/categories', scope: 'clients', hasColor: true, bilingual: false },
@@ -42,7 +42,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
 
   const load = useCallback(async (k) => {
     try { const res = await api.get(KINDS[k].base); setLists((s) => ({ ...s, [k]: res })); }
-    catch (err) { toastErr(err, fireToast, t); setLists((s) => ({ ...s, [k]: [] })); }
+    catch (err) { toastApiError(err, fireToast, t); setLists((s) => ({ ...s, [k]: [] })); }
   }, [fireToast, t]);
   useEffect(() => { if (lists[kind] === null) load(kind); }, [kind, lists, load]);
 
@@ -84,7 +84,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
           : t('Categoria salvata', 'Category saved'),
         icon: 'check',
       });
-    } catch (err) { toastErr(err, fireToast, t); } // 400: nome già usato (anche con maiuscole diverse)
+    } catch (err) { toastApiError(err, fireToast, t); } // 400: nome già usato (anche con maiuscole diverse)
     finally { setSaving(false); }
   };
 
@@ -117,7 +117,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     } catch (err) {
       // 400 con il motivo: servizi collegati, o etichetta citata da una regola
       // caparra o da un'automazione (il messaggio le nomina)
-      toastErr(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setDeleting(false);
       setConfirmDel(null);
@@ -161,7 +161,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
       await load(kind);
       syncCtx(kind);
       fireToast({ msg: t('Ordine aggiornato', 'Order updated'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); load(kind); }
+    } catch (err) { toastApiError(err, fireToast, t); load(kind); }
   };
 
   const blank = () => (kind === 'servizi'

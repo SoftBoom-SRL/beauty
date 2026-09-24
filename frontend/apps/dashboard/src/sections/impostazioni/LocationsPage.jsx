@@ -2,11 +2,11 @@
 // Reads: any staff. Writes: owner-only (lock state otherwise).
 // Deleting the only location → 400 from the API, surfaced as toast.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, PhoneInput } from '@youty/shared';
+import { api, Icon, PhoneInput, toastApiError } from '@youty/shared';
 import DkModal from '../../ui/DkModal.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 
 export default function LocationsPage({ onBack }) {
   const { t, lang, session, reload, fireToast } = useDash();
@@ -17,7 +17,7 @@ export default function LocationsPage({ onBack }) {
 
   const load = useCallback(async () => {
     try { setList(await api.get('/api/core/locations')); }
-    catch (err) { toastErr(err, fireToast, t); setList([]); }
+    catch (err) { toastApiError(err, fireToast, t); setList([]); }
   }, [fireToast, t]);
   useEffect(() => { load(); }, [load]);
 
@@ -32,7 +32,7 @@ export default function LocationsPage({ onBack }) {
       await Promise.all([load(), reload.salon()]);
       setEdit(null);
       fireToast({ msg: t('Sede salvata', 'Location saved'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSaving(false); }
   };
 
@@ -50,7 +50,7 @@ export default function LocationsPage({ onBack }) {
       setEdit(null);
       setConfirmDel(null);
       fireToast({ msg: t('Sede eliminata', 'Location deleted'), icon: 'x' });
-    } catch (err) { toastErr(err, fireToast, t); } // 400 "only one" → toast
+    } catch (err) { toastApiError(err, fireToast, t); } // 400 "only one" → toast
     finally { setDeleting(false); }
   };
 

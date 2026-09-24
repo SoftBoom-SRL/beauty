@@ -1,9 +1,9 @@
 // FornitoriSub.jsx — supplier directory: CRUD on /api/inventory/suppliers.
 // DELETE returns 400 when the supplier still has products/orders attached → toast.
 import React, { useState } from 'react';
-import { api, EmptyState, Icon, PhoneInput } from '@youty/shared';
+import { api, EmptyState, Icon, PhoneInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { ORDER_METHODS, errMsg } from './lib.js';
+import { ORDER_METHODS } from './lib.js';
 import { inputCss } from './bits.jsx';
 
 const EMPTY = { name: '', email: '', phone: '', order_method: 'email', address: '', vat_number: '', sdi_pec: '', notes: '' };
@@ -71,7 +71,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
       setEditId(null); setDraft(null);
       refreshShared();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 
@@ -84,7 +84,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
       setAddOpen(false); setNw(EMPTY);
       refreshShared();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 
@@ -98,7 +98,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
       refreshShared();
     } catch (err) {
       // 400 "Fornitore con prodotti o ordini associati: impossibile eliminarlo"
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setBusy(false); }
   };
 

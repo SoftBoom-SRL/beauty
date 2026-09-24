@@ -2,11 +2,11 @@
 // Scope checkboxes come from the known API scope list; system roles read-only.
 // Keeps the prototype's local "revenue summary visible" UI toggle (ctx showRevenue).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon } from '@youty/shared';
+import { api, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 
 // known scopes (common/permissions.py) with bilingual labels
 export const SCOPES = [
@@ -45,7 +45,7 @@ export default function RolesDrawer({ onClose }) {
       const r = await api.get('/api/auth/roles');
       setRoles(r);
       setDrafts(Object.fromEntries(r.map((x) => [x.id, { name: x.name, scopes: [...x.scopes] }])));
-    } catch (err) { toastErr(err, fireToast, t); setRoles([]); }
+    } catch (err) { toastApiError(err, fireToast, t); setRoles([]); }
   }, [fireToast, t]);
   useEffect(() => { if (canTeam) load(); }, [canTeam, load]);
 
@@ -60,7 +60,7 @@ export default function RolesDrawer({ onClose }) {
       setDrafts((d) => ({ ...d, [created.id]: { name: created.name, scopes: [...created.scopes] } }));
       setOpenId(created.id);
       fireToast({ msg: t('Ruolo creato · imposta i permessi', 'Role created · set permissions'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   const saveRole = async (role) => {
@@ -71,7 +71,7 @@ export default function RolesDrawer({ onClose }) {
       setRoles((l) => l.map((r) => (r.id === role.id ? upd : r)));
       setDrafts((ds) => ({ ...ds, [role.id]: { name: upd.name, scopes: [...upd.scopes] } }));
       fireToast({ msg: t('Permessi salvati per ', 'Permissions saved for ') + upd.name, icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   /* Eliminare un ruolo partiva al primo clic: chi lo aveva restava senza
@@ -102,7 +102,7 @@ export default function RolesDrawer({ onClose }) {
       if (openId === role.id) setOpenId(null);
       setConfirmDel(null);
       fireToast({ msg: t('Ruolo eliminato', 'Role deleted'), icon: 'x' });
-    } catch (err) { toastErr(err, fireToast, t); } // 400 if system
+    } catch (err) { toastApiError(err, fireToast, t); } // 400 if system
     finally { setDeleting(false); }
   };
   const delDetail = () => {

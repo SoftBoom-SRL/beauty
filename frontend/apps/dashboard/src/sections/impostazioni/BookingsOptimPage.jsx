@@ -5,11 +5,11 @@
 // Dropped (no API field): deposit-mode selector (covered by DepositRules below)
 // and the free-text "Le tue regole" builder (phase 2).
 import React, { useRef, useState } from 'react';
-import { api, Icon, Toggle, NumInput } from '@youty/shared';
+import { api, Icon, Toggle, NumInput, toastApiError } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
 import { useDash } from '../../ctx.jsx';
 import DepositRules from './DepositRules.jsx';
-import { toastErr, LockNote } from './lib.jsx';
+import { LockNote } from './lib.jsx';
 
 /* module-scope helpers — stable identity so inputs keep focus across re-renders */
 const AoPills = ({ value, onChange, options, disabled }) => (
@@ -99,7 +99,7 @@ export default function BookingsOptimPage({ onBack }) {
       if (failed) return;
       fireToast({ msg: pending.length ? t('Impostazioni e regole deposito salvate', 'Settings and deposit rules saved') : t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
       onBack();
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSaving(false); }
   };
 

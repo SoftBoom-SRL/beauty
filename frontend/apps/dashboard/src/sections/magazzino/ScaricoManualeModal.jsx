@@ -4,10 +4,10 @@
 // sequentially to /products/{id}/unload; per-line status pending→✓/error, one failure
 // does not abort the rest, failed lines stay editable. onDone() runs after the batch.
 import React, { useState } from 'react';
-import { api, ApiError, Icon, Avatar } from '@youty/shared';
+import { api, ApiError, Icon, Avatar, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { errMsg, fmtQty, num } from './lib.js';
+import { fmtQty, num } from './lib.js';
 import { NumBox, inputCss } from './bits.jsx';
 import { SCARICO_REASONS } from './AdjModal.jsx';
 
@@ -35,7 +35,7 @@ export default function ScaricoManualeModal({ products, onClose, onDone }) {
   const canApply = !locked && !busy && validLines.some((l) => l.status !== 'done');
 
   const lineErr = (err) =>
-    err instanceof ApiError && err.status === 422 ? t('Giacenza insufficiente', 'Insufficient stock') : errMsg(err, t);
+    err instanceof ApiError && err.status === 422 ? t('Giacenza insufficiente', 'Insufficient stock') : apiErrorText(err, t);
 
   const apply = async () => {
     if (!canApply) return;
