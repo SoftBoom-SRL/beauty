@@ -1,4 +1,3 @@
-import re
 from decimal import Decimal
 from typing import Optional
 
@@ -13,7 +12,7 @@ from ninja.pagination import LimitOffsetPagination, paginate
 from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import client_auth, staff_auth
-from common.money import CENT, MAX_MONEY
+from common.money import CENT
 from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
@@ -29,6 +28,7 @@ from .gift_cards import (
     gift_card_kpis,
     sell_gift_card,
 )
+from .loyalty import apply_program_data
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
     ClientGiftCardIn,
@@ -311,96 +311,11 @@ def list_loyalty_programs(request, active: bool | None = None):
     return qs
 
 
-# Premi che il gestionale sa davvero emettere e il banco sa riscattare. Il
-# «prodotto omaggio» non c'è: non esiste un buono legato a un articolo di
-# magazzino, e accettarlo qui significherebbe promettere alla cliente un premio
-# che nessuna cassa può onorare.
-ISSUABLE_REWARDS = ("coupon_amount", "discount_pct", "free_service", "gift_card")
-
-# Tetto al rapporto di accumulo. Un refuso (1000 invece di 1) su un programma
-# «per euro» con soglia bassa emetteva migliaia di premi a ogni scontrino;
-# services.MAX_REWARDS_PER_SALE ferma l'emorragia a valle, questo la evita a
-# monte. Cento punti per euro è già una scelta esotica, oltre è un errore.
-MAX_EARN_RATIO = Decimal("100")
-# Un punto che scade fra otto anni non scade: oltre questo non ha senso e il
-# campo (PositiveSmallIntegerField) andrebbe comunque in overflow.
-MAX_POINTS_EXPIRY_MONTHS = 120
-MAX_THRESHOLD = 1_000_000
-
-_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-
-def _apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
-    if data.reward_type not in ISSUABLE_REWARDS:
-        raise HttpError(422, "Tipo di premio non gestito: scegli buono, sconto, servizio omaggio o gift card")
-    if data.reward_type == "free_service" and not data.reward_service_id:
-        raise HttpError(422, "Scegli il servizio da regalare")
-    if data.reward_type != "free_service" and Decimal(str(data.reward_value or 0)) <= 0:
-        raise HttpError(422, "Indica il valore del premio")
-    # Gli altri enum arrivavano scritti a database tali e quali: un "per_euro "
-    # con lo spazio finiva nel ramo «per servizio» senza dire niente, e un
-    # enrollment sbagliato spegneva in silenzio ogni iscrizione automatica —
-    # punti fermi a zero e nessun errore da nessuna parte.
-    if data.type not in LoyaltyProgram.Type.values:
-        raise HttpError(422, "Tipo di programma non valido")
-    if data.earn_metric not in LoyaltyProgram.EarnMetric.values:
-        raise HttpError(422, "Modalità di accumulo non valida")
-    if data.enrollment not in LoyaltyProgram.Enrollment.values:
-        raise HttpError(422, "Modalità di iscrizione non valida")
-    # Una tessera «A timbri» salvata con la metrica «per euro» (quella del
-    # modello vuoto della dashboard, che per i timbri nasconde il selettore)
-    # dava un timbro per euro: una piega da 45 € valeva quattro premi.
-    stamps = data.type == LoyaltyProgram.Type.STAMPS
-    if stamps and data.earn_metric == LoyaltyProgram.EarnMetric.PER_EURO:
-        raise HttpError(
-            400,
-            "Un programma a timbri dà un timbro per visita o per servizio, non per euro speso",
-        )
-    # threshold=0 faceva accumulare punti che non diventavano mai un premio.
-    if not 1 <= data.threshold <= MAX_THRESHOLD:
-        raise HttpError(422, "La soglia dev'essere un numero di punti fra 1 e 1.000.000")
-    # Per i timbri il rapporto non si sceglie (un timbro a visita o a servizio,
-    # vedi services._points_earned): si scrive 1 qualunque cosa arrivi, così
-    # quello che la scheda mostra è quello che succede in cassa.
-    if not stamps:
-        earn_ratio = Decimal(str(data.earn_ratio))
-        if not Decimal("0") < earn_ratio <= MAX_EARN_RATIO:
-            raise HttpError(422, f"Punti per unità fuori scala (massimo {MAX_EARN_RATIO})")
-    if Decimal(str(data.reward_value or 0)) > MAX_MONEY:
-        raise HttpError(422, "Valore del premio fuori scala")
-    if data.reward_type == "discount_pct" and Decimal(str(data.reward_value or 0)) > 100:
-        raise HttpError(422, "Uno sconto percentuale non può superare il 100%")
-    if not 0 <= data.points_expiry_months <= MAX_POINTS_EXPIRY_MONTHS:
-        raise HttpError(422, "Scadenza punti non valida (0 = mai, massimo 120 mesi)")
-    if not _HEX_COLOR.match(data.color or ""):
-        raise HttpError(422, "Colore non valido: usa il formato #RRGGBB")
-    if data.reward_service_id:
-        Service = django_apps.get_model("catalog", "Service")  # lazy
-        program.reward_service = salon_get(Service, ctx, data.reward_service_id)
-        # Il listino ammette servizi a 0 €: come premio diventavano una carta da
-        # zero che nessuno può emettere, e alla soglia l'errore bloccava ogni
-        # incasso di quella cliente.
-        if data.reward_type == "free_service" and Decimal(
-            str(program.reward_service.price or 0)
-        ) <= 0:
-            raise HttpError(
-                422, "Il servizio da regalare ha prezzo zero: scegline uno a pagamento"
-            )
-    else:
-        program.reward_service = None
-    for name, value in data.dict(exclude={"reward_service_id"}).items():
-        setattr(program, name, value)
-    if stamps:
-        program.earn_ratio = Decimal("1")
-    program.save()
-    return program
-
-
 @router.post("/loyalty-programs", auth=staff_auth, response=LoyaltyProgramOut)
 def create_loyalty_program(request, data: LoyaltyProgramIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    program = _apply_program_data(LoyaltyProgram(salon=ctx.salon), ctx, data)
+    program = apply_program_data(LoyaltyProgram(salon=ctx.salon), ctx, data)
     log_activity(
         ctx.salon,
         "loyalty_program.created",
@@ -415,7 +330,7 @@ def create_loyalty_program(request, data: LoyaltyProgramIn):
 def update_loyalty_program(request, program_id: int, data: LoyaltyProgramIn):
     ctx = request.auth
     require_scope(ctx, "marketing")
-    program = _apply_program_data(salon_get(LoyaltyProgram, ctx, program_id), ctx, data)
+    program = apply_program_data(salon_get(LoyaltyProgram, ctx, program_id), ctx, data)
     log_activity(
         ctx.salon,
         "loyalty_program.updated",

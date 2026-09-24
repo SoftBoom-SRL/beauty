@@ -338,7 +338,7 @@ def finalize_sale(
 
             deduct_stock_for_sale(sale)
 
-        from apps.marketing.services import accrue_loyalty  # lazy
+        from apps.marketing.loyalty import accrue_loyalty  # lazy
 
         accrue_loyalty(sale)
 
