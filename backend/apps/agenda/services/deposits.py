@@ -19,6 +19,7 @@ from common.conditions import evaluate
 from common.money import CENT
 
 from ..models import Appointment, AppointmentService
+from .messages import _withdraw_deposit_messages
 
 logger = logging.getLogger("youty.agenda")
 
@@ -180,6 +181,23 @@ def shrink_deposit_to_total(appointment: Appointment, *, actor=None) -> Decimal:
         return max(excess, Decimal("0.00"))
 
     appointment.deposit_amount = total
+    if total <= 0:
+        # Visita scesa a 0 € (il listino ammette servizi a 0 €): non resta
+        # niente da pagare. La caparra restava «richiesta» a 0 € con la sua
+        # scadenza: l'incasso al banco rispondeva «Nessuna caparra da
+        # incassare», ma allo scadere il posto si liberava lo stesso, con
+        # «posto liberato, caparra non versata» alla cliente. E il link di
+        # prima restava pagabile: rifarlo a 0 € non chiudeva la sessione
+        # vecchia. Ora la caparra non c'è più: niente scadenza né rilascio, il
+        # link non ancora partito non parte e quello inviato si chiude su Stripe.
+        from .deposit_holds import clear_deposit_hold  # lazy: deposit_holds importa questo modulo
+
+        appointment.deposit_status = Appointment.DepositStatus.NONE
+        appointment.save(update_fields=["deposit_amount", "deposit_status", "updated_at"])
+        clear_deposit_hold(appointment)
+        _withdraw_deposit_messages(appointment)
+        close_deposit_link_after_commit(appointment)
+        return excess
     appointment.save(update_fields=["deposit_amount", "updated_at"])
     if appointment.deposit_payment_link or appointment.deposit_checkout_session_id:
         # Il link nuovo deve leggere la caparra già ridotta.

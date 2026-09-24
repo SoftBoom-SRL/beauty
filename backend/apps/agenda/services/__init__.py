@@ -17,8 +17,8 @@ I moduli, dai più semplici a quelli che li usano (nessun ciclo):
 - `occupancy`: impegni per operatrice, chi si prenota, fasce di apertura;
 - `availability`: la ricerca degli orari liberi e consigliati;
 - `resolution`: la conferma di prenotazioni e modifiche (chi fa cosa, se ci sta);
-- `deposits`: quanto chiedere di caparra, regali, link di pagamento;
 - `messages`: eventi verso Yourang, trattenuti e fusi;
+- `deposits`: quanto chiedere di caparra, regali, link di pagamento;
 - `freed_slots`: gli annunci `slot.freed` alla lista d'attesa;
 - `undo_messages`: i messaggi dopo un «torna indietro»;
 - `refunds`: i rimborsi della caparra;

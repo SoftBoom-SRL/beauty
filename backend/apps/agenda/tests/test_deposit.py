@@ -329,6 +329,101 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         )
 
 
+class DepositDownToZeroTests(AgendaTestBase):
+    """Bug sospetto 5 (24/09): una caparra da pagare scesa a 0 € non c'è più.
+
+    Restava «richiesta» con la sua scadenza: l'incasso al banco rispondeva
+    «Nessuna caparra da incassare», ma allo scadere il posto si liberava lo
+    stesso con «posto liberato, caparra non versata» alla cliente, e il link
+    di prima restava pagabile.
+    """
+
+    def setUp(self):
+        from apps.catalog.models import Service
+
+        SalonSettings.objects.create(salon=self.salon, deposit_hold_minutes=30)
+        DepositRule.objects.create(
+            salon=self.salon, name="Sempre", conditions={}, amount_type="fixed", amount=Decimal("10.00")
+        )
+        self.salon = Salon.objects.get(pk=self.salon.pk)
+        enabled = patch("apps.sales.stripe_service.payments_enabled", return_value=True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
+        # il listino ammette servizi a 0 €
+        self.consult = Service.objects.create(
+            salon=self.salon, category=self.svc60.category, name_it="Consulenza",
+            duration_min=15, price=Decimal("0.00"),
+        )
+        self.op1.services.add(self.consult)
+        self.windows = {self.op1.id: [(9 * 60, 18 * 60)]}
+        with self._windows(self.windows), patch("apps.clients.services.client_facts", return_value={}):
+            self.appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.consult.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="app",
+            )
+        self.assertEqual(self.appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertIsNotNone(self.appointment.deposit_due_at)
+        Appointment.objects.filter(pk=self.appointment.pk).update(
+            deposit_checkout_session_id="cs_1", deposit_payment_link="https://pay.test/cs_1",
+        )
+        self.link = OutboxEvent.objects.create(
+            salon=self.salon, event_type="deposit.payment_link",
+            payload={"appointment_id": self.appointment.id},
+        )
+
+    def _without_the_paid_service(self, gesture):
+        closed = []
+        with self._windows(self.windows), patch(
+            "apps.sales.stripe_service.expire_deposit_checkout",
+            side_effect=lambda a: closed.append(a.deposit_checkout_session_id),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                gesture()
+        return closed
+
+    def _assert_no_deposit_left(self, closed):
+        from ..services.deposit_holds import process_deposit_holds
+
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.NONE)
+        self.assertEqual(appointment.deposit_amount, Decimal("0.00"))
+        self.assertIsNone(appointment.deposit_due_at)
+        self.assertIsNone(appointment.deposit_hold_until)
+        # il link non ancora partito non parte, quello inviato si chiude su Stripe
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.status, OutboxEvent.Status.SUPERSEDED)
+        self.assertEqual(closed, ["cs_1"])
+        # e allo scadere del termine il posto resta suo, senza «posto liberato»
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 0)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
+
+    def test_removing_the_paid_service(self):
+        from ..services.appointments import edit_appointment
+
+        consult = self.appointment.items.get(service=self.consult)
+        closed = self._without_the_paid_service(lambda: edit_appointment(
+            self.appointment,
+            items=[{"id": consult.id, "service_id": self.consult.id, "operator_id": self.op1.id}],
+        ))
+        self._assert_no_deposit_left(closed)
+
+    def test_detaching_the_paid_service(self):
+        from ..services.appointments import split_appointment
+
+        paid = self.appointment.items.get(service=self.svc60)
+        closed = self._without_the_paid_service(lambda: split_appointment(
+            self.appointment, paid.id, _aware(self.day + dt.timedelta(days=1), 10),
+        ))
+        self._assert_no_deposit_left(closed)
+
+
 class RefundConcurrencyTests(AgendaTestBase):
     """I rimborsi parziali si sommano, non si sovrascrivono."""
 
