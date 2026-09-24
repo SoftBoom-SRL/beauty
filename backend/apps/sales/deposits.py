@@ -161,6 +161,15 @@ def sync_deposit_refunds(appointment) -> None:
 # ---- Pagamento online della caparra (webhook Stripe) ---------------------------
 
 
+def amount_received(obj: dict):
+    """Centesimi arrivati secondo l'oggetto Stripe: `amount_received`, altrimenti `amount`.
+
+    None quando l'oggetto non lo dice. Per la sessione Checkout il webhook
+    passa qui un intent costruito con `amount_total` in tutti e due i campi.
+    """
+    return obj.get("amount_received", obj.get("amount"))
+
+
 def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str = "") -> tuple[str, int]:
     """Applica il pagamento della caparra sotto lock; dice cosa è successo.
 
@@ -236,7 +245,7 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
             )
             return "ignored", 0
         expected = stripe_service._to_cents(appointment.deposit_amount or 0)
-        received = obj.get("amount_received", obj.get("amount"))
+        received = amount_received(obj)
         if received is not None and int(received) < expected:
             log_activity(
                 appointment.salon,
@@ -325,7 +334,7 @@ def refund_duplicate_deposit(appointment, intent_id: str, obj: dict, account: st
     doppio senza che nulla lo segnalasse. Il rimborso va sull'account da cui è
     arrivato QUESTO pagamento.
     """
-    cents = obj.get("amount_received", obj.get("amount")) or 0
+    cents = amount_received(obj) or 0
     refund = stripe_service.refund_payment_intent(
         appointment.salon,
         intent_id,

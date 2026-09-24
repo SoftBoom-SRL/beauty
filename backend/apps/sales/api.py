@@ -1,12 +1,14 @@
 """Endpoint vendite: checkout appuntamenti, POS, storico con KPI, Stripe.
 
-I modelli delle altre app (agenda, clients) sono risolti lazy con
-django.apps.get_model per evitare dipendenze di import a livello di modulo.
+Qui c'è solo il lato HTTP: permessi, appartenenza al salone, forma della
+risposta. Il checkout sta in checkout.py, la cassa delle caparre in
+deposits.py, il webhook Stripe in stripe_webhooks.py, riepilogo e storico in
+reports.py, la forma delle vendite in serializers.py; services.py scrive le
+vendite e stripe_service.py parla con Stripe.
 """
 
 from typing import Optional
 
-from django.apps import apps as django_apps
 from ninja import Query, Router
 from ninja.errors import HttpError
 
@@ -17,6 +19,8 @@ from common.permissions import require_owner, require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
+from apps.agenda.models import Appointment
+from apps.clients.models import Client
 from apps.core.services import log_activity
 
 from . import reports, serializers, stripe_service, stripe_webhooks
@@ -56,7 +60,6 @@ _payment_intent_succeeded = stripe_webhooks.on_payment_intent_succeeded
 def checkout(request, appointment_id: int, data: CheckoutIn):
     ctx = request.auth
     require_scope(ctx, "sales")
-    Appointment = django_apps.get_model("agenda", "Appointment")
     salon_get(Appointment, ctx, appointment_id)  # 404 fuori dal salone
     payload = data.dict()
     sale = checkout_appointment(ctx.salon, appointment_id, payload, actor=ctx.user)
@@ -69,7 +72,6 @@ def pos_sale(request, data: PosIn):
     require_scope(ctx, "sales")
     client = None
     if data.client_id:
-        Client = django_apps.get_model("clients", "Client")
         client = salon_get(Client, ctx, data.client_id)
     payload = data.dict()
     sale = finalize_sale(
@@ -145,7 +147,6 @@ def sale_detail(request, sale_id: int):
 def charge_no_show(request, appointment_id: int):
     ctx = request.auth
     require_scope(ctx, "sales")
-    Appointment = django_apps.get_model("agenda", "Appointment")
     appointment = salon_get(Appointment, ctx, appointment_id)
     # L'importo torna dal servizio: è quello davvero chiesto a Stripe. Prima si
     # ricalcolava qui il totale della visita, e con una caparra trattenuta la
@@ -183,7 +184,6 @@ def deposit_link(request, appointment_id: int, resend: bool = True):
     """Crea (o rimanda) il link di pagamento della caparra alla cliente."""
     ctx = request.auth
     require_scope(ctx, "sales")
-    Appointment = django_apps.get_model("agenda", "Appointment")
     appointment = salon_get(Appointment, ctx, appointment_id)
     if appointment.deposit_status != "required":
         raise HttpError(400, "La caparra di questo appuntamento non è in attesa di pagamento")
@@ -199,7 +199,6 @@ def deposit_link(request, appointment_id: int, resend: bool = True):
 def client_deposit_link(request, appointment_id: int):
     """La cliente chiede il link per pagare la caparra del proprio appuntamento."""
     ctx = request.auth
-    Appointment = django_apps.get_model("agenda", "Appointment")
     appointment = salon_get(Appointment, ctx, appointment_id, client=ctx.client)
     if appointment.deposit_status != "required":
         raise HttpError(400, "Nessuna caparra da pagare per questo appuntamento")

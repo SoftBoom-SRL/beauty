@@ -33,6 +33,18 @@ REFUND_EVENTS = (
 )
 
 
+def _stripe_id(value) -> str:
+    """Id di un riferimento Stripe (intent, metodo di pagamento, Customer).
+
+    Stripe lo manda come stringa, oppure come oggetto quando è «espanso»: si
+    accettano tutti e due, e un valore vuoto diventa "".
+    """
+    value = value or ""
+    if isinstance(value, dict):
+        return value.get("id") or ""
+    return value
+
+
 def handle_event(event: dict) -> None:
     """Esegue un evento Stripe con la firma già verificata (`stripe_service.verify_webhook`)."""
     event_type = event.get("type", "")
@@ -187,9 +199,7 @@ def on_checkout_session_completed(obj: dict, metadata: dict, account: str = "") 
     `payment_intent`. Elaborato solo se il pagamento è andato a buon fine.
     """
     if obj.get("payment_status") in (None, "paid"):
-        intent = obj.get("payment_intent") or ""
-        if isinstance(intent, dict):
-            intent = intent.get("id") or ""
+        intent = _stripe_id(obj.get("payment_intent"))
         on_payment_intent_succeeded(
             {"id": intent, "amount_received": obj.get("amount_total"), "amount": obj.get("amount_total")},
             metadata,
@@ -236,7 +246,7 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
         outcome = "rimborso in corso"
     else:
         outcome = "rimborsata"
-    cents = obj.get("amount_received", obj.get("amount")) or 0
+    cents = deposits.amount_received(obj) or 0
     log_activity(
         salon,
         "deposit.orphan_payment",
@@ -257,9 +267,7 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
 
 def _refund_facts(event_type: str, obj: dict) -> dict:
     """Estrae dall'evento Stripe (intent, id rimborso, centesimi, stato, soglia)."""
-    intent_id = obj.get("payment_intent") or ""
-    if isinstance(intent_id, dict):
-        intent_id = intent_id.get("id") or ""
+    intent_id = _stripe_id(obj.get("payment_intent"))
     if event_type == "charge.refunded":
         # obj è la Charge: `amount_refunded` è il totale già restituito, conta
         # solo i rimborsi riusciti e non porta l'id del singolo rimborso.
@@ -316,9 +324,7 @@ def on_refund_event(obj: dict, event_type: str = "charge.refunded") -> None:
 def on_setup_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> None:
     """setup_intent.succeeded: la carta salvata dalla web app va sulla scheda della cliente."""
     client_id = metadata.get("client_id")
-    payment_method = obj.get("payment_method") or ""
-    if isinstance(payment_method, dict):
-        payment_method = payment_method.get("id") or ""
+    payment_method = _stripe_id(obj.get("payment_method"))
     salon_id = metadata.get("salon_id")
     if client_id and payment_method:
         clients = Client.objects.select_related("salon", "salon__settings")
@@ -342,9 +348,7 @@ def on_setup_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
             # …e solo col Customer a cui è agganciata: se due richieste ne
             # avevano creati due, sulla scheda poteva restare quello
             # sbagliato e l'addebito no-show veniva rifiutato (18-11).
-            customer = obj.get("customer") or ""
-            if isinstance(customer, dict):
-                customer = customer.get("id") or ""
+            customer = _stripe_id(obj.get("customer"))
             if customer:
                 client.stripe_customer_id = customer
                 fields.append("stripe_customer_id")
