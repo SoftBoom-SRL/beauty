@@ -3,11 +3,13 @@
 // confirm). Right: builder (POST / PUT /api/automations/). Events, condition
 // fields and operators come from GET /api/automations/events-catalog.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Toggle, EmptyState, toastApiError } from '@youty/shared';
+import { Icon, Toggle, EmptyState, toastApiError } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import Builder from './Builder.jsx';
 import { eventIcon, offsetPhrase, catLabel } from './catalog.js';
+import { automationsApi } from '../../api/automations.js';
+import { settingsApi } from '../../api/core.js';
 
 export default function AutomazioniSection() {
   const { t, lang, fireToast, hasScope, settings, session, reload } = useDash();
@@ -23,7 +25,7 @@ export default function AutomazioniSection() {
   const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   const refetch = useCallback(async () => {
-    const list = await api.get('/api/automations/');
+    const list = await automationsApi.list();
     setRules(list);
     return list;
   }, []);
@@ -33,8 +35,8 @@ export default function AutomazioniSection() {
     setLoadError(false);
     try {
       const [list, cat] = await Promise.all([
-        api.get('/api/automations/'),
-        api.get('/api/automations/events-catalog'),
+        automationsApi.list(),
+        automationsApi.eventsCatalog(),
       ]);
       setRules(list);
       setCatalog(cat);
@@ -55,7 +57,7 @@ export default function AutomazioniSection() {
     if (!canWrite) return;
     setRules((l) => l.map((r) => (r.id === rule.id ? { ...r, active: !r.active } : r)));
     try {
-      await api.post(`/api/automations/${rule.id}/toggle`);
+      await automationsApi.toggle(rule.id);
       await refetch();
     } catch (err) {
       toastErr(err);
@@ -69,7 +71,7 @@ export default function AutomazioniSection() {
     if (!rule) return;
     setDeleting(true);
     try {
-      await api.del(`/api/automations/${rule.id}`);
+      await automationsApi.remove(rule.id);
       setConfirmDel(null);
       const list = await refetch();
       setSel((s) => (s === rule.id ? (list[0] ? list[0].id : null) : s));
@@ -238,7 +240,7 @@ function DelaySetting({ t, settings, isOwner, reload, fireToast, onError }) {
     setValue(next);           // la scelta si vede subito, il salvataggio segue
     setSaving(true);
     try {
-      await api.put('/api/core/settings', { automation_delay_seconds: next });
+      await settingsApi.update({ automation_delay_seconds: next });
       // Salvato: la ricarica delle impostazioni va per conto suo. Stava nello
       // stesso try e, se cadeva, la pillola tornava al valore vecchio anche se
       // il server aveva salvato il nuovo (15-19).

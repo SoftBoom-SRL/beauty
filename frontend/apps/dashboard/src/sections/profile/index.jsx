@@ -8,8 +8,9 @@
 // (DK_OWNER_STAFF) were dropped — the API has no per-location report endpoint;
 // KPIs shown are salon-wide, locations render as a plain list.
 import React, { useEffect, useState } from 'react';
-import { api, staffAuth, Icon, Avatar, fmtEurOrZero, toastApiError } from '@youty/shared';
+import { staffAuth, Icon, Avatar, fmtEurOrZero, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
+import { insightsApi } from '../../api/insights.js';
 
 export default function ProfileSection() {
   const { t, lang, session, salon, locations, fireToast } = useDash();
@@ -22,7 +23,7 @@ export default function ProfileSection() {
     if (!isOwner) return undefined;
     let alive = true;
     setKpisLoading(true);
-    api.get('/api/insights/kpis', { params: { period: 'month' } })
+    insightsApi.kpis({ period: 'month' })
       .then((k) => { if (alive) setKpis(k); })
       .catch((err) => {
         if (!alive) return;

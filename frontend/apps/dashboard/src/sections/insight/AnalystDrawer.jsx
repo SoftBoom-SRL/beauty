@@ -6,7 +6,8 @@
 // disponibile nella fase 2" today — there are no canned fake answers here, the
 // 501 message is rendered inline as the assistant's reply with a "Fase 2" badge.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Icon, Avatar, toastApiError } from '@youty/shared';
+import { ApiError, Icon, Avatar, toastApiError } from '@youty/shared';
+import { insightsApi } from '../../api/insights.js';
 
 const ASK_CHIPS = [
   { it: 'Qual è il giorno più scarico?', en: 'Which day is quietest?' },
@@ -41,7 +42,7 @@ export default function AnalystDrawer({ t, lang, fireToast, onClose, initialQues
     setText('');
     setTyping(true);
     try {
-      await api.post('/api/insights/ask', { question: q });
+      await insightsApi.ask({ question: q });
       // The endpoint always 501s today; if it ever succeeds, show a plain reply.
       setMsgs((m) => [...m, { role: 'ai', phase2: false, text: t('Risposta ricevuta.', 'Answer received.') }]);
     } catch (err) {
