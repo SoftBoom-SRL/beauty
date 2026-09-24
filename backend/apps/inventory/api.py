@@ -1,5 +1,4 @@
 import logging
-import re
 from decimal import Decimal
 from typing import Optional
 
@@ -18,6 +17,7 @@ from common.media import stored_upload_name
 from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
+from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 
 from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
@@ -49,10 +49,9 @@ UNLOAD_KINDS = {
     StockMovement.Kind.TRANSFER,
 }
 
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 # PositiveSmallIntegerField: sopra questo valore il database rifiuta la riga, e
 # al cliente arriva un 500 invece del 400 che gli spiega cosa ha sbagliato.
-MAX_CATEGORY_ORDER = 32767
+MAX_CATEGORY_ORDER = MAX_POSITIVE_SMALL_INT
 
 # La fattura del carico finisce in uno storage servito da noi: senza un tetto
 # alla dimensione e un elenco di formati, il campo «allega fattura» è un
@@ -101,19 +100,6 @@ def _apply_product_payload(product: Product, ctx, data: ProductIn) -> Product:
     # correggeva il prezzo) sparivano dalla giacenza pur restando nello storico.
     product.save(update_fields=[*payload.keys(), "supplier", "category", "updated_at"])
     return product
-
-
-def _validate_category_in(data: CategoryIn) -> None:
-    """Colore e ordine arrivano dal client e finiscono grezzi in colonne strette.
-
-    Senza questo controllo un colore di venti caratteri o un ordine negativo non
-    sono un errore della richiesta ma un errore del database: 500 e nessuna
-    spiegazione a chi sta compilando il modulo.
-    """
-    if not (0 <= data.order <= MAX_CATEGORY_ORDER):
-        raise HttpError(400, "Ordine della categoria non valido")
-    if data.color is not None and not _HEX_COLOR_RE.match((data.color or "").strip()):
-        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
 
 
 def _invoice_upload_name(upload: UploadedFile) -> str:
@@ -535,7 +521,7 @@ def list_categories(request):
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     return ProductCategory.objects.create(
         salon=ctx.salon,
         name=data.name,
@@ -548,7 +534,7 @@ def create_category(request, data: CategoryIn):
 def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     category = salon_get(ProductCategory, ctx, category_id)
     category.name = data.name
     category.order = data.order

@@ -1,6 +1,5 @@
 """Endpoint /api/staff — operatrici, turni, assenze, performance, clienti serviti."""
 
-import re
 from decimal import Decimal
 from typing import Optional
 
@@ -17,6 +16,7 @@ from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
+from common.validation import MAX_POSITIVE_INT, require_hex_color
 
 from .models import Absence, Operator, WeeklyShift
 from .schemas import (
@@ -44,12 +44,11 @@ from .services import (
 
 router = Router(tags=["staff"])
 
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 # Un ciclo di turni più lungo di un anno non esiste in un salone, e il campo a
 # database è PositiveSmallIntegerField: senza tetto (e senza minimo) il valore
 # diventava un errore del database (500) invece di un errore della richiesta.
 MAX_CYCLE_WEEKS = 52
-MAX_OPERATOR_ORDER = 2147483647  # limite di PositiveIntegerField
+MAX_OPERATOR_ORDER = MAX_POSITIVE_INT  # limite di PositiveIntegerField
 
 PUBLIC_OPERATORS_MAX_PER_WINDOW = 120
 PUBLIC_OPERATORS_WINDOW_SECONDS = 300
@@ -152,8 +151,8 @@ def _validate_operator_payload(payload: dict) -> None:
     for name, value in payload.items():
         if value is None and name not in _NULLABLE_OPERATOR_FIELDS:
             raise HttpError(400, f"Campo obbligatorio: {name}")
-    if "color" in payload and not _HEX_COLOR_RE.match(payload["color"].strip()):
-        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+    if "color" in payload:
+        require_hex_color(payload["color"].strip())
     if "cycle_weeks" in payload and not (1 <= payload["cycle_weeks"] <= MAX_CYCLE_WEEKS):
         raise HttpError(400, f"Settimane di ciclo non valide (da 1 a {MAX_CYCLE_WEEKS})")
     if "order" in payload and not (0 <= payload["order"] <= MAX_OPERATOR_ORDER):
@@ -355,8 +354,7 @@ def set_operator_color(request, operator_id: int, data: OperatorColorIn):
     require_scope(ctx, "agenda")
     operator = salon_get(Operator, ctx, operator_id)
     color = (data.color or "").strip()
-    if not _HEX_COLOR_RE.match(color):
-        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
+    require_hex_color(color)
     operator.color = color.upper()
     operator.save(update_fields=["color"])
     log_activity(

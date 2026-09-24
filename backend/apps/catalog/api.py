@@ -5,7 +5,6 @@ Endpoint pubblici (`/public/...`) senza auth: usati dalla web app cliente prima
 del login per mostrare listino e pacchetti del salone (solo elementi attivi).
 """
 
-import re
 from typing import Optional
 
 from django.db import transaction
@@ -21,6 +20,7 @@ from common.auth import staff_auth
 from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
+from common.validation import MAX_POSITIVE_INT, validate_category_in
 
 from .models import Package, PackageItem, Service, ServiceCategory
 from .schemas import (
@@ -37,11 +37,10 @@ from .schemas import (
 
 router = Router(tags=["catalog"])
 
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 DEFAULT_CATEGORY_COLOR = "#E0E7FF"
 # PositiveIntegerField: oltre questo valore il database rifiuta la riga e al
 # client arriva un 500 invece del 400 che gli dice cosa correggere.
-MAX_CATEGORY_ORDER = 2147483647
+MAX_CATEGORY_ORDER = MAX_POSITIVE_INT
 
 PUBLIC_CATALOG_MAX_PER_WINDOW = 120
 PUBLIC_CATALOG_WINDOW_SECONDS = 300
@@ -64,14 +63,6 @@ def _public_ratelimit(request, salon: Salon, bucket: str) -> None:
         raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
 
 
-def _validate_category_in(data: CategoryIn) -> None:
-    """Colore e ordine finiscono grezzi in colonne strette: qui sono 400, non 500."""
-    if not (0 <= data.order <= MAX_CATEGORY_ORDER):
-        raise HttpError(400, "Ordine della categoria non valido")
-    if data.color is not None and not _HEX_COLOR_RE.match((data.color or "").strip()):
-        raise HttpError(400, "Colore non valido (atteso #RRGGBB)")
-
-
 # ---- Categorie servizi -------------------------------------------------------
 
 
@@ -84,7 +75,7 @@ def list_categories(request):
 def create_category(request, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     payload = data.dict()
     payload["color"] = (payload["color"] or DEFAULT_CATEGORY_COLOR).strip()
     category = ServiceCategory.objects.create(salon=ctx.salon, **payload)
@@ -102,7 +93,7 @@ def create_category(request, data: CategoryIn):
 def update_category(request, category_id: int, data: CategoryIn):
     ctx = request.auth
     require_scope(ctx, "pricing")
-    _validate_category_in(data)
+    validate_category_in(data, max_order=MAX_CATEGORY_ORDER)
     category = salon_get(ServiceCategory, ctx, category_id)
     payload = data.dict()
     # Colore assente = invariato: un modulo che manda solo nome e ordine non
