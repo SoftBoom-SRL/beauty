@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
@@ -824,6 +825,30 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         # e allo scadere delle 24 ore, se non paga, lo slot si libera
         result = process_deposit_holds(self.salon, now=booked_at + dt.timedelta(hours=24, minutes=1))
         self.assertEqual(result["released"], 1)
+
+    def test_the_move_message_carries_the_new_deadline(self):
+        """Bug sospetto 4 (24/09): la scadenza si ricalcola con lo spostamento, non dopo.
+
+        Si riallineava solo alla lettura successiva dell'agenda o al cron, quando
+        `appointment.moved` era già partito con la scadenza di prima (e la
+        risposta allo spostamento la riportava).
+        """
+        from ..services.appointments import move_appointment
+
+        self._settings(hold=24 * 60)
+        self._no_automation_delay()
+        booked_at = timezone.now()
+        appointment = self._book(booked_at + dt.timedelta(hours=2))
+        self.assertEqual(appointment.deposit_due_at, appointment.start)  # tagliata all'inizio
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            moved = move_appointment(appointment, _aware(self.day, 10), force=True)
+        event = OutboxEvent.objects.filter(event_type="appointment.moved").latest("id")
+        due = parse_datetime(event.payload["deposit_due_at"])
+        # 24 ore dalla prenotazione, non l'inizio che la visita non ha più
+        self.assertAlmostEqual((due - booked_at).total_seconds(), 24 * 3600, delta=60)
+        self.assertEqual(moved.deposit_due_at, due)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_due_at, due)
 
     def test_a_visit_moved_earlier_gets_the_deadline_cut_on_the_new_start(self):
         from ..services.deposit_holds import process_deposit_holds
