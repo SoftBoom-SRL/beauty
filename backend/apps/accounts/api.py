@@ -113,7 +113,7 @@ def _first_membership(user) -> Membership | None:
     )
 
 
-def _client_by_phone(salon, phone: str):
+def _active_client_by_phone(salon, phone: str):
     """Cliente attivo con quel numero, comunque scritto («+39 333…», «333…», «0039…»).
 
     Restituisce None se non esiste: chi chiama NON deve trasformarlo in un 404,
@@ -868,7 +868,7 @@ def client_request_otp(request, data: OTPRequestIn):
         logger.warning("request-otp: tetto dei codici emessi per salone (salone=%s)", salon.slug)
         raise HttpError(429, "Troppe richieste: riprova tra qualche minuto")
 
-    client = _client_by_phone(salon, data.phone)
+    client = _active_client_by_phone(salon, data.phone)
     if client is not None:
         try:
             issue_otp(client)
@@ -894,7 +894,7 @@ def client_verify_otp(request, data: OTPVerifyIn):
         f"otp-verify-ip:{ip}", OTP_VERIFY_MAX_PER_IP, OTP_WINDOW_SECONDS,
         "Troppi tentativi: riprova tra qualche minuto",
     )
-    client = _client_by_phone(salon, data.phone)
+    client = _active_client_by_phone(salon, data.phone)
     if client is None:
         # Stessa risposta del codice sbagliato: il numero inesistente non si
         # distingue da quello esistente con il codice errato.

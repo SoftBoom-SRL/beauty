@@ -200,7 +200,6 @@ def disconnect(request):
 @router.post("/yourang/webhook", auth=None, response=OkOut)
 def webhook(request):
     body = request.body
-    org_id = ""
     try:
         payload = json.loads(body) if body else {}
     except json.JSONDecodeError:

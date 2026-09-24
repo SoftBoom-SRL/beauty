@@ -28,6 +28,11 @@ from apps.catalog.models import Package, Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.services import held_events, log_activity, supersede_events
 from apps.staff.models import Operator
+# La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
+# common.phone: è la stessa usata da login, registrazione, form pubblico e
+# import CSV, così il telefono che è la chiave naturale dei contatti Yourang
+# coincide con quello con cui il cliente accede all'app.
+from common.phone import find_client_by_phone, normalize_phone, phone_key
 
 from .client import YourangClient
 from .models import YourangConnection, YourangEventSync
@@ -65,20 +70,6 @@ MAX_CONTACT_PAGES = 200
 PLACEHOLDER_SERVICE_NAME = "Prenotazione Yourang"
 
 logger = logging.getLogger("youty.integrations")
-
-
-# La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
-# common.phone: è la stessa usata da login, registrazione, form pubblico e
-# import CSV, così il telefono che è la chiave naturale dei contatti Yourang
-# coincide con quello con cui il cliente accede all'app.
-from common.phone import (  # noqa: E402,F401
-    COUNTRY_CODES,
-    TRUNK_ZERO_KEPT,
-    _drop_trunk_zero,
-    find_client_by_phone,
-    normalize_phone,
-    phone_key,
-)
 
 
 def _split_name(full: str) -> tuple[str, str]:

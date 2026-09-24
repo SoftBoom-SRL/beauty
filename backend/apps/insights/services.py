@@ -6,7 +6,9 @@ quando i dati mancano — mai sollevare eccezioni per un dataset vuoto.
 
 Import cross-app: i modelli sono importati a livello di modulo (a runtime le
 altre app esisteranno, vedi SPEC.md §0). `staff.services.shift_windows` viene
-invece importato lazy dentro le funzioni per evitare cicli, come richiesto.
+invece importato dentro la funzione che lo usa, a ogni chiamata: così chi lo
+sostituisce in apps.staff.services (i test dell'agenda lo fanno) lo sostituisce
+anche qui. Un ciclo di import da evitare non c'è più.
 """
 
 from datetime import date as date_cls
@@ -21,7 +23,7 @@ from ninja.errors import HttpError
 from apps.agenda.models import Appointment, AppointmentService
 from apps.catalog.models import ServiceCategory
 from apps.clients.models import Client, ClientCategory
-from apps.sales.models import Sale, SaleLine
+from apps.sales.models import DepositRefund, Payment, Sale, SaleLine
 from apps.staff.models import Operator
 from common.money import CENT
 
@@ -43,10 +45,15 @@ ZERO = Decimal("0.00")
 # Stati "prenotati" ai fini dell'occupazione e stati terminali usati dai KPI.
 # Check-in e trattamento in corso occupano la poltrona esattamente come un
 # confermato: escluderli faceva scendere l'occupazione al momento dell'arrivo.
-_OCCUPIED_STATUSES = ("confirmed", "checked_in", "in_progress", "closed")
-_CLOSED = "closed"
-_NO_SHOW = "no_show"
-_CANCELLED = "cancelled"
+_OCCUPIED_STATUSES = (
+    Appointment.Status.CONFIRMED,
+    Appointment.Status.CHECKED_IN,
+    Appointment.Status.IN_PROGRESS,
+    Appointment.Status.CLOSED,
+)
+_CLOSED = Appointment.Status.CLOSED
+_NO_SHOW = Appointment.Status.NO_SHOW
+_CANCELLED = Appointment.Status.CANCELLED
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +169,7 @@ def _safe_avg_money(total: Decimal, count: int) -> Decimal:
 
 
 def _operator_shift_minutes(operator, d: date_cls) -> int:
-    from apps.staff.services import shift_windows  # lazy: evita import circolare con staff
+    from apps.staff.services import shift_windows  # lazy: si risolve a ogni chiamata (vedi in testa)
 
     windows = shift_windows(operator, d) or []
     return sum(max(0, end - start) for start, end in windows)
@@ -427,8 +434,6 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
     # è il denaro davvero entrato nel periodo.
     billed_qs = sales_qs.filter(deposit_appointment__isnull=True)
     revenue = billed_qs.aggregate(total=Sum("total"))["total"] or ZERO
-    from apps.sales.models import DepositRefund  # lazy: come Payment più sotto
-
     # Al netto delle caparre restituite nel periodo (annullamento in tempo,
     # eccedenza al conto, restituzione a mano): prima una caparra rimborsata
     # restava per sempre in `deposit_cashed` e in `cash_in` (08-17). Il
@@ -463,8 +468,6 @@ def kpis(salon, period: str, date: date_cls | None = None, date_from: date_cls |
         ).aggregate(total=Sum("amount"))["total"]
         or ZERO
     )
-    from apps.sales.models import Payment  # lazy: evita import inutili a modulo
-
     gift_card_redeemed = (
         Payment.objects.filter(
             sale__salon=salon, sale__created_at__gte=start, sale__created_at__lt=end, method="gift_card"
