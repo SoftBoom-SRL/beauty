@@ -15,7 +15,7 @@ from django.dispatch import receiver
 from apps.catalog.models import Service
 from apps.staff.models import Operator
 
-from .sync import PLACEHOLDER_SERVICE_NAME
+from .constants import PLACEHOLDER_SERVICE_NAME
 
 
 def _placeholder_ids(salon_id) -> list[int]:

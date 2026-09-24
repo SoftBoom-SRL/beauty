@@ -10,6 +10,7 @@ comando garantisce la coerenza periodica (come i backfill di food/real_estate).
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from apps.integrations.connection import same_link
 from apps.integrations.models import YourangConnection
 from apps.integrations.sync import summarize_errors, sync_clients, sync_services
 
@@ -40,14 +41,12 @@ class Command(BaseCommand):
             # UPDATE sulla riga con la stessa org, non save() della copia letta
             # a inizio giro: se durante la sync il titolare ha scollegato (riga
             # sparita) o ricollegato, l'esito di questo giro non è più suo.
-            same_link = YourangConnection.objects.filter(
-                pk=conn.pk, yourang_org_id=conn.yourang_org_id
-            )
+            link = same_link(conn)
             try:
                 clients = sync_clients(conn)
                 services = sync_services(conn)
             except Exception as exc:  # noqa: BLE001
-                same_link.update(
+                link.update(
                     last_error=str(exc)[:500],
                     status=YourangConnection.Status.ERROR,
                     updated_at=timezone.now(),
@@ -55,7 +54,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f"[{conn.salon}] {exc}"))
                 continue
             errors = clients.errors + services.errors
-            same_link.update(
+            link.update(
                 last_sync_at=timezone.now(),
                 # Gli errori parziali (403 senza contacts:write, voci rifiutate)
                 # restano scritti, come fanno collega e login: prima il cron li

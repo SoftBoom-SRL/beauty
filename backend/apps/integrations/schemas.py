@@ -7,7 +7,7 @@ from ninja import Schema
 class AuthorizeOut(Schema):
     authorize_url: str
     # Da tenere nel sessionStorage della finestra che avvia il flusso e da
-    # rimandare all'exchange: lega il codice a chi ha iniziato (vedi api.py).
+    # rimandare all'exchange: lega il codice a chi ha iniziato (vedi oauth.py).
     nonce: str
 
 

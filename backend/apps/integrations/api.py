@@ -12,11 +12,8 @@ Flusso "Collega Yourang" (come i portali food/real_estate, qui lato server Djang
 
 import json
 import logging
-import secrets
 
 from django.conf import settings
-from django.utils import timezone
-from django.utils.crypto import constant_time_compare, salted_hmac
 from ninja import Router
 from ninja.errors import HttpError
 
@@ -26,16 +23,15 @@ from common.permissions import require_owner
 from common.schemas import OkOut
 
 from . import client as yc
-from . import crypto, sync
-from .connection import OrgConflict, link_org, reset_remote_refs
-from .login import attach_tokens, login_with_yourang
-from .models import YourangConnection, YourangOAuthState
+from . import crypto, sync, webhooks
+from .connection import OrgConflict, attach_tokens, link_org, reset_remote_refs
+from .login import login_with_yourang
+from .models import YourangConnection
+from .oauth import consume_state, start_flow
 from .schemas import AuthorizeOut, ExchangeIn, StatusOut
 
 logger = logging.getLogger("youty.integrations")
 router = Router(tags=["integrations"])
-
-STATE_TTL_SECONDS = 600
 
 
 def _status_out(conn: YourangConnection | None) -> dict:
@@ -63,36 +59,6 @@ def _require_config() -> None:
         raise HttpError(503, "Integrazione Yourang non configurata")
 
 
-# ---- Chi ha chiesto questo codice? ------------------------------------------
-#
-# Lo `state` sta a database con il verifier PKCE, e basta a legare il codice al
-# flusso. Non lega però il flusso alla FINESTRA che l'ha avviato: chi avviava un
-# «Accedi con Yourang» con la propria identità poteva mandare a un altro il link
-# di ritorno (/oauth-popup/done?code=…&state=…), e chi lo apriva si ritrovava
-# dentro il salone di chi l'aveva mandato, a scriverci dati (10-02). L'avvio
-# restituisce quindi anche un `nonce`, che il popup tiene nel sessionStorage
-# della sua finestra (un link aperto altrove non ce l'ha) e rimanda
-# all'exchange. È l'HMAC dello state con la chiave del server: nessuna colonna
-# in più, e nessuno può ricavarlo dallo state.
-
-NONCE_SALT = "apps.integrations.yourang-oauth-window"
-_BAD_FLOW = "Richiesta di collegamento non valida: riavvia «Yourang» da questa finestra"
-
-
-def _window_nonce(state: str) -> str:
-    return salted_hmac(NONCE_SALT, state).hexdigest()
-
-
-def _start_flow(salon=None, user=None) -> dict:
-    verifier, challenge = yc.make_pkce()
-    state = secrets.token_urlsafe(24)
-    YourangOAuthState.objects.create(state=state, code_verifier=verifier, salon=salon, user=user)
-    return {
-        "authorize_url": yc.build_authorize_url(state, challenge, nonce=secrets.token_urlsafe(16)),
-        "nonce": _window_nonce(state),
-    }
-
-
 # ---- Connect (OAuth) -------------------------------------------------------
 
 
@@ -102,14 +68,14 @@ def oauth_start(request):
     ctx = request.auth
     require_owner(ctx)
     _require_config()
-    return _start_flow(ctx.salon, ctx.user)
+    return start_flow(ctx.salon, ctx.user)
 
 
 @router.get("/yourang/oauth/login/start", auth=None, response=AuthorizeOut)
 def oauth_login_start(request):
     """Avvia il flusso "login con Yourang" (dalla pagina di login, nessuna sessione)."""
     _require_config()
-    return _start_flow()  # salon/user null
+    return start_flow()  # salon/user null
 
 
 @router.post("/yourang/oauth/exchange", auth=None)
@@ -117,23 +83,7 @@ def oauth_exchange(request, data: ExchangeIn):
     """Scambia il code. Lo `state` distingue i due flussi: con salone → connect;
     senza → login con Yourang (provisiona/collega + conia la sessione staff)."""
     _require_config()
-    # Il nonce si controlla PRIMA di consumare lo state: un link di ritorno
-    # aperto in un'altra finestra non deve né usarlo né bruciarlo.
-    if not data.nonce or not constant_time_compare(data.nonce, _window_nonce(data.state)):
-        raise HttpError(400, _BAD_FLOW)
-
-    st = (
-        YourangOAuthState.objects.select_related("salon", "user")
-        .filter(state=data.state)
-        .first()
-    )
-    if st is None:
-        raise HttpError(400, "Stato OAuth non valido o scaduto")
-    age = (timezone.now() - st.created_at).total_seconds()
-    verifier, salon, user = st.code_verifier, st.salon, st.user
-    st.delete()
-    if age > STATE_TTL_SECONDS:
-        raise HttpError(400, "Stato OAuth scaduto: riprova")
+    verifier, salon, user = consume_state(data)
 
     # --- Login con Yourang: nessun salone nello stato ---
     if salon is None:
@@ -230,28 +180,7 @@ def webhook(request):
     entity_id = str(payload.get("resource_id") or "")
 
     try:
-        if event_type == "contact.deleted":
-            # Niente da fare: la scheda locale resta (storico, caparre, note) e
-            # il suo contact-id non viene più usato; toglierlo farebbe
-            # rispingere su Yourang, al prossimo giro, il contatto appena
-            # cancellato lì. Prima qui partiva comunque la sync completa.
-            pass
-        elif event_type.startswith("contact") and entity_id:
-            # Solo quel contatto: la sync completa (elenco + push di ogni
-            # scheda non collegata) dentro ogni webhook costava migliaia di
-            # chiamate a raffica. Il push resta al primo collegamento e al cron.
-            sync.sync_contact(conn, entity_id)
-        elif event_type.startswith("contact"):
-            # Payload senza resource_id: riconciliazione completa, senza push.
-            sync.sync_clients(conn, push=False)
-        elif event_type == "event.deleted" and entity_id:
-            # `and entity_id` come nel ramo gemello qui sotto: senza, un
-            # event.deleted col campo assente arrivava a cancel_event con "" e
-            # annullava l'INTERA agenda del salone in una sola UPDATE,
-            # rispondendo pure 200 "ok".
-            sync.cancel_event(conn, entity_id)
-        elif event_type.startswith("event") and entity_id:
-            sync.import_event(conn, entity_id)
+        webhooks.dispatch(conn, event_type, entity_id)
     except Exception as exc:
         # Rispondere 200 a un'elaborazione fallita dice al mittente «ricevuto»:
         # Yourang non riprova e la prenotazione importata sparisce senza che
