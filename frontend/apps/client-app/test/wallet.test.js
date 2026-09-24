@@ -12,7 +12,7 @@ import { test } from 'node:test';
 
 import {
   cents, fmtCredit, fmtPct, giftCardTotals, giftServiceCards, isSpendable,
-} from '../src/screens/walletLib.js';
+} from '../src/lib/wallet.js';
 
 // Il portafoglio di Sofia, come lo manda GET /api/marketing/client/wallet.
 const mine = { id: 1, balance: '50.00', payment_status: 'paid', recipient_name: '', received: false };

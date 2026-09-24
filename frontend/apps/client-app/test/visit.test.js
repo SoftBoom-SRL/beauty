@@ -1,10 +1,11 @@
-// Caccia 22/09 — regole sulle visite nell'app cliente (visitLib.js).
+// Caccia 22/09 — regole sulle visite nell'app cliente (lib/appointments.js).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptMinutes, depositDueMs, depositExpired, sameBooking, svcMinutes,
-} from '../src/screens/visitLib.js';
+  apptMinutes, depositDueMs, depositExpired, sameBooking,
+} from '../src/lib/appointments.js';
+import { svcMinutes } from '../src/lib/catalog.js';
 
 // 16-05: la Home lasciata aperta mostrava «Paga ora» anche dopo la scadenza
 // della caparra; il pagamento arrivava dopo il rilascio dell'orario e finiva

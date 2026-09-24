@@ -1,6 +1,9 @@
-// visitLib.js — regole sulle visite della cliente (logica pura, senza React:
-// la usano lib.jsx e Prenota, e i test la provano da sola).
-import { parseISO } from '@youty/shared';
+// appointments.js — regole sulle visite della cliente: caparra, durata, «è la
+// stessa prenotazione?» e le etichette degli elenchi.
+// Logica pura, senza React: la caricano anche i test con `node --test`.
+import { parseISO, timeLabel, minutesOfDay } from '@youty/shared';
+import { svcMinutes } from './catalog.js';
+import { fmtDayMed } from './dates.js';
 
 /** Scadenza della caparra da versare, in ms (null se non c'è). */
 export function depositDueMs(appt) {
@@ -16,14 +19,6 @@ export function depositDueMs(appt) {
 export function depositExpired(appt, now = Date.now()) {
   const due = depositDueMs(appt);
   return due != null && due <= now;
-}
-
-/** Minuti di un servizio del listino pubblico: lavoro + posa (contratto C4).
- *  L'app chiamava «Durata» il solo lavoro: colore 60' + 40' di posa si
- *  leggeva «1h», e l'agenda la teneva 1h 40' (09-07). Senza `soak_min` (backend
- *  vecchio) resta la sola durata. */
-export function svcMinutes(sv) {
-  return (Number(sv?.duration_min) || 0) + (Number(sv?.soak_min) || 0);
 }
 
 /** Durata di un appuntamento della cliente: dall'inizio alla fine, che nel
@@ -46,4 +41,20 @@ export function sameBooking(appt, startIso, serviceIds) {
   if (new Date(appt.start).getTime() !== new Date(startIso).getTime()) return false;
   const booked = (appt.services || []).map((s) => s.service_id);
   return sortedIds(booked) === sortedIds(serviceIds || []);
+}
+
+/** "Gio 14 nov 2026" full date + time meta for lists. */
+export function fmtApptDate(iso, lang) {
+  return fmtDayMed(iso, lang);
+}
+
+export function apptTime(iso) { return timeLabel(minutesOfDay(iso)); }
+
+/** Durata di un appuntamento dell'elenco: lavoro + posa (vedi apptMinutes). */
+export function apptDur(appt) {
+  return apptMinutes(appt);
+}
+
+export function apptServiceNames(appt) {
+  return (appt.services || []).map((s) => s.name).join(' + ');
 }

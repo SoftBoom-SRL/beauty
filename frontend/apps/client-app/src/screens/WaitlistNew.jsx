@@ -9,7 +9,7 @@ import {
   ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon,
   WEEKDAYS_SHORT, errToast,
 } from './lib.jsx';
-import { svcMinutes } from './visitLib.js';
+import { svcMinutes } from '../lib/catalog.js';
 
 export default function WaitlistNew() {
   const { t, lang, brand, setView, viewParams, fireToast } = useApp();

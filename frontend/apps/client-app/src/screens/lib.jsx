@@ -1,9 +1,18 @@
-// lib.jsx — shared helpers/components for the client-app screens (ported from
-// prototype screen-cliente.jsx). Lives inside screens/ per folder ownership.
+// lib.jsx — componenti e hook condivisi dagli schermi dell'app cliente.
+// Le funzioni pure sono in ../lib/*.js, dove le provano i test con
+// `node --test`; da qui per ora si ri-esportano.
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, parseISO, timeLabel, minutesOfDay, toDateStr, todayStr, addDays, salonTzOpts } from '@youty/shared';
+import { ApiError, Icon, api, fmtEur, toDateStr, todayStr, salonTzOpts } from '@youty/shared';
 import { headFont } from '../theme.js';
-import { apptMinutes, depositDueMs, depositExpired } from './visitLib.js';
+import { depositDueMs, depositExpired } from '../lib/appointments.js';
+import { errToast } from '../lib/errors.js';
+
+export { svcLangName, catIcon } from '../lib/catalog.js';
+export { nextDays, dayStripLabel, fmtDayMed, relLabel } from '../lib/dates.js';
+export { fmtApptDate, apptTime, apptDur, apptServiceNames } from '../lib/appointments.js';
+export { mapsUrl, icsDataUrl, downloadIcs } from '../lib/links.js';
+export { errToast } from '../lib/errors.js';
+export { prefLabel, WEEKDAYS_SHORT } from '../lib/waitlist.js';
 
 /* ============================== UI bits ============================== */
 
@@ -151,22 +160,7 @@ export function StickyCta({ children }) {
   );
 }
 
-/* ============================== catalog helpers ============================== */
-
-/** Bilingual name for public catalog objects ({name_it, name_en}). */
-export function svcLangName(obj, lang) {
-  if (!obj) return '';
-  return (lang === 'en' && obj.name_en) ? obj.name_en : obj.name_it;
-}
-
-/** Category icon heuristic (prototype BK_CAT_ICON keyed nail/hair/viso/extra). */
-export function catIcon(name = '') {
-  const n = String(name).toLowerCase();
-  if (/(unghi|nail|mani|pedic)/.test(n)) return 'sparkle';
-  if (/(capell|hair|piega|taglio)/.test(n)) return 'scissors';
-  if (/(viso|face|skin|pelle)/.test(n)) return 'drop';
-  return 'star';
-}
+/* ============================== data hooks ============================== */
 
 /** Fetch the public price list (categories with services). */
 export function usePublicServices(slug) {
@@ -242,22 +236,6 @@ export function useClientAppointments() {
   return { data, error, reload };
 }
 
-/* ============================== dates / labels ============================== */
-
-const locale = (lang) => (lang === 'en' ? 'en-GB' : 'it-IT');
-
-/** I prossimi n giorni come Date[], a partire da OGGI IN SALONE.
- *
- *  Partivano da `new Date()`, cioè dal calendario del telefono: da Los Angeles
- *  il primo chip era un giorno che per il salone è già passato e usciva sempre
- *  vuoto; da Tokyo la striscia partiva da domani e gli orari ancora liberi di
- *  oggi sparivano. I Date restano mezzanotte LOCALE, perché da qui in poi sono
- *  aritmetica di giorni (etichette e toDateStr), non istanti. */
-export function nextDays(n = 14) {
-  const today = parseISO(todayStr());
-  return Array.from({ length: n }, (_, i) => addDays(today, i));
-}
-
 /** La data di oggi come 'YYYY-MM-DD', che cambia da sola a mezzanotte.
  *
  * Le schermate di prenotazione calcolavano la striscia dei giorni una volta
@@ -281,118 +259,5 @@ export function useTodayKey() {
   }, []);
   return key;
 }
-
-/** Short strip label parts, e.g. { wd: 'Gio', num: '14' }. */
-export function dayStripLabel(date, lang) {
-  const wd = date.toLocaleDateString(locale(lang), { weekday: 'short' }).replace('.', '');
-  return { wd: wd.charAt(0).toUpperCase() + wd.slice(1), num: String(date.getDate()) };
-}
-
-/** "Gio 14 nov" style medium label. */
-export function fmtDayMed(dateish, lang) {
-  const d = parseISO(dateish);
-  const opts = { weekday: 'short', day: 'numeric', month: 'short' };
-  // Un istante si legge sul calendario del salone; una data pura è già un giorno.
-  const s = d.toLocaleDateString(
-    locale(lang),
-    typeof dateish === 'string' && !dateish.includes('T') ? opts : salonTzOpts(opts),
-  ).replace(/\./g, '');
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/** Big relative label for the next appointment: "Oggi alle 15:30" / "Domani alle 10:00" / "Gio 14 nov · 10:00". */
-export function relLabel(iso, lang, t) {
-  const d = parseISO(iso);
-  // «Oggi» e «domani» si contano sul calendario del SALONE: dall'estero la
-  // cliente leggeva l'ora del proprio telefono, e a cavallo della mezzanotte
-  // anche il giorno sbagliato.
-  const days = Math.round((parseISO(toDateStr(iso)) - parseISO(todayStr())) / 86400000);
-  const hm = timeLabel(minutesOfDay(iso));
-  if (days === 0) return t('Oggi alle ', 'Today at ') + hm;
-  if (days === 1) return t('Domani alle ', 'Tomorrow at ') + hm;
-  if (days > 1 && days < 7) {
-    const wd = d.toLocaleDateString(locale(lang), salonTzOpts({ weekday: 'long' }));
-    return wd.charAt(0).toUpperCase() + wd.slice(1) + t(' alle ', ' at ') + hm;
-  }
-  return fmtDayMed(d, lang) + ' · ' + hm;
-}
-
-/** "Gio 14 nov 2026" full date + time meta for lists. */
-export function fmtApptDate(iso, lang) {
-  return fmtDayMed(iso, lang);
-}
-
-export function apptTime(iso) { return timeLabel(minutesOfDay(iso)); }
-
-/** Durata di un appuntamento dell'elenco: lavoro + posa (vedi apptMinutes). */
-export function apptDur(appt) {
-  return apptMinutes(appt);
-}
-
-export function apptServiceNames(appt) {
-  return (appt.services || []).map((s) => s.name).join(' + ');
-}
-
-/* ============================== actions ============================== */
-
-/** Google Maps directions link searching the salon by name. */
-export function mapsUrl(brand) {
-  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(brand?.name || '');
-}
-
-/** Build an .ics data URL for an appointment (client-side add-to-calendar). */
-export function icsDataUrl(appt, brandName) {
-  // Orari in UTC (la Z finale): un .ics con l'ora "fluttuante" veniva
-  // interpretato dal calendario nel fuso del telefono, e un appuntamento preso
-  // dall'estero finiva in agenda all'ora sbagliata.
-  const pad = (n) => String(n).padStart(2, '0');
-  const fmt = (d) => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
-  const start = parseISO(appt.start);
-  const end = appt.end ? parseISO(appt.end) : new Date(start.getTime() + apptDur(appt) * 60000);
-  const summary = (apptServiceNames(appt) || 'Appuntamento') + (brandName ? ' — ' + brandName : '');
-  const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//youty//client-app//IT', 'BEGIN:VEVENT',
-    `UID:appt-${appt.id}@youty`, `DTSTAMP:${fmt(new Date())}`, `DTSTART:${fmt(start)}`, `DTEND:${fmt(end)}`,
-    `SUMMARY:${summary.replace(/[\n,;]/g, ' ')}`, brandName ? `LOCATION:${brandName.replace(/[\n,;]/g, ' ')}` : null,
-    'END:VEVENT', 'END:VCALENDAR',
-  ].filter(Boolean).join('\r\n');
-  return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics);
-}
-
-export function downloadIcs(appt, brandName) {
-  const a = document.createElement('a');
-  a.href = icsDataUrl(appt, brandName);
-  a.download = 'appuntamento.ics';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-/** Uniform ApiError → toast. */
-export function errToast(err, fireToast, t) {
-  if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-  else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-}
-
-/** Waitlist preference label. */
-export function prefLabel(entry, t, lang) {
-  switch (entry.preference) {
-    case 'morning': return t('Mattina', 'Morning');
-    case 'afternoon': return t('Pomeriggio', 'Afternoon');
-    case 'weekend': return t('Weekend', 'Weekend');
-    case 'exact': {
-      const days = (entry.exact_days || []).map((d) => (WEEKDAYS_SHORT[d] ? WEEKDAYS_SHORT[d][lang === 'en' ? 1 : 0] : '')).filter(Boolean).join(' ');
-      const time = entry.exact_time ? String(entry.exact_time).slice(0, 5) : '';
-      return [days, time].filter(Boolean).join(' · ') || t('Orario preciso', 'Exact time');
-    }
-    default: return t('Qualsiasi orario', 'Any time');
-  }
-}
-
-/** 0=Monday … 6=Sunday (backend convention). [it, en, letterIt, letterEn] */
-export const WEEKDAYS_SHORT = [
-  ['Lun', 'Mon', 'L', 'M'], ['Mar', 'Tue', 'M', 'T'], ['Mer', 'Wed', 'M', 'W'],
-  ['Gio', 'Thu', 'G', 'T'], ['Ven', 'Fri', 'V', 'F'], ['Sab', 'Sat', 'S', 'S'], ['Dom', 'Sun', 'D', 'S'],
-];
 
 export { toDateStr };

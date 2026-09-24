@@ -1,5 +1,7 @@
-// walletLib.js — regole del portafoglio della cliente (logica pura, senza
-// React: la usano Wallet, GiftCard e Prenota, e i test la provano da sola).
+// wallet.js — regole del portafoglio della cliente: credito delle gift card,
+// coupon, scadenze (usate da Wallet, GiftCard e Prenota).
+// Logica pura, senza React: la caricano anche i test con `node --test`.
+import { fmtEur, parseISO, salonTzOpts } from '@youty/shared';
 
 /** Importo decimale dell'API ("50.00") → centesimi interi. Le somme si fanno
  *  in centesimi: sommando i decimali come numeri 0,10 + 0,20 non fa 0,30. */
@@ -68,4 +70,28 @@ export function giftServiceCards(cards) {
  *  cliente leggeva uno sconto che la cassa non le faceva. */
 export function fmtPct(value, lang) {
   return Number(value || 0).toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { maximumFractionDigits: 2 });
+}
+
+export function fmtExpiry(iso, lang, t) {
+  if (!iso) return t('Senza scadenza', 'No expiry');
+  // Le scadenze sono ISTANTI (DateTime lato server): vanno lette sul calendario
+  // del SALONE. Sull'orologio del telefono una gift card che scade a mezzanotte
+  // risultava scaduta il giorno prima a chi la guardava da ovest, e valida un
+  // giorno in più a chi la guardava da est.
+  const d = parseISO(iso);
+  const s = d.toLocaleDateString(
+    lang === 'en' ? 'en-GB' : 'it-IT',
+    salonTzOpts({ day: 'numeric', month: 'short', year: 'numeric' }),
+  ).replace(/\./g, '');
+  return t('Scade il ', 'Expires ') + s;
+}
+
+export function couponLabel(c, lang, t) {
+  return c.kind === 'percent'
+    ? t(`Sconto del ${fmtPct(c.value, lang)}%`, `${fmtPct(c.value, lang)}% off`)
+    : t(`Buono da ${fmtEur(Number(c.value), lang)}`, `${fmtEur(Number(c.value), lang)} voucher`);
+}
+
+export function couponOrigin(origin, t) {
+  return origin === 'loyalty' ? t('Premio fedeltà', 'Loyalty reward') : t('Sconto', 'Discount');
 }

@@ -11,8 +11,9 @@ import {
   ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
   nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
-import { giftServiceCards } from './walletLib.js';
-import { sameBooking, svcMinutes } from './visitLib.js';
+import { giftServiceCards } from '../lib/wallet.js';
+import { sameBooking } from '../lib/appointments.js';
+import { svcMinutes } from '../lib/catalog.js';
 
 const STEP_INFO = [['Servizio', 'Service'], ['Giorno e ora', 'Day & time'], ['Conferma', 'Confirm']];
 

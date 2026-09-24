@@ -6,8 +6,7 @@ import { Icon, ProgressBar, api, fmtEur, NumInput } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
-import { fmtExpiry } from './Wallet.jsx';
-import { fmtCredit, giftCardTotals, isUnpaid } from './walletLib.js';
+import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 const PRESETS = [25, 50, 75, 100];
 
