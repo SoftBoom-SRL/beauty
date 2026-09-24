@@ -37,7 +37,7 @@ CI.
 | test del frontend, 258 | 434 |
 | nessun lint né CI | ESLint (JSX e regole degli hook), ruff, CI su ogni pull request e su `main` |
 
-Il lavoro sta sul branch `claude/exciting-bohr-5ch9g7`: 218 commit, uniti per
+Il lavoro sta sul branch `claude/exciting-bohr-5ch9g7`: 216 commit, uniti per
 area con un merge ciascuno («Unisci: …»). **Non è su `main`**: un push su
 `main` va in produzione.
 
@@ -59,7 +59,11 @@ area con un merge ciascuno («Unisci: …»). **Non è su `main`**: un push su
 - Le sole correzioni riguardano **test** che fallivano a certe ore, non il codice:
   - cinque test degli insight, rossi il primo del mese fra mezzanotte e le 2 e
     nelle prime ore dell'anno;
-  - un test della disdetta registrata dallo staff, rosso dalle 15:30 alle 6.
+  - un test della disdetta registrata dallo staff, rosso dalle 15:30 alle 6;
+  - quattro test trovati facendo girare la suite con l'orologio spostato: le
+    pause «di oggi» fra mezzanotte e le 2, due visite che dopo le 22:30
+    scavalcavano la mezzanotte, la data del consenso nella prima ora
+    dell'anno.
 
 ## 3. Dove sta cosa adesso
 
@@ -105,6 +109,7 @@ Le novità principali:
 - `.github/workflows/ci.yml`: sul backend ruff, `check`, migrazioni, test; sul frontend lint, test, build.
 - [`tools/smoke/`](../../tools/smoke/README.md): un giro deterministico nel browser (103 passi fra dashboard e web app) che confronta due versioni schermata per schermata. Serve per i cambiamenti larghi, che i test non coprono nel JSX.
 - `backend/common/tests/test_imports.py` controlla che ogni `from … import …` del progetto si risolva, anche quelli dentro le funzioni: un nome spostato non arriva più in produzione come 500.
+- `tools/test_a_ora.py` lancia la suite del backend con l'orologio spostato (la sera, a mezzanotte, a capodanno…), per scovare i test che passano solo a certe ore.
 - [`CLAUDE.md`](../../CLAUDE.md): le regole in breve per chi lavora con un assistente AI.
 
 ## 4. Come è stato verificato
