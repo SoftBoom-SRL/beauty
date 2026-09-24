@@ -37,7 +37,7 @@ class ImportUpsertTests(ClientsTestCase):
 
     def test_import_matches_by_email_when_no_phone_match(self):
         # Stessa persona (stesso nome): la riga senza telefono aggiorna la scheda.
-        # Con un nome diverso la salta (06-08, vedi tests_caccia22_import).
+        # Con un nome diverso la salta (06-08, vedi SharedEmailTests qui sotto).
         existing = self.make_client(first_name="Giulia", phone="+393330005555", email="giulia@example.com")
         result = import_rows(
             self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": "", "lang": "en"}]
