@@ -51,8 +51,8 @@ def spendable_gift_cards(salon, client_ids):
     la sua scheda non esiste ancora, e non è un regalo di chi l'ha pagata.
     Lo stato EXPIRED lo scrive solo chi prova a riscattare: una carta scaduta da
     mesi resta «attiva» a database, quindi la scadenza si verifica qui.
-    È la regola unica dell'agenda: la usano `api.gift_index` (i regali mostrati
-    sulla visita) e la caparra (`gift_covered_amount`).
+    È la regola unica dell'agenda: la usano `presenters.gift_index` (i regali
+    mostrati sulla visita) e la caparra (`gift_covered_amount`).
     """
     from apps.marketing.models import GiftCard  # lazy
 

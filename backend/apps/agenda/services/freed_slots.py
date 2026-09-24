@@ -264,7 +264,8 @@ def free_slot_event(appointment: Appointment, *, start=None, operator_id=None):
     """Annuncia alla lista d'attesa come liberata l'intera visita (o da `start`, per `operator_id`).
 
     Resta per chi la chiama da fuori dall'agenda: i gesti dell'agenda passano da
-    `_sync_freed_slots`, che annuncia solo ciò che si è liberato davvero. Anche
+    `_sync_freed_slots` (di solito con `emit_with_freed_slots`), che annuncia
+    solo ciò che si è liberato davvero. Anche
     qui l'orario si taglia su adesso (una visita già finita non si propone a
     nessuno) e sostituisce gli annunci ancora trattenuti dello stesso
     appuntamento. Ritorna l'evento, o None se non c'è più niente da annunciare.

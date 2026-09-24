@@ -16,9 +16,36 @@ from ..models import Appointment, Pause
 from ..presenters import _appointment_out, _codes_hidden, _fmt_min, _gifts_out, _pause_out, gift_index
 from ..schemas import AppointmentOut
 from ..services import deposit_holds
+from ..services.occupancy import _operators_qs
 from .params import _parse_day
 
 router = Router()
+
+
+def _visible_appointments(salon, location_id, **dates):
+    """Le visite non annullate del periodo (`dates`), con la cliente, in ordine d'inizio.
+
+    Con `location_id`, come per le operatrici: la sede richiesta più gli
+    appuntamenti senza sede (prenotazioni dall'app o importate), che altrimenti
+    sparirebbero. Ogni vista aggiunge i suoi prefetch.
+    """
+    appointments = (
+        Appointment.objects.filter(salon=salon, **dates)
+        .exclude(status=Appointment.Status.CANCELLED)
+        .select_related("client")
+        .order_by("start")
+    )
+    if location_id:
+        appointments = appointments.filter(Q(location_id=location_id) | Q(location__isnull=True))
+    return appointments
+
+
+def _by_local_day(appointments) -> dict:
+    """{giorno: [visite]}, col giorno del salone (non quello UTC)."""
+    by_day = defaultdict(list)
+    for appointment in appointments:
+        by_day[timezone.localtime(appointment.start).date()].append(appointment)
+    return by_day
 
 
 @router.get("/day", auth=staff_auth)
@@ -32,29 +59,15 @@ def agenda_day(request, date: str, location_id: int = None):
     from apps.staff.models import Operator  # lazy
     from apps.staff.services import shift_windows  # lazy
 
-    # prefetch di turni e assenze + settings del salone: `shift_windows` li legge
-    # per ogni operatrice, e senza questo la vista giorno faceva tre query per
-    # colonna invece di tre in tutto.
-    operators = (
-        Operator.objects.filter(salon=ctx.salon, active=True)
-        .select_related("salon__settings")
-        .prefetch_related("shifts", "absences")
-        .order_by("order", "id")
-    )
-    if location_id:
-        operators = operators.filter(Q(location__isnull=True) | Q(location_id=location_id))
+    # Le operatrici su cui cercano disponibilità e conferma (attive, della sede o
+    # senza sede), con turni, assenze e settings del salone già letti:
+    # `shift_windows` li legge per ogni operatrice, e senza il prefetch la vista
+    # giorno faceva tre query per colonna invece di tre in tutto.
+    operators = _operators_qs(ctx.salon, location_id or None)
 
-    appointments = (
-        Appointment.objects.filter(salon=ctx.salon, start__date=day)
-        .exclude(status=Appointment.Status.CANCELLED)
-        .select_related("client")
-        .prefetch_related("items__service", "items__operator")
-        .order_by("start")
+    appointments = _visible_appointments(ctx.salon, location_id, start__date=day).prefetch_related(
+        "items__service", "items__operator"
     )
-    if location_id:
-        # Come per le operatrici: la sede richiesta + gli appuntamenti senza sede
-        # (es. prenotazioni dall'app o importate), che altrimenti sparirebbero.
-        appointments = appointments.filter(Q(location_id=location_id) | Q(location__isnull=True))
     pauses = (
         Pause.objects.filter(salon=ctx.salon, start__date=day)
         .select_related("operator")
@@ -139,27 +152,14 @@ def agenda_week(request, start: str, location_id: int = None):
     deposit_holds.process_deposit_holds(ctx.salon)
     days = [first_day + dt.timedelta(days=offset) for offset in range(7)]
 
-    appointments = (
-        Appointment.objects.filter(
-            salon=ctx.salon, start__date__gte=days[0], start__date__lte=days[-1]
-        )
-        .exclude(status=Appointment.Status.CANCELLED)
-        .select_related("client")
-        .prefetch_related("items__service")
-        .order_by("start")
+    appointments = list(
+        _visible_appointments(
+            ctx.salon, location_id, start__date__gte=days[0], start__date__lte=days[-1]
+        ).prefetch_related("items__service")
     )
-    if location_id:
-        # Come nella vista giorno: la sede richiesta più gli appuntamenti senza
-        # sede (prenotazioni dall'app o importate), che altrimenti sparirebbero.
-        appointments = appointments.filter(
-            Q(location_id=location_id) | Q(location__isnull=True)
-        )
-    appointments = list(appointments)
     gifts = gift_index(ctx.salon, [a.client_id for a in appointments])
     hide_codes = _codes_hidden(ctx)
-    by_day = defaultdict(list)
-    for appointment in appointments:
-        by_day[timezone.localtime(appointment.start).date()].append(appointment)
+    by_day = _by_local_day(appointments)
 
     result = []
     for day in days:
@@ -238,23 +238,14 @@ def agenda_range(request, start: str, end: str, location_id: int = None):
     )
     if location_id:
         operators = [o for o in operators if o.location_id in (None, location_id)]
-    appointments = (
-        Appointment.objects.filter(
-            salon=ctx.salon, start__date__gte=first_day, start__date__lte=last_day
-        )
-        .exclude(status=Appointment.Status.CANCELLED)
-        .select_related("client")
-        .prefetch_related("items__service")
-        .order_by("start")
+    appointments = list(
+        _visible_appointments(
+            ctx.salon, location_id, start__date__gte=first_day, start__date__lte=last_day
+        ).prefetch_related("items__service")
     )
-    if location_id:
-        appointments = appointments.filter(Q(location_id=location_id) | Q(location__isnull=True))
-    appointments = list(appointments)
     gifts = gift_index(ctx.salon, [a.client_id for a in appointments])
     hide_codes = _codes_hidden(ctx)
-    by_day = defaultdict(list)
-    for appointment in appointments:
-        by_day[timezone.localtime(appointment.start).date()].append(appointment)
+    by_day = _by_local_day(appointments)
 
     result = []
     day = first_day
