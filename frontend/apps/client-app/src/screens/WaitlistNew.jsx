@@ -7,9 +7,9 @@ import React from 'react';
 import { Icon, fmtEur, fmtDur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { joinWaitlist } from '../api/client.js';
-import {
-  ClientSubHead, StickyCta, svcLangName, catIcon, errToast,
-} from './lib.jsx';
+import { svcLangName, catIcon, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { StickyCta } from '../components/StickyCta.jsx';
 import { usePublicServices } from '../hooks/usePublicCatalog.js';
 import { WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../lib/waitlist.js';
 import { svcMinutes } from '../lib/catalog.js';

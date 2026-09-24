@@ -6,7 +6,9 @@ import { Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWallet } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
-import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
+import { errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 export default function Wallet() {

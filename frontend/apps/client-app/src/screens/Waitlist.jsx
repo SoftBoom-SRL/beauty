@@ -4,7 +4,9 @@ import React from 'react';
 import { Icon } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWaitlist, leaveWaitlist } from '../api/client.js';
-import { ClientSubHead, Meta, prefLabel, fmtDayMed, errToast } from './lib.jsx';
+import { prefLabel, fmtDayMed, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
 
 export default function Waitlist() {
   const { t, lang, brand, setView, fireToast } = useApp();

@@ -1,6 +1,6 @@
 // NavBar.jsx — bottom navigation (Home / Prenotazioni / Prenota FAB / Wallet / Profilo).
 import { Icon } from '@youty/shared';
-import { useApp } from './ctx.jsx';
+import { useApp } from '../ctx.jsx';
 
 /** Views where the bottom nav is visible. */
 export const NAV_VIEWS = ['home', 'prenotazioni', 'wallet', 'profilo', 'waitlist', 'pacchetti', 'giftcard'];

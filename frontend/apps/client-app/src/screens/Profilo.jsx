@@ -6,7 +6,8 @@ import { useApp } from '../ctx.jsx';
 import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
 import { headFont } from '../theme.js';
-import { ClientSubHead, errToast } from './lib.jsx';
+import { errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
 
 export default function Profilo() {
   const { t, lang, setLang, brand, client, setView, fireToast } = useApp();

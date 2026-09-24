@@ -8,10 +8,11 @@ import { ApiError, Icon, PhoneInput, clientAuth, fmtEur, fmtDur, isPlausiblePhon
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
-import {
-  ClientSubHead, DetailRow, StickyCta, DepositDue, svcLangName, catIcon,
-  nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast,
-} from './lib.jsx';
+import { svcLangName, catIcon, nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DetailRow } from '../components/DetailRow.jsx';
+import { StickyCta } from '../components/StickyCta.jsx';
+import { DepositDue } from '../components/DepositDue.jsx';
 import { usePublicOperators, usePublicServices } from '../hooks/usePublicCatalog.js';
 import { useTodayKey } from '../hooks/useTodayKey.js';
 import { giftServiceCards } from '../lib/wallet.js';

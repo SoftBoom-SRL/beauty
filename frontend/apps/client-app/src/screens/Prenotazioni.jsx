@@ -4,10 +4,11 @@
 import React from 'react';
 import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
-import {
-  ClientSubHead, Meta, DashedEmpty, DepositDue,
-  fmtDayMed, apptServiceNames, errToast,
-} from './lib.jsx';
+import { fmtDayMed, apptServiceNames, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
+import { DepositDue } from '../components/DepositDue.jsx';
 import { useClientAppointments } from '../hooks/useClientAppointments.js';
 import { apptMinutes } from '../lib/appointments.js';
 

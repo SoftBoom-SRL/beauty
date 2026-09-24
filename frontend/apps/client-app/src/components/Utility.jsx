@@ -1,6 +1,6 @@
 // Utility.jsx — floating top utility bar: language toggle + logout.
 import { Icon, clientAuth } from '@youty/shared';
-import { useApp } from './ctx.jsx';
+import { useApp } from '../ctx.jsx';
 
 export default function Utility() {
   const { t, lang, setLang, fireToast, session, openAuth, setView } = useApp();

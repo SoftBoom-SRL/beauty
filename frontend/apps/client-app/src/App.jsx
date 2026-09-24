@@ -4,8 +4,8 @@ import { AppProvider, useApp } from './ctx.jsx';
 import { brandVars } from './theme.js';
 import { SCREENS } from './screens/registry.js';
 import AuthFlow from './screens/auth/AuthFlow.jsx';
-import NavBar, { NAV_VIEWS } from './NavBar.jsx';
-import Utility from './Utility.jsx';
+import NavBar, { NAV_VIEWS } from './components/NavBar.jsx';
+import Utility from './components/Utility.jsx';
 import Hook from './screens/Hook.jsx';
 
 /* Il primo segmento del path è lo slug del salone (vedi shared/salon.js), il

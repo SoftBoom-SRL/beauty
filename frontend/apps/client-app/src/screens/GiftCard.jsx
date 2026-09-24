@@ -6,7 +6,9 @@ import { Icon, ProgressBar, fmtEur, NumInput } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { buyGiftCard, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
-import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
+import { errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 const PRESETS = [25, 50, 75, 100];

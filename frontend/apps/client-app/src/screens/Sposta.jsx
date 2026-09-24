@@ -9,10 +9,10 @@ import { ApiError, Icon, fmtDur, fmtTime, minutesOfDay, timeLabel } from '@youty
 import { useApp } from '../ctx.jsx';
 import { getAvailability, moveAppointment } from '../api/client.js';
 import { headFont } from '../theme.js';
-import {
-  ClientSubHead, Meta, StickyCta, nextDays, dayStripLabel, fmtDayMed, toDateStr,
-  apptServiceNames, errToast,
-} from './lib.jsx';
+import { nextDays, dayStripLabel, fmtDayMed, toDateStr, apptServiceNames, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
+import { StickyCta } from '../components/StickyCta.jsx';
 import { useTodayKey } from '../hooks/useTodayKey.js';
 import { apptMinutes } from '../lib/appointments.js';
 

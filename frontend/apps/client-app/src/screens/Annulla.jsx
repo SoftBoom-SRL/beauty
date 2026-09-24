@@ -6,9 +6,9 @@ import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/sha
 import { useApp } from '../ctx.jsx';
 import { cancelAppointment } from '../api/client.js';
 import { headFont } from '../theme.js';
-import {
-  ClientSubHead, Meta, fmtDayMed, apptServiceNames, errToast,
-} from './lib.jsx';
+import { fmtDayMed, apptServiceNames, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { Meta } from '../components/Meta.jsx';
 import { apptMinutes } from '../lib/appointments.js';
 
 export default function Annulla() {

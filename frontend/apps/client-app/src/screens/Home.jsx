@@ -5,10 +5,9 @@ import React from 'react';
 import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
-import {
-  Meta, relLabel, fmtDayMed,
-  apptServiceNames, mapsUrl, downloadIcs, errToast, DepositDue,
-} from './lib.jsx';
+import { relLabel, fmtDayMed, apptServiceNames, mapsUrl, downloadIcs, errToast } from './lib.jsx';
+import { Meta } from '../components/Meta.jsx';
+import { DepositDue } from '../components/DepositDue.jsx';
 import { useClientAppointments } from '../hooks/useClientAppointments.js';
 import { apptMinutes } from '../lib/appointments.js';
 

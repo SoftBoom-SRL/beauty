@@ -8,7 +8,9 @@ import { Icon, fmtEur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { getPublicPackages } from '../api/client.js';
 import { headFont } from '../theme.js';
-import { ClientSubHead, DashedEmpty, svcLangName, errToast } from './lib.jsx';
+import { svcLangName, errToast } from './lib.jsx';
+import { ClientSubHead } from '../components/ClientSubHead.jsx';
+import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { useApiData } from '../hooks/useApiData.js';
 import { usePublicServices } from '../hooks/usePublicCatalog.js';
 
