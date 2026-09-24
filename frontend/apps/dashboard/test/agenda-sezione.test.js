@@ -3,7 +3,8 @@
 // caccia ai bug del 22/09/2026: 13-01 = 12-05 = 17-06 e 13-07 = 12-11 («Sposta
 // qui»), 13-08 (prenotazione aperta), 12-17 (ombra in settimana), 12-13 (orario
 // passato), 03-15 («Annulla» degli avvisi), C2 (ridimensionamento con
-// expected_updated_at), 12-24 («Vai a una data»), 12-09 (eventi live).
+// expected_updated_at), 12-24 («Vai a una data»), 12-09 (eventi live). Bug
+// sospetti del 24/09/2026: n. 49 (gesto riuscito, ricarico fallito).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -47,12 +48,13 @@ function setup({ modal = null, undo = [] } = {}) {
   globalThis.setInterval = () => 0;      // l'orologio dell'agenda (ogni 30 s) non serve qui
   globalThis.clearInterval = () => {};
   const ApiError = globalThis.__ApiError;
-  const state = { undo, appts: { 41: maria(), 42: sara }, days: { [TODAY]: rowsFor([sara]) }, put: null, undoPost: null, onMovePost: null };
-  const calls = { get: [], post: [], put: [] };
+  // `dayError`: se c'è, la GET della giornata fallisce con quell'errore
+  const state = { undo, appts: { 41: maria(), 42: sara }, days: { [TODAY]: rowsFor([sara]) }, put: null, undoPost: null, onMovePost: null, dayError: null };
+  const calls = { get: [], post: [], put: [], del: [] };
   globalThis.__api = {
     get: (url, opts) => {
       calls.get.push({ url, opts });
-      if (url === '/api/agenda/day') return Promise.resolve(state.days[opts.params.date] || rowsFor());
+      if (url === '/api/agenda/day') return state.dayError ? Promise.reject(state.dayError) : Promise.resolve(state.days[opts.params.date] || rowsFor());
       if (url === '/api/agenda/undo') return Promise.resolve(state.undo);
       const m = /^\/api\/agenda\/appointments\/(\d+)$/.exec(url);
       if (m) return Promise.resolve(state.appts[m[1]]);
@@ -66,7 +68,7 @@ function setup({ modal = null, undo = [] } = {}) {
     },
     put: (url, body) => { calls.put.push({ url, body }); return state.put ? state.put(body, calls.put.length) : Promise.resolve({}); },
     patch: () => Promise.resolve({}),
-    del: () => Promise.resolve({}),
+    del: (url) => { calls.del.push({ url }); return Promise.resolve({}); },
   };
   let liveFn = null;
   let modalSeq = 0;
@@ -303,4 +305,52 @@ test('il pannello aperto non si rimonta: né al secondo clic sul blocco né dopo
   assert.ok(g.calls.post.some((p) => p.url === '/api/agenda/appointments/41/move'));
   assert.equal(g.dash.openModal.calls.length, 1, 'il pannello resta quello aperto');
   assert.equal(g.dg().props.ghost ?? null, null, 'la copia fresca è già su giovedì: niente più ombra');
+});
+
+test('gesto riuscito e ricarico della giornata fallito: resta l\'avviso del gesto, nessun errore', async () => {
+  const g = setup();
+  await ready(g);
+  // una visita di oggi con due servizi (per lo stacco) e la pausa pranzo di Anna
+  const visita = { ...maria(), start: isoAtMin(TODAY, 10 * 60) };
+  const pausa = { id: 5, operator_id: 1, start: isoAtMin(TODAY, 13 * 60), duration_min: 60, note: '' };
+  const dg = () => g.dg().props;
+  const menuButton = (text) => find(find(g.m.tree, (el) => el.type?.name === 'SlotMenu'), (el) => el.type === 'button' && textOf(el) === text);
+  // [gesto, come si fa, avviso del gesto riuscito (null: non ne ha), con «Annulla»]
+  const gesti = [
+    ['stacco', () => dg().onSplitItem(visita, visita.items[1], 12 * 60, 2), 'Piega staccato alle 12:00', true],
+    ['pausa spostata', () => dg().onMovePause(pausa, 14 * 60, 1), 'Pausa spostata alle 14:00', true],
+    ['pausa allungata', () => dg().onResizePause(pausa, 90), null, false],
+    ['pausa rimossa', () => dg().onDeletePause(pausa), 'Pausa rimossa', true],
+    ['durata', () => dg().onResizeItem(sara, sara.items[0], 45), 'Durata aggiornata', false],
+    ['pausa aggiunta', () => {
+      dg().onSlotMenu(1, 12 * 60, 300, 300, { ok: true, code: 'ok', label: 'Disponibile' });
+      g.render();
+      menuButton('Aggiungi pausa').props.onClick();
+      g.render();
+      return menuButton('Aggiungi').props.onClick();
+    }, 'Pausa aggiunta · Anna alle 12:00', false],
+  ];
+  const reads = (url) => g.calls.get.filter((x) => x.url === url).length;
+  // da qui la giornata non si rilegge: la rete cade subito dopo la scrittura
+  g.state.dayError = new TypeError('Failed to fetch');
+  for (const [nome, gesto, msg, annulla] of gesti) {
+    const from = g.dash.fireToast.calls.length;
+    const days = reads('/api/agenda/day'), undos = reads('/api/agenda/undo');
+    await gesto();
+    await flush();
+    g.render();
+    const avvisi = g.dash.fireToast.calls.slice(from).map(([x]) => x);
+    assert.ok(reads('/api/agenda/day') > days, `${nome}: la giornata si ricarica (e non risponde)`);
+    assert.deepEqual(avvisi.filter((x) => x.icon === 'alert').map((x) => x.msg), [], `${nome}: nessun errore, il gesto è riuscito`);
+    assert.deepEqual(avvisi.map((x) => x.msg), msg ? [msg] : [], `${nome}: resta l'avviso del gesto`);
+    if (annulla) {
+      assert.equal(avvisi[0].undo, 'Annulla', `${nome}: l'avviso ha il suo «Annulla»`);
+      assert.equal(typeof avvisi[0].undoFn, 'function');
+    }
+    assert.ok(reads('/api/agenda/undo') > undos, `${nome}: la pila di «torna indietro» si rilegge lo stesso`);
+  }
+  // ogni scrittura è partita una volta sola: niente secondi tentativi
+  assert.deepEqual(g.calls.post.map((p) => p.url), ['/api/agenda/appointments/41/split', '/api/agenda/pauses']);
+  assert.deepEqual(g.calls.put.map((p) => p.url), ['/api/agenda/pauses/5', '/api/agenda/pauses/5', '/api/agenda/appointments/42']);
+  assert.deepEqual(g.calls.del.map((p) => p.url), ['/api/agenda/pauses/5']);
 });
