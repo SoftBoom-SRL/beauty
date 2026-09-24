@@ -7,6 +7,7 @@ l'orario che la cliente vede è quello che la conferma applica.
 
 import datetime as dt
 from collections import defaultdict
+from typing import NamedTuple
 
 from django.conf import settings
 from django.utils import timezone
@@ -16,8 +17,24 @@ from .occupancy import _bookable_service, _busy_map, _chain_deadline, _opening_b
 from .timegrid import _is_free, _slot_datetime
 
 
+class PlanStep(NamedTuple):
+    """Una voce del piano di ricerca (vedi `_slot_plan`).
+
+    `candidates` sono le operatrici fra cui scegliere, `duration_min` e
+    `soak_min` il lavoro attivo e la posa della voce; `group` (spostamento di
+    una visita) è l'id dell'operatrice non più prenotabile le cui righe passano
+    tutte a UNA sola collega, None altrimenti.
+    """
+
+    service: object
+    candidates: list
+    duration_min: int
+    soak_min: int
+    group: int | None
+
+
 def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_service_ids=()):
-    """Piano della ricerca: per ogni voce (servizio, candidate, attivo, posa, gruppo).
+    """Piano della ricerca: per ogni voce un `PlanStep` (servizio, candidate, attivo, posa, gruppo).
 
     None se una voce non ha nessuna operatrice possibile: allora non c'è orario.
 
@@ -39,7 +56,7 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
     """
     operator_by_id = {op.id: op for op in operators}
     keep = set(keep_service_ids or ())
-    plan: list[tuple] = []
+    plan: list[PlanStep] = []
     for raw in items:
         service = _bookable_service(salon, raw.get("service_id"), keep_ids=keep)
         eligible_ids = set(service.operators.values_list("id", flat=True))
@@ -65,7 +82,7 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
         duration = int(raw.get("duration_min") or service.duration_min)
         soak = raw.get("soak_min")
         soak = int(service.soak_min or 0) if soak is None else int(soak)
-        plan.append((service, candidates, duration, soak, group))
+        plan.append(PlanStep(service, candidates, duration, soak, group))
     return plan
 
 
@@ -98,12 +115,12 @@ def _chain_at(plan, windows, busy, tick: int, bands):
             chosen = next((op for op in candidates if free(op, index)), None)
         else:
             if group not in by_group:
-                members = [i for i, step in enumerate(plan) if step[4] == group]
+                members = [i for i, step in enumerate(plan) if step.group == group]
                 by_group[group] = next(
                     (
                         op
                         for op in candidates
-                        if all(op in plan[i][1] and free(op, i) for i in members)
+                        if all(op in plan[i].candidates and free(op, i) for i in members)
                     ),
                     None,
                 )
@@ -121,6 +138,29 @@ def _chain_at(plan, windows, busy, tick: int, bands):
     if deadline is not None and cursor > deadline[0]:
         return None
     return assignment, segments
+
+
+def _search_context(
+    salon, day: dt.date, items: list[dict], location, *, exclude_appointment_id, keep_service_ids
+):
+    """(piano, finestre di turno, impegni) per cercare in quel giorno; None se una voce non ha operatrici.
+
+    È lo stesso per la ricerca (`get_free_slots`) e per un orario solo
+    (`slot_assignment`): la conferma applica proprio quello che la ricerca ha
+    proposto.
+    """
+    from apps.staff.services import shift_windows  # lazy
+
+    operators = list(_operators_qs(salon, location))
+    plan = _slot_plan(
+        salon, items, operators,
+        moving=exclude_appointment_id is not None, keep_service_ids=keep_service_ids,
+    )
+    if plan is None:
+        return None
+    windows = {op.id: shift_windows(op, day) for op in operators}
+    busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
+    return plan, windows, busy
 
 
 def get_free_slots(
@@ -157,27 +197,22 @@ def get_free_slots(
 
     Ritorna [{"start": iso, "assignment": [{"service_id", "operator_id"}]}].
     """
-    from apps.staff.services import shift_windows  # lazy
-
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
 
     salon_settings = getattr(salon, "settings", None)
     step = getattr(salon_settings, "slot_interval_min", None) or settings.AGENDA_SLOT_STEP_MIN
-    operators = list(_operators_qs(salon, location))
-    plan = _slot_plan(
-        salon, items, operators,
-        moving=exclude_appointment_id is not None, keep_service_ids=keep_service_ids,
+    context = _search_context(
+        salon, date, items, location,
+        exclude_appointment_id=exclude_appointment_id, keep_service_ids=keep_service_ids,
     )
-    if plan is None:
+    if context is None:
         return []
-
-    windows = {op.id: shift_windows(op, date) for op in operators}
-    busy = _busy_map(salon, date, exclude_appointment_id=exclude_appointment_id)
+    plan, windows, busy = context
     min_useful = _min_useful_minutes(salon, step)
 
     all_windows = [
-        w for _, candidates, _, _, _ in plan for op in candidates for w in windows.get(op.id, [])
+        w for entry in plan for op in entry.candidates for w in windows.get(op.id, [])
     ]
     if not all_windows:
         return []
@@ -222,21 +257,17 @@ def slot_assignment(
     cliente ha visto (lo spostamento di una visita la cui operatrice non c'è
     più). Il passato non si scarta qui: lo rifiuta chi scrive.
     """
-    from apps.staff.services import shift_windows  # lazy
-
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
     local = timezone.localtime(start)
     day = local.date()
-    operators = list(_operators_qs(salon, location))
-    plan = _slot_plan(
-        salon, items, operators,
-        moving=exclude_appointment_id is not None, keep_service_ids=keep_service_ids,
+    context = _search_context(
+        salon, day, items, location,
+        exclude_appointment_id=exclude_appointment_id, keep_service_ids=keep_service_ids,
     )
-    if plan is None:
+    if context is None:
         return None
-    windows = {op.id: shift_windows(op, day) for op in operators}
-    busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
+    plan, windows, busy = context
     chain = _chain_at(plan, windows, busy, local.hour * 60 + local.minute, _opening_bands(salon, day))
     return chain[0] if chain else None
 
