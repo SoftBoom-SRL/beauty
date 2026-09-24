@@ -145,7 +145,9 @@ Le app, con i moduli di dominio principali:
   `client_facts`, `stripe_service.*`, …) si importano dentro la funzione che le
   usa, così vengono cercate a ogni chiamata. Non si ri-esporta un nome da un
   altro modulo per comodità: una `mock.patch` sul nome ri-esportato non tocca
-  il codice che usa l'originale.
+  il codice che usa l'originale. Per lo stesso motivo i package `services/` e
+  `api/` dell'agenda non ri-esportano niente dalla radice: si importa dal
+  sottomodulo (`from apps.agenda.services.locking import lock_salon`).
 - **Lingue.** Campi testo bilingui `name_it` / `name_en`; nel frontend ogni
   testo è `t('italiano', 'English')`.
 

@@ -55,7 +55,7 @@ in cui vivono le funzioni principali.
   fondono con i messaggi dell'appuntamento), `slot:<id>`, `automation:<id>`,
   `communication:<id>`.
 - **Ritardo di sicurezza**: gli eventi dell'agenda passano da
-  `agenda.services.emit_appointment_event`, che li TRATTIENE per
+  `agenda.services.messages.emit_appointment_event`, che li TRATTIENE per
   `SalonSettings.automation_delay_seconds` (30 di serie, 0 = subito) con una
   `coalesce_key` per oggetto. Due eventi trattenuti sullo stesso appuntamento si
   fondono in uno solo: prenotare e correggere l'orario un istante dopo manda un
@@ -248,25 +248,30 @@ finestre lavorabili in minuti per quella data = turno del weekday
   exact_days JSON default list (0=lun…6=dom), exact_time TimeField null/blank,
   status active/contacted/booked/expired default active, created_at.
 
-**services.py**
-- `get_free_slots(salon, date, items, location=None) -> list[dict]`
+**services/** — un package, un modulo per argomento (la mappa è in
+`docs/SVILUPPO.md` §1.1); si importa dal sottomodulo, la radice non ri-esporta niente.
+- `availability.get_free_slots(salon, date, items, location=None) -> list[dict]`
   items = [{"service_id": int, "operator_id": int|None}] (None = qualsiasi idonea).
   Griglia da settings.AGENDA_SLOT_STEP_MIN (15'). Un orario t è valido se i servizi si
   concatenano in sequenza da t e per ciascuno esiste un'operatrice idonea
   (in `service.operators`) libera per l'intera finestra: dentro `staff.services.shift_windows`,
   senza sovrapposizioni con Appointment (status non in cancelled/no_show) né Pause.
   Ritorna [{"start": iso, "assignment": [{"service_id", "operator_id"}]}].
-- `compute_deposit(salon, client, total_price) -> Decimal`:
+- `deposits.compute_deposit(salon, client, total_price) -> Decimal`:
   se client.deposit_always → prima regola attiva qualunque; altrimenti prima
   `core.DepositRule` attiva (per priority) le cui conditions matchano
   `clients.services.client_facts(client)`; pct → percentuale del totale, fixed → importo. 0 se nessuna.
-- `create_appointment(salon, client, items, start, *, via, actor=None, flexible=False)`:
+- `appointments.create_appointment(salon, client, items, start, *, via, actor=None, flexible=False)`:
   transazione; rivalida che lo slot sia libero (altrimenti HttpError 409
   "Orario non più disponibile"); snapshot durata/prezzo dal servizio; operator principale =
   operatrice del primo item; calcola deposito → deposit_status required/none;
   log + emit `appointment.created` (payload: client nome/telefono/lang, servizi, start ISO, deposito).
-- `free_slot_event(appointment)`: emit `slot.freed` {start, duration_min, operator_id,
+- `freed_slots.free_slot_event(appointment)`: emit `slot.freed` {start, duration_min, operator_id,
   matching_waitlist: [entry_id...]} — waitlist attive compatibili per servizio+operatrice.
+
+Gli endpoint stanno in `api/`, un modulo per risorsa (`agenda_views`, `appointments`,
+`undo_routes`, `pauses`, `waitlist`, `availability`, `client_app`); la forma delle
+risposte in `presenters.py`.
 
 **Endpoint staff** (/api/agenda)
 - GET `/day?date=YYYY-MM-DD&location_id=` → per ogni operatrice attiva:
