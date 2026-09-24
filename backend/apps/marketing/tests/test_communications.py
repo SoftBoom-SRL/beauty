@@ -15,7 +15,7 @@ from django.apps import apps as django_apps
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.core.management.commands.flush_outbox import _due
+from apps.core.outbox import _due
 from apps.core.models import OutboxEvent, Salon
 from common.auth import create_client_tokens, create_staff_tokens
 
@@ -341,7 +341,7 @@ class AlreadyDeliveredTests(_Base):
         """Revisione finale: con dodici ore dalla nascita l'annullamento di una
         campagna fra cinque giorni scadeva se la consegna restava ferma, e alla
         data Yourang mandava la campagna eliminata."""
-        from apps.core.management.commands.flush_outbox import expire_stale
+        from apps.core.outbox import expire_stale
 
         when = self._schedule(timezone.now() + timedelta(days=5))
         self._deliver(self._sends().get())

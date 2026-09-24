@@ -22,6 +22,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
+from .outbox import delivery_status
 from .schemas import (
     ActivityFeedOut,
     OutboxStatusOut,
@@ -520,48 +521,9 @@ def outbox_status(request):
     quell'URL — o senza il comando schedulato — restano in coda: è la causa più
     comune, e va detta al titolare invece di lasciarlo aspettare un SMS.
     """
-    from datetime import timedelta
-
-    from django.db.models.functions import Coalesce
-
-    from .models import OutboxEvent
-
     ctx = request.auth
     require_owner(ctx)
-    now = timezone.now()
-    qs = OutboxEvent.objects.filter(salon=ctx.salon)
-    # `sending` = preso in carico da un worker in questo momento: per chi guarda
-    # la diagnostica è ancora un messaggio che non è arrivato.
-    active = qs.filter(
-        status__in=(OutboxEvent.Status.PENDING, OutboxEvent.Status.SENDING)
-    )
-    # Trattenuti fino a un istante futuro e mai tentati (una campagna
-    # programmata, il ritardo di sicurezza dell'agenda): non sono una coda
-    # ferma. Contati fra quelli «in coda», una campagna programmata per sabato
-    # faceva dire da lunedì che i messaggi aspettavano da giorni.
-    scheduled = active.filter(status=OutboxEvent.Status.PENDING, attempts=0, due_at__gt=now)
-    pending = active.exclude(pk__in=scheduled.values("pk"))
-    sent = qs.filter(status=OutboxEvent.Status.SENT)
-    day_ago = now - timedelta(hours=24)
-    return {
-        "configured": bool(django_settings.YOURANG_API_URL),
-        "pending": pending.count(),
-        "scheduled": scheduled.count(),
-        "failed": qs.filter(status=OutboxEvent.Status.FAILED).count(),
-        # Scaduti prima di partire (un promemoria oltre l'orario della visita,
-        # un codice oltre i suoi dieci minuti): restano fino alla pulizia.
-        "expired": qs.filter(status=OutboxEvent.Status.EXPIRED).count(),
-        "sent_24h": sent.filter(sent_at__gte=day_ago).count(),
-        # Da quando aspetta: la fine della trattenuta, non la creazione.
-        "oldest_pending_at": (
-            pending.annotate(since=Coalesce("due_at", "created_at"))
-            .order_by("since")
-            .values_list("since", flat=True)
-            .first()
-        ),
-        "last_sent_at": sent.order_by("-sent_at").values_list("sent_at", flat=True).first(),
-        "pending_types": sorted(set(pending.order_by("-id").values_list("event_type", flat=True)[:50])),
-    }
+    return delivery_status(ctx.salon)
 
 
 @router.post("/activity/stream-ticket", auth=staff_auth)

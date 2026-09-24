@@ -53,10 +53,10 @@ def emit_event(
     delay_seconds: int = 0,
     coalesce_key: str = "",
 ):
-    """Accoda un evento per Yourang. La consegna avverrà quando le API saranno attive.
+    """Accoda un evento per Yourang: lo consegna il worker `flush_outbox` (core.outbox).
 
     `delay_seconds` > 0 trattiene l'evento: prima di quell'istante nessun worker
-    lo consegna (vedi `flush_outbox._due`). `coalesce_key` lo lega a un oggetto,
+    lo consegna (vedi `core.outbox._due`). `coalesce_key` lo lega a un oggetto,
     così chi emette l'evento successivo può ritrovarlo con `held_events` e
     fonderlo invece di accodarne un altro; il worker consegna inoltre gli eventi
     con la stessa chiave nell'ordine in cui sono nati.

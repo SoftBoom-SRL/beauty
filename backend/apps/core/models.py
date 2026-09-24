@@ -161,8 +161,8 @@ class ActivityLog(models.Model):
 class OutboxEvent(models.Model):
     """Eventi di dominio destinati alla piattaforma Yourang (WhatsApp/automazioni).
 
-    Finché le API Yourang non sono disponibili gli eventi restano accodati qui;
-    il comando `flush_outbox` li consegnerà quando l'integrazione sarà attiva.
+    Il comando `flush_outbox` li consegna a YOURANG_API_URL (il motore è in
+    core.outbox); finché l'URL non è configurato restano accodati qui.
     """
 
     class Status(models.TextChoices):
@@ -177,7 +177,7 @@ class OutboxEvent(models.Model):
         SUPERSEDED = "superseded"
         # Non più consegnabile: il momento di cui parlava è passato (un OTP di
         # ieri, la conferma di una visita già iniziata, una campagna di mesi fa)
-        # prima che la consegna riuscisse. Vedi flush_outbox.expire_stale.
+        # prima che la consegna riuscisse. Vedi core.outbox.expire_stale.
         EXPIRED = "expired"
 
     salon = models.ForeignKey(Salon, on_delete=models.CASCADE, related_name="outbox_events")
