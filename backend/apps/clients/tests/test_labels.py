@@ -8,7 +8,7 @@ from django.test import TestCase
 from ninja.errors import HttpError
 
 from apps.core.models import OutboxEvent, Salon
-from common.auth import StaffContext
+from common.testing import staff_context
 
 from ..api import create_category, delete_category, update_category
 from ..models import Client, ClientCategory
@@ -38,9 +38,7 @@ def _label_rule(name, cmp="contains"):
 class _Base(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.request = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=False)
-        )
+        self.request = SimpleNamespace(auth=staff_context(self.salon, {"clients"}))
         self.client_obj = Client.objects.create(salon=self.salon, first_name="Anna", phone="+393331112233")
 
     def deposit_rule(self, conditions, name="A rischio"):

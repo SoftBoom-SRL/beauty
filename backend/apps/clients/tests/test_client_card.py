@@ -17,7 +17,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, Salon
-from common.auth import StaffContext, create_staff_tokens
+from common.testing import bearer, post_json, put_json, staff_context
 
 from ..api import create_client, delete_client, get_client, update_client
 from ..models import Client, ClientCategory, ClientNote, TechnicalSheet
@@ -176,7 +176,7 @@ class ClientGenderBirthdayApiTests(TestCase):
         self.user, self.auth = _staff_http(self.salon, ["clients"])
 
     def _post(self, payload):
-        return self.client.post("/api/clients/", data=json.dumps(payload), content_type="application/json", **self.auth)
+        return post_json(self.client, "/api/clients/", payload, **self.auth)
 
     def test_birthday_without_year_roundtrip(self):
         res = self._post({"first_name": "Sofia", "phone": "+393331112233", "birthday": "--03-15", "gender": "female"})
@@ -203,10 +203,11 @@ class ClientGenderBirthdayApiTests(TestCase):
         today = timezone.localdate()
         expected = today.year - 1990 - ((today.month, today.day) < (3, 15))
         self.assertEqual(body["age"], expected)
-        put = self.client.put(
+        put = put_json(
+            self.client,
             f"/api/clients/{body['id']}",
-            data=json.dumps({"first_name": "Giada", "phone": "+393331112299", "birthday": "--12-24", "gender": "other"}),
-            content_type="application/json", **self.auth,
+            {"first_name": "Giada", "phone": "+393331112299", "birthday": "--12-24", "gender": "other"},
+            **self.auth,
         )
         self.assertEqual(put.status_code, 200, put.content)
         self.assertEqual(put.json()["birthday"], "--12-24")
@@ -286,20 +287,19 @@ MARKETING = "apps.marketing.services"
 
 
 def _reception_auth(salon, scopes=("clients",)):
+    """Un membro nuovo col ruolo «Reception»: ridà solo l'header (`_staff_http` anche l'utente)."""
     from apps.accounts.models import Membership, Role, User
 
     user = User.objects.create_user(email=f"reception{salon.id}@theparlour.it", password="x" * 10)
     role = Role.objects.create(salon=salon, name="Reception", scopes=list(scopes))
     Membership.objects.create(user=user, salon=salon, role=role, is_owner=False)
-    return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
+    return bearer(user, salon)
 
 
 class _Base(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.request = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=False)
-        )
+        self.request = SimpleNamespace(auth=staff_context(self.salon, {"clients"}))
 
     def card(self, **kw):
         defaults = dict(salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331234567")
@@ -313,9 +313,7 @@ class PartialPutOverHttpTests(_Base):
         self.auth = _reception_auth(self.salon)
 
     def put(self, client, body):
-        return self.client.put(
-            f"/api/clients/{client.id}", json.dumps(body), content_type="application/json", **self.auth
-        )
+        return put_json(self.client, f"/api/clients/{client.id}", body, **self.auth)
 
     def test_a_label_alone_is_a_valid_body(self):
         """Con lo schema del POST nome e telefono erano obbligatori: il PUT di una
@@ -479,10 +477,10 @@ class MarketingFollowsTheCardTests(_Base):
 class ArchivedPhoneTests(_Base):
     def test_creating_with_the_number_of_an_archived_card_points_to_it(self):
         archived = self.card(first_name="Anna", last_name="Verdi", is_active=False)
-        res = self.client.post(
+        res = post_json(
+            self.client,
             "/api/clients/",
-            json.dumps({"first_name": "Anna", "last_name": "Verdi", "phone": "333 123 4567"}),
-            content_type="application/json",
+            {"first_name": "Anna", "last_name": "Verdi", "phone": "333 123 4567"},
             **_reception_auth(self.salon),
         )
         self.assertEqual(res.status_code, 409, res.content)

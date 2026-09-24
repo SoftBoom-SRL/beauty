@@ -5,7 +5,6 @@ update/delete registrata sul router); allegati e foto si scaricano solo con
 l'URL firmato.
 """
 
-import json
 import shutil
 import tempfile
 
@@ -16,7 +15,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer, put_json
 
 from ..api import create_note, create_sheet, delete_note, list_notes, list_sheets, router
 from ..models import Client, ClientNote, ClientNoteAttachment, TechnicalSheet
@@ -251,9 +250,11 @@ class NoteAttachmentsApiTests(TestCase):
 
     def test_note_can_be_edited(self):
         note = ClientNote.objects.create(client=self.client_obj, text="vecchio")
-        res = self.client.put(
+        res = put_json(
+            self.client,
             f"/api/clients/{self.client_obj.id}/notes/{note.id}",
-            data=json.dumps({"text": "nuovo", "visibility": "ai"}), content_type="application/json", **self.auth,
+            {"text": "nuovo", "visibility": "ai"},
+            **self.auth,
         )
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.json()["text"], "nuovo")
@@ -281,7 +282,7 @@ class SheetPhotoUrlTests(TestCase):
         user.save()
         role = Role.objects.create(salon=self.salon, name="Operatrice", scopes=["agenda", "clients"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        self.auth = bearer(user, self.salon)
         self.card = Client.objects.create(salon=self.salon, first_name="Sofia", phone="+393331110000")
 
     def tearDown(self):

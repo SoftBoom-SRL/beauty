@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from django.test import TestCase
 
 from apps.core.models import Salon
-from common.auth import StaffContext
+from common.testing import staff_context
 
 from ..api import list_clients
 from ..models import Client
@@ -90,9 +90,7 @@ class PhoneLookupTests(ClientsTestCase):
 class AccentInsensitiveSearchTests(TestCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.request = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=False)
-        )
+        self.request = SimpleNamespace(auth=staff_context(self.salon, {"clients"}))
         self.nicolo = Client.objects.create(
             salon=self.salon, first_name="Nicolò", last_name="Bellò", phone="+393330001234"
         )

@@ -6,7 +6,6 @@ avvisi riga per riga.
 """
 
 import datetime as dt
-import json
 
 from django.db import connection
 from django.test import TestCase
@@ -14,7 +13,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.core.models import ActivityLog, Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer, post_json
 
 from ..api import import_clients
 from ..models import Client, ClientNote
@@ -340,15 +339,15 @@ class ImportApiTests(_Base):
         user = User.objects.create_user(email="import@theparlour.it", password="x" * 10)
         role = Role.objects.create(salon=self.salon, name="Reception", scopes=["clients"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
+        auth = bearer(user, self.salon)
         archived = self.card(is_active=False)
-        res = self.client.post(
+        res = post_json(
+            self.client,
             "/api/clients/import",
-            json.dumps({"rows": [
+            {"rows": [
                 {"first_name": "Bea", "phone": "3339990000", "birthday": "1990-02-29"},
                 {"first_name": "Anna", "phone": "+393331112233"},
-            ]}),
-            content_type="application/json",
+            ]},
             **auth,
         )
         self.assertEqual(res.status_code, 200, res.content)

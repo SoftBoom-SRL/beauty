@@ -14,7 +14,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.auth import StaffContext, create_staff_tokens
+from common.testing import bearer, staff_context
 
 from ..api import client_history, get_client, list_client_appointments, list_notes, list_sheets
 from ..models import Client, ClientCategory, ClientNote, TechnicalSheet
@@ -66,8 +66,7 @@ class ClientAppointmentsApiTests(TestCase):
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
         role = Role.objects.create(salon=self.salon, name="Manager", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
-        tokens = create_staff_tokens(user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(user, self.salon)
 
         self.operator = Operator.objects.create(
             salon=self.salon, first_name="Giulia", last_name="Bianchi", color="#AACCEE"
@@ -173,9 +172,7 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222"
         )
-        no_scope = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes=set(), is_owner=False
-        )
+        no_scope = staff_context(self.salon)
         self.request = SimpleNamespace(auth=no_scope)
 
     def test_history_notes_sheets_and_appointments_are_refused(self):
@@ -192,11 +189,7 @@ class SensitiveReadsNeedTheClientsScopeTests(TestCase):
     def test_the_owner_still_reads_everything(self):
         from ..api import client_history
 
-        owner = SimpleNamespace(
-            auth=StaffContext(
-                user=None, salon=self.salon, membership=None, scopes=set(), is_owner=True
-            )
-        )
+        owner = SimpleNamespace(auth=staff_context(self.salon, is_owner=True))
         self.assertEqual(list_notes(owner, self.client_obj.id), [])
         self.assertEqual(list(list_sheets(owner, self.client_obj.id)), [])
         self.assertEqual(list_client_appointments(owner, self.client_obj.id), [])
@@ -218,11 +211,7 @@ class SalesFiguresNeedTheSalesScopeTests(TestCase):
         Sale.objects.create(salon=self.salon, client=self.client_obj, kind="pos", total=Decimal("80"))
 
     def _ctx(self, scopes):
-        return SimpleNamespace(
-            auth=StaffContext(
-                user=None, salon=self.salon, membership=None, scopes=set(scopes), is_owner=False
-            )
-        )
+        return SimpleNamespace(auth=staff_context(self.salon, scopes))
 
     def test_without_the_sales_scope_the_figures_are_zero(self):
         detail = get_client(self._ctx({"clients"}), self.client_obj.id)
@@ -242,11 +231,7 @@ class SalesFiguresNeedTheSalesScopeTests(TestCase):
         self.assertFalse(detail.stats_hidden)
 
     def test_the_owner_sees_the_figures_without_the_scope(self):
-        ctx = SimpleNamespace(
-            auth=StaffContext(
-                user=None, salon=self.salon, membership=None, scopes=set(), is_owner=True
-            )
-        )
+        ctx = SimpleNamespace(auth=staff_context(self.salon, is_owner=True))
         detail = get_client(ctx, self.client_obj.id)
         self.assertEqual(detail.total_spent, Decimal("80"))
         self.assertFalse(detail.stats_hidden)
@@ -310,11 +295,7 @@ class ClientHistoryQueryCountTests(TestCase):
 
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.ctx = SimpleNamespace(
-            auth=StaffContext(
-                user=None, salon=self.salon, membership=None, scopes={"clients"}, is_owner=True
-            )
-        )
+        self.ctx = SimpleNamespace(auth=staff_context(self.salon, {"clients"}, is_owner=True))
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", phone="+393331112222"
         )
@@ -368,9 +349,7 @@ class ClientHistoryQueryCountTests(TestCase):
 
 
 def _request(salon, scopes=("clients", "sales")):
-    return SimpleNamespace(
-        auth=StaffContext(user=None, salon=salon, membership=None, scopes=set(scopes), is_owner=False)
-    )
+    return SimpleNamespace(auth=staff_context(salon, scopes))
 
 
 class _Base(TestCase):
@@ -564,8 +543,6 @@ class HistorySalesHiddenTests(_Base):
         self.assertIsNotNone(next(e for e in data["entries"] if e["kind"] == "visit")["sale"])
 
     def test_the_owner_sees_the_sales(self):
-        owner = SimpleNamespace(
-            auth=StaffContext(user=None, salon=self.salon, membership=None, scopes=set(), is_owner=True)
-        )
+        owner = SimpleNamespace(auth=staff_context(self.salon, is_owner=True))
         data = client_history(owner, self.client_obj.id)
         self.assertFalse(data["sales_hidden"])
