@@ -12,6 +12,8 @@ import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harn
 
 const { default: AgendaSection } = await loadComponent('apps/dashboard/src/sections/agenda/index.jsx', {
   stubs: ['DayGrid.jsx', 'WeekView.jsx', 'MonthView.jsx', 'RightRail.jsx', 'GroupBookingDrawer.jsx'],
+  // i pezzi senza hook della barra e della sezione, che per i test fanno parte di index.jsx
+  expand: ['JumpTitle', 'DayStrip', 'UndoButton', 'ZoomControls', 'ViewSelector', 'OperatorChips', 'PickBanner', 'RailPanel', 'SlotMenu'],
 });
 
 const TODAY = todayStr();
