@@ -1,10 +1,11 @@
 // FornitoriSub.jsx — supplier directory: CRUD on /api/inventory/suppliers.
 // DELETE returns 400 when the supplier still has products/orders attached → toast.
 import React, { useState } from 'react';
-import { api, EmptyState, Icon, PhoneInput, toastApiError } from '@youty/shared';
+import { EmptyState, Icon, PhoneInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ORDER_METHODS } from './lib.js';
 import { inputCss } from './bits.jsx';
+import { suppliersApi } from '../../api/inventory.js';
 
 const EMPTY = { name: '', email: '', phone: '', order_method: 'email', address: '', vat_number: '', sdi_pec: '', notes: '' };
 
@@ -66,7 +67,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
     if (busy || !draft.name.trim()) return;
     setBusy(true);
     try {
-      await api.put(`/api/inventory/suppliers/${s.id}`, trimmed(draft));
+      await suppliersApi.update(s.id, trimmed(draft));
       fireToast({ msg: t(`Fornitore ${draft.name.trim()} aggiornato · si applica a ${countOf(s.id)} prodotti`, `Supplier ${draft.name.trim()} updated · applies to ${countOf(s.id)} products`), icon: 'check' });
       setEditId(null); setDraft(null);
       refreshShared();
@@ -79,7 +80,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
     if (busy || !nw.name.trim()) return;
     setBusy(true);
     try {
-      await api.post('/api/inventory/suppliers', trimmed(nw));
+      await suppliersApi.create(trimmed(nw));
       fireToast({ msg: t(`Fornitore ${nw.name.trim()} creato`, `Supplier ${nw.name.trim()} created`), icon: 'check' });
       setAddOpen(false); setNw(EMPTY);
       refreshShared();
@@ -92,7 +93,7 @@ export default function FornitoriSub({ suppliers, allProds, canWrite, refreshSha
     if (busy) return;
     setBusy(true);
     try {
-      await api.del(`/api/inventory/suppliers/${s.id}`);
+      await suppliersApi.remove(s.id);
       fireToast({ msg: t(`Fornitore ${s.name} eliminato`, `Supplier ${s.name} deleted`), icon: 'x' });
       setEditId(null); setDraft(null);
       refreshShared();

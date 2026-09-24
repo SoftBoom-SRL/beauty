@@ -2,37 +2,14 @@
 // Shared reference data (categories, suppliers, full products snapshot) is loaded here and
 // passed to the sub-tabs; each sub-tab fetches its own paginated lists.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, toastApiError } from '@youty/shared';
+import { toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { STOCK_META } from './lib.js';
 import ProdottiSub from './ProdottiSub.jsx';
 import OrdiniSub from './OrdiniSub.jsx';
 import FornitoriSub from './FornitoriSub.jsx';
 import StoricoSub from './StoricoSub.jsx';
-
-const PROD_PAGE = 500;
-const PROD_MAX_PAGES = 20;   // fino a 10.000 articoli: oltre, le metriche si dichiarano parziali
-
-/* Lo snapshot alimenta valore di magazzino, conteggio sottoscorta, elenco
- * brand, picker dello scarico manuale e i prezzi delle righe d'ordine: una
- * sola pagina da 500 con `count` ignorato faceva mentire tutte queste cifre su
- * un catalogo più grande, e i prodotti oltre il 500° sparivano dal picker
- * senza alcun avviso. Si pagina fino a `count`, con un tetto oltre il quale lo
- * snapshot si dichiara parziale. */
-async function loadAllProducts() {
-  const items = [];
-  let count = 0;
-  for (let page = 0; page < PROD_MAX_PAGES; page++) {
-    const res = await api.get('/api/inventory/products', {
-      params: { limit: PROD_PAGE, offset: page * PROD_PAGE, include_inactive: true },
-    });
-    const batch = res?.items || [];
-    items.push(...batch);
-    count = Number(res?.count ?? items.length);
-    if (!batch.length || items.length >= count) return { items, partial: false };
-  }
-  return { items, partial: items.length < count };
-}
+import { productCategoriesApi, productsApi, suppliersApi } from '../../api/inventory.js';
 
 export default function MagazzinoSection() {
   const { t, subTab, setSubTab, fireToast, hasScope } = useDash();
@@ -48,9 +25,10 @@ export default function MagazzinoSection() {
   const loadShared = useCallback(async (silent = false) => {
     try {
       const [c, s, p] = await Promise.all([
-        api.get('/api/inventory/categories'),
-        api.get('/api/inventory/suppliers'),
-        loadAllProducts(),
+        productCategoriesApi.list(),
+        suppliersApi.list(),
+        // tutto il catalogo, a pagine fino a `count` (vedi productsApi.listAll)
+        productsApi.listAll(),
       ]);
       setCats(c || []);
       setSuppliers(s || []);

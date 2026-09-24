@@ -4,10 +4,11 @@
 // Line prices/VAT are not stored on order lines — they are enriched client-side from
 // the products snapshot (purchase price net of supplier discount).
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, fmtEur, Icon, NumInput, toastApiError } from '@youty/shared';
+import { EmptyState, fmtEur, Icon, NumInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ORDER_METHODS, ORDER_STATUS_META, STOCK_META, eur0, fmtQty, fmtWhen, num, openOrderPrint, orderLineMath, parseRestockCsv, round2, unitCost } from './lib.js';
 import { Pager, SkelRows, inputCss } from './bits.jsx';
+import { ordersApi } from '../../api/inventory.js';
 
 const PAGE = 20;
 
@@ -35,7 +36,7 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
   useEffect(() => {
     let dead = false;
     setLoading(true);
-    api.get('/api/inventory/orders', { params: { status: statusF !== 'all' ? statusF : undefined, limit: PAGE, offset } })
+    ordersApi.list({ status: statusF !== 'all' ? statusF : undefined, limit: PAGE, offset })
       .then((r) => { if (!dead) setData(r); })
       .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
       .finally(() => { if (!dead) setLoading(false); });
@@ -49,7 +50,7 @@ export default function OrdiniSub({ suppliers, allProds, canWrite, refreshShared
     if (!canWrite || generating) return;
     setGenerating(true);
     try {
-      const orders = await api.post('/api/inventory/orders/generate');
+      const orders = await ordersApi.generate();
       if (orders.length) {
         fireToast({ msg: t(`${orders.length} bozze d'ordine generate dai prodotti sotto soglia`, `${orders.length} order drafts generated from below-threshold products`), icon: 'check' });
         setStatusF('all'); setOffset(0); refresh();
@@ -154,7 +155,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
       .map((l) => ({ id: l.id, qty_ordered: qtyDraft[l.id] }));
     const payload = extra ? [...changed.filter((c) => c.id !== extra.id), extra] : changed;
     if (!payload.length) return order;
-    const updated = await api.put(`/api/inventory/orders/${order.id}`, { lines: payload });
+    const updated = await ordersApi.update(order.id, { lines: payload });
     setQtyDraft({});
     onChanged(updated);
     return updated;
@@ -186,7 +187,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
     setBusy(true);
     try {
       await saveLines(); // persist pending edits first
-      const updated = await api.post(`/api/inventory/orders/${order.id}/send`, { method });
+      const updated = await ordersApi.send(order.id, { method });
       onChanged(updated);
       const meta = ORDER_METHODS[method] || ORDER_METHODS.email;
       fireToast({ msg: t(`Ordine inviato a ${order.supplier_name} via ${meta.it}`, `Order sent to ${order.supplier_name} via ${meta.en}`), icon: 'check' });
@@ -227,7 +228,7 @@ function OrderCard({ order, prodById, supplier, salonName, canWrite, t, lang, fi
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.post(`/api/inventory/orders/${order.id}/receive`, {
+      const res = await ordersApi.receive(order.id, {
         lines: order.lines.map((l) => ({ id: l.id, qty_received: recv[l.id] != null ? recv[l.id] : 0 })),
       });
       onChanged(res.order);

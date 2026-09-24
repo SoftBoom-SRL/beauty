@@ -2,11 +2,12 @@
 // Ported from the prototype's ProductDrawer (which superseded ProdEditModal); mock state →
 // POST/PUT /api/inventory/products, movements from GET /products/{id}/movements.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, fmtEur, Icon, toastApiError, apiErrorText } from '@youty/shared';
+import { fmtEur, Icon, toastApiError, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
 import { MOVE_META, STOCK_META, UNIT_OPTIONS, eur0, fmtQty, fmtWhen, num, round2, unitCost } from './lib.js';
 import { Fld, MoneyBox, NumBox, Sec, inputCss } from './bits.jsx';
+import { productsApi } from '../../api/inventory.js';
 
 /* category colour: fallback + pastel presets offered in the picker */
 const CAT_FALLBACK = '#E0E7FF';
@@ -165,7 +166,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
   useEffect(() => {
     if (isNew) return;
     let dead = false;
-    api.get(`/api/inventory/products/${prod.id}/movements`, { params: { limit: 8 } })
+    productsApi.movements(prod.id, { limit: 8 })
       .then((r) => { if (!dead) setMoves(r.items || []); })
       .catch(() => { if (!dead) setMoves([]); });
     return () => { dead = true; };
@@ -190,7 +191,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
     };
     try {
       if (isNew) {
-        const created = await api.post('/api/inventory/products', payload);
+        const created = await productsApi.create(payload);
         /* Il prodotto c'è: da qui in poi un errore non deve lasciare la scheda
          * su «Crea prodotto». Stava nello stesso try del carico della scorta
          * iniziale, e se cadeva quello un secondo clic creava un doppione (il
@@ -198,7 +199,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
          * da cui la scorta si carica con «+». */
         if (draft.initial_qty > 0) {
           try {
-            await api.postForm(`/api/inventory/products/${created.id}/load`, {
+            await productsApi.load(created.id, {
               qty: draft.initial_qty, reason: t('Scorta iniziale', 'Initial stock'),
             });
           } catch (err) {
@@ -210,7 +211,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
         }
         fireToast({ msg: t('Prodotto creato', 'Product created'), icon: 'check' });
       } else {
-        await api.put(`/api/inventory/products/${prod.id}`, payload);
+        await productsApi.update(prod.id, payload);
         fireToast(reactivate
           ? { msg: t('Prodotto riattivato', 'Product reactivated'), icon: 'check' }
           : { msg: t('Prodotto salvato', 'Product saved'), icon: 'check' });
@@ -228,7 +229,7 @@ export default function ProductDrawer({ prod, cats, suppliers, canWrite, onClose
     if (!canWrite || busy) return;
     setBusy(true);
     try {
-      await api.del(`/api/inventory/products/${prod.id}`);
+      await productsApi.remove(prod.id);
       fireToast({ msg: t('Prodotto disattivato', 'Product deactivated'), icon: 'x' });
       onDeleted();
       onClose();

@@ -2,7 +2,7 @@
 // Filters (q, category_id, supplier_id, brand, usage, stock_state) are server-side;
 // the server already sorts below-threshold products first.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, fmtEur, Icon, toastApiError } from '@youty/shared';
+import { EmptyState, fmtEur, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { STOCK_META, USAGE_META, eur0, fmtQty, num, unitCost } from './lib.js';
@@ -11,6 +11,7 @@ import ProductDrawer from './ProductDrawer.jsx';
 import AdjModal from './AdjModal.jsx';
 import RestockModal from './RestockModal.jsx';
 import ScaricoManualeModal from './ScaricoManualeModal.jsx';
+import { productCategoriesApi, productsApi } from '../../api/inventory.js';
 
 const PAGE = 30;
 
@@ -41,17 +42,15 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
   useEffect(() => {
     let dead = false;
     setLoading(true);
-    api.get('/api/inventory/products', {
-      params: {
-        q: qDeb || undefined,
-        category_id: catF !== 'all' ? catF : undefined,
-        supplier_id: supF !== 'all' ? supF : undefined,
-        brand: brandF !== 'all' ? brandF : undefined,
-        usage: usageF !== 'all' ? usageF : undefined,
-        stock_state: stockF !== 'all' ? stockF : undefined,
-        include_inactive: activeF === 'inactive' ? true : undefined,
-        limit: PAGE, offset,
-      },
+    productsApi.list({
+      q: qDeb || undefined,
+      category_id: catF !== 'all' ? catF : undefined,
+      supplier_id: supF !== 'all' ? supF : undefined,
+      brand: brandF !== 'all' ? brandF : undefined,
+      usage: usageF !== 'all' ? usageF : undefined,
+      stock_state: stockF !== 'all' ? stockF : undefined,
+      include_inactive: activeF === 'inactive' ? true : undefined,
+      limit: PAGE, offset,
     })
       .then((r) => { if (!dead) setData(r); })
       .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); toastApiError(err, fireToast, t); } })
@@ -89,7 +88,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
     const c = (cats || []).find((x) => x.id === catId);
     if (!c) return;
     try {
-      await api.put(`/api/inventory/categories/${catId}`, { name: c.name, order: c.order, color });
+      await productCategoriesApi.update(catId, { name: c.name, order: c.order, color });
       refreshShared();
     } catch (err) { toastApiError(err, fireToast, t); }
   };
@@ -98,7 +97,7 @@ export default function ProdottiSub({ cats, suppliers, allProds, prodsPartial, c
   const afterMovement = async () => {
     refresh();
     if (selProd && !selProd._new && adj && adj.prod.id === selProd.id) {
-      try { setSelProd(await api.get(`/api/inventory/products/${selProd.id}`)); } catch { /* list refresh will catch up */ }
+      try { setSelProd(await productsApi.get(selProd.id)); } catch { /* list refresh will catch up */ }
     }
   };
 
