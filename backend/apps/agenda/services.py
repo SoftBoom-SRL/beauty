@@ -30,6 +30,10 @@ from apps.core.services import (
     log_activity,
     supersede_events,
 )
+# compat refactoring: rimuovere dopo l'integrazione. `default_location` ora vive
+# in apps.core.services; agenda/api.py (`services.default_location`) e
+# staff/api.py (import pigro da qui) la cercano ancora in questo modulo.
+from apps.core.services import default_location  # noqa: F401
 from common.conditions import evaluate
 
 from . import undo as undo_log
@@ -240,16 +244,6 @@ def _bookable_service(salon, service_id, *, keep_ids=()):
 # ---------------------------------------------------------------------------
 # Disponibilità
 # ---------------------------------------------------------------------------
-
-
-def default_location(salon):
-    """La sede su cui lavora l'app cliente: la predefinita, altrimenti la prima.
-
-    Ricerca e prenotazione devono guardare la stessa: cercando su tutte le sedi
-    e prenotando su quella predefinita, l'app proponeva orari di un'operatrice
-    che lavora altrove e poi rispondeva 409 alla conferma.
-    """
-    return salon.locations.filter(is_default=True).first() or salon.locations.first()
 
 
 def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_service_ids=()):

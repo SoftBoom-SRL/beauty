@@ -16,8 +16,9 @@ appuntamento inserito e spostato un istante dopo produce un messaggio solo.
 import logging
 
 from django.utils import timezone
+from ninja.errors import HttpError
 
-from .models import ActivityLog, OutboxEvent, SalonSettings
+from .models import ActivityLog, OutboxEvent, Salon, SalonSettings
 
 logger = logging.getLogger("youty.events")
 
@@ -209,3 +210,36 @@ def opening_hours_text(week: dict) -> str:
         days = WEEKDAYS_IT[a] if a == b else f"{WEEKDAYS_IT[a]}–{WEEKDAYS_IT[b]}"
         parts.append(f"{days} {label}")
     return " · ".join(parts)
+
+
+# ---- Salone e sede predefinita ---------------------------------------------------
+
+
+def get_salon_by_slug(slug: str) -> Salon:
+    """Il salone di una richiesta pubblica, dal suo slug, o 404 «Salone non trovato».
+
+    Gli endpoint senza autenticazione ricevono il salone come slug (`?salon=`
+    per branding, catalogo, operatrici e disponibilità; `salon_slug` nel corpo
+    per registrazione e accesso dall'app e per il modulo contatti) e lo
+    cercavano ciascuno a mano, in sei copie uguali. Nessun filtro in più: il
+    salone demo si trova come gli altri, con una sola query e senza
+    `select_related`, come nelle copie.
+    """
+    try:
+        return Salon.objects.get(slug=slug)
+    except Salon.DoesNotExist:
+        raise HttpError(404, "Salone non trovato")
+
+
+def default_location(salon):
+    """La sede su cui lavora l'app cliente: la predefinita, altrimenti la prima.
+
+    Ricerca e prenotazione devono guardare la stessa: cercando su tutte le sedi
+    e prenotando su quella predefinita, l'app proponeva orari di un'operatrice
+    che lavora altrove e poi rispondeva 409 alla conferma.
+
+    Sta in core e non nell'agenda perché serve anche fuori: le operatrici
+    pubbliche dello staff la importavano da `agenda.services` con un import
+    pigro, e il branding pubblico ne aveva una copia.
+    """
+    return salon.locations.filter(is_default=True).first() or salon.locations.first()

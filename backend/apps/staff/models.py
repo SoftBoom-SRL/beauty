@@ -51,6 +51,19 @@ class Operator(models.Model):
         parts = [p[0].upper() for p in (self.first_name, self.last_name) if p]
         return "".join(parts) or "?"
 
+    @property
+    def full_name(self) -> str:
+        """Nome e cognome come li mostrano cassa, storico cliente, magazzino e agenda.
+
+        Senza spazio ai bordi quando manca una delle due parti. Era scritto a
+        mano (`f"{first_name} {last_name}".strip()`) in quattro serializzatori.
+        `__str__` (l'admin) resta com'è, senza `strip`, come i messaggi del
+        registro attività dello staff, che compongono il nome allo stesso modo.
+        Nessuno schema delle API ha un campo `full_name` letto da un'operatrice,
+        quindi il nuovo attributo non compare da solo in nessuna risposta.
+        """
+        return f"{self.first_name} {self.last_name}".strip()
+
 
 class WeeklyShift(models.Model):
     """Riga del pattern di turno ricorrente su un ciclo di `operator.cycle_weeks` settimane.

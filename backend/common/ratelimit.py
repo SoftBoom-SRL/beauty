@@ -18,8 +18,9 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils import timezone
+from ninja.errors import HttpError
 
-__all__ = ["client_ip", "hit", "peek", "reset", "purge_expired"]
+__all__ = ["client_ip", "hit", "peek", "reset", "purge_expired", "enforce", "enforce_public"]
 
 
 def _model():
@@ -107,6 +108,36 @@ def hit(key: str, limit: int, window_seconds: int) -> bool:
 
     count = model.objects.filter(key=key).values_list("count", flat=True).first()
     return (count or 1) <= limit
+
+
+def enforce(key: str, limit: int, window_seconds: int, message: str) -> None:
+    """`hit` che rifiuta: 429 con `message` quando il limite è superato.
+
+    È la forma `if not hit(...): raise HttpError(429, ...)` ripetuta a mano
+    negli endpoint. Il tentativo si conta anche quando si rifiuta, come con
+    `hit`. Chi fa altro prima di rifiutare (un log, un secondo contatore da
+    contare comunque) resta con `hit`.
+    """
+    if not hit(key, limit, window_seconds):
+        raise HttpError(429, message)
+
+
+def enforce_public(request, salon, bucket: str, limit: int, window_seconds: int) -> None:
+    """Tetto per IP di un endpoint pubblico (senza autenticazione) di un salone.
+
+    Catalogo, operatrici e disponibilità pubblici lo scrivevano ciascuno a mano,
+    con la stessa chiave `public-<bucket>:<id salone>:<ip>`, lo stesso IP
+    (`client_ip`, che si fida di X-Forwarded-For solo dal proxy) e lo stesso
+    429. Qui è una volta sola: la chiave è identica byte per byte, quindi
+    adottarla non azzera né divide i contatori in corso. Tetto e finestra
+    restano del chiamante, che li tiene nelle proprie costanti.
+    """
+    enforce(
+        f"public-{bucket}:{salon.id}:{client_ip(request)}",
+        limit,
+        window_seconds,
+        "Troppe richieste: riprova tra qualche minuto",
+    )
 
 
 def peek(key: str) -> int:
