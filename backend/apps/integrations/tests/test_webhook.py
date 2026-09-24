@@ -140,10 +140,14 @@ class WebhookRouteTests(TestCase):
         self.assertEqual(resp.status_code, 401)
 
     def test_processing_failure_asks_for_a_retry(self):
-        with patch("apps.integrations.sync.import_event", side_effect=RuntimeError("boom")):
+        with patch("apps.integrations.sync.import_event", side_effect=RuntimeError("boom")) as fake:
             resp = self._post({"type": "event.updated", "organization_id": "org-hook",
                                "resource_id": "evt-1"})
         self.assertEqual(resp.status_code, 503)
+        # Il finto deve essere arrivato al codice: senza, un webhook che importa
+        # il nome direttamente fallirebbe lo stesso (la vera import_event non ha
+        # il token) e il test resterebbe verde senza provare niente.
+        fake.assert_called_once()
 
 
 @override_settings(**API_SETTINGS)
