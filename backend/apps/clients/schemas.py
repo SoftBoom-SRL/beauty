@@ -80,6 +80,8 @@ class ClientDetailOut(ClientOut):
     stats_hidden: bool = False
 
 
+# Il docstring qui sotto è la description dello schema nel contratto OpenAPI,
+# quindi resta com'è: `api._client_payload` che cita è ora `fields.client_payload`.
 class ClientIn(Schema):
     """Corpo del POST cliente (il PUT usa `ClientUpdateIn`, tutto facoltativo).
 

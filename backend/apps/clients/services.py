@@ -17,6 +17,7 @@ from ninja.errors import HttpError
 
 from common.phone import canonical_phone, normalize_phone, phone_key as _phone_key
 
+from .fields import normalize_gender, parse_birthday
 from .models import Client
 from .search import APOSTROPHE_CLASS, strip_accents
 
@@ -107,43 +108,6 @@ def client_facts(client: Client) -> dict:
         client=client, cancelled_late=True
     ).count()
     return facts
-
-
-# ---- Compleanno: con o senza anno ----------------------------------------------
-
-
-def parse_birthday(value) -> tuple[dt.date | None, bool]:
-    """Normalizza il compleanno ricevuto dall'API.
-
-    Accetta: None/"" → nessun compleanno; "YYYY-MM-DD" → data completa;
-    "--MM-DD" o "MM-DD" (ISO 8601 senza anno) → giorno e mese con anno
-    segnaposto BIRTHDAY_YEAR_UNKNOWN e year_known=False.
-    Ritorna (date | None, year_known). Solleva 400 se non interpretabile.
-    """
-    if value in (None, ""):
-        return None, True
-    if isinstance(value, dt.date):
-        return value, True
-    raw = str(value).strip()
-    m = re.fullmatch(r"-{0,2}(\d{1,2})-(\d{1,2})", raw)
-    if m:
-        month, day = int(m.group(1)), int(m.group(2))
-        try:
-            return dt.date(Client.BIRTHDAY_YEAR_UNKNOWN, month, day), False
-        except ValueError:
-            raise HttpError(400, "Compleanno non valido (giorno o mese fuori intervallo)")
-    try:
-        return dt.date.fromisoformat(raw), True
-    except ValueError:
-        raise HttpError(400, "Compleanno non valido (atteso YYYY-MM-DD oppure --MM-DD)")
-
-
-def normalize_gender(value: str) -> str:
-    """'female' | 'male' | 'other' | ''. Solleva 400 su valori sconosciuti."""
-    v = (value or "").strip().lower()
-    if v in ("", "female", "male", "other"):
-        return v
-    raise HttpError(400, "Genere non valido (female, male, other o vuoto)")
 
 
 # ---- Import CSV -----------------------------------------------------------------
