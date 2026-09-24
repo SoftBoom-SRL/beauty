@@ -16,7 +16,7 @@ export { SALON_SLUG, resolveSalonSlug } from './salon.js';
 export { LangProvider, useT, makeT, storedLang } from './i18n.jsx';
 
 export {
-  fmtEur, timeLabel, fmtDur,
+  fmtEur, fmtEurNoFree, fmtEurOrZero, timeLabel, fmtDur,
   todayStr, toDateStr, parseISO, minutesOfDay, addDays, fmtDateIt,
   // Fuso del salone: le app lo impostano al boot dal payload del server.
   setSalonTz, salonTz, nowMinutes, isoAtMin,
