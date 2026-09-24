@@ -1,9 +1,9 @@
-// lib.jsx — componenti e hook condivisi dagli schermi dell'app cliente.
+// lib.jsx — componenti condivisi dagli schermi dell'app cliente.
 // Le funzioni pure sono in ../lib/*.js, dove le provano i test con
 // `node --test`; da qui per ora si ri-esportano.
 import React from 'react';
 import { ApiError, Icon, fmtEur, toDateStr, todayStr, salonTzOpts } from '@youty/shared';
-import { createDepositLink, getAppointments, getPublicOperators, getPublicServices } from '../api/client.js';
+import { createDepositLink } from '../api/client.js';
 import { headFont } from '../theme.js';
 import { depositDueMs, depositExpired } from '../lib/appointments.js';
 import { errToast } from '../lib/errors.js';
@@ -159,106 +159,6 @@ export function StickyCta({ children }) {
       {children}
     </div>
   );
-}
-
-/* ============================== data hooks ============================== */
-
-/** Fetch the public price list (categories with services). */
-export function usePublicServices(slug) {
-  const [cats, setCats] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    getPublicServices(slug)
-      .then((d) => { if (alive) setCats(d); })
-      .catch((e) => { if (alive) setError(e); });
-    return () => { alive = false; };
-  }, [slug]);
-  return { cats, error };
-}
-
-/** Fetch the public list of active operators (stylist picker in booking). */
-export function usePublicOperators(slug) {
-  const [operators, setOperators] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    getPublicOperators(slug)
-      .then((d) => { if (alive) setOperators(d); })
-      .catch((e) => { if (alive) setError(e); });
-    return () => { alive = false; };
-  }, [slug]);
-  return { operators, error };
-}
-
-/** Fetch the client's own appointments ({upcoming, past}).
- *
- *  Si ricarica da sola quando cambia il giorno del salone e quando l'app torna
- *  in primo piano. Caricata una volta sola, la Home lasciata aperta la sera
- *  diceva ancora «Domani alle 10:00» la mattina dopo, per un appuntamento che
- *  era oggi, e una visita già rilasciata per caparra non versata restava lì
- *  col suo «Paga ora» (16-05). */
-export function useClientAppointments() {
-  const [data, setData] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const seq = React.useRef(0);
-  const loaded = React.useRef(false);
-  const reload = React.useCallback(() => {
-    // Conta solo l'ultima richiesta: al rientro possono partirne due insieme
-    // (cambio di giorno e primo piano) e non devono arrivare fuori ordine.
-    const n = ++seq.current;
-    getAppointments()
-      .then((d) => { if (n !== seq.current) return; loaded.current = true; setData(d); setError(null); })
-      .catch((e) => {
-        if (n !== seq.current) return;
-        // Un aggiornamento fallito (rete assente al rientro) lascia a video
-        // quello che c'era, senza un toast d'errore a ogni ritorno nell'app.
-        if (!loaded.current) setError(e);
-      });
-  }, []);
-  const todayKey = useTodayKey();
-  React.useEffect(() => { reload(); }, [reload, todayKey]);
-  React.useEffect(() => {
-    let last = Date.now();
-    const onFront = () => {
-      if (document.visibilityState === 'hidden') return;
-      // visibilitychange e focus arrivano insieme: una richiesta basta
-      if (Date.now() - last < 5000) return;
-      last = Date.now();
-      reload();
-    };
-    document.addEventListener('visibilitychange', onFront);
-    window.addEventListener('focus', onFront);
-    return () => {
-      document.removeEventListener('visibilitychange', onFront);
-      window.removeEventListener('focus', onFront);
-    };
-  }, [reload]);
-  return { data, error, reload };
-}
-
-/** La data di oggi come 'YYYY-MM-DD', che cambia da sola a mezzanotte.
- *
- * Le schermate di prenotazione calcolavano la striscia dei giorni una volta
- * sola: un'app lasciata aperta la sera proponeva ancora ieri come primo giorno.
- * Si controlla anche al ritorno in primo piano, perché sul telefono i timer si
- * fermano quando l'app è in secondo piano.
- * Il giorno è quello del SALONE: è la mezzanotte della reception a far
- * scivolare la striscia, non quella del telefono di chi guarda. */
-export function useTodayKey() {
-  const [key, setKey] = React.useState(() => todayStr());
-  React.useEffect(() => {
-    const tick = () => setKey((k) => { const now = todayStr(); return now === k ? k : now; });
-    const id = setInterval(tick, 60000);
-    document.addEventListener('visibilitychange', tick);
-    window.addEventListener('focus', tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', tick);
-      window.removeEventListener('focus', tick);
-    };
-  }, []);
-  return key;
 }
 
 export { toDateStr };

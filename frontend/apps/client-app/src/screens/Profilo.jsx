@@ -4,30 +4,21 @@ import React from 'react';
 import { Icon, Toggle, clientAuth } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
 import { headFont } from '../theme.js';
 import { ClientSubHead, errToast } from './lib.jsx';
 
 export default function Profilo() {
   const { t, lang, setLang, brand, client, setView, fireToast } = useApp();
-  const [me, setMe] = React.useState(null);
-  const [wlCount, setWlCount] = React.useState(null);
-  const [points, setPoints] = React.useState(null);
+  const { data: me, setData: setMe } = useApiData(getMe, [], { onError: (e) => errToast(e, fireToast, t) });
+  // Richieste attive in lista d'attesa e punti fedeltà sono un di più: se non
+  // arrivano si legge 0, senza toast. Il conto si fa appena arriva la risposta.
+  const waitlist = useApiData(() => getWaitlist().then((l) => (l || []).filter((w) => w.status === 'active').length), []);
+  const loyalty = useApiData(() => getWallet().then((w) => (w?.loyalty || []).reduce((s, p) => s + Number(p.points || 0), 0)), []);
+  const wlCount = waitlist.error ? 0 : waitlist.data;
+  const points = loyalty.error ? 0 : loyalty.data;
   const [saving, setSaving] = React.useState(false);
   const [consentBusy, setConsentBusy] = React.useState(false);
-
-  React.useEffect(() => {
-    let alive = true;
-    getMe()
-      .then((d) => { if (alive) setMe(d); })
-      .catch((e) => { if (alive) errToast(e, fireToast, t); });
-    getWaitlist()
-      .then((l) => { if (alive) setWlCount((l || []).filter((w) => w.status === 'active').length); })
-      .catch(() => { if (alive) setWlCount(0); });
-    getWallet()
-      .then((w) => { if (alive) setPoints((w?.loyalty || []).reduce((s, p) => s + Number(p.points || 0), 0)); })
-      .catch(() => { if (alive) setPoints(0); });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMe = async (patch, localToo) => {
     if (saving) return;

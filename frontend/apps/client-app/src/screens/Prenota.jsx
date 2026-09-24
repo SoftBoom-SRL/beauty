@@ -9,9 +9,11 @@ import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
-  nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr, errToast,
+  ClientSubHead, DetailRow, StickyCta, DepositDue, svcLangName, catIcon,
+  nextDays, dayStripLabel, fmtDayMed, toDateStr, errToast,
 } from './lib.jsx';
+import { usePublicOperators, usePublicServices } from '../hooks/usePublicCatalog.js';
+import { useTodayKey } from '../hooks/useTodayKey.js';
 import { giftServiceCards } from '../lib/wallet.js';
 import { sameBooking } from '../lib/appointments.js';
 import { svcMinutes } from '../lib/catalog.js';

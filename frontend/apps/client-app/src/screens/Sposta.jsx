@@ -10,9 +10,10 @@ import { useApp } from '../ctx.jsx';
 import { getAvailability, moveAppointment } from '../api/client.js';
 import { headFont } from '../theme.js';
 import {
-  ClientSubHead, Meta, StickyCta, nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr,
+  ClientSubHead, Meta, StickyCta, nextDays, dayStripLabel, fmtDayMed, toDateStr,
   apptServiceNames, errToast,
 } from './lib.jsx';
+import { useTodayKey } from '../hooks/useTodayKey.js';
 import { apptMinutes } from '../lib/appointments.js';
 
 export default function Sposta() {

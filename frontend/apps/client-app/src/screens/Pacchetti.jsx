@@ -8,21 +8,16 @@ import { Icon, fmtEur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { getPublicPackages } from '../api/client.js';
 import { headFont } from '../theme.js';
-import { ClientSubHead, DashedEmpty, usePublicServices, svcLangName, errToast } from './lib.jsx';
+import { ClientSubHead, DashedEmpty, svcLangName, errToast } from './lib.jsx';
+import { useApiData } from '../hooks/useApiData.js';
+import { usePublicServices } from '../hooks/usePublicCatalog.js';
 
 export default function Pacchetti() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const { cats } = usePublicServices(SALON_SLUG);
-  const [pkgs, setPkgs] = React.useState(null);
-  const [error, setError] = React.useState(null);
-
-  React.useEffect(() => {
-    let alive = true;
-    getPublicPackages(SALON_SLUG)
-      .then((d) => { if (alive) setPkgs(d); })
-      .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: pkgs, error } = useApiData(() => getPublicPackages(SALON_SLUG), [], {
+    onError: (e) => errToast(e, fireToast, t),
+  });
 
   /* price lookup: service_id → price (from the public price list) */
   const priceById = React.useMemo(() => {

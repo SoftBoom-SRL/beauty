@@ -8,8 +8,9 @@ import { Icon, fmtEur, fmtDur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { joinWaitlist } from '../api/client.js';
 import {
-  ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon, errToast,
+  ClientSubHead, StickyCta, svcLangName, catIcon, errToast,
 } from './lib.jsx';
+import { usePublicServices } from '../hooks/usePublicCatalog.js';
 import { WEEKDAY_LETTERS_EN, WEEKDAY_LETTERS_IT } from '../lib/waitlist.js';
 import { svcMinutes } from '../lib/catalog.js';
 

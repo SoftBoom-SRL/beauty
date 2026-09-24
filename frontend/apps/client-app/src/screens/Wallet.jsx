@@ -5,21 +5,13 @@ import React from 'react';
 import { Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWallet } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
 export default function Wallet() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const [wallet, setWallet] = React.useState(null);
-  const [error, setError] = React.useState(null);
-
-  React.useEffect(() => {
-    let alive = true;
-    getWallet()
-      .then((d) => { if (alive) setWallet(d); })
-      .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
-    return () => { alive = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: wallet, error } = useApiData(getWallet, [], { onError: (e) => errToast(e, fireToast, t) });
 
   const loading = !wallet && !error;
   const cards = wallet?.gift_cards || [];

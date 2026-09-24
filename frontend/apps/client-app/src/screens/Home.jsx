@@ -6,9 +6,10 @@ import { Icon, fmtEur, fmtDur, fmtTime, statusMeta, depositMeta } from '@youty/s
 import { useApp } from '../ctx.jsx';
 import { headFont } from '../theme.js';
 import {
-  Meta, useClientAppointments, relLabel, fmtDayMed,
+  Meta, relLabel, fmtDayMed,
   apptServiceNames, mapsUrl, downloadIcs, errToast, DepositDue,
 } from './lib.jsx';
+import { useClientAppointments } from '../hooks/useClientAppointments.js';
 import { apptMinutes } from '../lib/appointments.js';
 
 /* cover with monogram (prototype Cover, data from brand) */
