@@ -19,6 +19,7 @@ import {
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
 import { retryForced } from './lib/retry.js';
+import { weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
   weekDays, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
@@ -320,7 +321,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try {
       await agendaApi.moveAppointment(d.id, body);
       fireToast({
-        msg: t('Spostato · ', 'Moved · ') + whereLabel(dayData, operators, d.dayIdx, d.nop, d.ns, t),
+        msg: weekMovedText(t, whereLabel(dayData, operators, d.dayIdx, d.nop, d.ns, t)),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         // «Torna indietro» del server, lo stesso del tasto in barra, per la

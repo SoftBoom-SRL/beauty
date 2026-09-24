@@ -8,6 +8,7 @@ import { useDash, useLive } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
 import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
 import { withForceRetry } from '../lib/retry.js';
+import { panelMovedText, undoneText, nothingToUndoText } from '../lib/toastText.js';
 import * as agendaApi from '../agendaApi.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
@@ -286,11 +287,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       // «Annulla» non disfa un gesto fatto dopo da un'altra scheda.
       const entry = agendaApi.getUndoStack().then((list) => (list?.[0]?.kind === 'move' ? list[0].id : null)).catch(() => null);
       const who = operators.find((x) => x.id === toOp);
-      const when = day === baseDate ? timeLabel(target) : `${fmtDateIt(day)} · ${timeLabel(target)}`;
       fireToast({
-        msg: reassigned
-          ? t(`Passato a ${who?.first_name || ''}, ${when}`, `Moved to ${who?.first_name || ''}, ${when}`)
-          : t(`Spostato · ${when}`, `Moved · ${when}`),
+        // il giorno si scrive solo se cambia (panelMovedText)
+        msg: panelMovedText(t, { reassigned, who, day, baseDate, target }),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         undoFn: () => { undoMove(entry); },
@@ -314,10 +313,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     const entryId = await entryPromise;
     try {
       const res = await agendaApi.undoGesture(entryId);
-      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
+      fireToast({ msg: undoneText(t, res.label), icon: 'undo' });
       if (res.date) onShowDate?.(res.date);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
+      if (err instanceof ApiError && err.status === 404) fireToast({ msg: nothingToUndoText(t), icon: 'info' });
       else toastApiError(err, fireToast, t);
     } finally {
       if (alive.current) reload();

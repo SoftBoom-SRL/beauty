@@ -3,12 +3,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
-  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, dayTimeLabel, openingFor, hoverPlacement,
+  MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, openingFor, hoverPlacement,
   isoAtMin, mondayOf, addMonths, firstName, opDisplay, aStartMin,
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, clampZoom, zoomStep,
   moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
 import { isConflict, retryForced } from './lib/retry.js';
+import {
+  movedText, splitText, pauseMovedText, breakAddedText, restoredText, undoneText, nothingToUndoText,
+} from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
@@ -328,9 +331,9 @@ export default function AgendaSection() {
       // Il gesto può aver riportato l'appuntamento su un altro giorno: senza
       // questo salto si annullava «a vuoto», con la griglia ferma dov'era.
       if (res.date && res.date !== dateRef.current) setDate(res.date);
-      fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
+      fireToast({ msg: undoneText(t, res.label), icon: 'undo' });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) fireToast({ msg: t('Non c\'è più niente da annullare', 'Nothing left to undo'), icon: 'info' });
+      if (err instanceof ApiError && err.status === 404) fireToast({ msg: nothingToUndoText(t), icon: 'info' });
       else toastApiError(err, fireToast, t);
     } finally {
       undoingRef.current = false;
@@ -411,14 +414,8 @@ export default function AgendaSection() {
         force: !!opts.force,
       });
       const opName = firstName((operators.find((o) => o.id === toOp) || {}).first_name || '');
-      // Su un altro giorno l'avviso lo dice: «Spostato alle 10:00» a chi ha
-      // appena portato la cliente da martedì a giovedì non spiegava niente.
-      const when = otherDay ? dayTimeLabel(date, startMin, t) : timeLabel(startMin);
-      const where = reassigned
-        ? t(`Spostato a ${opName}, ${when}`, `Moved to ${opName}, ${when}`)
-        : otherDay
-          ? t('Spostato a ' + when, 'Moved to ' + when)
-          : t('Spostato alle ' + when, 'Moved to ' + when);
+      // su un altro giorno l'avviso dice anche il giorno (movedText)
+      const where = movedText(t, { opName, reassigned, otherDay, date, startMin });
       // `undoAfter` rilegge anche la pila di «torna indietro»
       const undoFn = undoAfter(mark);
       fireToast({
@@ -468,9 +465,8 @@ export default function AgendaSection() {
         operator_id: opId && opId !== item.operator_id ? opId : null,
         force: !!opts.force,
       });
-      const when = otherDay ? dayTimeLabel(iso, startMin, t) : timeLabel(startMin);
       fireToast({
-        msg: t(`${item.service_name} staccato alle ${when}`, `${item.service_name} detached at ${when}`),
+        msg: splitText(t, item.service_name, { otherDay, date: iso, startMin }),
         icon: 'scissors',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
@@ -533,9 +529,8 @@ export default function AgendaSection() {
       // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
       // libero non lascia l'appuntamento marcato «forzato» senza motivo.
       await agendaApi.moveAppointment(a.id, { start: isoAtMin(iso, startMin), force: !!opts.force });
-      const when = dayTimeLabel(iso, startMin, t);
       fireToast({
-        msg: t('Spostato a ' + when, 'Moved to ' + when),
+        msg: movedText(t, { reassigned: false, otherDay: true, date: iso, startMin }),
         icon: 'calendar',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),
@@ -583,7 +578,7 @@ export default function AgendaSection() {
   const restoreReleased = async (a, force = false) => {
     try {
       await agendaApi.restoreAppointment(a.id, force);
-      fireToast({ msg: t(`Appuntamento di ${firstName(a.client?.full_name)} ripristinato`, `${firstName(a.client?.full_name)}'s appointment restored`), icon: 'check' });
+      fireToast({ msg: restoredText(t, a.client?.full_name), icon: 'check' });
       refetchAll();
     } catch (err) {
       // Lo slot nel frattempo si è riempito: si rimette comunque dov'era. Chi
@@ -600,7 +595,7 @@ export default function AgendaSection() {
     try {
       await agendaApi.updatePause(p.id, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
       fireToast({
-        msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)),
+        msg: pauseMovedText(t, startMin),
         icon: 'clock',
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
@@ -678,7 +673,7 @@ export default function AgendaSection() {
       await agendaApi.createPause({ operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
       const o = operators.find((x) => x.id === opId);
       fireToast({
-        msg: t(`Pausa aggiunta · ${firstName(o?.first_name)} alle ${timeLabel(startMin)}`, `Break added · ${firstName(o?.first_name)} at ${timeLabel(startMin)}`),
+        msg: breakAddedText(t, o?.first_name, startMin),
         icon: 'clock',
       });
       await fetchDay();
