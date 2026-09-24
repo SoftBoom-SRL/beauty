@@ -19,18 +19,18 @@ from django.conf import settings as django_settings
 
 from common.auth import client_auth, staff_auth
 from common.permissions import require_owner, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from apps.core.services import emit_event, log_activity
 
-from . import stripe_service
+from . import serializers, stripe_service
 from .models import Payment, Sale, SaleLine
 from .schemas import (
     ChargeNoShowOut,
     CheckoutIn,
     CheckoutOut,
     DepositLinkOut,
-    OkOut,
     PosIn,
     SaleDetailOut,
     SaleListOut,
@@ -52,86 +52,9 @@ from .services import (
 logger = logging.getLogger("youty.stripe")
 router = Router(tags=["sales"])
 
-
-# ---- Serializzazione ---------------------------------------------------------
-
-
-def _operator_name(operator) -> str:
-    if operator is None:
-        return ""
-    return f"{operator.first_name} {operator.last_name}".strip()
-
-
-def _line_out(line: SaleLine) -> dict:
-    return {
-        "id": line.id,
-        "line_type": line.line_type,
-        "operator_id": line.operator_id,
-        "operator_name": _operator_name(line.operator),
-        "service_id": line.service_id,
-        # Nome del servizio (C14): lo storico mostrava «Servizio #12».
-        "service_name": line.service.name_it if line.service_id else "",
-        "product_id": line.product_id,
-        "product_name": line.product.name if line.product_id else "",
-        "gift_card_code": line.gift_card.code if line.gift_card_id else None,
-        "qty": line.qty,
-        "unit_price": line.unit_price,
-        "discount_pct": line.discount_pct,
-        "is_gift": line.is_gift,
-        "amount": line.amount,
-        "coupon_share": line.coupon_share,
-    }
-
-
-def _payment_out(payment) -> dict:
-    return {
-        "id": payment.id,
-        "method": payment.method,
-        "amount": payment.amount,
-        "gift_card_code": payment.gift_card.code if payment.gift_card_id else None,
-    }
-
-
-def _sale_out(sale: Sale) -> dict:
-    return {
-        "id": sale.id,
-        "kind": sale.kind,
-        "appointment_id": sale.appointment_id,
-        "deposit_appointment_id": sale.deposit_appointment_id,
-        "client_id": sale.client_id,
-        "client_name": sale.client.full_name if sale.client_id else "",
-        "location_id": sale.location_id,
-        "total": sale.total,
-        "coupon_discount": sale.coupon_discount,
-        "deposit_deducted": sale.deposit_deducted,
-        "created_at": sale.created_at,
-    }
-
-
-def _sale_detail(sale: Sale) -> dict:
-    return {
-        **_sale_out(sale),
-        "lines": [
-            _line_out(line) for line in sale.lines.select_related("operator", "gift_card", "product", "service")
-        ],
-        "payments": [_payment_out(p) for p in sale.payments.select_related("gift_card")],
-    }
-
-
-def _breakdown(sale: Sale) -> list[dict]:
-    """Incassato per operatrice (righe senza operatrice raggruppate a parte)."""
-    per_operator: dict = {}
-    for line in sale.lines.select_related("operator"):
-        entry = per_operator.setdefault(
-            line.operator_id,
-            {
-                "operator_id": line.operator_id,
-                "operator_name": _operator_name(line.operator) or "Senza operatrice",
-                "amount": Decimal("0.00"),
-            },
-        )
-        entry["amount"] += line.amount
-    return list(per_operator.values())
+# compat refactoring: rimuovere dopo l'integrazione — lo storico della scheda
+# cliente (clients/api.py, `client_history`) importa ancora `_sale_out` da qui.
+_sale_out = serializers.sale_out
 
 
 # ---- Checkout e POS ----------------------------------------------------------
@@ -275,7 +198,7 @@ def checkout(request, appointment_id: int, data: CheckoutIn):
         },
         coalesce_key=appointment_event_key(appointment.id),
     )
-    return {"sale": _sale_detail(sale), "breakdown": _breakdown(sale)}
+    return {"sale": serializers.sale_detail(sale), "breakdown": serializers.operator_breakdown(sale)}
 
 
 @router.post("/pos", auth=staff_auth, response=SaleDetailOut)
@@ -296,7 +219,7 @@ def pos_sale(request, data: PosIn):
         coupon_code=payload["coupon_code"],
         actor=ctx.user,
     )
-    return _sale_detail(sale)
+    return serializers.sale_detail(sale)
 
 
 # ---- Storico e riepiloghi ----------------------------------------------------
@@ -363,7 +286,7 @@ def list_sales(
             "count": agg["count"] or 0,
             "items_count": items_count,
         },
-        "items": [_sale_out(s) for s in items],
+        "items": [serializers.sale_out(s) for s in items],
     }
 
 
@@ -381,7 +304,7 @@ def sale_detail(request, sale_id: int):
     # senza quel permesso si leggeva lo scontrino intero conoscendone l'id.
     require_scope(request.auth, "sales")
     sale = salon_get(Sale, request.auth, sale_id)
-    return _sale_detail(sale)
+    return serializers.sale_detail(sale)
 
 
 # ---- Stripe ------------------------------------------------------------------
@@ -428,14 +351,6 @@ def client_setup_intent(request):
 # ---- Link caparra ------------------------------------------------------------
 
 
-def _deposit_link_out(appointment) -> dict:
-    return {
-        "url": appointment.deposit_payment_link,
-        "amount": appointment.deposit_amount,
-        "due_at": appointment.deposit_due_at,
-    }
-
-
 @router.post("/appointments/{int:appointment_id}/deposit-link", auth=staff_auth, response=DepositLinkOut)
 def deposit_link(request, appointment_id: int, resend: bool = True):
     """Crea (o rimanda) il link di pagamento della caparra alla cliente."""
@@ -450,7 +365,7 @@ def deposit_link(request, appointment_id: int, resend: bool = True):
     if not stripe_service.payments_enabled(ctx.salon):
         raise HttpError(503, "Pagamenti online non configurati: collega Stripe nelle Impostazioni")
     stripe_service.ensure_deposit_link(appointment, resend=resend, actor=ctx.user)
-    return _deposit_link_out(appointment)
+    return serializers.deposit_link_out(appointment)
 
 
 @router.post("/client/appointments/{int:appointment_id}/deposit-link", auth=client_auth, response=DepositLinkOut)
@@ -470,7 +385,7 @@ def client_deposit_link(request, appointment_id: int):
     # Se la sessione salvata è scaduta (Stripe la chiude dopo 24 ore) il link
     # viene rifatto: prima la cliente riceveva per sempre quello morto (05-10).
     stripe_service.ensure_deposit_link(appointment)
-    return _deposit_link_out(appointment)
+    return serializers.deposit_link_out(appointment)
 
 
 # ---- Stripe Connect (titolare) -----------------------------------------------

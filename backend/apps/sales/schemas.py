@@ -141,10 +141,6 @@ class SetupIntentOut(Schema):
     client_secret: Optional[str] = None
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 class StripeConnectStatusOut(Schema):
     available: bool           # la piattaforma ha STRIPE_CONNECT_CLIENT_ID
     payments_enabled: bool    # si possono creare link di pagamento (chiave Stripe presente)
