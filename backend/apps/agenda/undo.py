@@ -87,20 +87,29 @@ def _money(value) -> str:
     return str(Decimal(value or 0).quantize(CENT))
 
 
+# I campi dell'appuntamento che l'istantanea copia così come sono, e che
+# `_restore_appointment` riscrive: un campo solo qui, e non anche là, verrebbe
+# confrontato ma mai rimesso a posto. `start` e `deposit_amount` stanno a parte,
+# perché si scrivono in una forma sola (vedi `_at` e `_money`).
+_SNAPSHOT_FIELDS = (
+    "operator_id",
+    "status",
+    "cancel_reason",
+    "cancelled_late",
+    "note",
+    "flexible",
+    "forced",
+    "auto_released",
+    "deposit_status",
+)
+
+
 def appointment_snapshot(appointment: Appointment) -> dict:
     """Tutto ciò che «torna indietro» sa rimettere a posto di un appuntamento."""
     return {
         "id": appointment.id,
         "start": _at(appointment.start),
-        "operator_id": appointment.operator_id,
-        "status": appointment.status,
-        "cancel_reason": appointment.cancel_reason,
-        "cancelled_late": appointment.cancelled_late,
-        "note": appointment.note,
-        "flexible": appointment.flexible,
-        "forced": appointment.forced,
-        "auto_released": appointment.auto_released,
-        "deposit_status": appointment.deposit_status,
+        **{field: getattr(appointment, field) for field in _SNAPSHOT_FIELDS},
         "deposit_amount": _money(appointment.deposit_amount),
         "items": [
             {
@@ -357,20 +366,14 @@ def _ensure_slot_free(snap: dict, appointment: Appointment) -> None:
 def _restore_appointment(snap: dict) -> Appointment:
     appointment = _live_appointment(snap)
     appointment.start = parse_datetime(snap["start"])
-    appointment.operator_id = snap["operator_id"]
-    appointment.status = snap["status"]
-    appointment.cancel_reason = snap["cancel_reason"]
-    appointment.cancelled_late = snap["cancelled_late"]
-    appointment.note = snap["note"]
-    appointment.flexible = snap["flexible"]
-    appointment.forced = snap["forced"]
-    appointment.auto_released = snap["auto_released"]
-    appointment.deposit_status = snap["deposit_status"]
+    for field in _SNAPSHOT_FIELDS:
+        setattr(appointment, field, snap[field])
     appointment.deposit_amount = Decimal(snap["deposit_amount"])
     appointment.save(
         update_fields=[
-            "start", "operator", "status", "cancel_reason", "cancelled_late", "note",
-            "flexible", "forced", "auto_released", "deposit_status", "deposit_amount",
+            "start",
+            *(field.removesuffix("_id") for field in _SNAPSHOT_FIELDS),
+            "deposit_amount",
             "updated_at",
         ]
     )
