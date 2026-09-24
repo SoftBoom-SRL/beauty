@@ -26,6 +26,7 @@ from django.db import close_old_connections
 from django.http import HttpResponse, HttpResponseForbidden, StreamingHttpResponse
 from django.utils import timezone
 
+from .livefeed import LIVE_FEED_SAFETY_SECONDS, allowed_prefixes, event_dict
 from .models import ActivityLog
 
 logger = logging.getLogger("youty.stream")
@@ -41,14 +42,6 @@ STREAM_KEEPALIVE_SECONDS = 15
 # viene tolta dal salone, cambia password o perde un permesso smette di ricevere
 # entro un minuto, non a fine stream (20 minuti).
 STREAM_ACCESS_CHECK_SECONDS = 60
-# Finestra di sicurezza del feed live. Su Postgres l'id si assegna all'INSERT
-# ma la riga si vede al COMMIT: una transazione che prendeva l'id N e committava
-# dopo N+1 veniva scavalcata dal cursore, e l'evento non arrivava a nessuna
-# postazione, nemmeno col polling di coerenza. Stream e polling rileggono quindi
-# anche gli eventi con id sotto il cursore scritti negli ultimi secondi (una
-# transazione più lunga è un'eccezione). Il prezzo è qualche riconsegna, che la
-# dashboard scarta per id (contratto C20).
-LIVE_FEED_SAFETY_SECONDS = 15
 # Connessioni live accettate contemporaneamente DA QUESTO PROCESSO. Ogni stream
 # aperto occupa un thread di gunicorn (`--worker-class gthread`) e una
 # connessione al database per tutta la sua durata: senza tetto, qualche centinaio
@@ -81,64 +74,6 @@ def _release_stream_slot() -> None:
 def open_stream_count() -> int:
     """Stream live aperti in questo processo (diagnostica e test)."""
     return _open_streams
-# Eventi consegnati dal feed live e AREA richiesta per riceverli. Un evento
-# arriva a chi ha ALMENO UNO degli scope elencati (il titolare riceve tutto):
-# lo stream e il registro attività mostravano incassi, magazzino, fedeltà e
-# impostazioni a chiunque fosse autenticato, cioè esattamente i dati che il
-# permesso d'area nega a quell'operatrice.
-# Tupla vuota = riservato al titolare.
-LIVE_FEED_SCOPES = {
-    "appointment.": ("agenda",),
-    "pause.": ("agenda",),
-    "waitlist.": ("agenda",),
-    "slot.": ("agenda",),
-    "visit.": ("agenda",),
-    # La caparra si legge dal pallino in agenda (chi la incassa la vede in cassa):
-    # senza questo prefisso la dashboard non sapeva MAI di una caparra pagata o
-    # rimborsata e continuava a mostrare «caparra richiesta» col conto alla rovescia.
-    "deposit.": ("agenda", "sales"),
-    "client.": ("clients",),
-    # Le etichette compaiono anche nelle condizioni delle automazioni: chi ha
-    # solo marketing restava con i nomi vecchi dopo un rinomina (15-07).
-    "client_category.": ("clients", "marketing"),
-    "sale.": ("sales",),
-    # Listino: l'agenda prenota da lì, quindi serve anche a chi ha solo agenda.
-    "service.": ("agenda", "pricing"),
-    "category.": ("agenda", "pricing"),
-    "package.": ("pricing",),
-    # Turni e assenze ridisegnano le corsie dell'agenda.
-    "operator.": ("agenda", "team"),
-    "product.": ("inventory",),
-    "stock.": ("inventory",),
-    "order.": ("inventory",),
-    "supplier.": ("inventory",),
-    "coupon.": ("marketing",),
-    "giftcard.": ("marketing", "sales"),
-    "loyalty.": ("marketing",),
-    "communication.": ("marketing",),
-    "automation.": ("marketing",),
-    # Regole caparra: le legge e le scrive solo il titolare. Senza prefisso le
-    # sue modifiche non arrivavano nemmeno alle altre sue postazioni.
-    "deposit_rule.": (),
-    # Orari, intervallo fasce e regole del salone li legge già chiunque da
-    # /api/core/salon: senza questo prefisso un cambio di orari fatto dal
-    # titolare non raggiungeva più le altre postazioni fino al ricaricamento
-    # della pagina. Il sommario non contiene dati di cassa.
-    "settings.": ("*",),
-}
-LIVE_FEED_PREFIXES = tuple(LIVE_FEED_SCOPES)
-
-
-def allowed_prefixes(is_owner: bool, scopes) -> tuple[str, ...]:
-    """Prefissi che questo membro può ricevere dal feed live."""
-    if is_owner:
-        return LIVE_FEED_PREFIXES
-    owned = set(scopes or ())
-    return tuple(
-        p
-        for p, needed in LIVE_FEED_SCOPES.items()
-        if "*" in needed or owned.intersection(needed)
-    )
 
 
 def issue_stream_ticket(
@@ -211,15 +146,9 @@ def _window_rows(salon_id: int, cursor: int, horizon):
 
 
 def _event_out(e: ActivityLog) -> dict:
-    return {
-        "id": e.id,
-        "type": e.type,
-        "summary": e.summary,
-        "actor_id": e.actor_id,
-        "actor_name": e.actor_name,
-        "payload": e.payload,
-        "created_at": e.created_at.isoformat(),
-    }
+    # L'evento del polling (livefeed.event_dict) con l'istante già in testo: il
+    # frame SSE passa da json.dumps. Stesse chiavi, nello stesso ordine.
+    return {**event_dict(e), "created_at": e.created_at.isoformat()}
 
 
 def event_generator(

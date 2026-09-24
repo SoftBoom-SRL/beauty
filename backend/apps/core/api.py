@@ -1,13 +1,10 @@
 import re
-from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings as django_settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
 from django.utils.dateparse import parse_date
 from ninja import File, Router
 from ninja.errors import HttpError
@@ -21,6 +18,7 @@ from common.permissions import require_owner, require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
+from .livefeed import feed_page
 from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
 from .outbox import delivery_status
 from .schemas import (
@@ -43,6 +41,7 @@ from .services import (
     normalize_opening_hours_week,
     opening_hours_text,
 )
+from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
 router = Router(tags=["core"])
 
@@ -439,14 +438,6 @@ def list_activity(
     return qs
 
 
-# I prefissi di evento del feed live e i permessi richiesti sono definiti UNA
-# volta in core.views (stream SSE) e riusati qui dal polling di riserva: due
-# elenchi separati avevano perso `settings.` e `client_category.` solo lato HTTP.
-from .views import LIVE_FEED_SAFETY_SECONDS, allowed_prefixes  # noqa: E402
-
-LIVE_FEED_LIMIT = 50
-
-
 @router.get("/activity/feed", auth=staff_auth, response=ActivityFeedOut)
 def activity_feed(request, after: int | None = None):
     """Feed live per il polling della dashboard.
@@ -463,53 +454,7 @@ def activity_feed(request, after: int | None = None):
     a chi il permesso d'area li nega (lo stream SSE applica lo stesso filtro).
     """
     ctx = request.auth
-    qs = ActivityLog.objects.filter(salon=ctx.salon)
-    latest = qs.order_by("-id").values_list("id", flat=True).first() or 0
-    if after is None:
-        return {"cursor": latest, "events": []}
-
-    prefixes = allowed_prefixes(ctx.is_owner, ctx.scopes)
-    events = []
-    if prefixes:
-        prefix_q = Q()
-        for prefix in prefixes:
-            prefix_q |= Q(type__startswith=prefix)
-        events = list(
-            qs.filter(id__gt=after).filter(prefix_q).order_by("id")[:LIVE_FEED_LIMIT]
-        )
-        # Un id sotto il cursore che si vede solo ora è una transazione che ha
-        # committato dopo una successiva: senza rileggerli il cursore l'aveva già
-        # scavalcato e l'evento non arrivava più a nessuno. Il cursore stesso è
-        # un evento che il client ha già.
-        horizon = timezone.now() - timedelta(seconds=LIVE_FEED_SAFETY_SECONDS)
-        late = list(
-            qs.filter(id__lt=after, created_at__gte=horizon)
-            .filter(prefix_q)
-            .order_by("id")[:LIVE_FEED_LIMIT]
-        )
-        events = late + events
-    # Il cursore avanza sempre fino all'ultimo id visto (anche se filtrato via),
-    # così un evento amministrativo non viene richiesto all'infinito.
-    scanned = qs.filter(id__gt=after).order_by("id").values_list("id", flat=True)[:LIVE_FEED_LIMIT]
-    scanned = list(scanned)
-    cursor = max([after] + scanned + [e.id for e in events])
-    if len(scanned) < LIVE_FEED_LIMIT:
-        cursor = max(cursor, latest)
-    return {
-        "cursor": cursor,
-        "events": [
-            {
-                "id": e.id,
-                "type": e.type,
-                "summary": e.summary,
-                "actor_id": e.actor_id,
-                "actor_name": e.actor_name,
-                "payload": e.payload,
-                "created_at": e.created_at,
-            }
-            for e in events
-        ],
-    }
+    return feed_page(ctx.salon, after, is_owner=ctx.is_owner, scopes=ctx.scopes)
 
 
 @router.get("/outbox/status", auth=staff_auth, response=OutboxStatusOut)
@@ -529,8 +474,6 @@ def outbox_status(request):
 @router.post("/activity/stream-ticket", auth=staff_auth)
 def activity_stream_ticket(request):
     """Ticket effimero per aprire lo stream SSE (EventSource non manda header)."""
-    from .views import STREAM_TICKET_TTL, issue_stream_ticket
-
     ctx = request.auth
     # Il biglietto dice chi sta ascoltando (lo stream non ha altro modo di
     # saperlo): utente e versione della password, con cui lo stream rilegge la

@@ -542,7 +542,7 @@ class CheckoutSeenByTheAgendaTests(HistoryTestBase):
     """08-03: il checkout lascia un evento che anche l'agenda riceve."""
 
     def test_the_checkout_writes_an_agenda_event_without_amounts(self):
-        from apps.core.views import allowed_prefixes
+        from apps.core.livefeed import allowed_prefixes
 
         appointment = self._appointment()
         res = self._checkout(
