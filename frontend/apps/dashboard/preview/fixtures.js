@@ -8,12 +8,18 @@ const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0
 export const TODAY = iso(today);
 const at = (day, h, m = 0) => `${day}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
 
-const SVC_OPS = { 10: [3], 11: [3], 12: [1, 2], 13: [1, 2] };
+const SVC_OPS = { 10: [3], 11: [3], 12: [1, 2], 13: [1, 2], 14: [4, 5] };
 
+/* Colori come quelli di seed_demo (saturi per le operatrici, pastello per le
+ * categorie): con i pastello di ripiego l'anteprima era più gentile del
+ * salone vero, e un testo illeggibile su un colore pieno non si vedeva qui.
+ * Noor oggi non lavora: serve a vedere la colonna «non in turno». */
 export const OPERATORS = [
-  { id: 1, first_name: 'Anna', last_name: 'Ferri', initials: 'AF', name: 'Anna Ferri', role_title: 'Hair stylist', active: true },
-  { id: 2, first_name: 'Giulia', last_name: 'Neri', initials: 'GN', name: 'Giulia Neri', role_title: 'Estetista', active: true },
-  { id: 3, first_name: 'Sara', last_name: 'Blu', initials: 'SB', name: 'Sara Blu', role_title: 'Nail artist', active: true },
+  { id: 1, first_name: 'Anna', last_name: 'Ferri', initials: 'AF', name: 'Anna Ferri', role_title: 'Hair stylist', color: '#6366F1', active: true },
+  { id: 2, first_name: 'Giulia', last_name: 'Neri', initials: 'GN', name: 'Giulia Neri', role_title: 'Estetista', color: '#F59E0B', active: true },
+  { id: 3, first_name: 'Sara', last_name: 'Blu', initials: 'SB', name: 'Sara Blu', role_title: 'Nail artist', color: '#EC4899', active: true },
+  { id: 4, first_name: 'Lina', last_name: 'Bianchi', initials: 'LB', name: 'Lina Bianchi', role_title: 'Estetista viso', color: '#10B981', active: true },
+  { id: 5, first_name: 'Noor', last_name: 'Fadil', initials: 'NF', name: 'Noor Fadil', role_title: 'Massaggiatrice', color: '#14B8A6', active: true },
 ].map((o) => ({
   // come il payload vero di /api/staff/: l'elenco dei servizi che sa fare
   ...o,
@@ -27,10 +33,12 @@ export const SERVICES = [
   { id: 11, name_it: 'Nail art', name_en: 'Nail art', duration_min: 20, soak_min: 0, price: '15.00', category_id: 100, active: true, operators: SVC_OPS[11] },
   { id: 12, name_it: 'Colore', name_en: 'Colour', duration_min: 45, soak_min: 30, price: '60.00', category_id: 101, active: true, operators: SVC_OPS[12] },
   { id: 13, name_it: 'Piega', name_en: 'Blow-dry', duration_min: 30, soak_min: 0, price: '25.00', category_id: 101, active: true, operators: SVC_OPS[13] },
+  { id: 14, name_it: 'Pulizia viso', name_en: 'Facial', duration_min: 50, soak_min: 0, price: '55.00', category_id: 102, active: true, operators: SVC_OPS[14] },
 ];
 export const SERVICE_CATEGORIES = [
-  { id: 100, name: 'Unghie', color: '#8A5A6E' },
-  { id: 101, name: 'Capelli', color: '#5E748C' },
+  { id: 100, name: 'Unghie', color: '#FDE2E4' },
+  { id: 101, name: 'Capelli', color: '#DBEAFE' },
+  { id: 102, name: 'Viso', color: '#DCFCE7' },
 ];
 
 const svcOf = (id) => SERVICES.find((s) => s.id === id);
@@ -68,7 +76,28 @@ const SEED = (day) => [
     deposit_status: 'none', forced: true, gifts: [],
     items: [item(9004, SERVICES[3], 2, 0)],
   },
+  // una giornata piena quanto basta per giudicare la densità della griglia
+  visit(504, day, 10, 0, 4, 'Giorgia Conti', '+39 333 222 1100', [[9005, 14, 4]]),
+  visit(505, day, 9, 30, 3, 'Paola Riva', '+39 347 100 2020', [[9006, 10, 3]]),
+  visit(506, day, 15, 30, 1, 'Chiara Galli', '+39 320 400 5050', [[9007, 13, 1]], { status: 'confirmed', deposit_status: 'paid', deposit_amount: '10.00' }),
+  visit(507, day, 11, 0, 2, 'Federica Marini', '+39 331 909 1212', [[9008, 12, 2], [9009, 13, 2]]),
+  visit(508, day, 16, 0, 4, 'Irene Sala', '+39 339 818 7070', [[9010, 14, 4]]),
 ];
+
+/** Una visita come la dà il server: `lines` = [[id riga, id servizio, operatrice], …] in ordine. */
+function visit(id, day, h, m, opId, name, phone, lines, extra = {}) {
+  const items = lines.map(([itemId, svcId, op], i) => item(itemId, svcOf(svcId), op, i));
+  const minutes = items.reduce((s, it) => s + it.duration_min + it.soak_min, 0);
+  const start = at(day, h, m);
+  const end = new Date(new Date(start).getTime() + minutes * 60000);
+  return {
+    id, start, end: at(day, end.getHours(), end.getMinutes()), operator_id: opId, status: 'confirmed',
+    client: { id: 100 + id, full_name: name, phone }, client_name: name, client_phone: phone,
+    total_duration_min: minutes, duration_min: minutes,
+    total_price: items.reduce((s, it) => s + Number(it.price), 0).toFixed(2), note: '',
+    deposit_status: 'none', forced: false, gifts: [], items, ...extra,
+  };
+}
 
 /* ---- stato in memoria: una giornata per data, creata alla prima richiesta ---- */
 const STORE = new Map();
@@ -157,7 +186,7 @@ export const APPOINTMENT = (id) => findAppt(id) || appointmentsOf(TODAY)[0];
 
 export const DAY_ROWS = (day) => OPERATORS.map((o) => ({
   operator: { id: o.id, name: o.name, first_name: o.first_name, last_name: o.last_name, initials: o.initials, role_title: o.role_title },
-  windows: o.id === 3 ? [['09:00', '13:00']] : [['09:00', '13:00'], ['14:00', '19:00']],
+  windows: { 3: [['09:00', '13:00']], 4: [['10:00', '18:00']], 5: [] }[o.id] || [['09:00', '13:00'], ['14:00', '19:00']],
   // un appuntamento è elencato una volta sola, nella riga dell'operatrice principale
   appointments: appointmentsOf(day).filter((a) => a.operator_id === o.id),
   pauses: o.id === 1 ? [{ id: 700, operator_id: 1, start: at(day, 13, 0), duration_min: 60, note: 'pranzo' }] : [],
@@ -187,6 +216,30 @@ export const WEEK = (startIso) => {
     const appts = appointmentsOf(day);
     return { date: day, count: appts.length, by_status: {}, appointments: appts.map(compact) };
   });
+};
+
+/* Il mese (GET /api/agenda/range): un giorno per data, con l'occupazione per
+ * operatrice. Senza questa rotta la vista Mese dell'anteprima si rompeva. */
+export const RANGE = (startIso, endIso) => {
+  const out = [];
+  for (let d = new Date(startIso + 'T00:00'); iso(d) <= endIso; d.setDate(d.getDate() + 1)) {
+    const day = iso(d);
+    const appts = appointmentsOf(day);
+    const by_status = {};
+    appts.forEach((a) => { by_status[a.status] = (by_status[a.status] || 0) + 1; });
+    const operators = OPERATORS.filter((o) => o.id !== 5).map((o) => ({
+      operator_id: o.id, capacity_min: d.getDay() === 0 ? 0 : 540,
+      booked_min: appts.filter((a) => a.operator_id === o.id).reduce((s, a) => s + a.total_duration_min, 0),
+    }));
+    out.push({
+      date: day, count: appts.length, by_status,
+      capacity_min: operators.reduce((s, o) => s + o.capacity_min, 0),
+      booked_min: operators.reduce((s, o) => s + o.booked_min, 0),
+      revenue: appts.filter((a) => a.status !== 'no_show').reduce((s, a) => s + Number(a.total_price), 0),
+      operators, appointments: appts.map(compact),
+    });
+  }
+  return out;
 };
 
 export const SALON = {

@@ -5,10 +5,11 @@ import { staffAuth, LangProvider } from '@youty/shared';
 import { DashboardProvider } from '../src/ctx.jsx';
 import AgendaSection from '../src/sections/agenda/index.jsx';
 import Topbar from '../src/shell/Topbar.jsx';
+import Sidebar from '../src/shell/Sidebar.jsx';
 import { useDash } from '../src/ctx.jsx';
 import DkModals from '../src/modals/DkModals.jsx';
 import DkToast from '../src/ui/DkToast.jsx';
-import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment, rememberUndo, UNDO_STACK, undoLast } from './fixtures.js';
+import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, RANGE, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment, rememberUndo, UNDO_STACK, undoLast } from './fixtures.js';
 import '@youty/shared/styles/base.css';
 import '../src/styles/desktop.css';
 import '../src/styles/app.css';
@@ -46,7 +47,7 @@ const routes = [
   }],
   [/\/api\/agenda\/day/, (u) => DAY_ROWS(u.searchParams.get('date') || TODAY)],
   [/\/api\/agenda\/week/, (u) => WEEK(u.searchParams.get('start'))],
-  [/\/api\/agenda\/month/, () => []],
+  [/\/api\/agenda\/range/, (u) => RANGE(u.searchParams.get('start'), u.searchParams.get('end'))],
   [/\/api\/agenda\/waitlist/, () => []],
   [/\/api\/agenda\/released/, () => []],
   [/\/api\/agenda\/availability/, () => []],
@@ -75,13 +76,19 @@ function Ponte() {
   return <DkToast {...toastProps} />;
 }
 
+// come la shell vera (Shell.jsx): barra laterale compressa sotto i 1366 px
+const SIDE_COLLAPSED = window.innerWidth < 1366;
+
 staffAuth.installStaffAuth();
 ReactDOM.createRoot(document.getElementById('root')).render(
   <LangProvider>
     <DashboardProvider>
       {/* stessa impalcatura della shell vera (.dk-root/.dk-main): il pannello
-          laterale restringe l'area di lavoro proprio attraverso queste classi */}
-      <div className="dk-root">
+          laterale restringe l'area di lavoro proprio attraverso queste classi.
+          Con la barra laterale: senza, l'agenda aveva 250 px in più che in
+          salone non ha, e una barra che va a capo non si vedeva qui. */}
+      <div className={'dk-root' + (SIDE_COLLAPSED ? ' dk-side-collapsed' : '')}>
+        <Sidebar collapsed={SIDE_COLLAPSED} onToggleCollapse={() => {}} />
         <div className="dk-main">
           <Topbar />
           <div className="dk-content" style={{ display: 'flex', flexDirection: 'column' }}>
