@@ -24,7 +24,7 @@ export default function WeekDayColumn({
     <div data-daycol={index} className={looseTarget ? 'dk-col--target' : ''}
       onClick={(e) => { if (e.target === e.currentTarget) onDayAreaClick(e, day.date); }}
       onDoubleClick={(e) => onDayAreaClick(e, day.date)}
-      style={{ flex: '0 0 ' + width + 'px', minWidth: 0, position: 'relative', borderLeft: WEEK_DAY_BORDER, background: isToday ? WEEK_TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
+      style={{ flex: '1 0 ' + width + 'px', minWidth: 0, position: 'relative', borderLeft: WEEK_DAY_BORDER, background: isToday ? WEEK_TODAY_BG : 'transparent', display: 'flex', cursor: canWrite ? 'copy' : 'default' }}>
       {/* righe orarie: sotto i blocchi (z 2), sopra lo sfondo (GridLines) */}
       <GridLines marks={marks} g0={g0} pxm={pxm} />
       <NowLine nowMin={nowMin} g0={g0} g1={g1} pxm={pxm} variant="week" />

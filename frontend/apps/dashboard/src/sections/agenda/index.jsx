@@ -2,14 +2,14 @@
 // Lo stato e i gesti stanno negli hook (hooks/): che cosa si guarda
 // (useAgendaNav), zoom, dati del giorno e della colonna di destra
 // (useAgendaData), live, «torna indietro» (useUndo), tasti e gesti che
-// scrivono (useAgendaMutations). Qui restano la barra, le chip, il menu dello
-// slot e il montaggio delle viste.
+// scrivono (useAgendaMutations). Qui restano la barra (col filtro «Team»), il
+// menu dello slot e il montaggio delle viste.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, toDateStr, todayStr, parseISO } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, hoverPlacement, isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek,
-  HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
+  visibleDayRows, restingIds, itemBlocks, HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
 } from './lib.js';
 import { useAgendaNav } from './hooks/useAgendaNav.js';
 import { useStoredFlag } from './hooks/useStoredFlag.js';
@@ -32,7 +32,7 @@ import SalonHoursChip from './parts/SalonHoursChip.jsx';
 import UndoButton from './parts/UndoButton.jsx';
 import ZoomControls from './parts/ZoomControls.jsx';
 import ViewSelector from './parts/ViewSelector.jsx';
-import OperatorChips from './parts/OperatorChips.jsx';
+import TeamFilter from './parts/TeamFilter.jsx';
 import PickBanner from './parts/PickBanner.jsx';
 import RailPanel from './parts/RailPanel.jsx';
 import SlotMenu from './parts/SlotMenu.jsx';
@@ -41,11 +41,18 @@ import MonthView from './MonthView.jsx';
 import RightRail from './RightRail.jsx';
 import GroupBookingDrawer from './modals/GroupBookingDrawer.jsx';
 
+/* Le frecce della barra dicono dove portano: [indietro it, en, avanti it, en]. */
+const NAV_LABELS = {
+  day: ['Giorno precedente', 'Previous day', 'Giorno successivo', 'Next day'],
+  week: ['Settimana precedente', 'Previous week', 'Settimana successiva', 'Next week'],
+  month: ['Mese precedente', 'Previous month', 'Mese successivo', 'Next month'],
+};
+
 export default function AgendaSection() {
   const {
     t, lang, operators, services, serviceCategories, hasScope,
     openModal, modal, fireToast, opColors, setOpColor, opPalette,
-    setTab, setDeepLink, showRevenue, live, setAgendaPick, setAgendaDate, settings, session, locationId,
+    setTab, deepLink, setDeepLink, showRevenue, live, setAgendaPick, setAgendaDate, settings, session, locationId,
     toastProps,
   } = useDash();
   const canWrite = hasScope('agenda');
@@ -53,7 +60,11 @@ export default function AgendaSection() {
 
   /* ---- navigation state ---- */
   const { date, setDate, calView, setCalView, jumpOpen, setJumpOpen, navPrev, navNext, jumpToMonth, jumpToDate, openDay } = useAgendaNav();
-  const [railOpen, setRailOpen] = useStoredFlag('dk-agenda-rail');
+  /* Il pannello di destra parte chiuso sugli schermi sotto i 1600 px (finché
+   * non lo si apre: poi resta come lo si lascia). Aperto si prendeva 312 px
+   * di un portatile, un terzo dell'agenda; chiuso mostra comunque i numeri
+   * che chiedono un'azione (vedi RailPanel). */
+  const [railOpen, setRailOpen] = useStoredFlag('dk-agenda-rail', typeof window !== 'undefined' && window.innerWidth >= 1600);
 
   /* ---- zoom delle viste giorno/settimana: preferenza della postazione ---- */
   const { zoom, setZoom, fitZoom } = useAgendaZoom();
@@ -95,8 +106,9 @@ export default function AgendaSection() {
     prevModal.current = modal;
   }, [modal, refetchAll]);
 
-  /* ---- operator visibility chips ---- */
-  const { vis, visCount, allOn, toggleVis, setAll } = useOperatorVisibility(operators);
+  /* ---- filtro «Team»: quali colonne, e «Solo chi lavora oggi» ---- */
+  const { vis, toggleVis, setAll, only } = useOperatorVisibility(operators);
+  const [onlyWorking, setOnlyWorking] = useStoredFlag('dk-agenda-only-working');
 
   const { colorOf, itemColor } = useAgendaColors({ opColors, services, serviceCategories });
 
@@ -114,6 +126,15 @@ export default function AgendaSection() {
    * Mentre è aperto l'agenda è in "pick mode": un clic su uno slot libero
    * passa orario e operatrice al drawer invece di aprire il menu. */
   const [groupOpen, setGroupOpen] = useState(false);
+  /* «Prenotazione di gruppo» sta nel menu di «Prenota» in alto, con le altre
+   * creazioni: il menu passa di qui (deepLink) perché il drawer vive con
+   * l'agenda, che deve restare visibile dietro per scaglionare gli orari. */
+  useEffect(() => {
+    if (deepLink !== 'group-booking') return;
+    setDeepLink(null);
+    if (!canWrite) { noWrite(); return; }
+    setGroupOpen(true);
+  }, [deepLink, setDeepLink, canWrite, noWrite]);
   const pickMode = modal?.name === 'newappt';
   const openNewAppt = useCallback((prefill) => {
     if (!canWrite) { noWrite(); return; }
@@ -168,8 +189,8 @@ export default function AgendaSection() {
   const { undoing, undoLast, undoMark, undoAfter } = useUndo({
     canWrite, noWrite, fireToast, t, toastProps, dateRef, setDate, refetchAllRef, fetchUndo, undoStack,
   });
-  // N, + − 0 e ⌘Z
-  useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoom, undoLast });
+  // N, + − 0, ⌘Z; T (oggi), ← → (indietro e avanti), G S M (la vista)
+  useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoom, undoLast, goToday: () => setDate(todayStr()), navPrev, navNext, setCalView });
 
   /* ---- mutations (drag & drop, pauses) ---- */
   const {
@@ -194,15 +215,19 @@ export default function AgendaSection() {
   const monday = mondayOf(date);
   const weekDays = weekDaysOf(monday);
 
-  // Nessun fallback "mostra tutte": spegnendo tutte le chip la griglia deve
+  // Nessun fallback "mostra tutte": spegnendo tutto il team la griglia deve
   // restare vuota (lo stato vuoto è già previsto), non riaccendere tutto.
-  /* Le chip decidono quali COLONNE si disegnano, non quali dati esistono: il
+  /* Il filtro «Team» decide quali COLONNE si disegnano, non quali dati esistono: il
    * payload elenca ogni appuntamento una volta sola, nella riga dell'operatrice
    * principale, ma i suoi servizi possono essere di altre. Filtrando anche i
-   * dati, spegnere una chip faceva sparire il lavoro delle colleghe rimaste e
+   * dati, spegnere un'operatrice faceva sparire il lavoro delle colleghe rimaste e
    * dichiarava «Disponibile» uno slot occupato davvero. */
   const allRows = dayData || [];
-  const visibleRows = allRows.filter((r) => vis[r.operator.id] !== false);
+  /* «Solo chi lavora oggi» non nasconde mai la colonna dove cade l'ombra
+   * dell'appuntamento aperto nel pannello. */
+  const keepOps = ghostAppt ? [...new Set(itemBlocks(ghostAppt).map((b) => b.opId))] : [];
+  const visibleRows = visibleDayRows(allRows, vis, { onlyWorking, keep: keepOps });
+  const resting = onlyWorking && dayData ? restingIds(allRows, vis, keepOps) : [];
 
   // il titolo della barra apre il selettore di mese e data (JumpTitle)
   const jumpProps = { open: jumpOpen, setOpen: setJumpOpen, t, MONTHS, cur, onMonth: jumpToMonth, onDate: jumpToDate };
@@ -216,41 +241,39 @@ export default function AgendaSection() {
     <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
       {/* timeline column */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {/* sub toolbar */}
-        {/* va a capo quando lo spazio non basta: prima il selettore vista (Giorno/
-          * Settimana/Mese) veniva tagliato dal pannello laterale aperto. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, rowGap: 10, padding: '16px 26px', borderBottom: '1px solid var(--hair)', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            <button className="dk-iconbtn" style={{ width: 38, height: 38 }} onClick={navPrev}><Icon name="chevL" size={18} /></button>
-            <button className="dk-iconbtn" style={{ width: 38, height: 38 }} onClick={navNext}><Icon name="chevR" size={18} /></button>
+        {/* La barra: una riga sola (vedi .dk-agbar in agenda.css). A sinistra
+          * dove si è (Oggi, frecce, periodo, giorni), a destra come lo si
+          * guarda (team, indietro, zoom, vista). Stretta, prima perde le
+          * etichette ripetute nei suggerimenti e solo alla fine va a capo. */}
+        <div className="dk-agbar">
+          <div className="dk-agbar__group">
+            {/* «Oggi» sempre allo stesso posto: compariva solo lontano da oggi e
+                spostava tutta la barra al primo clic su un altro giorno */}
+            <button type="button" className="dk-agbtn" onClick={() => setDate(todayStr())} aria-current={isToday && calView === 'day' ? 'date' : undefined}
+              title={t('Vai a oggi (T)', 'Go to today (T)')}>{t('Oggi', 'Today')}</button>
+            <button type="button" className="dk-agicon" onClick={navPrev} aria-label={t(NAV_LABELS[calView][0], NAV_LABELS[calView][1])} title={t(NAV_LABELS[calView][0], NAV_LABELS[calView][1]) + ' (←)'}><Icon name="chevL" size={17} /></button>
+            <button type="button" className="dk-agicon" onClick={navNext} aria-label={t(NAV_LABELS[calView][2], NAV_LABELS[calView][3])} title={t(NAV_LABELS[calView][2], NAV_LABELS[calView][3]) + ' (→)'}><Icon name="chevR" size={17} /></button>
+            {calView === 'day'
+              ? <JumpTitle compact label={MONTHS[cur.getMonth()] + ' ' + cur.getFullYear()} short={MONTHS[cur.getMonth()].slice(0, 3) + ' ' + cur.getFullYear()} {...jumpProps} />
+              : <JumpTitle label={periodLabel(calView, date, weekDays, MONTHS)} short={periodLabel(calView, date, weekDays, MONTHS.map((m) => m.slice(0, 3)))} {...jumpProps} />}
           </div>
-          {calView === 'day' ? (
-            <React.Fragment>
-              <JumpTitle compact label={MONTHS[cur.getMonth()] + ' ' + cur.getFullYear()} {...jumpProps} />
-              <DayStrip weekDays={weekDays} date={date} setDate={setDate} dragOn={dragOn} t={t} />
-              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 40 }} onClick={() => setDate(todayStr())}>{t('Oggi', 'Today')}</button>}
-            </React.Fragment>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <JumpTitle label={periodLabel(calView, date, weekDays, MONTHS)} {...jumpProps} />
-              {!isToday && <button className="dk-btn dk-btn--soft" style={{ height: 36 }} onClick={() => setDate(todayStr())}>{t('Oggi', 'Today')}</button>}
-            </div>
-          )}
+          {calView === 'day' && <DayStrip weekDays={weekDays} date={date} setDate={setDate} dragOn={dragOn} t={t} />}
           <SalonHoursChip settings={settings} date={date} t={t} isOwner={!!session?.is_owner} onOpen={() => { setDeepLink && setDeepLink('hours'); setTab('impostazioni'); }} />
-          <div style={{ flex: 1, minWidth: 0 }} />
-          {canWrite && (
-            <React.Fragment>
-              <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />
-              <button className="dk-btn dk-btn--soft" style={{ height: 40, flexShrink: 0 }} onClick={() => setGroupOpen(true)} title={t('Prenota più clienti insieme', 'Book several clients together')}>
-                <Icon name="clients" size={16} />{t('Gruppo', 'Group')}
-              </button>
-            </React.Fragment>
-          )}
-          {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
-              stirare, e il comando sparisce invece di restare lì a non fare
-              niente. */}
-          {calView !== 'month' && <ZoomControls zoom={zoom} setZoom={setZoom} fitZoom={fitZoom} t={t} />}
-          <ViewSelector calView={calView} setCalView={setCalView} t={t} />
+          <div className="dk-agbar__spacer" />
+          <div className="dk-agbar__group">
+            {calView === 'day' && (
+              <TeamFilter operators={operators} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+                onlyWorking={onlyWorking} setOnlyWorking={setOnlyWorking} resting={resting}
+                // mentre la giornata carica non ci sono righe: niente «0/5» di passaggio
+                shown={dayData ? visibleRows.length : null} total={dayData ? allRows.length : operators.length} t={t} />
+            )}
+            {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
+            {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
+                stirare, e il comando sparisce invece di restare lì a non fare
+                niente. */}
+            {calView !== 'month' && <ZoomControls zoom={zoom} setZoom={setZoom} fitZoom={fitZoom} t={t} />}
+            <ViewSelector calView={calView} setCalView={setCalView} t={t} />
+          </div>
         </div>
 
         {/* body — day / week / month */}
@@ -263,8 +286,6 @@ export default function AgendaSection() {
           <MonthView anchor={date} onOpenDay={openDay} />
         ) : (
           <React.Fragment>
-            <OperatorChips operators={operators} vis={vis} visCount={visCount} allOn={allOn} toggleVis={toggleVis} setAll={setAll} colorOf={colorOf} t={t} />
-
             {pickBanner}
             {dayData === null ? (
               <DaySkeleton />
@@ -313,7 +334,8 @@ export default function AgendaSection() {
       </div>
 
       {/* right rail — collapsible */}
-      <RailPanel open={railOpen} setOpen={setRailOpen} t={t}>
+      <RailPanel open={railOpen} setOpen={setRailOpen} t={t}
+        badges={{ released: (released || []).length, waitlist: (waitlist || []).filter((w) => w.status === 'active' || w.status === 'contacted').length }}>
         <RightRail
           summary={summary}
           waitlist={waitlist}

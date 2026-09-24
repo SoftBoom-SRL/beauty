@@ -15,13 +15,17 @@ import { minutesOfDay } from '@youty/shared';
  *  (quando cambia si riguarda l'ombra), `ready` = la griglia è disegnata (la
  *  settimana passa dallo scheletro senza ref). Ritorna `remember()`, da
  *  chiamare quando la griglia scorre. */
-export function useScrollMemo({ scrollRef, headRef, memo, g0, pxm, ghost, dayKey, ready = true }) {
+export function useScrollMemo({ scrollRef, headRef, memo, g0, pxm, ghost, dayKey, ready = true, initialMin = null }) {
   const ownMemo = useRef(null);
   const mem = memo || ownMemo;
+  /* Senza un minuto da ricordare (la prima apertura) si parte da
+   * `initialMin`: oggi, un'ora prima di adesso. Aprendo l'agenda alle 16 si
+   * vedeva la mattina già passata e bisognava scorrere per trovare adesso. */
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!ready || !el || mem.current == null) return;
-    el.scrollTop = Math.max(0, (mem.current - g0) * pxm);
+    const target = mem.current ?? initialMin;
+    if (!ready || !el || target == null) return;
+    el.scrollTop = Math.max(0, (target - g0) * pxm);
   }, [ready, g0]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const el = scrollRef.current;

@@ -13,7 +13,7 @@ import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harn
 const { default: AgendaSection } = await loadComponent('apps/dashboard/src/sections/agenda/index.jsx', {
   stubs: ['DayGrid.jsx', 'WeekView.jsx', 'MonthView.jsx', 'RightRail.jsx', 'GroupBookingDrawer.jsx'],
   // i pezzi senza hook della barra e della sezione, che per i test fanno parte di index.jsx
-  expand: ['JumpTitle', 'DayStrip', 'UndoButton', 'ZoomControls', 'ViewSelector', 'OperatorChips', 'PickBanner', 'RailPanel', 'SlotMenu'],
+  expand: ['JumpTitle', 'DayStrip', 'UndoButton', 'ZoomControls', 'ViewSelector', 'PickBanner', 'RailPanel', 'SlotMenu'],
 });
 
 const TODAY = todayStr();
@@ -42,12 +42,12 @@ const rowsFor = (appts = []) => OPS.map((o) => ({
   appointments: appts.filter((a) => a.operator_id === o.id), pauses: [],
 }));
 
-function setup({ modal = null, undo = [] } = {}) {
-  installDom();
+function setup({ modal = null, undo = [], rows = null } = {}) {
+  const win = installDom();
   globalThis.setInterval = () => 0;      // l'orologio dell'agenda (ogni 30 s) non serve qui
   globalThis.clearInterval = () => {};
   const ApiError = globalThis.__ApiError;
-  const state = { undo, appts: { 41: maria(), 42: sara }, days: { [TODAY]: rowsFor([sara]) }, put: null, undoPost: null, onMovePost: null };
+  const state = { undo, appts: { 41: maria(), 42: sara }, days: { [TODAY]: rows || rowsFor([sara]) }, put: null, undoPost: null, onMovePost: null };
   const calls = { get: [], post: [], put: [] };
   globalThis.__api = {
     get: (url, opts) => {
@@ -79,7 +79,7 @@ function setup({ modal = null, undo = [] } = {}) {
   };
   const m = mount(AgendaSection, {});
   const g = {
-    m, calls, state, dash: globalThis.__dash, ApiError,
+    m, calls, state, win, dash: globalThis.__dash, ApiError,
     render: () => m.render(),
     dg: () => find(m.tree, (el) => el.type?.name === 'DayGrid'),
     wv: () => find(m.tree, (el) => el.type?.name === 'WeekView'),
@@ -303,4 +303,48 @@ test('il pannello aperto non si rimonta: né al secondo clic sul blocco né dopo
   assert.ok(g.calls.post.some((p) => p.url === '/api/agenda/appointments/41/move'));
   assert.equal(g.dash.openModal.calls.length, 1, 'il pannello resta quello aperto');
   assert.equal(g.dg().props.ghost ?? null, null, 'la copia fresca è già su giovedì: niente più ombra');
+});
+
+test('«Prenotazione di gruppo» dal menu di «Prenota» apre il drawer dell\'agenda', async () => {
+  const g = setup();
+  await ready(g);
+  assert.equal(find(g.m.tree, (el) => el.type?.name === 'GroupBookingDrawer'), null);
+  g.dash.deepLink = 'group-booking';                 // quello che fa la barra in alto
+  g.render();
+  g.render();
+  assert.ok(find(g.m.tree, (el) => el.type?.name === 'GroupBookingDrawer'), 'il drawer si apre');
+  assert.deepEqual(g.dash.setDeepLink.calls.at(-1), [null], 'il collegamento si consuma');
+});
+
+test('«Solo chi lavora oggi» toglie la colonna di chi è a riposo, non i suoi dati', async () => {
+  // Bea (id 4) oggi non ha turno né appuntamenti
+  const rows = rowsFor([sara]).map((r) => (r.operator.id === 4 ? { ...r, windows: [] } : r));
+  const g = setup({ rows });
+  await ready(g);
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 2, 3], 'la sua colonna non c\'è');
+  assert.deepEqual(g.dg().props.allRows.map((r) => r.operator.id), [1, 2, 3, 4], 'i conti la vedono ancora');
+});
+
+test('i tasti T, ← e → e G S M muovono l\'agenda; con un pannello aperto tacciono', async () => {
+  const g = setup();
+  await ready(g);
+  // un giorno nuovo passa dallo scheletro: si aspetta che la giornata arrivi
+  const key = async (k, target = { tagName: 'BODY' }) => { g.win.fire('keydown', { key: k, target, preventDefault() {} }); g.render(); await ready(g); };
+  await key('ArrowRight');
+  assert.equal(g.dg().props.date, plus(1), '→ il giorno dopo');
+  await key('ArrowLeft');
+  await key('ArrowLeft');
+  assert.equal(g.dg().props.date, plus(-1), '← il giorno prima');
+  await key('t');
+  assert.equal(g.dg().props.date, TODAY, 'T torna a oggi');
+  await key('ArrowRight', { tagName: 'INPUT' });
+  assert.equal(g.dg().props.date, TODAY, 'chi scrive in un campo tiene le sue frecce');
+  await key('s');
+  assert.ok(g.wv(), 'S apre la settimana');
+  await key('g');
+  assert.ok(g.dg(), 'G torna al giorno');
+  g.dash.modal = { id: 9, name: 'apptdetail', props: {} };
+  g.render();
+  await key('ArrowRight');
+  assert.equal(g.dg().props.date, TODAY, 'con il dettaglio aperto ← → non sfogliano l\'agenda dietro');
 });

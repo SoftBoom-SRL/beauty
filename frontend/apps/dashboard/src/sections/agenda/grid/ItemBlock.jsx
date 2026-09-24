@@ -4,7 +4,7 @@
 // (anche durante il trascinamento) e i gestori del puntatore.
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
-import { DK_START, PXM, TONE_BORDER, laneCss } from '../lib.js';
+import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
 export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
@@ -12,13 +12,20 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
   const h = (active + soak) * pxm;
-  const compact = h < 50;
+  /* Quante righe ci stanno: una sola (cliente, servizio, ora in fila) sotto i
+   * 44 px, due (cliente e servizio) fino a 62, tre con l'orario. Prima la
+   * terza riga compariva anche dove non c'era posto e usciva tagliata. */
+  const compact = h < 44;
+  const showTime = compact || h >= 62;
   // Visita con più servizi: senza un segno che li lega, in agenda si vedono
   // due riquadri identici a due appuntamenti diversi della stessa cliente, e
   // non si capisce né che sono una cosa sola né che si possono staccare.
   const total = (appt.items || []).length;
   const grouped = total > 1;
   const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
+  // testo scuro sui colori chiari, bianco su quelli scuri (vedi lib/colors.js)
+  const ink = inkOn(color, 0.82);
+  const client = appt.client?.full_name || appt.client_name || '';
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
   const textZ = { position: 'relative', zIndex: 2 };
@@ -50,7 +57,11 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
         // contorno spariva sotto il vicino di corsia.
-        zIndex: dragging ? 20 : highlight ? 3 : 2, padding: compact ? '3px 9px' : '7px 11px', overflow: 'hidden',
+        zIndex: dragging ? 20 : highlight ? 3 : 2, padding: compact ? '3px 9px' : '6px 10px', overflow: 'hidden',
+        // la spina della visita (12 px a sinistra) non copre il testo, e il
+        // bollino della caparra incassata non copre l'ora nei blocchi bassi
+        paddingLeft: grouped ? 21 : compact ? 9 : 10,
+        ...(compact && isFirst && appt.deposit_status === 'paid' ? { paddingRight: 30 } : {}),
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', transform: dragging ? 'scale(1.03)' : 'none',
         opacity: appt.status === 'no_show' ? 0.5 : dragging ? 0.92 : 1, transition: dragging ? 'none' : 'box-shadow 150ms',
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,
@@ -67,15 +78,26 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
           <Icon name="wallet" size={13} color="var(--ok)" stroke={2} />
         </div>
       )}
-      <div style={{ ...textZ, fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, paddingLeft: grouped ? 14 : 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>{item.service_name}</div>
-      <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 1, flexShrink: 0 }}>
-        {showStatusDot && <span title={sm.label} style={{ width: 7, height: 7, borderRadius: 99, background: sm.color, flexShrink: 0 }} />}
-        <span className="tabnum" style={{ fontSize: 11, fontWeight: 500, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{dragging ? '–' + timeLabel(startMin + active + soak) : ''}</span>
-        {grouped && (
-          <span className="tabnum" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.02em', color: 'var(--ink-2)', background: 'rgba(255,255,255,0.62)', borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>{index + 1}/{total}</span>
-        )}
+      {/* Chi, poi cosa, poi quando: in reception la prima domanda davanti a un
+          blocco è «chi arriva?». Prima il nome della cliente era la riga più
+          piccola e più chiara, sotto servizio e orario. Nei blocchi bassi
+          tutto su una riga: cliente, servizio, ora. */}
+      <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>
+        {/* arrivata / in corso: il pallino accanto al nome, visibile in ogni altezza */}
+        {showStatusDot && <span title={sm.label} style={{ display: 'inline-block', verticalAlign: 'middle', width: 7, height: 7, borderRadius: 99, background: sm.color, marginRight: 5, marginTop: -2, boxShadow: '0 0 0 1.5px rgba(255,255,255,0.8)' }} />}
+        {client || item.service_name}
       </div>
-      {!compact && <div style={{ ...textZ, color: 'var(--muted)', fontSize: 11, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{appt.client?.full_name}</div>}
+      {client && (
+        <div style={{ ...textZ, fontSize: 11.5, fontWeight: 500, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, marginTop: compact ? 0 : 1 }}>
+          {item.service_name}
+        </div>
+      )}
+      {showTime && <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 2, flexShrink: 0 }}>
+        <span className="tabnum" style={{ fontSize: 11, fontWeight: 600, color: ink.sub, whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{dragging || !compact ? '–' + timeLabel(startMin + active + soak) : ''}</span>
+        {grouped && (
+          <span className="tabnum" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.02em', color: ink.ink, background: ink.chip, borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>{index + 1}/{total}</span>
+        )}
+      </div>}
       {canWrite && !dragging && (
         <div className="dk-resize-handle" onPointerDown={onResizeDown} title={t('Trascina per cambiare il tempo attivo', 'Drag to change the active time')} style={{ position: 'absolute', left: 0, right: 0, top: soak > 0 ? active * pxm - 5 : undefined, bottom: soak > 0 ? undefined : 0, height: 9, cursor: 'ns-resize', display: 'grid', placeItems: 'center', touchAction: 'none', zIndex: 3 }}>
           <div style={{ width: 26, height: 3, borderRadius: 99, background: 'rgba(17,24,39,0.35)' }} />

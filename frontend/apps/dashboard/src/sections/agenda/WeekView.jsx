@@ -31,8 +31,11 @@ import { useGridZoom } from './hooks/useGridZoom.js';
 import { useScrollMemo } from './hooks/useScrollMemo.js';
 import { useGridDrag } from './hooks/useGridDrag.js';
 
-const SUBCOL_W = 48;   // larghezza minima di una sotto-colonna operatrice
-const DAY_MIN_W = 120;
+/* Larghezze MINIME: i giorni si allargano fino a riempire lo spazio (flex
+ * 1 0 in WeekDayHeader e WeekDayColumn). Prima erano fisse, e con quattro
+ * operatrici la domenica usciva dallo schermo anche con metà pagina vuota. */
+const SUBCOL_W = 44;   // larghezza minima di una sotto-colonna operatrice
+const DAY_MIN_W = 112;
 
 export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
@@ -80,7 +83,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * ricorda e si ritrova (anche se la fascia cambia); l'ombra, se resta fuori
    * vista, si porta in vista. */
   const ready = days !== null;
-  const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready });
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready, initialMin: nowMin != null && nowMin > G0 && nowMin < G1 ? nowMin - 60 : null });
   function onGridScroll() {
     rememberScroll();
     onDragScroll();

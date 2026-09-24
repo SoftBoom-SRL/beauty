@@ -34,7 +34,7 @@ const TITLES = {
 const POPOVER_AWAY = { event: 'pointerdown', capture: true, escape: true };
 
 export default function Topbar() {
-  const { t, lang, tab, setTab, search, setSearch, openModal, session, live, agendaDate } = useDash();
+  const { t, lang, tab, setTab, search, setSearch, openModal, session, live, agendaDate, setDeepLink, hasScope } = useDash();
   /* In agenda si prenota sul giorno che si ha davanti; altrove il drawer decide
    * da sé (oggi). */
   const openBooking = () => openModal('newappt', { prefill: agendaDate ? { date: agendaDate } : {} });
@@ -52,8 +52,8 @@ export default function Topbar() {
   return (
     <header className="dk-top">
       <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-        <div className="t-meta" style={{ color: 'var(--clay-ink)', fontSize: 10.5, whiteSpace: 'nowrap' }}>{fmtDateIt(new Date())}</div>
-        <div style={{ fontFamily: 'var(--serif)', fontSize: 24, fontWeight: 500, lineHeight: 1.05, marginTop: 3 }}>{title}</div>
+        <div className="t-meta" style={{ color: 'var(--clay-ink)', fontSize: 10, whiteSpace: 'nowrap' }}>{fmtDateIt(new Date())}</div>
+        <div style={{ fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 600, letterSpacing: '-0.015em', lineHeight: 1.05, marginTop: 2 }}>{title}</div>
       </div>
       <div style={{ flex: 1 }} />
 
@@ -93,7 +93,11 @@ export default function Topbar() {
                 // il cliente creato da qui serve quasi sempre a prenotare:
                 // salvata la scheda, si prosegue con l'appuntamento (afterSave)
                 { icon: 'user', title: t('Nuovo cliente', 'New client'), sub: t('Si crea la scheda e si prosegue con la prenotazione', 'Create the profile, then continue with the booking'), act: () => openModal('newclient', { afterSave: 'book' }) },
-              ].map((o, i) => (
+                // Stava nella barra dell'agenda come «Gruppo»: è una creazione,
+                // e il posto delle creazioni è qui. Il drawer vive con l'agenda
+                // (che resta visibile dietro): ci si arriva con il deepLink.
+                hasScope('agenda') && { icon: 'clients', title: t('Prenotazione di gruppo', 'Group booking'), sub: t('Più clienti insieme, scaglionando gli orari sull\'agenda', 'Several clients at once, staggering times on the agenda'), act: () => { setDeepLink('group-booking'); setTab('agenda'); } },
+              ].filter(Boolean).map((o, i) => (
                 <button key={i} className="dk-row" onClick={() => { setNewMenu(false); o.act(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '11px 11px', borderRadius: 10, textAlign: 'left' }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={o.icon} size={18} color="var(--clay-ink)" /></div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -108,9 +112,9 @@ export default function Topbar() {
         )}
       </div>
 
-      <div style={{ width: 1, height: 30, background: 'var(--hair)' }} />
+      <div style={{ width: 1, height: 26, background: 'var(--hair)' }} />
       <button onClick={() => setTab('profile')} title={t('Profilo', 'Profile')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, borderRadius: 99 }}>
-        <Avatar initials={initials} size={40} color="var(--clay-tint2)" ring />
+        <Avatar initials={initials} size={36} color="var(--clay-tint2)" ring />
       </button>
     </header>
   );

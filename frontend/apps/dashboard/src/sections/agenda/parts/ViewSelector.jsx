@@ -1,12 +1,20 @@
-// ViewSelector — Giorno / Settimana / Mese nella barra.
+// ViewSelector — Giorno / Settimana / Mese nella barra (anche coi tasti G, S, M).
+// Con la barra stretta i tre bottoni lasciano il posto a un menu (vedi i gradini
+// di .dk-agbar in agenda.css): tutti e due restano nella pagina, il CSS sceglie.
+
+const VIEWS = [['day', 'Giorno', 'Day', 'G'], ['week', 'Settimana', 'Week', 'S'], ['month', 'Mese', 'Month', 'M']];
 
 export default function ViewSelector({ calView, setCalView, t }) {
   return (
-    <div style={{ display: 'flex', gap: 4, background: 'var(--surface)', border: '1px solid var(--hair)', borderRadius: 12, padding: 4, flexShrink: 0 }}>
-      {[['day', 'Giorno', 'Day'], ['week', 'Settimana', 'Week'], ['month', 'Mese', 'Month']].map(([v, it, en]) => {
-        const sel = calView === v;
-        return <button key={v} onClick={() => setCalView(v)} style={{ padding: '8px 15px', borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', background: sel ? 'var(--ink)' : 'transparent', color: sel ? '#fff' : 'var(--ink)', transition: 'all 140ms' }}>{t(it, en)}</button>;
-      })}
-    </div>
+    <>
+      <div className="dk-agseg dk-ag-t3" role="group" aria-label={t('Vista', 'View')}>
+        {VIEWS.map(([v, it, en, key]) => (
+          <button key={v} onClick={() => setCalView(v)} aria-pressed={calView === v} title={t(`${it} (${key})`, `${en} (${key})`)}>{t(it, en)}</button>
+        ))}
+      </div>
+      <select className="dk-agselect dk-ag-t3only" value={calView} onChange={(e) => setCalView(e.target.value)} aria-label={t('Vista', 'View')}>
+        {VIEWS.map(([v, it, en]) => <option key={v} value={v}>{t(it, en)}</option>)}
+      </select>
+    </>
   );
 }

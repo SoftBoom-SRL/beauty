@@ -8,8 +8,7 @@ import { Icon } from '@youty/shared';
 export default function UndoButton({ undoStack, undoing, undoLast, t }) {
   return (
     <button
-      className="dk-btn dk-btn--soft"
-      style={{ height: 40, flexShrink: 0, opacity: undoStack.length && !undoing ? 1 : 0.4, cursor: undoStack.length && !undoing ? 'pointer' : 'default' }}
+      className="dk-agbtn dk-agbtn--quiet dk-agbtn--icon-narrow"
       disabled={!undoStack.length || undoing}
       onClick={() => undoLast(undoStack[0]?.id)}
       aria-label={t('Torna indietro', 'Undo')}
@@ -17,7 +16,7 @@ export default function UndoButton({ undoStack, undoing, undoLast, t }) {
         ? t(`Torna indietro · ${undoStack[0].label}`, `Undo · ${undoStack[0].label}`)
         : t('Niente da annullare', 'Nothing to undo')) + '  (⌘Z)'}
     >
-      <Icon name="undo" size={16} />{t('Indietro', 'Undo')}
+      <Icon name="undo" size={16} /><span className="dk-ag-lbl">{t('Indietro', 'Undo')}</span>
     </button>
   );
 }

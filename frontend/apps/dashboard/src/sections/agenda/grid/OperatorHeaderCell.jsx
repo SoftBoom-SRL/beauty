@@ -1,6 +1,7 @@
 // OperatorHeaderCell — la testata di una colonna in vista giorno: avatar col
 // pallino del turno, nome (disambiguato fra omonime), appuntamenti e incasso
-// del giorno, bottone e selettore del colore dell'operatrice.
+// del giorno, bottone e selettore del colore dell'operatrice (il bottone
+// compare al passaggio del mouse, vedi .dk-ophead in agenda.css).
 // Senza hook: nei test fa parte di DayGrid (grid-harness, `expand`).
 import React from 'react';
 import { Avatar, Icon } from '@youty/shared';
@@ -14,22 +15,25 @@ export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showR
   const cnt = row.appointments.length;
   const rev = apptRevenue(row.appointments);   // il no-show non entra, come nel mese
   const onShift = (row.windows || []).length > 0;
+  /* Testata bassa (44 px, prima 63) e colore in una striscia: riempita del
+   * colore pieno dell'operatrice (indaco, ambra…) il nome si leggeva a
+   * fatica e la fila delle testate era la cosa più rumorosa dello schermo. */
   return (
-    <div title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + COLW + 'px', padding: '10px 11px', display: 'flex', alignItems: 'center', gap: 9, minWidth: 0, borderRadius: '0 0 12px 12px', background: col, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
+    <div className="dk-ophead" title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + COLW + 'px', height: 44, boxSizing: 'border-box', padding: '0 6px 0 9px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, borderRadius: '10px 10px 0 0', background: `color-mix(in srgb, ${col} 12%, var(--surface))`, boxShadow: `inset 0 3px 0 ${col}`, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
       <div style={{ position: 'relative', flexShrink: 0 }}>
-        <Avatar initials={initialsOf(o.name)} size={34} color={col} ring />
-        <span title={onShift ? t('In turno', 'On shift') : t('Non in turno', 'Off today')} style={{ position: 'absolute', bottom: -1, right: -1, width: 11, height: 11, borderRadius: 99, background: onShift ? 'var(--ok)' : 'var(--faint)', border: '2px solid #fff' }} />
+        <Avatar initials={initialsOf(o.name)} size={26} color={col} ring />
+        <span title={onShift ? t('In turno', 'On shift') : t('Non in turno', 'Off today')} style={{ position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: 99, background: onShift ? 'var(--ok)' : 'var(--faint)', border: '2px solid var(--surface)' }} />
       </div>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div title={o.name} style={{ fontWeight: 700, fontSize: 20, whiteSpace: 'nowrap', color: 'var(--ink)', letterSpacing: '-0.015em', lineHeight: 1.05, overflow: 'hidden', textOverflow: 'ellipsis' }}>{opDisplay(firstName(o.name), lastName(o.name), opFirsts)}</div>
-        <div style={{ color: 'var(--ink)', opacity: 0.6, fontSize: 11.5, fontWeight: 500, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {onShift
-            ? `${cnt}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}`
+      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
+        <div title={o.name} style={{ fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', color: 'var(--ink)', letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{opDisplay(firstName(o.name), lastName(o.name), opFirsts)}</div>
+        <div className="tabnum" style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {onShift || cnt
+            ? `${t(`${cnt} app.`, `${cnt} appt`)}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}`
             : t('Non in turno', 'Off today')}
         </div>
       </div>
-      <button onClick={() => setPicker(picker === o.id ? null : o.id)} title={t('Cambia colore', 'Change colour')} style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center', border: 'none', background: 'rgba(255,255,255,0.55)' }}>
-        <Icon name="palette" size={14} color="var(--ink)" />
+      <button className="dk-ophead__pal" onClick={() => setPicker(picker === o.id ? null : o.id)} aria-expanded={picker === o.id} title={t('Cambia colore', 'Change colour')} aria-label={t('Cambia colore', 'Change colour')} style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center', border: 'none', background: 'transparent' }}>
+        <Icon name="palette" size={14} color="var(--muted)" />
       </button>
       {picker === o.id && <OpColorPicker opId={o.id} col={col} t={t} setOpColor={setOpColor} setPicker={setPicker} opPalette={opPalette} />}
     </div>

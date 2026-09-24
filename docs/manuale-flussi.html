@@ -74,9 +74,12 @@
 
 <h3>3.1 Agenda</h3>
 <ul>
-  <li><b>Viste</b> Giorno / Settimana / Mese. In Giorno: colonne per operatrice. In Settimana: colonne per operatrice compresse, larghezza fissa con <b>scorrimento orizzontale</b> (si vedono ~3–4 giorni con sidebar chiuse), giorno corrente evidenziato in azzurrino, separatori viola. Navigazione con frecce e <b>date picker</b> rapido (salto mese/anno).</li>
+  <li><b>Barra in una riga</b>: <b>Oggi</b>, frecce, mese (apre il <b>date picker</b> con salto mese/anno), i sette giorni della settimana (oggi col pallino; durante un trascinamento sono il bersaglio per spostare a un altro giorno), orari del centro, filtro <b>Team</b>, <b>Indietro</b>, zoom (− / + / Adatta) e vista. Sugli schermi stretti le etichette lasciano il posto alle icone, con il nome nel suggerimento; la griglia comincia subito sotto.</li>
+  <li><b>Viste</b> Giorno / Settimana / Mese. In Giorno: colonne per operatrice, con testata bassa (nome, appuntamenti e incasso del giorno; il colore si cambia dal pennello che compare al passaggio). In Settimana: sotto-colonne per operatrice, i giorni si allargano fino a riempire lo spazio (con molte operatrici si scorre di lato), giorno corrente evidenziato. Aprendo l'agenda oggi, la griglia parte un'ora prima di adesso.</li>
+  <li><b>Filtro Team</b> (vista Giorno): quali colonne vedere, «Solo» per la giornata di una persona, <b>Solo chi lavora oggi</b> (acceso di partenza: nasconde chi non ha turno, pause né appuntamenti, e lo segna «a riposo»). La scelta resta sulla postazione.</li>
+  <li><b>Tasti</b>: <b>N</b> nuova prenotazione, <b>T</b> oggi, <b>← →</b> giorno/settimana/mese prima e dopo, <b>G S M</b> la vista, <b>+ − 0</b> zoom, <b>⌘Z</b> torna indietro.</li>
   <li><b>Slot da 15 minuti.</b> Cliccando uno slot libero si sceglie tra <b>Nuovo appuntamento</b> o <b>Pausa</b>. Cliccando un punto della colonna l'orario di inizio si aggancia allo slot più vicino e l'operatrice è quella della colonna.</li>
-  <li><b>Blocco appuntamento:</b> mostra sempre nome e cognome cliente + orario; colore per <b>categoria di servizio</b>; icona quando la <b>caparra è stata incassata</b>. Hover: tooltip con cliente, servizio, orario, telefono, note. Hover sull'operatrice: nome e cognome.</li>
+  <li><b>Blocco appuntamento:</b> prima il nome della cliente, poi il servizio, poi l'orario (nei blocchi bassi tutto su una riga); colore per <b>categoria di servizio</b>, con il testo che resta leggibile anche sui colori scuri; icona quando la <b>caparra è stata incassata</b>. Hover: tooltip con cliente, servizio, orario, telefono, note. Hover sull'operatrice: nome e cognome.</li>
   <li><b>Pausa:</b> blocco dedicato, trascinabile e ridimensionabile, non prenotabile; durata e slot personalizzabili.</li>
   <li><b>Popup appuntamento</b> (ciclo di vita: Confermato → Check-in → In corso → Check-out → Chiuso):
     <ul>
@@ -87,7 +90,8 @@
       <li><b>Stima margine</b> (dato gestionale interno, riga di sintesi espandibile): costo fornitori, costo prodotti (uso vs vendita), costo dipendente, totale costi vs incasso, margine € e %.</li>
     </ul>
   </li>
-  <li><b>Pannello destro:</b> box <b>Vendite totali di oggi</b> (checkout servizi+prodotti + vendite del Punto Vendita) — cliccabile, porta al <b>Registro attività</b> filtrato su oggi; <b>Opportunità di oggi</b>; <b>Lista d'attesa</b>. La sidebar destra e quella sinistra sono collassabili.</li>
+  <li><b>Pannello destro:</b> box <b>Vendite totali di oggi</b> (checkout servizi+prodotti + vendite del Punto Vendita) — cliccabile, porta al <b>Registro attività</b> filtrato su oggi; <b>Opportunità di oggi</b>; <b>Lista d'attesa</b>. La sidebar destra e quella sinistra sono collassabili; sugli schermi sotto i 1600 px (destra) e i 1366 px (sinistra) partono chiuse finché non le si apre. Chiuso, il pannello destro mostra i numeri che chiedono un'azione (slot liberati da richiamare, lista d'attesa).</li>
+  <li><b>Prenotazione di gruppo</b>: dal menu della freccia accanto a <b>Prenota</b> (in alto), insieme a «Nuovo cliente».</li>
 </ul>
 
 <h3>3.2 Check-out, incasso e vendita (un unico step)</h3>

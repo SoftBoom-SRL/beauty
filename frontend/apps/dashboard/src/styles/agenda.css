@@ -23,3 +23,87 @@
 /* maniglia di ridimensionamento: visibile solo al passaggio sul blocco (evita prese accidentali) */
 .dk-resize-handle > div { opacity: 0; transition: opacity 120ms var(--ease); }
 .dk-resize-handle:hover > div, [style*="cursor: grab"]:hover > .dk-resize-handle > div { opacity: 1; }
+
+/* ============================================================
+   Agenda — la barra in una riga
+   ------------------------------------------------------------
+   Prima la barra andava a capo su tre righe (frecce e giorni, orari e
+   bottoni, vista) e con la riga delle chip «Calendari» la griglia
+   cominciava a 380 px dall'alto: su un portatile da 900 px si vedevano
+   sei ore. Qui tutto sta su una riga alta 52 px; quando la colonna è
+   stretta (pannello di destra aperto, iPad) prima spariscono le
+   etichette ripetute dai suggerimenti, e solo alla fine si va a capo.
+   ============================================================ */
+.dk-agbar { container-type: inline-size; display: flex; align-items: center; gap: 8px; row-gap: 8px; flex-wrap: wrap; min-height: 52px; padding: 8px 16px; border-bottom: 1px solid var(--hair); background: var(--surface); flex-shrink: 0; box-sizing: border-box; }
+.dk-agbar__group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.dk-agbar__spacer { flex: 1; min-width: 4px; }
+/* bottone di testo della barra (Oggi, Indietro, Team) */
+.dk-agbtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 120ms var(--ease), border-color 120ms var(--ease); flex-shrink: 0; }
+.dk-agbtn:hover:not(:disabled) { background: var(--surface-2); }
+.dk-agbtn:disabled { opacity: 0.45; cursor: default; }
+.dk-agbtn[aria-expanded="true"] { background: var(--clay-tint); border-color: color-mix(in srgb, var(--clay) 40%, transparent); color: var(--clay-ink); }
+.dk-agbtn--quiet { border-color: transparent; background: transparent; }
+.dk-agbtn--quiet:hover:not(:disabled) { background: var(--paper-2); }
+/* frecce: quadrate, senza bordo, una accanto all'altra */
+.dk-agicon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; border: none; background: transparent; color: var(--ink); cursor: pointer; transition: background 120ms var(--ease); flex-shrink: 0; }
+.dk-agicon:hover { background: var(--paper-2); }
+/* gruppo di segmenti: vista, zoom, giorni della settimana */
+.dk-agseg { display: inline-flex; align-items: center; gap: 2px; height: 34px; padding: 2px; border-radius: 10px; background: var(--paper-2); flex-shrink: 0; box-sizing: border-box; }
+.dk-agseg > button { height: 30px; min-width: 30px; padding: 0 11px; border-radius: 8px; border: none; background: transparent; color: var(--ink-2); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 120ms var(--ease), color 120ms var(--ease); }
+.dk-agseg > button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--ink); }
+.dk-agseg > button:disabled { opacity: 0.35; cursor: default; }
+.dk-agseg > button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(17,24,39,0.10), 0 0 0 1px rgba(17,24,39,0.04); }
+/* striscia dei giorni: due righe minute dentro 30 px */
+.dk-agdays > button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 38px; min-width: 38px; padding: 0; line-height: 1; }
+.dk-agdays > button .dow { font-size: 9.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.6; }
+.dk-agdays > button .num { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dk-agdays > button[aria-pressed="true"] { background: var(--ink); color: #fff; box-shadow: none; }
+.dk-agdays > button[aria-pressed="true"] .dow { opacity: 0.75; }
+.dk-agdays > button.is-today:not([aria-pressed="true"]) .num { color: var(--clay-ink); }
+.dk-agdays > button.is-today::after { content: ""; width: 4px; height: 4px; border-radius: 99px; background: var(--clay); margin-top: 1px; }
+.dk-agdays > button.is-today[aria-pressed="true"]::after { background: #fff; }
+.dk-agdays--drop { background: var(--clay-tint); box-shadow: inset 0 0 0 1px var(--clay); }
+/* Colonna stretta, a gradini (larghezze misurate sulla barra vera):
+   - sotto i 1440 px spariscono le etichette ripetute nei suggerimenti
+     (Indietro, Team, Adatta, la percentuale, «Centro»);
+   - sotto i 1180 il mese si abbrevia, gli orari impostati restano solo
+     nell'icona (la griglia li mostra comunque) e i giorni si stringono;
+   - sotto i 1060 la vista diventa un menu;
+   - sotto i 900 circa la barra va a capo: due righe basse, mai le tre di prima. */
+.dk-agbar .dk-ag-t2only, .dk-agbar .dk-ag-t3only { display: none; }
+@container (max-width: 1440px) {
+  .dk-agbar .dk-ag-lbl { display: none; }
+  .dk-agbar .dk-agbtn--icon-narrow { padding: 0 9px; }
+}
+@container (max-width: 1180px) {
+  .dk-agbar .dk-ag-t2 { display: none; }
+  .dk-agbar .dk-ag-t2only { display: inline-flex; }
+  .dk-agbar .dk-agdays > button { width: 34px; min-width: 34px; }
+}
+@container (max-width: 1060px) {
+  .dk-agbar .dk-ag-t3 { display: none; }
+  .dk-agbar .dk-ag-t3only { display: inline-flex; }
+}
+/* la vista come menu nativo (sul tablet apre il selettore del sistema) */
+.dk-agselect { height: 34px; padding: 0 28px 0 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B7280' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 9l7 7 7-7'/%3E%3C/svg%3E") no-repeat right 10px center; appearance: none; -webkit-appearance: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; flex-shrink: 0; }
+
+/* testata dell'operatrice: il bottone del colore compare al passaggio, dove
+   il passaggio esiste (sul tablet resta visibile, se no non si trova) */
+@media (hover: hover) {
+  .dk-ophead .dk-ophead__pal { opacity: 0; transition: opacity 120ms var(--ease); }
+  .dk-ophead:hover .dk-ophead__pal, .dk-ophead .dk-ophead__pal[aria-expanded="true"] { opacity: 1; }
+}
+
+/* popover del filtro Team */
+.dk-teampop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 70; width: 300px; padding: 6px; box-shadow: var(--sh-pop); }
+.dk-teamrow { display: flex; align-items: center; gap: 4px; border-radius: 9px; padding-right: 4px; }
+.dk-teamrow:hover { background: var(--surface-2); }
+.dk-teamrow__main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; background: transparent; text-align: left; cursor: pointer; border-radius: 9px; }
+.dk-teamrow .only { flex-shrink: 0; border: none; background: transparent; cursor: pointer; font-size: 11.5px; font-weight: 600; color: var(--clay-ink); padding: 4px 8px; border-radius: 7px; }
+.dk-teamrow .only:hover { background: var(--clay-tint); }
+@media (hover: hover) {
+  .dk-teamrow .only { opacity: 0; }
+  .dk-teamrow:hover .only, .dk-teamrow .only:focus-visible { opacity: 1; }
+}
+.dk-teamcheck { width: 18px; height: 18px; border-radius: 6px; display: grid; place-items: center; flex-shrink: 0; border: 1.5px solid var(--line-strong); background: var(--surface); }
+.dk-teamcheck--on { background: var(--ink); border-color: var(--ink); }

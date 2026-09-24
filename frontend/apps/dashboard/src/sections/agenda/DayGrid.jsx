@@ -59,11 +59,11 @@ export default function DayGrid({
   const { start: G0, end: G1 } = dayGridRange(allRows || rows, openingFor(settings, date), ghost);
   const marks = gridMarks(step, G0, G1);             // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (G1 - G0) * pxm;
-  /* `rows` = le colonne da disegnare (le chip delle operatrici spente non ci
+  /* `rows` = le colonne da disegnare (le operatrici spente nel filtro «Team» non ci
    * sono). `dataRows` = TUTTE le righe del giorno: i conti vanno fatti su
    * quelle, perché un appuntamento è elencato una volta sola nella riga
    * dell'operatrice principale mentre i suoi servizi possono essere di altre.
-   * Con i soli dati visibili, spegnere una chip nascondeva il lavoro delle
+   * Con i soli dati visibili, spegnere un'operatrice nascondeva il lavoro delle
    * colleghe dentro le visite rimaste e faceva dire «Disponibile» a uno slot
    * occupato — ci si prenotava sopra davvero. */
   const dataRows = allRows || rows;
@@ -91,7 +91,7 @@ export default function DayGrid({
   /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica): il
    * minuto in cima si ricorda in `scrollMemo`, che vive nella sezione e
    * sopravvive al rimontaggio, e l'ombra fuori vista si porta in vista. */
-  const rememberScroll = useScrollMemo({ scrollRef, headRef, memo: scrollMemo, g0: G0, pxm, ghost, dayKey: date });
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, memo: scrollMemo, g0: G0, pxm, ghost, dayKey: date, initialMin: nowMin != null && nowMin > G0 && nowMin < G1 ? nowMin - 60 : null });
   function onGridScroll() {
     rememberScroll();
     onDragScroll();
@@ -370,7 +370,7 @@ export default function DayGrid({
       onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onScroll={onGridScroll}
     >
       {/* operator header (sticky top) */}
-      <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingBottom: 8, borderBottom: '1px solid var(--hair)' }}>
+      <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingTop: 6, borderBottom: '1px solid var(--hair)' }}>
         <div style={{ width: DAY_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 11, background: 'var(--paper)' }} />
         <div style={{ flex: 1, display: 'flex', gap: 6, paddingRight: 4 }}>
           {rows.map((row) => (
@@ -384,7 +384,9 @@ export default function DayGrid({
       </div>
 
       {/* grid body — `data-span-min`: quanti minuti copre, per «Adatta» */}
-      <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH }}>
+      {/* 8 px d'aria sotto l'intestazione: l'etichetta della prima ora (centrata
+          sulla sua riga) finiva sotto la testata e si leggeva a metà */}
+      <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH, marginTop: 8 }}>
         {/* hour gutter (sticky left) */}
         <HourGutter g0={G0} g1={G1} pxm={pxm} variant="day" />
         {/* columns */}
@@ -392,7 +394,7 @@ export default function DayGrid({
           <GridLines marks={marks} g0={G0} pxm={pxm} />
           {/* passato (solo oggi): velo leggero — non si prenota indietro nel tempo */}
           {nowMin != null && nowMin > G0 && (
-            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, G1) - G0) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3, borderRadius: '12px 12px 0 0' }} />
+            <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: (Math.min(nowMin, G1) - G0) * pxm, background: 'rgba(17,24,39,0.035)', pointerEvents: 'none', zIndex: 3 }} />
           )}
           <NowLine nowMin={nowMin} g0={G0} g1={G1} pxm={pxm} variant="day" />
           {rows.map((row) => {
@@ -404,7 +406,7 @@ export default function DayGrid({
                 key={o.id}
                 className={isTarget ? (tone === 'warn' ? 'dk-col--target-warn' : 'dk-col--target') : ''}
                 onClick={(e) => onColumnClick(e, row)}
-                style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: 12, background: `color-mix(in srgb, ${colorOf(o.id)} 26%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
+                style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: `color-mix(in srgb, ${colorOf(o.id)} 6%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t} />
                 {/* traccia dell'origine durante il drag.
@@ -444,7 +446,12 @@ export default function DayGrid({
           })}
           {!rows.length && (
             <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
-              <div className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('Nessuna operatrice attiva', 'No active staff')}</div>
+              <div className="t-sm" style={{ color: 'var(--muted-2)' }}>
+                {/* il team c'è ma il filtro lo nasconde tutto: si dice dove riaccenderlo */}
+                {(allRows || []).length
+                  ? t('Nessuna colonna da mostrare: sceglile dal filtro «Team» in alto', 'No columns to show: pick them from the «Team» filter above')
+                  : t('Nessuna operatrice attiva', 'No active staff')}
+              </div>
             </div>
           )}
         </div>

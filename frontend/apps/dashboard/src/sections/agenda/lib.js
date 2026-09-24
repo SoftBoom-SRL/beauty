@@ -36,6 +36,10 @@ export { noShowSteps, lateCancel, cancelSteps } from './lib/flowSteps.js';
 
 export { weekDayOps } from './lib/week.js';
 
+export { workingOperatorIds, visibleDayRows, restingIds } from './lib/team.js';
+
+export { hexRgb, wantsLightText, inkOn } from './lib/colors.js';
+
 /** "YYYY-MM-DD" + minuti → ISO8601 dell'istante, nel fuso del SALONE.
  *  Riesportato da @youty/shared: costruirlo con lo scarto del dispositivo
  *  faceva creare appuntamenti spostati di ore da una postazione su un altro

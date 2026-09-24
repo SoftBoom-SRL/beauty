@@ -64,6 +64,8 @@ export const ICON_PATHS = {
   voice: '<path d="M4 12v0M8 8v8M12 5v14M16 8v8M20 11v2"/>',
   lock: '<rect x="4.5" y="10" width="15" height="10.5" rx="2.2"/><path d="M7.8 10V7.2a4.2 4.2 0 018.4 0V10"/>',
   tag: '<path d="M4 4.5h7.5L20 13l-7 7-8.5-8.5z"/><circle cx="8.5" cy="9" r="1.3" fill="currentColor" stroke="none"/>',
+  // due frecce che si chiudono su una riga: «tutta la giornata in una schermata»
+  fit: '<path d="M12 3v6.5M9 6.5l3 3 3-3M12 21v-6.5M9 17.5l3-3 3 3M4 12h16"/>',
 };
 
 export function Icon({ name, size = 22, color = 'currentColor', stroke = 1.7, style = {}, className }) {

@@ -1,6 +1,6 @@
 // Shell.jsx — la cornice della dashboard: barra laterale, barra in alto, la
 // sezione attiva e i contenitori globali (toast, modali, drawer).
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { EmptyState, Icon } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 import { SECTIONS } from '../sections/registry.js';
@@ -16,18 +16,28 @@ const AnalystDrawer = lazy(() => import('../sections/insight/AnalystDrawer.jsx')
 export default function Shell() {
   const { tab, drawer, setDrawer, toastProps, t, lang, hasScope, fireToast } = useDash();
 
+  /* Finché non la si sceglie, sotto i 1366 px (portatili piccoli, iPad in
+   * orizzontale) la barra laterale parte compressa: aperta si prendeva 252 px
+   * e l'agenda andava a capo o scorreva di lato. Scelta una volta, resta. */
   const [sideCollapsed, setSideCollapsed] = useState(() => {
-    try { return localStorage.getItem('dk-side-collapsed') === '1'; } catch { return false; }
+    try {
+      const v = localStorage.getItem('dk-side-collapsed');
+      if (v !== null) return v === '1';
+    } catch { /* ignore */ }
+    return window.innerWidth < 1366;
   });
-  useEffect(() => {
-    try { localStorage.setItem('dk-side-collapsed', sideCollapsed ? '1' : '0'); } catch { /* ignore */ }
-  }, [sideCollapsed]);
+  // si salva solo la scelta fatta col bottone: il valore di partenza segue lo schermo
+  const toggleSide = () => {
+    const next = !sideCollapsed;
+    setSideCollapsed(next);
+    try { localStorage.setItem('dk-side-collapsed', next ? '1' : '0'); } catch { /* ignore */ }
+  };
 
   const Section = SECTIONS[tab];
 
   return (
     <div className={'dk-root' + (sideCollapsed ? ' dk-side-collapsed' : '')}>
-      <Sidebar collapsed={sideCollapsed} onToggleCollapse={() => setSideCollapsed((c) => !c)} />
+      <Sidebar collapsed={sideCollapsed} onToggleCollapse={toggleSide} />
 
       <div className="dk-main">
         <Topbar />
