@@ -212,7 +212,7 @@ def opening_hours_text(week: dict) -> str:
     return " · ".join(parts)
 
 
-# ---- Salone dell'URL pubblico -------------------------------------------------
+# ---- Salone e sede predefinita ---------------------------------------------------
 
 
 def get_salon_by_slug(slug: str) -> Salon:
@@ -229,3 +229,17 @@ def get_salon_by_slug(slug: str) -> Salon:
         return Salon.objects.get(slug=slug)
     except Salon.DoesNotExist:
         raise HttpError(404, "Salone non trovato")
+
+
+def default_location(salon):
+    """La sede su cui lavora l'app cliente: la predefinita, altrimenti la prima.
+
+    Ricerca e prenotazione devono guardare la stessa: cercando su tutte le sedi
+    e prenotando su quella predefinita, l'app proponeva orari di un'operatrice
+    che lavora altrove e poi rispondeva 409 alla conferma.
+
+    Sta in core e non nell'agenda perché serve anche fuori: le operatrici
+    pubbliche dello staff la importavano da `agenda.services` con un import
+    pigro, e il branding pubblico ne aveva una copia.
+    """
+    return salon.locations.filter(is_default=True).first() or salon.locations.first()
