@@ -167,7 +167,7 @@ class CheckoutApiTests(TestCase):
     def test_the_checkout_does_not_overwrite_a_deposit_paid_meanwhile(self):
         """La cliente paga il link mentre la cassiera chiude il conto: il salvataggio
         finale riportava la caparra a «richiesta» e cancellava il PaymentIntent."""
-        from apps.sales.api import finalize_sale as real_finalize
+        from apps.sales.checkout import finalize_sale as real_finalize
 
         def _paid_meanwhile(*args, **kwargs):
             self.Appointment.objects.filter(pk=self.appointment.pk).update(
@@ -175,7 +175,7 @@ class CheckoutApiTests(TestCase):
             )
             return real_finalize(*args, **kwargs)
 
-        with patch("apps.sales.api.finalize_sale", side_effect=_paid_meanwhile):
+        with patch("apps.sales.checkout.finalize_sale", side_effect=_paid_meanwhile):
             response = self._checkout()
         self.assertEqual(response.status_code, 200, response.content)
         self.appointment.refresh_from_db()
@@ -413,9 +413,9 @@ class BugHunt21SeptemberTests(TestCase):
         all'inizio della richiesta: il webhook della caparra pagata, arrivato
         nel frattempo, veniva riscritto all'indietro — denaro incassato su
         Stripe e PaymentIntent perso, quindi nemmeno rimborsabile."""
-        from .. import api as sales_api
+        from .. import checkout as sales_checkout
 
-        real_finalize = sales_api.finalize_sale
+        real_finalize = sales_checkout.finalize_sale
 
         def interleaved(*args, **kwargs):
             # il webhook Stripe arriva mentre il checkout è in corso
@@ -424,7 +424,7 @@ class BugHunt21SeptemberTests(TestCase):
             )
             return real_finalize(*args, **kwargs)
 
-        with patch.object(sales_api, "finalize_sale", side_effect=interleaved):
+        with patch.object(sales_checkout, "finalize_sale", side_effect=interleaved):
             response = self._checkout()
         self.assertEqual(response.status_code, 200, response.content)
         self.appointment.refresh_from_db()
