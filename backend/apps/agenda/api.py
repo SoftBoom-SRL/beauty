@@ -1090,12 +1090,6 @@ def availability(
 # ---- Endpoint app cliente --------------------------------------------------------
 
 
-def _client_policy_ok(appointment) -> bool:
-    return appointment.start - timezone.now() >= dt.timedelta(
-        hours=settings.CLIENT_MOVE_CANCEL_MIN_HOURS
-    )
-
-
 def _client_appointment_out(appointment, gifts_by_client=None) -> dict:
     return {
         "id": appointment.id,
@@ -1304,7 +1298,7 @@ def _client_move_reassignment(salon, appointment, start):
 def client_move_appointment(request, appointment_id: int, data: ClientMoveIn):
     ctx = request.auth
     appointment = salon_get(Appointment, ctx, appointment_id, client=ctx.client)
-    if not _client_policy_ok(appointment):
+    if not transitions.client_notice_ok(appointment):
         raise HttpError(
             400,
             "Spostamento non consentito a meno di "
@@ -1324,7 +1318,7 @@ def client_move_appointment(request, appointment_id: int, data: ClientMoveIn):
 def client_cancel_appointment(request, appointment_id: int):
     ctx = request.auth
     appointment = salon_get(Appointment, ctx, appointment_id, client=ctx.client)
-    if not _client_policy_ok(appointment):
+    if not transitions.client_notice_ok(appointment):
         raise HttpError(400, "Annullamento non consentito: contatta il salone")
     appointment = transitions.cancel_appointment(appointment, by_client=True)
     return _client_appointment_out(appointment, gift_index(ctx.salon, [ctx.client.id]))

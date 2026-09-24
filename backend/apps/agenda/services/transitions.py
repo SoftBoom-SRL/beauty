@@ -119,6 +119,18 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
     return appointment
 
 
+def client_notice_ok(appointment: Appointment) -> bool:
+    """Vero se mancano almeno CLIENT_MOVE_CANCEL_MIN_HOURS ore alla visita.
+
+    È il preavviso della cliente: dall'app sposta e annulla solo così, e sotto
+    la soglia la sua disdetta (anche registrata dalla reception con
+    `by_client`) è tardiva.
+    """
+    return appointment.start - timezone.now() >= dt.timedelta(
+        hours=settings.CLIENT_MOVE_CANCEL_MIN_HOURS
+    )
+
+
 def cancel_appointment(
     appointment: Appointment,
     *,
@@ -140,7 +152,7 @@ def cancel_appointment(
     caparra dei prossimi appuntamenti — si applica SOLO all'annullamento della
     cliente sotto le CLIENT_MOVE_CANCEL_MIN_HOURS ore. Prima si guardava
     soltanto l'orologio: ma l'app cliente rifiuta già l'annullamento tardivo
-    (_client_policy_ok), quindi «tardivo» capitava solo quando era il SALONE ad
+    (`client_notice_ok`), quindi «tardivo» capitava solo quando era il SALONE ad
     annullare. Se l'operatrice si ammalava e la reception disdiceva due ore
     prima, la cliente perdeva la caparra e si ritrovava schedata come
     inaffidabile. E siccome l'app manda la cliente in ritardo a «contattare il
@@ -155,9 +167,7 @@ def cancel_appointment(
     with transaction.atomic():
         _lock_and_reload(appointment)
         before = undo_log.appointment_snapshot(appointment)
-        late = by_client and appointment.start - timezone.now() < dt.timedelta(
-            hours=settings.CLIENT_MOVE_CANCEL_MIN_HOURS
-        )
+        late = by_client and not client_notice_ok(appointment)
         appointment.status = Appointment.Status.CANCELLED
         appointment.cancel_reason = reason or ""
         appointment.cancelled_late = late
