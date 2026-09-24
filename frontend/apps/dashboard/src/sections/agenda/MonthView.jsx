@@ -5,19 +5,20 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toastApiError, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, dowIndex, fmtMoney, opDisplay, AGENDA_LIVE_RE } from './lib.js';
+import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, dowIndex, fmtMoney, opDisplay, LIVE_DEBOUNCE_MONTH_MS } from './lib.js';
 import {
   monthGrid, filterDay, monthSummary, loadRatio, loadTone, LOAD_TONES, LOAD_WARN, LOAD_FULL,
   statusCounts, sortByStart, operatorRows, dayLabel, pctLabel, EMPTY_DAY,
 } from './monthLib.js';
 import * as agendaApi from './agendaApi.js';
+import { useLatest } from './hooks/useLatest.js';
+import { useAgendaLive } from './hooks/useAgendaLive.js';
 
 const MAX_OP_ROWS = 5;      // righe operatrice in cella, poi "+N"
 const MAX_APPTS = 3;        // appuntamenti in cella, poi "+N altri"
 const POP_MAX_APPTS = 12;   // appuntamenti nel popover, poi "+N"
 const POP_W = 320;
 const HOVER_CLOSE_MS = 120; // il popover sopravvive al passaggio tra due celle vicine
-const LIVE_DEBOUNCE_MS = 300;
 const TRACK = 'color-mix(in srgb, var(--ink) 8%, transparent)'; // fondo delle barre, visibile su ogni tema
 
 export default function MonthView({ anchor, onOpenDay }) {
@@ -28,8 +29,7 @@ export default function MonthView({ anchor, onOpenDay }) {
   const [sel, setSel] = useState(() => new Set()); // filtro operatrice locale (vuoto = tutte)
   const [hover, setHover] = useState(null);     // { iso, x, y } — stato separato: la griglia (memo) non si ridisegna
   const seq = useRef(0);                        // scarta le risposte arrivate dopo un cambio mese
-  const uiRef = useRef({ t, fireToast });
-  uiRef.current = { t, fireToast };
+  const uiRef = useLatest({ t, fireToast });
 
   /* ---- caricamento: una chiamata per l'intera griglia (5-6 settimane) ---- */
   const load = useCallback((silent) => {
@@ -42,29 +42,18 @@ export default function MonthView({ anchor, onOpenDay }) {
         if (!silent) { setData([]); setError(true); }
         toastApiError(err, uiRef.current.fireToast, uiRef.current.t);
       });
-  }, [grid.start, grid.end, locationId]);
+  }, [grid.start, grid.end, locationId, uiRef]);   // la ref è stabile
 
   useEffect(() => { load(false); }, [load]);
   useEffect(() => () => { seq.current++; }, []); // smontaggio: ignora le risposte in volo
 
-  /* live: modifiche dalle altre postazioni → ricarica senza skeleton, una volta per raffica */
-  /* Il timer sta in una ref: `live` cambia identità a ogni evento ricevuto, e
-   * con una variabile locale il cleanup dell'effetto annullava il ricarico
-   * appena programmato — il mese non si aggiornava mai.
+  /* live: modifiche dalle altre postazioni → ricarica senza skeleton, una volta per raffica
+   * (useAgendaLive: il timer sta in una ref, e il cleanup non lo annulla).
    * Gli eventi sono gli stessi delle viste giorno e settimana (AGENDA_LIVE_RE):
    * ascoltando solo appuntamenti e pause, la caparra pagata e i turni o gli
    * orari cambiati altrove lasciavano pallini e occupazione quelli vecchi. */
-  const liveTimer = useRef(null);
-  useEffect(() => {
-    if (!live?.subscribe) return undefined;
-    const unsub = live.subscribe(({ events }) => {
-      if (!events.some((e) => AGENDA_LIVE_RE.test(e.type))) return;
-      clearTimeout(liveTimer.current);
-      liveTimer.current = setTimeout(() => load(true), LIVE_DEBOUNCE_MS);
-    });
-    return unsub;
-  }, [live, load]);
-  useEffect(() => () => clearTimeout(liveTimer.current), []);
+  const onLive = useCallback(() => load(true), [load]);
+  useAgendaLive(live, onLive, LIVE_DEBOUNCE_MONTH_MS);
 
   /* ---- dati derivati ---- */
   const staff = useMemo(() => operators.filter((o) => o.active !== false), [operators]);

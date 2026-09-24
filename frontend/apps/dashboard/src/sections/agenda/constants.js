@@ -59,6 +59,12 @@ export const HOVER_CLEAR_WEEK = 280;
  *  liberato → lista d'attesa o nuova prenotazione). */
 export const MODAL_SWAP_MS = 150;
 
+/** Attesa dopo l'ultimo evento live prima di ricaricare: una raffica di
+ *  eventi (lo spostamento di una visita divisa, il conto chiuso) fa un
+ *  ricarico solo. Il giorno 250 ms, il mese 300. */
+export const LIVE_DEBOUNCE_DAY_MS = 250;
+export const LIVE_DEBOUNCE_MONTH_MS = 300;
+
 /** Eventi live dopo cui le viste giorno, settimana e mese si ricaricano.
  *  Ognuna ne ascoltava un pezzo diverso, e ciascuna restava ferma su qualcosa:
  *  - `deposit.` e `sale.`: la caparra pagata online e l'incasso in cassa

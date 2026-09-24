@@ -1,14 +1,16 @@
 // Aiuti dell'agenda nati dalle copie sparse nelle viste (giorno della
 // settimana, etichette di giorno e ora, passo degli slot, anteprima al
-// passaggio del mouse, righe della griglia, fasce fuori turno). Ognuno si
-// confronta con l'espressione che sostituisce, copiata così com'era.
+// passaggio del mouse, righe della griglia, fasce fuori turno, frecce e
+// titolo della barra). Ognuno si confronta con l'espressione che sostituisce,
+// copiata così com'era.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parseISO, timeLabel } from '@youty/shared';
+import { parseISO, timeLabel, toDateStr, todayStr } from '@youty/shared';
 import {
-  DOW_EN, DOW_IT, closedIntervals, dayLabel, dayTimeLabel, dowIndex, gridMarks, hmToMin, hoverPlacement,
-  openApptIdOf, slotStep, visibleMarks,
+  DOW_EN, DOW_IT, MONTHS_EN, MONTHS_IT, addMonths, closedIntervals, dayLabel, dayTimeLabel, dowIndex, gridMarks,
+  hmToMin, hoverPlacement, isTodayInWeek, mondayOf, openApptIdOf, periodLabel, shiftAnchor, slotStep, visibleMarks,
+  weekDaysOf,
 } from '../src/sections/agenda/lib.js';
 
 // come makeT di @youty/shared (i18n.jsx, che nei test non si carica)
@@ -90,4 +92,52 @@ test('closedIntervals: il fuori turno dentro la fascia della griglia', () => {
   // un turno che esce dalla griglia non allarga niente
   assert.deepEqual(closedIntervals([['07:00', '21:00']], 8 * 60, 20 * 60), []);
   assert.equal(hmToMin('9:05'), 545);
+});
+
+/* ---- la barra della sezione (index.jsx): frecce, settimana, titolo ---- */
+// Le frecce com'erano scritte in navPrev/navNext (al posto di setDate, return).
+const navPrevWas = (calView, date) => {
+  if (calView === 'day') { const d = parseISO(date); d.setDate(d.getDate() - 1); return toDateStr(d); }
+  else if (calView === 'week') { const d = parseISO(date); d.setDate(d.getDate() - 7); return toDateStr(d); }
+  else return addMonths(date, -1);
+};
+const navNextWas = (calView, date) => {
+  if (calView === 'day') { const d = parseISO(date); d.setDate(d.getDate() + 1); return toDateStr(d); }
+  else if (calView === 'week') { const d = parseISO(date); d.setDate(d.getDate() + 7); return toDateStr(d); }
+  else return addMonths(date, 1);
+};
+
+test('shiftAnchor: un giorno, una settimana o un mese, come le frecce della barra', () => {
+  for (const view of ['day', 'week', 'month']) {
+    for (const iso of [...DAYS, '2026-01-31', '2026-02-28', '2028-02-29']) {
+      assert.equal(shiftAnchor(view, iso, -1), navPrevWas(view, iso), `${view} ${iso} indietro`);
+      assert.equal(shiftAnchor(view, iso, 1), navNextWas(view, iso), `${view} ${iso} avanti`);
+    }
+  }
+  assert.equal(shiftAnchor('day', '2026-12-31', 1), '2027-01-01');
+  assert.equal(shiftAnchor('week', '2026-10-01', -1), '2026-09-24');
+  assert.equal(shiftAnchor('month', '2026-01-31', 1), '2026-02-01', 'il mese riparte dal primo');
+});
+
+test('weekDaysOf, periodLabel e isTodayInWeek scrivono la barra di sempre', () => {
+  for (const iso of [...DAYS, todayStr()]) {
+    const monday = mondayOf(iso);
+    // la settimana com'era costruita in index.jsx
+    const was = [...Array(7)].map((_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+    const days = weekDaysOf(monday);
+    assert.deepEqual(days.map(toDateStr), was.map(toDateStr));
+    for (const MONTHS of [MONTHS_IT, MONTHS_EN]) {
+      const cur = parseISO(iso);
+      const s = was[0], e = was[6];
+      const week = s.getMonth() === e.getMonth()
+        ? `${s.getDate()}–${e.getDate()} ${MONTHS[e.getMonth()]} ${e.getFullYear()}`
+        : `${s.getDate()} ${MONTHS[s.getMonth()].slice(0, 3)} – ${e.getDate()} ${MONTHS[e.getMonth()].slice(0, 3)} ${e.getFullYear()}`;
+      assert.equal(periodLabel('week', iso, days, MONTHS), week);
+      assert.equal(periodLabel('month', iso, days, MONTHS), MONTHS[cur.getMonth()] + ' ' + cur.getFullYear());
+    }
+    assert.equal(isTodayInWeek(days), was.some((d) => toDateStr(d) === todayStr()));
+  }
+  assert.equal(isTodayInWeek(weekDaysOf(mondayOf(todayStr()))), true);
+  assert.equal(periodLabel('week', '2026-10-01', weekDaysOf(mondayOf('2026-10-01')), MONTHS_IT), '28 Set – 4 Ott 2026');
+  assert.equal(periodLabel('week', '2026-10-07', weekDaysOf(mondayOf('2026-10-07')), MONTHS_EN), '5–11 October 2026');
 });

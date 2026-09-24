@@ -1,18 +1,30 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
+// Lo stato e i gesti stanno negli hook (hooks/): che cosa si guarda
+// (useAgendaNav), zoom, dati del giorno e della colonna di destra
+// (useAgendaData), live, «torna indietro» (useUndo), tasti e gesti che
+// scrivono (useAgendaMutations). Qui restano la barra, le chip, il menu dello
+// slot e il montaggio delle viste.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { Avatar, Icon, fmtDateIt, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, openingFor, hoverPlacement,
-  isoAtMin, mondayOf, addMonths, firstName, opDisplay, aStartMin,
-  DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, clampZoom, zoomStep,
-  moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
+  isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek, firstName, opDisplay, aStartMin,
+  ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, LIVE_DEBOUNCE_DAY_MS, zoomStep,
+  plausibleDate,
 } from './lib.js';
-import { isConflict, retryForced } from './lib/retry.js';
-import {
-  movedText, splitText, pauseMovedText, breakAddedText, restoredText, undoneText, nothingToUndoText,
-} from './lib/toastText.js';
-import * as agendaApi from './agendaApi.js';
+import { useAgendaNav } from './hooks/useAgendaNav.js';
+import { useStoredFlag } from './hooks/useStoredFlag.js';
+import { useAgendaZoom } from './hooks/useAgendaZoom.js';
+import { useNowMinutes } from './hooks/useNowMinutes.js';
+import { useAgendaData } from './hooks/useAgendaData.js';
+import { useOpenApptCopy } from './hooks/useOpenApptCopy.js';
+import { useAgendaLive } from './hooks/useAgendaLive.js';
+import { useOperatorVisibility } from './hooks/useOperatorVisibility.js';
+import { useAgendaColors } from './hooks/useAgendaColors.js';
+import { useUndo } from './hooks/useUndo.js';
+import { useAgendaShortcuts } from './hooks/useAgendaShortcuts.js';
+import { useAgendaMutations } from './hooks/useAgendaMutations.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
 import MonthView from './MonthView.jsx';
@@ -30,162 +42,41 @@ export default function AgendaSection() {
   const noWrite = useCallback(() => fireToast({ msg: t('Il tuo ruolo non ha il permesso “agenda”: puoi solo consultare', 'Your role lacks the “agenda” permission: read only'), icon: 'lock' }), [fireToast, t]);
 
   /* ---- navigation state ---- */
-  const [date, setDate] = useState(todayStr());
-  const [calView, setCalView] = useState('day'); // day | week | month
-  const [jumpOpen, setJumpOpen] = useState(false);
-  const [railOpen, setRailOpenRaw] = useState(() => {
-    try { return localStorage.getItem('dk-agenda-rail') !== '0'; } catch { return true; }
-  });
-  const setRailOpen = (v) => {
-    setRailOpenRaw(v);
-    try { localStorage.setItem('dk-agenda-rail', v ? '1' : '0'); } catch { /* ignore */ }
-  };
+  const { date, setDate, calView, setCalView, jumpOpen, setJumpOpen, navPrev, navNext, jumpToMonth, jumpToDate, openDay } = useAgendaNav();
+  const [railOpen, setRailOpen] = useStoredFlag('dk-agenda-rail');
 
-  /* ---- zoom delle viste giorno/settimana ----------------------------------
-   * Preferenza della POSTAZIONE, non del salone: resta su questo computer e
-   * non tocca l'intervallo di prenotazione (Impostazioni), che è una regola di
-   * tutti. Come i calendari professionali: cursore personale su Fresha,
-   * spaziatura righe e pinch su Vagaro, «quante ore per schermata» su Apple. */
-  const [zoom, setZoomRaw] = useState(() => {
-    try { return clampZoom(parseFloat(localStorage.getItem('dk-agenda-zoom')) || 1); } catch { return 1; }
-  });
-  /* Il valore precedente si legge dallo stato, non dalla chiusura: premendo due
-   * volte «+» in fretta il secondo clic partiva dallo stesso numero del primo e
-   * non faceva niente. */
-  const setZoom = useCallback((z) => {
-    setZoomRaw((prev) => clampZoom(typeof z === 'function' ? z(prev) : z));
-  }, []);
-  useEffect(() => {
-    try { localStorage.setItem('dk-agenda-zoom', String(zoom)); } catch { /* ignore */ }
-  }, [zoom]);
-  /* «Adatta»: la giornata intera in una schermata, senza scorrere. Si misura
-   * l'area visibile della griglia — è lei che detta quanto ci sta. */
-  const fitZoom = useCallback(() => {
-    const el = document.querySelector('.dk-tl-cols')?.closest('.scroll')
-      || document.querySelector('[data-daycol]')?.closest('.scroll');
-    if (!el) return;
-    const body = el.querySelector('.dk-tl-cols')?.parentElement || el.querySelector('[data-daycol]')?.parentElement;
-    const disponibile = el.clientHeight - (body ? body.offsetTop : 0) - 8;
-    // la fascia oraria non è più fissa (08–20): la dice la griglia stessa
-    const span = Number(body?.dataset?.spanMin) || (DK_END - DK_START);
-    if (disponibile > 60) setZoom(disponibile / (span * PXM));
-  }, [setZoom]);
+  /* ---- zoom delle viste giorno/settimana: preferenza della postazione ---- */
+  const { zoom, setZoom, fitZoom } = useAgendaZoom();
 
   /* ---- real "now" (updated every 30s) ---- */
-  const [nowMin, setNowMin] = useState(() => nowMinutes());
-  useEffect(() => {
-    const id = setInterval(() => setNowMin(nowMinutes()), 30000);
-    return () => clearInterval(id);
-  }, []);
+  const nowMin = useNowMinutes();
   const isToday = date === todayStr();
   useEffect(() => { setAgendaDate(date); return () => setAgendaDate(null); }, [date, setAgendaDate]);
 
   /* ---- day data ---- */
-  const [dayData, setDayData] = useState(null);   // null = first load → skeleton
+  const {
+    dayData, waitlist, summary, released, undoStack, dateRef, fetchDay, fetchUndo, refetchAll, refetchAllRef,
+  } = useAgendaData({ date, locationId, t, fireToast });
   // minuto in cima alla griglia del giorno: sopravvive allo scheletro fra un
   // giorno e l'altro (vedi DayGrid, `scrollMemo`)
   const dayScroll = useRef(null);
-  const [waitlist, setWaitlist] = useState([]);
-  const [summary, setSummary] = useState(null);
-  const [released, setReleased] = useState([]);   // slot liberati per caparra non pagata: «da richiamare»
-  const [undoStack, setUndoStack] = useState([]); // gesti annullabili, dal più recente
-  const [undoing, setUndoing] = useState(false);
 
-  /* Numero di sequenza condiviso con l'effetto di caricamento: una risposta
-   * lenta di un altro giorno non deve sovrascrivere quello che si sta guardando
-   * (succedeva con i ricarichi live, e lo spostamento successivo finiva per
-   * usare la data sbagliata). */
-  const daySeq = useRef(0);
-  /* Il numero di sequenza da solo non basta: un ricarico partito DOPO il
-   * cambio giorno (l'attesa del POST di uno spostamento, per esempio) chiede
-   * la data vecchia e prende il numero più alto, quindi vince — l'intestazione
-   * diceva 19 settembre e la griglia mostrava il 18. Si confronta anche la
-   * data, letta da una ref perché le funzioni in volo hanno in mano quella di
-   * quando sono partite. */
-  const dateRef = useRef(date);
-  dateRef.current = date;
-  const fetchDay = useCallback(async () => {
-    const my = ++daySeq.current;
-    const forDate = date;
-    const rows = await agendaApi.getDay(forDate, locationId);
-    if (my === daySeq.current && forDate === dateRef.current) setDayData(rows);
-  }, [date, locationId]);
-  const fetchWaitlist = useCallback(() => agendaApi.getWaitlist().then(setWaitlist).catch(() => {}), []);
-  /* «Torna indietro»: la pila dei gesti che CHI GUARDA può ancora annullare.
-   * Arriva dal server perché l'annullamento è vero — rimette a posto i dati e
-   * ferma i messaggi non ancora partiti — e perché deve rifiutarsi di
-   * sovrascrivere quello che nel frattempo ha fatto un'altra postazione. */
-  // restituisce anche la pila letta: serve a trovare la voce del gesto appena fatto (undoAfter)
-  const fetchUndo = useCallback(() => agendaApi.getUndoStack().then((list) => { setUndoStack(list); return list; }).catch(() => null), []);
-  const fetchSummary = useCallback(() => agendaApi.getTodaySummary().then(setSummary).catch(() => {}), []);
-  const fetchReleased = useCallback(() => agendaApi.getReleased().then(setReleased).catch(() => {}), []);
-  const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
-  /* Le callback date ai modali (onMutate, onCreated) vivono quanto il modale,
-   * ma `refetchAll` cambia a ogni giorno sfogliato: quella catturata
-   * all'apertura ricaricava il giorno di allora, e la risposta veniva scartata
-   * perché non era più quello a video. Passando dalla ref si ricarica sempre
-   * il giorno che si ha davanti. */
-  const refetchAllRef = useRef(refetchAll);
-  refetchAllRef.current = refetchAll;
+  /* Copia fresca dell'appuntamento aperto nel pannello (vedi useOpenApptCopy):
+   * l'ombra e «Sposta qui» devono partire da dov'è adesso. */
+  const { modalRef, reloadOpenAppt, openAppt } = useOpenApptCopy(modal);
 
-  /* Copia fresca dell'appuntamento aperto nel pannello. Le props del modale
-   * restano quelle dell'apertura, mentre il pannello salva e aggiorna solo il
-   * proprio stato: dopo «Passa a Bea» l'ombra restava nella colonna di Anna e
-   * «Sposta qui» mandava Anna come operatrice di partenza — il server non
-   * trovava i suoi servizi, e l'appuntamento restava a Bea (se occupata,
-   * forzato sopra la sua cliente) mentre l'avviso diceva «Spostato a Carla».
-   * Si rilegge a ogni modifica segnalata dal pannello, legata all'id del modale
-   * perché riaprendone un altro la copia vecchia non valga più. */
-  const modalRef = useRef(modal);
-  modalRef.current = modal;
-  const [apptFresh, setApptFresh] = useState(null);   // { modalId, appt }
-  const freshSeq = useRef(0);
-  const reloadOpenAppt = useCallback((id) => {
-    const m = modalRef.current;
-    if (!m || m.name !== 'apptdetail' || m.props?.appointment?.id !== id) return;
-    const my = ++freshSeq.current;
-    agendaApi.getAppointment(id)
-      .then((fresh) => {
-        if (my === freshSeq.current && modalRef.current?.id === m.id) setApptFresh({ modalId: m.id, appt: fresh });
-      })
-      .catch(() => { /* resta la copia che c'è */ });
-  }, []);
-
-  useEffect(() => {
-    const my = ++daySeq.current;
-    setDayData(null);
-    agendaApi.getDay(date, locationId)
-      .then((rows) => { if (my === daySeq.current) setDayData(rows); })
-      .catch((err) => { if (my === daySeq.current) { setDayData([]); toastApiError(err, fireToast, t); } });
-  }, [date, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
-
-  /* live: quando un'altra postazione tocca l'agenda, ricarica (debounce breve) */
-  /* Il cleanup NON deve annullare il debounce: `live` cambia identità a ogni
-   * evento ricevuto e la consegna aggiorna lo stato PRIMA di chiamare gli
-   * ascoltatori, quindi l'effetto si smontava subito dopo aver programmato il
-   * timer e lo cancellava — il ricarico non partiva MAI e la griglia restava
-   * ferma sui dati di quando si era aperto il giorno. Il timer vive in una ref
-   * e si spegne solo allo smontaggio, come già fa MonthView.
-   * `deposit.`: la caparra pagata online deve comparire da sola, senza che
-   * nessuno ricarichi la pagina. `operator.` e `settings.` (turni, assenze,
-   * orari del centro): vedi AGENDA_LIVE_RE.
+  /* live: quando un'altra postazione tocca l'agenda, ricarica (debounce breve,
+   * vedi useAgendaLive). `deposit.`: la caparra pagata online deve comparire da
+   * sola, senza che nessuno ricarichi la pagina. `operator.` e `settings.`
+   * (turni, assenze, orari del centro): vedi AGENDA_LIVE_RE.
    * Con il pannello aperto si rilegge anche il suo appuntamento, che può
    * essere stato cambiato altrove: l'ombra deve stare dove sta davvero. */
-  const liveTimer = useRef(null);
-  useEffect(() => {
-    if (!live?.subscribe) return undefined;
-    return live.subscribe(({ events }) => {
-      if (!events.some((e) => AGENDA_LIVE_RE.test(e.type))) return;
-      clearTimeout(liveTimer.current);
-      liveTimer.current = setTimeout(() => {
-        refetchAll();
-        const m = modalRef.current;
-        if (m?.name === 'apptdetail' && m.props?.appointment?.id) reloadOpenAppt(m.props.appointment.id);
-      }, 250);
-    });
-  }, [live, refetchAll, reloadOpenAppt]);
-  useEffect(() => () => clearTimeout(liveTimer.current), []);
+  const onAgendaLive = useCallback(() => {
+    refetchAll();
+    const m = modalRef.current;
+    if (m?.name === 'apptdetail' && m.props?.appointment?.id) reloadOpenAppt(m.props.appointment.id);
+  }, [refetchAll, reloadOpenAppt, modalRef]);
+  useAgendaLive(live, onAgendaLive, LIVE_DEBOUNCE_DAY_MS);
 
   /* refetch after any modal closes — mutations happen inside modals, keep the grid fresh */
   const prevModal = useRef(modal);
@@ -195,31 +86,10 @@ export default function AgendaSection() {
   }, [modal, refetchAll]);
 
   /* ---- operator visibility chips ---- */
-  const [vis, setVis] = useState({});
-  useEffect(() => {
-    setVis((m) => {
-      const next = { ...m };
-      operators.forEach((o) => { if (next[o.id] === undefined) next[o.id] = true; });
-      return next;
-    });
-  }, [operators]);
-  const visCount = operators.filter((o) => vis[o.id]).length;
-  const allOn = operators.every((o) => vis[o.id]);
+  const { vis, visCount, allOn, toggleVis, setAll } = useOperatorVisibility(operators);
   const opFirsts = operators.map((o) => o.first_name); // disambiguazione omonimie nelle chip
-  const toggleVis = (id) => setVis((m) => ({ ...m, [id]: !m[id] }));
-  const setAll = (on) => setVis(() => { const m = {}; operators.forEach((o) => { m[o.id] = on; }); return m; });
 
-  const colorOf = useCallback((id) => opColors[id] || 'var(--clay)', [opColors]);
-  const catColor = useCallback((catId) => {
-    const c = (serviceCategories || []).find((x) => x.id === catId);
-    return c ? c.color : null;
-  }, [serviceCategories]);
-  // colore per-servizio, dalla categoria del servizio (fallback: colore operatrice)
-  const itemColor = useCallback((item) => {
-    const s = (services || []).find((x) => x.id === item.service_id);
-    const col = s ? catColor(s.category_id) : null;
-    return col || colorOf(item.operator_id);
-  }, [services, catColor, colorOf]);
+  const { colorOf, itemColor } = useAgendaColors({ opColors, services, serviceCategories });
 
   /* ---- interactions state ---- */
   const [hover, setHover] = useState(null);       // { a, x, y, side }
@@ -239,7 +109,7 @@ export default function AgendaSection() {
   const openNewAppt = useCallback((prefill) => {
     if (!canWrite) { noWrite(); return; }
     openModal('newappt', { prefill: prefill || {}, onCreated: () => refetchAllRef.current() });
-  }, [canWrite, noWrite, openModal]);
+  }, [canWrite, noWrite, openModal, refetchAllRef]);   // la ref è stabile
   /* Con la prenotazione aperta, un clic in griglia SCEGLIE l'orario: aprire un
    * altro drawer (vista settimana) o il dettaglio di un blocco sostituiva quello
    * in corso, e cliente, servizi e nota scritti al telefono sparivano. */
@@ -284,433 +154,37 @@ export default function AgendaSection() {
       onShowDate: setDate,
     });
   };
-  /* groupOpen sta fra le dipendenze: senza, l'handler registrato restava
-   * quello di prima e vedeva il drawer di gruppo ancora chiuso — il tasto N ci
-   * apriva sopra la prenotazione singola. */
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
-      // Zoom da tastiera senza modificatori: ⌘+ e ⌘− sono del browser e
-      // ingrandirebbero tutta la pagina, che qui non è quello che serve.
-      if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((z) => zoomStep(z, 1)); return; }
-      if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom((z) => zoomStep(z, -1)); return; }
-      if (e.key === '0') { e.preventDefault(); setZoom(1); return; }
-      if (e.key !== 'n' && e.key !== 'N') return;
-      if (modal || groupOpen) return;   // il drawer di gruppo non è un modale del registry
-      e.preventDefault();
-      openNewAppt({ date });
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [openNewAppt, date, modal, groupOpen, setZoom]);
 
-  /* ---- torna indietro ----
-   * Un gesto sbagliato si disfa da qui: il server rimette i dati com'erano e,
-   * se il messaggio alla cliente non è ancora partito, lo ferma. Non chiede
-   * conferme (in agenda non se ne chiedono): se non si può più tornare
-   * indietro lo dice il server, e l'avviso riporta il suo motivo. */
-  /* Guardia in una ref, non nello stato: l'«Annulla» di un avviso tiene la
-   * funzione di quando è comparso, con `undoing` ancora falso. Premendo
-   * «Indietro» (o ⌘Z) e poi «Annulla» durante la richiesta partiva un secondo
-   * POST /undo senza id, che annullava anche il gesto di prima o rispondeva
-   * con un 409 falso. All'avvio si chiude anche l'avviso: non deve restare lì
-   * a offrire di annullare una cosa che si sta già annullando. */
-  const undoingRef = useRef(false);
-  const toastDoneRef = useRef(null);
-  toastDoneRef.current = toastProps?.onDone;
-  const undoLast = useCallback(async (entryId) => {
-    if (!canWrite) { noWrite(); return; }
-    if (undoingRef.current) return;
-    undoingRef.current = true;
-    setUndoing(true);
-    toastDoneRef.current?.();
-    try {
-      const res = await agendaApi.undoGesture(entryId);
-      // Il gesto può aver riportato l'appuntamento su un altro giorno: senza
-      // questo salto si annullava «a vuoto», con la griglia ferma dov'era.
-      if (res.date && res.date !== dateRef.current) setDate(res.date);
-      fireToast({ msg: undoneText(t, res.label), icon: 'undo' });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) fireToast({ msg: nothingToUndoText(t), icon: 'info' });
-      else toastApiError(err, fireToast, t);
-    } finally {
-      undoingRef.current = false;
-      setUndoing(false);
-      refetchAllRef.current();
-    }
-  }, [canWrite, noWrite, fireToast, t]);
-  const undoLastRef = useRef(undoLast);
-  undoLastRef.current = undoLast;
-
-  /* «Annulla» nell'avviso di un gesto: annulla QUEL gesto, non l'ultima voce
-   * di chi guarda. Le risposte di spostamenti e pause non dicono quale voce
-   * hanno scritto, quindi si segna la voce più recente nota PRIMA del gesto
-   * (`undoMark`) e dopo si rilegge la pila: la voce nuova è quella del gesto.
-   * Se non la si trova (pila non riletta), si ripiega sull'ultima voce come
-   * prima. `onDone`: chi ha fatto il gesto ricarica anche la sua vista. */
-  const undoStackRef = useRef(undoStack);
-  undoStackRef.current = undoStack;
-  const undoMark = useCallback(() => undoStackRef.current.reduce((m, e) => Math.max(m, e?.id || 0), 0), []);
-  const undoAfter = useCallback((mark, onDone) => {
-    const entry = fetchUndo().then((list) => (list || []).find((e) => e.id > mark)?.id ?? null);
-    return () => entry.then((id) => undoLastRef.current(id ?? undefined)).then(() => onDone?.());
-  }, [fetchUndo]);
-
-  /* ⌘Z / Ctrl+Z: la scorciatoia che tutti provano d'istinto. Non ruba il tasto
-   * a chi sta scrivendo in un campo né a un modale aperto, dove annullerebbe
-   * una cosa diversa da quella che si ha davanti. */
-  useEffect(() => {
-    const onKey = (e) => {
-      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
-      if ((e.key || '').toLowerCase() !== 'z') return;
-      const tag = (e.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
-      if (modal || groupOpen) return;
-      e.preventDefault();
-      undoLast();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [undoLast, modal, groupOpen]);
+  /* ---- torna indietro (bottone «Indietro», ⌘Z, «Annulla» degli avvisi) ---- */
+  const { undoing, undoLast, undoMark, undoAfter } = useUndo({
+    canWrite, noWrite, fireToast, t, toastProps, dateRef, setDate, refetchAllRef, fetchUndo, undoStack,
+  });
+  // N, + − 0 e ⌘Z
+  useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoom, undoLast });
 
   /* ---- mutations (drag & drop, pauses) ---- */
-  const [pending, setPending] = useState(null); // optimistic override { kind, id, startMin, opId, dur }
-  /* Forzatura: lo staff può andare oltre le regole (fuori turno, centro chiuso,
-   * sovrapposizione) e non gli viene chiesto niente, mai. Chi lavora qui tutti
-   * i giorni SA quando sta incastrando una cliente: ogni conferma era una
-   * finestra da chiudere, non una protezione. Si scrive e basta, con
-   * force=true, e resta l'avviso normale con «Annulla». */
+  const {
+    pending, moveAppt, splitItem, moveOpenApptHere, moveApptToDate, onInvalidDrop, restoreReleased,
+    movePause, resizePause, deletePause, resizeItem, addBreak,
+  } = useAgendaMutations({
+    canWrite, noWrite, date, operators, t, fireToast,
+    undoMark, undoAfter, fetchDay, fetchUndo, refetchAll, reloadOpenAppt, setSlotMenu,
+  });
   // Trascinamento in corso in vista giorno: accende i giorni in alto come
   // bersaglio, altrimenti nessuno immagina di poterci lasciare sopra un blocco.
   const [dragOn, setDragOn] = useState(false);
 
-  /* Sposta la visita sul giorno a video, all'ora `startMin`, e con `opId` (se
-   * diversa dalla colonna di partenza) passa di mano i servizi di quella
-   * colonna. Ritorna true se il server ha scritto lo spostamento. */
-  const moveAppt = async (a, startMin, opId, opts = {}) => {
-    const fromMin = aStartMin(a);
-    /* Colonna di PARTENZA del gesto: non è per forza quella dell'operatrice
-     * principale. Una visita può avere i servizi divisi fra due colleghe, e
-     * trascinando il gruppo di una devono cambiare mano i SUOI servizi — è
-     * quello che dice `from_operator_id` al server. */
-    const fromOp = opts.fromOp ?? a.operator_id;
-    const toOp = opId ?? fromOp;
-    const reassigned = toOp !== fromOp;
-    // Il giorno di partenza conta quanto ora e colonna: vedi moveIsNoop.
-    const fromDate = toDateStr(a.start);
-    if (moveIsNoop(startMin, toOp, { startMin: fromMin, opId: fromOp, date: fromDate }, date)) return false;
-    const otherDay = fromDate !== date;
-    const mark = undoMark();   // voce più recente prima del gesto (vedi undoAfter)
-    setPending({ kind: 'appt', id: a.id, startMin, opId: toOp, fromOp });
-    try {
-      await agendaApi.moveAppointment(a.id, {
-        start: isoAtMin(date, startMin),
-        // L'operatrice si manda solo se cambia davvero: mandarla sempre faceva
-        // rivalidare l'idoneità anche a un semplice spostamento d'orario, e un
-        // servizio tolto dall'elenco della collega bloccava il trascinamento.
-        ...(reassigned ? { operator_id: toOp, from_operator_id: fromOp } : {}),
-        force: !!opts.force,
-      });
-      const opName = firstName((operators.find((o) => o.id === toOp) || {}).first_name || '');
-      // su un altro giorno l'avviso dice anche il giorno (movedText)
-      const where = movedText(t, { opName, reassigned, otherDay, date, startMin });
-      // `undoAfter` rilegge anche la pila di «torna indietro»
-      const undoFn = undoAfter(mark);
-      fireToast({
-        msg: where,
-        icon: 'calendar',
-        undo: t('Annulla', 'Undo'),
-        // Passa dal «torna indietro» del server, non da uno spostamento al
-        // contrario: così l'orario torna quello di prima E il messaggio alla
-        // cliente, se non è ancora partito, non parte affatto. Rifare la strada
-        // al contrario ne avrebbe invece fatti partire due.
-        undoFn,
-      });
-      // lo spostamento è scritto: un ricarico andato male non lo rende fallito
-      await fetchDay().catch(() => {});
-      return true;
-    } catch (err) {
-      if (retryForced(err, opts.force, canWrite)) {
-        // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
-        // `await` qui dentro: il `finally` deve aspettare il secondo tentativo.
-        return await moveAppt(a, startMin, opId, { ...opts, force: true });
-      }
-      if (isConflict(err)) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
-      else toastApiError(err, fireToast, t);
-      await fetchDay().catch(() => {}); // revert to server truth
-      return false;
-    } finally { setPending(null); }
-  };
-
-  /* Stacco col trascinamento: il servizio esce dalla visita e diventa un
-   * appuntamento a sé allo slot dove è stato lasciato. Come per lo spostamento,
-   * uno slot occupato non ferma nessuno: si forza e lo si scrive nell'avviso.
-   * Ma si prova PRIMA senza forzare, altrimenti ogni stacco su un orario libero
-   * resterebbe marcato «forzato» in agenda senza motivo. */
-  const splitItem = async (appt, item, startMin, opId, opts = {}) => {
-    if (!canWrite) { noWrite(); return; }
-    // `opts.dateIso`: lo stacco può finire su un altro giorno (forbici lasciate
-    // sulla striscia in alto). Senza, la data era sempre quella a video e il
-    // servizio restava qui.
-    const iso = opts.dateIso || date;
-    const otherDay = iso !== date;
-    const mark = undoMark();
-    setPending({ kind: 'appt', id: appt.id, startMin: aStartMin(appt), opId: appt.operator_id });
-    try {
-      await agendaApi.splitAppointment(appt.id, {
-        item_id: item.id,
-        start: isoAtMin(iso, startMin),
-        operator_id: opId && opId !== item.operator_id ? opId : null,
-        force: !!opts.force,
-      });
-      fireToast({
-        msg: splitText(t, item.service_name, { otherDay, date: iso, startMin }),
-        icon: 'scissors',
-        undo: t('Annulla', 'Undo'),
-        undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
-      });
-      await fetchDay();
-    } catch (err) {
-      if (retryForced(err, opts.force)) {
-        await splitItem(appt, item, startMin, opId, { ...opts, force: true });
-        return;
-      }
-      toastApiError(err, fireToast, t);
-      await fetchDay().catch(() => {});
-    } finally { setPending(null); }
-  };
-
-  /* Appuntamento aperto nel pannello: con quello a video, un clic su uno spazio
-   * libero vuol dire «spostalo qui» — è il gesto della cliente che chiama per
-   * spostare, e prima bisognava indovinare l'orario e scriverlo a mano. */
-  // La copia più fresca che si ha: quella riletta dopo le modifiche del
-  // pannello, altrimenti quella dell'apertura.
-  const openAppt = modal?.name === 'apptdetail'
-    ? ((apptFresh && apptFresh.modalId === modal.id && apptFresh.appt) || modal.props?.appointment || null)
-    : null;
   /* Ombra dell'appuntamento aperto: mentre dal pannello si sfogliano i
    * giorni, si vede dove andrebbe a finire — alla sua ora, nella colonna di
    * chi lo fa. Sul suo giorno non serve: lì c'è il blocco vero, cerchiato. */
   const ghostAppt = openAppt && toDateStr(openAppt.start) !== date ? openAppt : null;
-  /* `slot` = il menu dello slot: { opId, startMin, ghostHit }. Clic sull'ombra
-   * = stessa ora e stesse operatrici su questo giorno; clic su uno spazio
-   * libero = quell'ora, con la colonna cliccata (vedi moveHereTarget). */
-  const moveOpenApptHere = async (a, slot) => {
-    setSlotMenu(null);
-    if (!canWrite) { noWrite(); return; }
-    // Si parte dall'appuntamento com'è ADESSO sul server: ora, giorno e
-    // operatrice di partenza devono essere quelli veri, non quelli di quando
-    // si è aperto il pannello (lì può essere cambiato, o altrove).
-    let cur = a;
-    try { cur = await agendaApi.getAppointment(a.id); } catch { /* si prova con la copia che c'è */ }
-    const target = moveHereTarget(cur, slot);
-    const from = { startMin: aStartMin(cur), opId: target.fromOp, date: toDateStr(cur.start) };
-    if (moveIsNoop(target.startMin, target.opId ?? target.fromOp, from, date)) {
-      // niente da mandare: lo si dice, invece di riaprire il pannello come
-      // se lo spostamento fosse avvenuto
-      fireToast({ msg: t('È già qui', 'Already here'), icon: 'info' });
-      return;
-    }
-    await moveAppt(cur, target.startMin, target.opId, { fromOp: target.fromOp });
-    // Il pannello NON si riapre: riaprirlo lo rimontava e perdeva le modifiche
-    // non salvate (13-05). Si rilegge da sé con l'evento live dello
-    // spostamento; qui si rinfresca subito la copia che muove l'ombra.
-    reloadOpenAppt(a.id);
-  };
-
-  /* Rilascio sopra un giorno della striscia: stesso orario, giorno nuovo. */
-  const moveApptToDate = async (a, iso, startMin, opts = {}) => {
-    if (!canWrite) { noWrite(); return; }
-    if (iso === date) { moveAppt(a, startMin, a.operator_id); return; }
-    const mark = undoMark();
-    try {
-      // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
-      // libero non lascia l'appuntamento marcato «forzato» senza motivo.
-      await agendaApi.moveAppointment(a.id, { start: isoAtMin(iso, startMin), force: !!opts.force });
-      fireToast({
-        msg: movedText(t, { reassigned: false, otherDay: true, date: iso, startMin }),
-        icon: 'calendar',
-        undo: t('Annulla', 'Undo'),
-        undoFn: undoAfter(mark),
-      });
-      refetchAll();
-    } catch (err) {
-      if (retryForced(err, opts.force)) {
-        await moveApptToDate(a, iso, startMin, { force: true });
-        return;
-      }
-      toastApiError(err, fireToast, t);
-      refetchAll();
-    }
-  };
-
-  /* Rilascio fuori dalle regole (fuori turno, sopra un'altra cliente): il
-   * blocco va dove è stato lasciato, punto. L'avviso raccontava ogni volta che
-   * si stava «forzando» qualcosa — al banco lo sanno già, e il toast copriva
-   * l'agenda nel momento di punta. Resta l'avviso normale dello spostamento,
-   * con «Annulla». */
-  const onInvalidDrop = (verdict, d, intent) => {
-    // L'idoneità non si forza: il server rifiuta comunque (400) e forzare qui
-    // voleva dire una chiamata sicuramente persa. Si dice perché, e basta.
-    if (verdict.code === 'skill' || !canWrite || !intent) {
-      fireToast({ msg: verdict.label + (verdict.detail ? ' · ' + verdict.detail : ''), icon: 'alert' });
-      return;
-    }
-    /* «Orario passato» lo dice il badge, ma non è un motivo per forzare: allo
-     * staff il server il passato lo concede, e forzando subito l'appuntamento
-     * restava marcato «forzato» senza bisogno. Si prova normalmente; se poi lo
-     * slot non è libero davvero, il 409 fa forzare come sempre. */
-    const force = verdict.code !== 'past';
-    if (intent.kind === 'split') {
-      // Senza questo ramo lo stacco su uno slot non valido non faceva NULLA: il
-      // blocco tornava al suo posto e non succedeva niente.
-      splitItem(intent.appt, intent.item, intent.startMin, intent.opId, { force });
-    } else if (intent.kind === 'appt') {
-      moveAppt(intent.appt, intent.newApptStart, intent.opArg, { force, fromOp: intent.fromOp });
-    } else if (intent.kind === 'pause') {
-      movePause(intent.pause, intent.startMin, intent.opId);
-    }
-  };
-
-  /* «da richiamare»: ripristino di uno slot liberato per caparra non pagata */
-  const restoreReleased = async (a, force = false) => {
-    try {
-      await agendaApi.restoreAppointment(a.id, force);
-      fireToast({ msg: restoredText(t, a.client?.full_name), icon: 'check' });
-      refetchAll();
-    } catch (err) {
-      // Lo slot nel frattempo si è riempito: si rimette comunque dov'era. Chi
-      // preme «ripristina» ha già deciso, e la barra di conferma era l'ennesima
-      // finestra da chiudere.
-      if (retryForced(err, force)) { restoreReleased(a, true); return; }
-      toastApiError(err, fireToast, t);
-    }
-  };
-
-  const movePause = async (p, startMin, opId) => {
-    const mark = undoMark();
-    setPending({ kind: 'pause', id: p.id, startMin, opId });
-    try {
-      await agendaApi.updatePause(p.id, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
-      fireToast({
-        msg: pauseMovedText(t, startMin),
-        icon: 'clock',
-        undo: t('Annulla', 'Undo'),
-        undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
-      });
-      await fetchDay();
-    } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
-    finally { setPending(null); }
-  };
-
-  const resizePause = async (p, dur) => {
-    if (dur === p.duration_min) return;
-    setPending({ kind: 'pause', id: p.id, startMin: aStartMin(p), opId: p.operator_id, dur });
-    try {
-      await agendaApi.updatePause(p.id, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
-      await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
-    } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
-    finally { setPending(null); }
-  };
-
-  const deletePause = async (p) => {
-    const mark = undoMark();
-    try {
-      await agendaApi.deletePause(p.id);
-      // `undoAfter` rilegge anche la pila di «torna indietro»
-      fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: undoAfter(mark) });
-      await fetchDay();
-    } catch (err) { toastApiError(err, fireToast, t); }
-  };
-
-  // #1 — resize del bordo inferiore di un blocco = nuova durata di QUEL servizio.
-  // Invia l'intera lista item (il backend onora duration_min per item e non ritocca la caparra).
-  const resizeItem = async (appt, item, newDur, opts = {}) => {
-    if (!newDur || newDur === item.duration_min) return;
-    try {
-      const items = (appt.items || []).map((it) => ({
-        id: it.id, service_id: it.service_id, operator_id: it.operator_id,
-        duration_min: it.id === item.id ? newDur : it.duration_min,
-      }));
-      /* La lista dei servizi è quella a video: se nel frattempo l'appuntamento
-       * è cambiato (un'altra postazione, il pannello) la si scriverebbe sopra
-       * alle modifiche altrui. Con `updated_at` in mano si chiede al server di
-       * scrivere solo se è ancora quello (contratto C2); senza — payload di un
-       * server che non lo manda — si scrive come prima. */
-      const body = { items, force: !!opts.force };
-      if (appt.updated_at) body.expected_updated_at = appt.updated_at;
-      await agendaApi.updateAppointment(appt.id, body);
-      fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
-      await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
-    } catch (err) {
-      // 412: l'appuntamento è cambiato nel frattempo. Mai forzare: si ricarica
-      // la giornata e si dice perché il blocco è tornato com'è davvero.
-      if (err instanceof ApiError && err.status === 412) {
-        fireToast({ msg: t('L\'appuntamento è cambiato nel frattempo: giornata ricaricata, riprova', 'The appointment changed in the meantime: day reloaded, try again'), icon: 'alert' });
-        await fetchDay().catch(() => {});
-        return;
-      }
-      // Allungare un trattamento mentre accanto c'è un'altra cliente (o oltre
-      // l'orario di chiusura) rispondeva «Orario non più disponibile» e il
-      // blocco tornava com'era: al banco si allunga e basta, come per gli
-      // spostamenti. Si riprova forzando, una volta sola.
-      if (retryForced(err, opts.force, canWrite)) {
-        await resizeItem(appt, item, newDur, { force: true });
-        return;
-      }
-      toastApiError(err, fireToast, t);
-      await fetchDay().catch(() => {});
-    }
-  };
-
-  const addBreak = async (opId, startMin, dur) => {
-    setSlotMenu(null);
-    try {
-      await agendaApi.createPause({ operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
-      const o = operators.find((x) => x.id === opId);
-      fireToast({
-        msg: breakAddedText(t, o?.first_name, startMin),
-        icon: 'clock',
-      });
-      await fetchDay();
-      fetchUndo();   // la pila di «torna indietro» segue ogni gesto
-    } catch (err) { toastApiError(err, fireToast, t); }
-  };
 
   /* ---- toolbar helpers ---- */
   const MONTHS = lang === 'en' ? MONTHS_EN : MONTHS_IT;
   const cur = parseISO(date);
-  const navPrev = () => {
-    if (calView === 'day') { const d = parseISO(date); d.setDate(d.getDate() - 1); setDate(toDateStr(d)); }
-    else if (calView === 'week') { const d = parseISO(date); d.setDate(d.getDate() - 7); setDate(toDateStr(d)); }
-    else setDate(addMonths(date, -1));
-  };
-  const navNext = () => {
-    if (calView === 'day') { const d = parseISO(date); d.setDate(d.getDate() + 1); setDate(toDateStr(d)); }
-    else if (calView === 'week') { const d = parseISO(date); d.setDate(d.getDate() + 7); setDate(toDateStr(d)); }
-    else setDate(addMonths(date, 1));
-  };
-  const jumpToMonth = (m, y) => { setCalView('month'); setDate(toDateStr(new Date(y, m, 1))); setJumpOpen(false); };
-  const jumpToDate = (iso) => { if (!iso) return; setDate(iso); setCalView('day'); setJumpOpen(false); };
-
   const monday = mondayOf(date);
-  const weekDays = [...Array(7)].map((_, i) => {
-    const d = new Date(monday); d.setDate(monday.getDate() + i);
-    return d;
-  });
-  const periodLabel = () => {
-    if (calView === 'month') return MONTHS[cur.getMonth()] + ' ' + cur.getFullYear();
-    const s = weekDays[0], e = weekDays[6];
-    return s.getMonth() === e.getMonth()
-      ? `${s.getDate()}–${e.getDate()} ${MONTHS[e.getMonth()]} ${e.getFullYear()}`
-      : `${s.getDate()} ${MONTHS[s.getMonth()].slice(0, 3)} – ${e.getDate()} ${MONTHS[e.getMonth()].slice(0, 3)} ${e.getFullYear()}`;
-  };
+  const weekDays = weekDaysOf(monday);
 
-  const openDay = (iso) => { setDate(iso); setCalView('day'); };
   // Nessun fallback "mostra tutte": spegnendo tutte le chip la griglia deve
   // restare vuota (lo stato vuoto è già previsto), non riaccendere tutto.
   /* Le chip decidono quali COLONNE si disegnano, non quali dati esistono: il
@@ -780,7 +254,7 @@ export default function AgendaSection() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ position: 'relative' }}>
                 <button onClick={() => setJumpOpen((o) => !o)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', background: 'transparent', border: 'none', fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 500, color: 'var(--ink)' }}>
-                  {periodLabel()}
+                  {periodLabel(calView, date, weekDays, MONTHS)}
                   <Icon name="chevD" size={16} color="var(--muted)" style={{ transform: jumpOpen ? 'rotate(180deg)' : 'none', transition: 'transform 140ms' }} />
                 </button>
                 {jumpOpen && <JumpPopover t={t} MONTHS={MONTHS} curM={cur.getMonth()} curY={cur.getFullYear()} onClose={() => setJumpOpen(false)} onMonth={jumpToMonth} onDate={jumpToDate} />}
@@ -1028,11 +502,6 @@ export default function AgendaSection() {
       )}
     </div>
   );
-}
-
-function isTodayInWeek(weekDays) {
-  const today = todayStr();
-  return weekDays.some((d) => toDateStr(d) === today);
 }
 
 /* ---- month/date jump popover ---- */
