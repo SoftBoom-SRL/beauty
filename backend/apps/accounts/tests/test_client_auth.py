@@ -1,11 +1,9 @@
-"""Caccia del 22/09: accesso di staff e clienti.
+"""Accesso delle clienti dalla web app: registrazione, codici OTP, profilo.
 
+Caccia del 22/09:
 - 16-01 / 10-04: i tetti per salone di OTP e registrazione non si riempiono più
   con numeri inventati o tentativi respinti;
 - 10-14 / 18-12: il doppio invio della registrazione è un 400, non un 500;
-- 10-13: il cambio password ha un tetto sui tentativi;
-- 10-11: i refresh senza `jti` non valgono più;
-- 08-08: login con email doppie per maiuscole e con più saloni, scelta stabile;
 - richiesta CLIENTI: la scheda archiviata che prova a entrare non resta un
   vicolo cieco muto, e il profilo modificato dall'app avvisa la dashboard;
 - 06-17 / C12: il profilo dell'app porta il consenso marketing.
@@ -16,12 +14,13 @@ import json
 from unittest import mock
 
 from django.test import TestCase
+from django.utils import timezone
 
-from apps.core.models import ActivityLog, Salon
+from apps.core.models import ActivityLog, OutboxEvent, Salon
 from common import ratelimit
-from common.auth import _encode, create_client_tokens
+from common.auth import create_client_tokens
 
-from ..models import ClientOTP, Membership, Role, User
+from ..models import ClientOTP
 
 
 def post_json(client, url, data, **extra):
@@ -32,6 +31,311 @@ def _client_model():
     from apps.clients.models import Client
 
     return Client
+
+
+class ClientOTPFlowTests(TestCase):
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _make_client(self, phone="+393331234567"):
+        from apps.clients.models import Client
+
+        return Client.objects.create(
+            salon=self.salon,
+            first_name="Sofia",
+            last_name="Ricci",
+            phone=phone,
+            lang="it",
+        )
+
+    def test_flusso_otp_completo(self):
+        # 1. registrazione dalla web app → cliente + client.created + primo OTP
+        response = post_json(
+            self.client,
+            "/api/auth/client/register",
+            {
+                "salon_slug": "the-parlour",
+                "first_name": "Sofia",
+                "last_name": "Ricci",
+                "phone": "+393331234567",
+                "lang": "it",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        from apps.clients.models import Client
+
+        client_obj = Client.objects.get(salon=self.salon, phone="+393331234567")
+        # F1/L15: senza `since` il KPI «nuovi clienti» del cruscotto resta a
+        # zero anche con la web app piena di iscrizioni.
+        self.assertEqual(client_obj.since, timezone.localdate())
+        self.assertTrue(
+            OutboxEvent.objects.filter(salon=self.salon, event_type="client.created").exists()
+        )
+
+        # telefono duplicato → 400
+        response = post_json(
+            self.client,
+            "/api/auth/client/register",
+            {
+                "salon_slug": "the-parlour",
+                "first_name": "Sofia",
+                "last_name": "Ricci",
+                "phone": "+393331234567",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+
+        # 2. richiesta OTP → nuovo codice + evento client.otp con il codice
+        response = post_json(
+            self.client,
+            "/api/auth/client/request-otp",
+            {"salon_slug": "the-parlour", "phone": "+393331234567"},
+        )
+        self.assertEqual(response.status_code, 200)
+        otp = ClientOTP.objects.filter(client=client_obj).latest("created_at")
+        event = OutboxEvent.objects.filter(event_type="client.otp").latest("created_at")
+        self.assertEqual(event.payload["code"], otp.code)
+        self.assertEqual(event.payload["phone"], "+393331234567")
+
+        # telefono sconosciuto → 200 come tutti gli altri, ma nessun codice
+        # emesso: la risposta non dice se il numero è in anagrafica
+        prima = ClientOTP.objects.count()
+        response = post_json(
+            self.client,
+            "/api/auth/client/request-otp",
+            {"salon_slug": "the-parlour", "phone": "+390000000000"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ClientOTP.objects.count(), prima)
+
+        # 3. verifica con codice sbagliato → 400
+        wrong = "000000" if otp.code != "000000" else "111111"
+        response = post_json(
+            self.client,
+            "/api/auth/client/verify-otp",
+            {"salon_slug": "the-parlour", "phone": "+393331234567", "code": wrong},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        # 4. verifica corretta → access token + profilo breve
+        response = post_json(
+            self.client,
+            "/api/auth/client/verify-otp",
+            {"salon_slug": "the-parlour", "phone": "+393331234567", "code": otp.code},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        access = data["access"]
+        self.assertEqual(data["client"]["first_name"], "Sofia")
+
+        # il codice è monouso
+        response = post_json(
+            self.client,
+            "/api/auth/client/verify-otp",
+            {"salon_slug": "the-parlour", "phone": "+393331234567", "code": otp.code},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        # 5. profilo autenticato
+        response = self.client.get(
+            "/api/auth/client/me", HTTP_AUTHORIZATION=f"Bearer {access}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["phone"], "+393331234567")
+
+        # 6. aggiornamento profilo
+        response = self.client.put(
+            "/api/auth/client/me",
+            data=json.dumps({"lang": "en", "email": "sofia@example.com"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["lang"], "en")
+        self.assertEqual(data["email"], "sofia@example.com")
+
+    def test_limite_otp_attivi(self):
+        """Oltre i tre codici attivi non ne parte un quarto.
+
+        La risposta resta 200: distinguere il rifiuto dal successo direbbe a
+        chiunque provi che quel numero è in anagrafica. Si guarda quindi il
+        risultato vero, cioè quanti codici sono stati emessi.
+        """
+        client_obj = self._make_client()
+        payload = {"salon_slug": "the-parlour", "phone": "+393331234567"}
+        for _ in range(4):
+            response = post_json(self.client, "/api/auth/client/request-otp", payload)
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual(ClientOTP.objects.filter(client=client_obj).count(), 3)
+
+    def test_codice_scaduto_non_vale_piu(self):
+        """T13: la scadenza dell'OTP non era mai stata verificata."""
+        client_obj = self._make_client()
+        payload = {"salon_slug": "the-parlour", "phone": "+393331234567"}
+        self.assertEqual(post_json(self.client, "/api/auth/client/request-otp", payload).status_code, 200)
+        otp = ClientOTP.objects.get(client=client_obj)
+
+        # L'orologio si sposta sul codice: dieci minuti dopo non vale più.
+        ClientOTP.objects.filter(pk=otp.pk).update(
+            expires_at=timezone.now() - dt.timedelta(seconds=1)
+        )
+        response = post_json(
+            self.client,
+            "/api/auth/client/verify-otp",
+            {"salon_slug": "the-parlour", "phone": "+393331234567", "code": otp.code},
+        )
+        self.assertEqual(response.status_code, 400)
+        otp.refresh_from_db()
+        self.assertFalse(otp.used)  # scaduto, non consumato
+
+        # E un codice scaduto non occupa uno dei tre posti attivi: la cliente
+        # che torna il giorno dopo deve poterne chiedere un altro.
+        self.assertEqual(post_json(self.client, "/api/auth/client/request-otp", payload).status_code, 200)
+        self.assertEqual(
+            ClientOTP.objects.filter(client=client_obj, expires_at__gt=timezone.now()).count(), 1
+        )
+
+
+class ClientOTPSecurityTests(TestCase):
+    """Login OTP: limite ai tentativi errati, limite alle richieste, numero
+    riconosciuto comunque sia scritto, codice mai nei log."""
+
+    URL_REQUEST = "/api/auth/client/request-otp"
+    URL_VERIFY = "/api/auth/client/verify-otp"
+
+    def setUp(self):
+        # Niente `cache.clear()`: i contatori dei rate limit non vivono più in
+        # cache ma nella tabella core.RateLimitCounter (vedi common/ratelimit),
+        # e ogni test gira in una transazione che viene annullata alla fine —
+        # quindi partono già azzerati. La riga di pulizia dava l'impressione
+        # sbagliata che senza di lei i test si sporcassero a vicenda.
+        from apps.clients.models import Client
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+39 333 1234567", lang="it"
+        )
+
+    def _request_otp(self, phone):
+        return post_json(self.client, self.URL_REQUEST, {"salon_slug": "the-parlour", "phone": phone})
+
+    def _verify(self, phone, code):
+        return post_json(
+            self.client, self.URL_VERIFY, {"salon_slug": "the-parlour", "phone": phone, "code": code}
+        )
+
+    def test_phone_spelling_variants_reach_the_same_client(self):
+        for phone in ("3331234567", "+393331234567", "0039 333 1234567"):
+            self.assertEqual(self._request_otp(phone).status_code, 200, phone)
+        self.assertEqual(ClientOTP.objects.filter(client=self.client_obj).count(), 3)
+
+    def test_wrong_codes_burn_the_otp_after_five_attempts(self):
+        self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+        otp = ClientOTP.objects.get(client=self.client_obj)
+        wrong = "000000" if otp.code != "000000" else "111111"
+        statuses = [self._verify("3331234567", wrong).status_code for _ in range(5)]
+        self.assertEqual(statuses, [400, 400, 400, 400, 429])
+        # il codice giusto ormai non vale più: serve richiederne uno nuovo
+        self.assertEqual(self._verify("3331234567", otp.code).status_code, 400)
+        otp.refresh_from_db()
+        self.assertTrue(otp.used)
+
+    def test_otp_requests_are_rate_limited_per_client(self):
+        # I codici vengono consumati a ogni giro per isolare il limite per finestra
+        # da quello sui codici attivi contemporanei (MAX_ACTIVE_OTP).
+        for _ in range(5):
+            self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+            ClientOTP.objects.filter(client=self.client_obj).update(used=True)
+        # La sesta richiesta risponde come le altre ma non emette niente: il
+        # tetto per cliente non deve trapelare dalla risposta.
+        self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+        self.assertEqual(ClientOTP.objects.filter(client=self.client_obj, used=False).count(), 0)
+
+    def test_a_request_for_an_unknown_number_is_indistinguishable(self):
+        """S4: la rubrica clienti non si ricava dalle risposte dell'endpoint."""
+        conosciuto = self._request_otp("+393331234567")
+        sconosciuto = self._request_otp("+393339999999")
+        self.assertEqual(conosciuto.status_code, sconosciuto.status_code)
+        self.assertEqual(conosciuto.content, sconosciuto.content)
+        # E il codice sbagliato su un numero inesistente risponde come su uno
+        # esistente: nemmeno la verifica dice chi c'è in anagrafica.
+        self.assertEqual(self._verify("+393339999999", "000000").status_code, 400)
+
+    def test_the_cap_per_address_stops_the_enumeration(self):
+        """Senza tetto per IP uno script cicla i numeri finché non li trova tutti."""
+        from ..api import OTP_MAX_PER_IP
+
+        for n in range(OTP_MAX_PER_IP):
+            self.assertEqual(self._request_otp(f"+39333444{n:04d}").status_code, 200)
+        self.assertEqual(self._request_otp("+393335550000").status_code, 429)
+
+    def test_outbox_log_never_contains_the_code(self):
+        with self.assertLogs("youty.events", level="INFO") as logs:
+            self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+        otp = ClientOTP.objects.get(client=self.client_obj)
+        self.assertFalse(any(otp.code in line for line in logs.output), logs.output)
+
+
+class ClientRegisterRateLimitTests(TestCase):
+    """La registrazione è pubblica e ogni successo accoda un messaggio a spese
+    del salone: senza tetto uno script crea schede e manda codici a raffica."""
+
+    def setUp(self):
+        # I contatori stanno su tabella e la transazione del test li annulla:
+        # non serve svuotare nessuna cache (vedi ClientOTPSecurityTests.setUp).
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _register(self, phone, ip="203.0.113.7"):
+        return post_json(
+            self.client,
+            "/api/auth/client/register",
+            {
+                "salon_slug": "the-parlour",
+                "first_name": "Sofia",
+                "last_name": "Ricci",
+                "phone": phone,
+            },
+            REMOTE_ADDR=ip,
+        )
+
+    def test_the_sixth_registration_from_one_address_is_refused(self):
+        statuses = [self._register(f"+39333111{n:04d}").status_code for n in range(6)]
+        self.assertEqual(statuses, [200, 200, 200, 200, 200, 429])
+        # nessuna scheda creata per la richiesta rifiutata
+        from apps.clients.models import Client
+
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 5)
+
+    def test_a_different_address_is_counted_separately(self):
+        for n in range(5):
+            self.assertEqual(self._register(f"+39333222{n:04d}").status_code, 200)
+        self.assertEqual(self._register("+393339999999", ip="198.51.100.4").status_code, 200)
+
+    def test_the_last_proxy_hop_is_what_counts(self):
+        """X-Forwarded-For è scrivibile dal client: se contasse il primo elemento
+        basterebbe cambiare un header a ogni richiesta per aggirare il tetto."""
+        for n in range(5):
+            res = self.client.post(
+                "/api/auth/client/register",
+                data=json.dumps({
+                    "salon_slug": "the-parlour", "first_name": "Sofia",
+                    "last_name": "Ricci", "phone": f"+39333333{n:04d}",
+                }),
+                content_type="application/json",
+                HTTP_X_FORWARDED_FOR=f"10.0.0.{n}, 203.0.113.9",
+            )
+            self.assertEqual(res.status_code, 200, res.content)
+        res = self.client.post(
+            "/api/auth/client/register",
+            data=json.dumps({
+                "salon_slug": "the-parlour", "first_name": "Sofia",
+                "last_name": "Ricci", "phone": "+393334440000",
+            }),
+            content_type="application/json",
+            HTTP_X_FORWARDED_FOR="10.0.0.99, 203.0.113.9",
+        )
+        self.assertEqual(res.status_code, 429)
 
 
 class OtpSalonCapTests(TestCase):
@@ -141,129 +445,6 @@ class RegisterDoubleSubmitTests(TestCase):
         self.assertEqual(res.status_code, 400, res.content)
         self.assertEqual(Client.objects.filter(salon=salon).count(), 1)
         self.assertFalse(ClientOTP.objects.exists())
-
-
-class PasswordChangeThrottleTests(TestCase):
-    """10-13: la password attuale non si indovina a raffica con un access token rubato."""
-
-    URL = "/api/auth/staff/password"
-
-    def setUp(self):
-        from common.auth import create_staff_tokens
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
-        Membership.objects.create(user=self.user, salon=self.salon, is_owner=True)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
-
-    def _change(self, current, new="Cartellina-2026"):
-        return post_json(
-            self.client, self.URL, {"current_password": current, "new_password": new}, **self.auth
-        )
-
-    def test_guessing_the_current_password_is_capped(self):
-        from ..api import PASSWORD_CHANGE_MAX_PER_USER
-
-        for n in range(PASSWORD_CHANGE_MAX_PER_USER):
-            self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)
-        # Anche la password giusta, ormai, aspetta la fine della finestra.
-        self.assertEqual(self._change("segretissima").status_code, 429)
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.check_password("segretissima"))
-
-    def test_the_right_current_password_clears_the_count(self):
-        from ..api import PASSWORD_CHANGE_MAX_PER_USER
-
-        for n in range(PASSWORD_CHANGE_MAX_PER_USER - 1):
-            self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)
-        # Password attuale giusta ma nuova troppo corta: rifiutata dalle regole,
-        # non dal tetto, e i tentativi ripartono da zero.
-        self.assertEqual(self._change("segretissima", new="corta").status_code, 400)
-        self.assertEqual(self._change("tentativo-x").status_code, 400)
-        self.assertEqual(self._change("segretissima").status_code, 200)
-
-
-class LegacyRefreshTests(TestCase):
-    """10-11: un refresh senza `jti` non ha una riga da revocare."""
-
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
-        Membership.objects.create(user=self.user, salon=self.salon, is_owner=True)
-
-    def _refresh(self, token):
-        return post_json(self.client, "/api/auth/staff/refresh", {"refresh": token})
-
-    def test_a_refresh_without_jti_is_refused(self):
-        legacy = _encode(
-            {"sub": str(self.user.id), "salon": self.salon.id, "tv": 0, "typ": "staff_refresh"},
-            dt.timedelta(days=30),
-        )
-        res = self._refresh(legacy)
-        self.assertEqual(res.status_code, 401, res.content)
-        # E non torna buono al secondo tentativo, né dopo un'uscita.
-        self.assertEqual(self._refresh(legacy).status_code, 401)
-
-    def test_tracked_refreshes_still_work(self):
-        login = post_json(
-            self.client, "/api/auth/staff/login", {"email": "anna@parlour.it", "password": "segretissima"}
-        ).json()
-        self.assertEqual(self._refresh(login["refresh"]).status_code, 200)
-
-
-class StaffLoginChoiceTests(TestCase):
-    """08-08: email doppie per maiuscole e più membership, scelta deterministica."""
-
-    def _login(self, email, password):
-        return post_json(self.client, "/api/auth/staff/login", {"email": email, "password": password})
-
-    def test_case_duplicates_log_into_the_account_whose_password_matches(self):
-        first = Salon.objects.create(name="Primo", slug="primo")
-        second = Salon.objects.create(name="Secondo", slug="secondo")
-        lower = User.objects.create_user(email="anna@parlour.it", password="Password-Prima-1")
-        upper = User.objects.create_user(email="Anna@parlour.it", password="Password-Seconda-2")
-        Membership.objects.create(user=lower, salon=first, is_owner=True)
-        Membership.objects.create(user=upper, salon=second, is_owner=True)
-
-        res = self._login("anna@parlour.it", "Password-Seconda-2")
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json()["salon"]["slug"], "secondo")
-        res = self._login("ANNA@parlour.it", "Password-Prima-1")
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json()["salon"]["slug"], "primo")
-        self.assertEqual(self._login("anna@parlour.it", "sbagliata-del-tutto").status_code, 401)
-
-    def test_the_salon_where_she_is_owner_wins_over_an_older_membership(self):
-        old = Salon.objects.create(name="Vecchio", slug="vecchio")
-        mine = Salon.objects.create(name="Mio", slug="mio")
-        user = User.objects.create_user(email="giulia@parlour.it", password="Password-Giulia-1")
-        Membership.objects.create(user=user, salon=old)  # ex collaboratrice, nessun ruolo
-        Membership.objects.create(user=user, salon=mine, is_owner=True)
-        res = self._login("giulia@parlour.it", "Password-Giulia-1")
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(res.json()["salon"]["slug"], "mio")
-
-    def test_a_membership_with_a_role_wins_over_one_without(self):
-        empty = Salon.objects.create(name="Senza ruolo", slug="senza-ruolo")
-        working = Salon.objects.create(name="Con ruolo", slug="con-ruolo")
-        user = User.objects.create_user(email="bea@parlour.it", password="Password-Bea-1")
-        Membership.objects.create(user=user, salon=empty)
-        role = Role.objects.create(salon=working, name="Operatrice", scopes=["agenda"])
-        Membership.objects.create(user=user, salon=working, role=role)
-        res = self._login("bea@parlour.it", "Password-Bea-1")
-        self.assertEqual(res.json()["salon"]["slug"], "con-ruolo")
-
-    def test_two_owner_memberships_keep_the_oldest(self):
-        first = Salon.objects.create(name="Primo", slug="primo")
-        second = Salon.objects.create(name="Secondo", slug="secondo")
-        user = User.objects.create_user(email="cora@parlour.it", password="Password-Cora-1")
-        Membership.objects.create(user=user, salon=first, is_owner=True)
-        Membership.objects.create(user=user, salon=second, is_owner=True)
-        for _ in range(2):
-            res = self._login("cora@parlour.it", "Password-Cora-1")
-            self.assertEqual(res.json()["salon"]["slug"], "primo")
 
 
 class ArchivedClientAccessTests(TestCase):

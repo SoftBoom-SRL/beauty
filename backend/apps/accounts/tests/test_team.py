@@ -1,9 +1,10 @@
-"""Caccia del 22/09: inviti, cambio ruolo e ruoli di sistema (10-01, 10-05, 15-02, 15-10).
+"""Il personale del salone: ruoli di sistema, inviti, cambio ruolo.
 
 Lo scope `team` gestisce il personale, non promuove a titolare: la passata del
-18/09 aveva chiuso l'auto-promozione diretta, ma restavano tre porte laterali —
-il codice degli inviti in attesa leggibile da chiunque avesse `team`, il cambio
-ruolo che non guardava il ruolo ATTUALE del collega, e i ruoli di sistema
+18/09 aveva chiuso l'auto-promozione diretta (S5, TeamPrivilegeTests), ma
+restavano tre porte laterali, chiuse dalla caccia del 22/09 (10-01, 10-05, 15-02,
+15-10) — il codice degli inviti in attesa leggibile da chiunque avesse `team`, il
+cambio ruolo che non guardava il ruolo ATTUALE del collega, e i ruoli di sistema
 riscrivibili via API.
 """
 
@@ -16,6 +17,7 @@ from django.utils import timezone
 
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
+from common.permissions import SCOPES
 
 from ..models import Invitation, Membership, Role, User
 from ..services import ensure_default_roles
@@ -27,6 +29,173 @@ def post_json(client, url, data, **extra):
 
 def bearer(user, salon):
     return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
+
+
+class DefaultRolesTests(TestCase):
+    def test_ensure_default_roles_idempotente(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        ensure_default_roles(salon)
+        ensure_default_roles(salon)  # seconda chiamata: nessun duplicato
+        roles = Role.objects.filter(salon=salon, is_system=True)
+        self.assertEqual(roles.count(), 3)
+        self.assertEqual(
+            roles.get(name="Manager").scopes,
+            ["agenda", "clients", "sales", "inventory", "pricing", "marketing"],
+        )
+        self.assertEqual(roles.get(name="Front desk").scopes, ["agenda", "clients", "sales"])
+        self.assertEqual(roles.get(name="Operatrice").scopes, ["agenda", "clients"])
+
+
+class InvitationPasswordTests(TestCase):
+    """Un invito non deve poter creare un account senza password vera.
+
+    Accettando l'invito con password vuota l'account nasceva comunque, e poi il
+    login con quella stessa password vuota funzionava.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.role = Role.objects.create(salon=self.salon, name="Front Desk", scopes=["agenda"])
+
+    def _accept(self, invitation, password):
+        return post_json(
+            self.client,
+            "/api/auth/invitations/accept",
+            {
+                "token": str(invitation.token),
+                "password": password,
+                "first_name": "Giulia",
+                "last_name": "Verdi",
+            },
+        )
+
+    def test_empty_password_is_refused_and_the_invitation_stays_usable(self):
+        from ..models import Invitation
+
+        invitation = Invitation.objects.create(
+            salon=self.salon, email="giulia@parlour.it", role=self.role
+        )
+        refused = self._accept(invitation, "")
+        self.assertEqual(refused.status_code, 400)
+        self.assertFalse(User.objects.filter(email="giulia@parlour.it").exists())
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, Invitation.Status.PENDING)
+
+        # Un rifiuto non brucia l'invito: con una password valida si entra.
+        accepted = self._accept(invitation, "Cartellina-2026")
+        self.assertEqual(accepted.status_code, 200, accepted.content)
+        invitation.refresh_from_db()
+        self.assertEqual(invitation.status, Invitation.Status.ACCEPTED)
+
+    def test_short_and_common_passwords_are_refused(self):
+        from ..models import Invitation
+
+        for password in ("abc", "password"):
+            invitation = Invitation.objects.create(
+                salon=self.salon, email=f"{password}@parlour.it", role=self.role
+            )
+            response = self._accept(invitation, password)
+            self.assertEqual(response.status_code, 400, password)
+
+
+class TeamPrivilegeTests(TestCase):
+    """S5: lo scope `team` gestisce il personale, non promuove a titolare.
+
+    Al responsabile del personale viene dato il solo scope team. Senza questi
+    controlli si creava un ruolo con tutti e nove i permessi e se lo assegnava:
+    al rinnovo aveva incassi, listino, magazzino e analisi che il titolare gli
+    aveva negato."""
+
+    def setUp(self):
+        from common.auth import create_staff_tokens
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.owner = User.objects.create_user(email="titolare@parlour.it", password="x-Segreta-1")
+        Membership.objects.create(user=self.owner, salon=self.salon, is_owner=True)
+
+        self.role_team = Role.objects.create(salon=self.salon, name="Personale", scopes=["team"])
+        self.manager = User.objects.create_user(email="hr@parlour.it", password="x-Segreta-1")
+        self.manager_membership = Membership.objects.create(
+            user=self.manager, salon=self.salon, role=self.role_team
+        )
+        self.hr = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.manager, self.salon)['access']}"
+        }
+        self.boss = {
+            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.owner, self.salon)['access']}"
+        }
+
+    def test_a_role_cannot_grant_scopes_the_caller_does_not_have(self):
+        response = post_json(
+            self.client,
+            "/api/auth/roles",
+            {"name": "Tuttofare", "scopes": ["team", "sales", "insights"]},
+            **self.hr,
+        )
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertFalse(Role.objects.filter(salon=self.salon, name="Tuttofare").exists())
+
+    def test_a_role_with_only_owned_scopes_is_allowed(self):
+        response = post_json(
+            self.client, "/api/auth/roles", {"name": "Vice", "scopes": ["team"]}, **self.hr
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def test_nobody_edits_their_own_membership(self):
+        potente = Role.objects.create(salon=self.salon, name="Tutto", scopes=["team", "sales"])
+        response = post_json(
+            self.client,
+            f"/api/auth/members/{self.manager_membership.id}/role",
+            {"role_id": potente.id},
+            **self.hr,
+        )
+        self.assertEqual(response.status_code, 403, response.content)
+        self.manager_membership.refresh_from_db()
+        self.assertEqual(self.manager_membership.role_id, self.role_team.id)
+
+    def test_a_colleague_cannot_be_given_more_than_the_caller_has(self):
+        collega = User.objects.create_user(email="sofia@parlour.it", password="x-Segreta-1")
+        membership = Membership.objects.create(user=collega, salon=self.salon)
+        potente = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        response = post_json(
+            self.client, f"/api/auth/members/{membership.id}/role", {"role_id": potente.id}, **self.hr
+        )
+        self.assertEqual(response.status_code, 403, response.content)
+
+    def test_an_invitation_cannot_smuggle_in_a_powerful_role(self):
+        potente = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        response = post_json(
+            self.client,
+            "/api/auth/invitations",
+            {"email": "nuova@parlour.it", "role_id": potente.id},
+            **self.hr,
+        )
+        self.assertEqual(response.status_code, 403, response.content)
+
+    def test_a_more_powerful_colleague_cannot_be_removed(self):
+        collega = User.objects.create_user(email="sofia@parlour.it", password="x-Segreta-1")
+        potente = Role.objects.create(salon=self.salon, name="Cassa", scopes=["sales"])
+        membership = Membership.objects.create(user=collega, salon=self.salon, role=potente)
+        response = self.client.delete(f"/api/auth/members/{membership.id}", **self.hr)
+        self.assertEqual(response.status_code, 403, response.content)
+
+    def test_the_owner_still_runs_the_salon(self):
+        """Il titolare seminato deve continuare a lavorare senza limiti."""
+        creazione = post_json(
+            self.client,
+            "/api/auth/roles",
+            {"name": "Tuttofare", "scopes": list(SCOPES)},
+            **self.boss,
+        )
+        self.assertEqual(creazione.status_code, 200, creazione.content)
+        role_id = creazione.json()["id"]
+        assegnazione = post_json(
+            self.client,
+            f"/api/auth/members/{self.manager_membership.id}/role",
+            {"role_id": role_id},
+            **self.boss,
+        )
+        self.assertEqual(assegnazione.status_code, 200, assegnazione.content)
 
 
 class _TeamSetup(TestCase):
