@@ -34,7 +34,7 @@ from apps.integrations.models import YourangConnection, YourangOAuthState
 from apps.integrations.sync import SyncReport
 from common.auth import create_staff_tokens
 
-from .tests import TEST_KEY
+from .test_main_tmp import TEST_KEY
 
 EXCHANGE = "/api/integrations/yourang/oauth/exchange"
 DIRECT = dict(

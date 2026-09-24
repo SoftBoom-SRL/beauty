@@ -15,8 +15,8 @@ from django.test import Client as HttpClient
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
-from . import crypto
-from .sync import cancel_event, import_event, normalize_phone
+from .. import crypto
+from ..sync import cancel_event, import_event, normalize_phone
 
 # 32-byte hex key (openssl rand -hex 32) — stesso formato di food/real_estate.
 TEST_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"

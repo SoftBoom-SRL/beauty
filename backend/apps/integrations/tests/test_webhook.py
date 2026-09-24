@@ -27,7 +27,7 @@ from apps.core.models import Salon
 from apps.integrations import crypto, sync
 from apps.integrations.models import YourangConnection
 
-from .tests import TEST_KEY
+from .test_main_tmp import TEST_KEY
 
 SECRET = "s3cret-22"
 API = "/api/external/v1"
