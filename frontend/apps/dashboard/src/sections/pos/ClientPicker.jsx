@@ -1,6 +1,7 @@
 // ClientPicker — optional client for a walk-in sale. Debounced search on GET /api/clients/?q=.
 import { useEffect, useRef, useState } from 'react';
-import { api, Avatar, Icon } from '@youty/shared';
+import { Avatar, Icon } from '@youty/shared';
+import { clientsApi } from '../../api/clients.js';
 
 const initialsOf = (c) => ((c.first_name?.[0] || '') + (c.last_name?.[0] || '')).toUpperCase() || '?';
 
@@ -15,7 +16,7 @@ export default function ClientPicker({ value, onChange, t }) {
     let dead = false;
     setList(null);
     const tm = setTimeout(() => {
-      api.get('/api/clients/', { params: { q: query || null, is_active: true, limit: 20 } })
+      clientsApi.list({ q: query || null, is_active: true, limit: 20 })
         .then((r) => { if (!dead) setList(r.items || []); })
         .catch(() => { if (!dead) setList([]); });
     }, 250);

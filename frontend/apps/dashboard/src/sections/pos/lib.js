@@ -1,6 +1,7 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, api, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 import { centsToEur, lineCents } from './money.js';
+import { couponsApi } from '../../api/marketing.js';
 
 // Il denaro si conta in centesimi interi con gli arrotondamenti del server:
 // le regole stanno in money.js (senza dipendenze, quindi provate da npm test).
@@ -61,7 +62,7 @@ export async function findCoupon(code, { clientId = null, t }) {
   if (!wanted) return { error: t('Inserisci un codice', 'Enter a code') };
   let rows;
   try {
-    const res = await api.get('/api/marketing/coupons', { params: { q: wanted, limit: 20 } });
+    const res = await couponsApi.list({ q: wanted, limit: 20 });
     rows = res?.items || res || [];
   } catch {
     return { error: t('Non riesco a verificare il buono: riprova', 'Cannot verify the voucher: try again') };

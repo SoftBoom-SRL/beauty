@@ -1,12 +1,13 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
 import { useEffect, useState } from 'react';
-import { api, Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
+import { Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
 import DkModal from '../../ui/DkModal.jsx';
 import useProductCatalog from './useProductCatalog.js';
+import { salesApi } from '../../api/sales.js';
 import {
   centsToApi, centsToEur, emptyPayments, findCoupon, inputCss, lineCents, methodLabel, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
@@ -155,7 +156,7 @@ export default function CartTab({ onGoHistory }) {
     if (payErr) { fireToast({ msg: payErr, icon: 'alert' }); return; }
     setSaving(true);
     try {
-      const sale = await api.post('/api/sales/pos', {
+      const sale = await salesApi.pos({
         client_id: clientSel ? clientSel.id : null,
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
         payments: resolvePayments(pay, totalCents),

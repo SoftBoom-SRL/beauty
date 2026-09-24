@@ -1,10 +1,11 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
 // KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
 import { useEffect, useRef, useState } from 'react';
-import { api, Icon, toastApiError } from '@youty/shared';
+import { Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
 import { lineGrossCents, saleLineLabel } from './history.js';
+import { salesApi } from '../../api/sales.js';
 
 const LIMIT = 50;
 
@@ -47,7 +48,7 @@ export default function HistoryTab() {
     const seq = ++reqSeq.current;
     setLoading(true);
     setOpenId(null);
-    api.get('/api/sales/', { params: params(0) })
+    salesApi.list(params(0))
       .then((r) => { if (seq === reqSeq.current) { setData(r); setItems(r.items || []); } })
       .catch((err) => {
         if (seq !== reqSeq.current) return;
@@ -62,7 +63,7 @@ export default function HistoryTab() {
     const seq = ++reqSeq.current;
     setLoadingMore(true);
     try {
-      const r = await api.get('/api/sales/', { params: params(items.length) });
+      const r = await salesApi.list(params(items.length));
       if (seq !== reqSeq.current) return;
       setItems((l) => [...l, ...(r.items || [])]);
     } catch (err) {
@@ -78,7 +79,7 @@ export default function HistoryTab() {
     setOpenId(id);
     if (!details[id] || details[id] === 'error') {
       setDetails((d) => ({ ...d, [id]: 'loading' }));
-      api.get(`/api/sales/${id}`)
+      salesApi.get(id)
         .then((r) => setDetails((d) => ({ ...d, [id]: r })))
         .catch((err) => {
           setDetails((d) => ({ ...d, [id]: 'error' }));

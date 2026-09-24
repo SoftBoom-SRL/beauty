@@ -6,11 +6,12 @@
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
+import { Avatar, Icon, NumInput, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
 import useProductCatalog from '../useProductCatalog.js';
+import { salesApi } from '../../../api/sales.js';
 import {
   centsToApi, centsToEur, emptyPayments, findCoupon, giftPrefillRows, inputCss, lineAmount, lineCents,
   methodLabel, money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
@@ -223,7 +224,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
         payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
       };
-      const res = await api.post(`/api/sales/checkout/${appt.id}`, body);
+      const res = await salesApi.checkout(appt.id, body);
       setResult(res);
       fireToast({ msg: t('Check-out registrato', 'Check-out recorded'), icon: 'check' });
       if (onDone) onDone(res);
