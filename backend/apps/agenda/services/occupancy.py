@@ -80,6 +80,49 @@ def _busy_map(
     return busy
 
 
+def _busy_maps(
+    salon,
+    day: dt.date,
+    *,
+    exclude_appointment_id: int | None = None,
+    ignore_client_id: int | None = None,
+) -> tuple[dict, dict]:
+    """Le due mappe degli impegni della conferma: (tutti, senza la stessa cliente).
+
+    Senza `ignore_client_id` la seconda È la prima, lo stesso oggetto:
+    `resolution._pick_operator` lo riconosce e non riprova la stessa mappa.
+    """
+    busy = _busy_map(salon, day, exclude_appointment_id=exclude_appointment_id)
+    same_client_busy = (
+        _busy_map(
+            salon, day,
+            exclude_appointment_id=exclude_appointment_id,
+            ignore_client_id=ignore_client_id,
+        )
+        if ignore_client_id
+        else busy
+    )
+    return busy, same_client_busy
+
+
+def _shift_windows_memo(day: dt.date):
+    """`windows_of(operatrice)`: le sue finestre di turno del giorno, lette una volta sola.
+
+    `shift_windows` si importa a ogni chiamata, come ovunque: i test la
+    sostituiscono in `apps.staff.services`.
+    """
+    from apps.staff.services import shift_windows  # lazy
+
+    cache: dict[int, list] = {}
+
+    def windows_of(operator):
+        if operator.id not in cache:
+            cache[operator.id] = shift_windows(operator, day)
+        return cache[operator.id]
+
+    return windows_of
+
+
 def _operators_qs(salon, location=None):
     from apps.staff.models import Operator  # lazy
 
