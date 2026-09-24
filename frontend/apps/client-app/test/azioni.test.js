@@ -105,6 +105,59 @@ test('Profilo: promemoria e consenso subito a video, indietro se il server rifiu
   } finally { s.unmount(); }
 });
 
+test('Profilo: la lingua scelta durante un salvataggio si salva dopo; se il server rifiuta torna quella salvata (voce 34)', async () => {
+  const { langs, toasts } = fakeCtx({});
+  // qui la lingua del contesto cambia davvero, come in ctx.jsx
+  const ctx = globalThis.__ctx;
+  ctx.setLang = (l) => { langs.push(l); ctx.lang = l; };
+  const s = mount(Profilo);
+  const puts = () => pending('put', '/api/auth/client/me');
+  try {
+    await reply(pending('get', '/api/auth/client/me')[0], ME);          // sulla scheda «it»
+    s.render();
+    // EN e subito dopo IT, col primo salvataggio ancora in volo
+    await tap(s, 'EN');
+    await tap(s, 'IT');
+    assert.equal(ctx.lang, 'it');
+    assert.deepEqual(puts().map((c) => c.args), [[{ lang: 'en' }]]);
+    await reply(puts()[0], { ...ME, lang: 'en' });
+    s.render();
+    // finito il primo, si salva l'ultima scelta: sul server non resta «en»
+    assert.deepEqual(puts().map((c) => c.args), [[{ lang: 'en' }], [{ lang: 'it' }]]);
+    await reply(puts()[1], { ...ME, lang: 'it' });
+    s.render();
+    assert.equal(puts().length, 2);
+    // anche dietro al salvataggio dei promemoria
+    stubs(s, 'Toggle')[0].props.onChange(false);
+    s.render();
+    await tap(s, 'EN');
+    assert.equal(puts().length, 3);
+    await reply(puts()[2], { ...ME, whatsapp_reminders: false });
+    s.render();
+    assert.deepEqual(puts()[3].args, [{ lang: 'en' }]);
+    await reply(puts()[3], { ...ME, whatsapp_reminders: false, lang: 'en' });
+    s.render();
+    // IT, EN e di nuovo IT col salvataggio di IT in volo: l'ultima scelta è
+    // già quella salvata, niente da salvare
+    await tap(s, 'IT');
+    await tap(s, 'EN');
+    await tap(s, 'IT');
+    await reply(puts()[4], { ...ME, whatsapp_reminders: false, lang: 'it' });
+    s.render();
+    assert.equal(puts().length, 5);
+    assert.equal(ctx.lang, 'it');
+    // il salvataggio che non riesce: a schermo torna la lingua salvata
+    await tap(s, 'EN');
+    assert.equal(ctx.lang, 'en');
+    await fail(puts()[5], 500, 'Non salvato');
+    s.render();
+    assert.equal(ctx.lang, 'it');
+    assert.deepEqual(toasts.slice(-1), [{ msg: 'Non salvato', icon: 'alert' }]);
+    assert.equal(puts().length, 6);
+    assert.deepEqual(langs, ['en', 'it', 'en', 'it', 'en', 'it', 'en', 'it']);
+  } finally { s.unmount(); }
+});
+
 test('Gift card: acquisto da pagare in salone, poi il portafoglio ricaricato', async () => {
   const { toasts } = fakeCtx({});
   const s = mount(GiftCard);
