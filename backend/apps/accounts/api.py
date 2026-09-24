@@ -12,8 +12,7 @@ from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.models import Salon
-from apps.core.services import emit_event, log_activity
+from apps.core.services import emit_event, get_salon_by_slug, log_activity
 from common.auth import (
     client_auth,
     create_client_tokens,
@@ -24,6 +23,7 @@ from common.auth import (
 from common import ratelimit
 from common.permissions import SCOPES, require_scope
 from common.phone import canonical_phone, find_client_by_phone
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Invitation, Membership, Role, StaffRefreshToken, User
@@ -39,7 +39,6 @@ from .schemas import (
     MemberOut,
     MemberRoleIn,
     MeOut,
-    OkOut,
     OTPRequestIn,
     OTPVerifyIn,
     RefreshIn,
@@ -112,13 +111,6 @@ def _first_membership(user) -> Membership | None:
         .order_by("-is_owner", "senza_ruolo", "id")
         .first()
     )
-
-
-def _salon_by_slug(slug: str) -> Salon:
-    try:
-        return Salon.objects.get(slug=slug)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
 
 
 def _client_by_phone(salon, phone: str):
@@ -756,7 +748,7 @@ REGISTER_MAX_PER_SALON = 120
 
 @router.post("/client/register", response=OkOut)
 def client_register(request, data: ClientRegisterIn):
-    salon = _salon_by_slug(data.salon_slug)
+    salon = get_salon_by_slug(data.salon_slug)
     from apps.clients.models import Client  # lazy: evita cicli in fase di load
 
     phone = canonical_phone(data.phone)
@@ -814,7 +806,7 @@ def client_register(request, data: ClientRegisterIn):
         "client.created",
         {
             "client_id": client.id,
-            "name": f"{client.first_name} {client.last_name}".strip(),
+            "name": client.full_name,
             "phone": client.phone,
             "lang": client.lang,
         },
@@ -853,7 +845,7 @@ def client_request_otp(request, data: OTPRequestIn):
     Ora il risultato non dipende dal numero: nemmeno il tetto per cliente
     trapela fuori, altrimenti basterebbe contare i 429 per sapere chi esiste.
     """
-    salon = _salon_by_slug(data.salon_slug)
+    salon = get_salon_by_slug(data.salon_slug)
     # Il tetto per IP si applica PRIMA della ricerca: vale anche per i numeri
     # che non esistono, che sono quelli che interessano a chi sta enumerando.
     ip = ratelimit.client_ip(request)
@@ -893,13 +885,15 @@ def client_request_otp(request, data: OTPRequestIn):
 
 @router.post("/client/verify-otp", response=ClientAuthOut)
 def client_verify_otp(request, data: OTPVerifyIn):
-    salon = _salon_by_slug(data.salon_slug)
+    salon = get_salon_by_slug(data.salon_slug)
     # Anche qui un tetto per indirizzo: il numero sconosciuto non ha un cliente
     # su cui contare i tentativi, quindi senza questo l'endpoint resterebbe
     # l'unico punto senza limiti del flusso di accesso.
     ip = ratelimit.client_ip(request)
-    if not ratelimit.hit(f"otp-verify-ip:{ip}", OTP_VERIFY_MAX_PER_IP, OTP_WINDOW_SECONDS):
-        raise HttpError(429, "Troppi tentativi: riprova tra qualche minuto")
+    ratelimit.enforce(
+        f"otp-verify-ip:{ip}", OTP_VERIFY_MAX_PER_IP, OTP_WINDOW_SECONDS,
+        "Troppi tentativi: riprova tra qualche minuto",
+    )
     client = _client_by_phone(salon, data.phone)
     if client is None:
         # Stessa risposta del codice sbagliato: il numero inesistente non si

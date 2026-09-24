@@ -23,13 +23,14 @@ from ninja.errors import HttpError
 from apps.core.services import log_activity
 from common.auth import staff_auth
 from common.permissions import require_owner
+from common.schemas import OkOut
 
 from . import client as yc
 from . import crypto, sync
 from .connection import OrgConflict, link_org, reset_remote_refs
 from .login import attach_tokens, login_with_yourang
 from .models import YourangConnection, YourangOAuthState
-from .schemas import AuthorizeOut, ExchangeIn, OkOut, StatusOut
+from .schemas import AuthorizeOut, ExchangeIn, StatusOut
 
 logger = logging.getLogger("youty.integrations")
 router = Router(tags=["integrations"])

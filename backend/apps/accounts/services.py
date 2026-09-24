@@ -63,10 +63,10 @@ def issue_otp(client) -> ClientOTP:
     ).count()
     if active >= MAX_ACTIVE_OTP:
         raise HttpError(429, "Troppi codici richiesti: riprova tra qualche minuto")
-    if not ratelimit.hit(
-        f"otp-issue:{client.id}", OTP_ISSUE_MAX_PER_WINDOW, OTP_ISSUE_WINDOW_SECONDS
-    ):
-        raise HttpError(429, "Troppi codici richiesti: riprova tra qualche minuto")
+    ratelimit.enforce(
+        f"otp-issue:{client.id}", OTP_ISSUE_MAX_PER_WINDOW, OTP_ISSUE_WINDOW_SECONDS,
+        "Troppi codici richiesti: riprova tra qualche minuto",
+    )
 
     otp = ClientOTP.objects.create(client=client, code=f"{secrets.randbelow(10**6):06d}")
     emit_event(

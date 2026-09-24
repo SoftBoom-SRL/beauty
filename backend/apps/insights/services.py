@@ -23,6 +23,7 @@ from apps.catalog.models import ServiceCategory
 from apps.clients.models import Client, ClientCategory
 from apps.sales.models import Sale, SaleLine
 from apps.staff.models import Operator
+from common.money import CENT
 
 PERIODS = {"month", "quarter", "year"}
 GRANULARITIES = {"day", "week", "month"}
@@ -152,7 +153,7 @@ def _safe_pct(numerator, denominator, ndigits: int = 1) -> float:
 def _safe_avg_money(total: Decimal, count: int) -> Decimal:
     if not count:
         return ZERO
-    return (Decimal(total) / count).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return (Decimal(total) / count).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 # ---------------------------------------------------------------------------

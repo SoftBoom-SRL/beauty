@@ -8,7 +8,8 @@ from ninja.errors import HttpError
 from apps.core.services import emit_event, log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import require_scope
+from common.permissions import has_scope, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Automation
@@ -16,7 +17,6 @@ from .schemas import (
     AutomationIn,
     AutomationOut,
     EventsCatalogOut,
-    OkOut,
     WebhookTriggerOut,
 )
 
@@ -148,7 +148,7 @@ def list_automations(request):
     # desk e Operatrice non hanno «marketing»), che fino a ieri la consultavano.
     # La sezione era già progettata come lettura a tutti e scrittura ai soli
     # marketing: qui si nasconde il segreto, non la pagina.
-    mask = not (ctx.is_owner or "marketing" in ctx.scopes)
+    mask = not has_scope(ctx, "marketing")
     rows = list(ctx.salon.automations.all())
     for row in rows:
         row._mask_secrets = mask
@@ -290,10 +290,10 @@ def trigger_webhook(request, webhook_token: str):
     # L'endpoint è pubblico (il token nell'URL è l'unica credenziale): senza
     # tetto, chi lo intercetta può far partire messaggi a raffica a spese del
     # salone, e ogni chiamata scrive una riga nel registro attività.
-    if not ratelimit.hit(
-        f"automation-hook:{automation.id}", HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS
-    ):
-        raise HttpError(429, "Troppe attivazioni: riprova tra qualche minuto")
+    ratelimit.enforce(
+        f"automation-hook:{automation.id}", HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS,
+        "Troppe attivazioni: riprova tra qualche minuto",
+    )
 
     body = request.body or b""
     # Il corpo finisce nel registro attività e nell'outbox: un payload enorme

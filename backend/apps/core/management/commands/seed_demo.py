@@ -44,6 +44,7 @@ from apps.inventory.models import (
 from apps.marketing.models import Communication, Coupon, GiftCard, LoyaltyProgram
 from apps.sales.models import Sale
 from apps.staff.models import Operator, WeeklyShift
+from common.money import CENT
 
 
 DEMO_SLUG = "the-parlour"
@@ -275,7 +276,7 @@ class Command(BaseCommand):
                 salon=salon, location=location, client=clients[client_idx],
                 operator=operators[op_key], start=start, status=status,
                 deposit_status=deposit,
-                deposit_amount=(total * Decimal("0.3")).quantize(Decimal("0.01")) if deposit != "none" else 0,
+                deposit_amount=(total * Decimal("0.3")).quantize(CENT) if deposit != "none" else 0,
             )
             for order, i in enumerate(svc_idxs):
                 AppointmentService.objects.create(

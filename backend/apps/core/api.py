@@ -16,7 +16,9 @@ from ninja.pagination import LimitOffsetPagination, paginate
 
 from common.auth import staff_auth
 from common.media import stored_upload_name
+from common.money import MAX_MONEY
 from common.permissions import require_owner, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
@@ -28,13 +30,18 @@ from .schemas import (
     DepositRuleOut,
     LocationIn,
     LocationOut,
-    OkOut,
     PublicBrandingOut,
     SalonOut,
     SettingsIn,
     SettingsOut,
 )
-from .services import log_activity, normalize_opening_hours_week, opening_hours_text
+from .services import (
+    default_location,
+    get_salon_by_slug,
+    log_activity,
+    normalize_opening_hours_week,
+    opening_hours_text,
+)
 
 router = Router(tags=["core"])
 
@@ -118,7 +125,6 @@ _SETTINGS_INT_RANGES = {
 }
 _BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 MAX_OPENING_HOURS_CHARS = 500
-MAX_MONTHLY_BUDGET = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
 
 
 def _validate_url(raw: str, label: str) -> str:
@@ -182,7 +188,7 @@ def update_settings(request, data: SettingsIn):
             budget = Decimal(str(payload["lastminute_monthly_budget"]))
         except (InvalidOperation, TypeError, ValueError):
             raise HttpError(400, "Budget non valido")
-        if not 0 <= budget <= MAX_MONTHLY_BUDGET:
+        if not 0 <= budget <= MAX_MONEY:
             raise HttpError(400, "Budget fuori scala")
         payload["lastminute_monthly_budget"] = budget
     if "privacy_policy_url" in payload:
@@ -328,8 +334,6 @@ def delete_location(request, location_id: int):
 
 # ---- Regole deposito -------------------------------------------------------
 
-MAX_RULE_AMOUNT = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
-
 
 def _deposit_rule_fields(data: DepositRuleIn) -> dict:
     """Campi della regola, validati.
@@ -346,7 +350,7 @@ def _deposit_rule_fields(data: DepositRuleIn) -> dict:
         raise HttpError(400, "L'acconto non può essere negativo")
     if fields["amount_type"] == DepositRule.AmountType.PERCENT and amount > 100:
         raise HttpError(400, "Un acconto in percentuale va da 0 a 100")
-    if amount > MAX_RULE_AMOUNT:
+    if amount > MAX_MONEY:
         raise HttpError(400, "Importo dell'acconto fuori scala")
     return fields
 
@@ -586,12 +590,9 @@ def activity_stream_ticket(request):
 
 @router.get("/public/branding", response=PublicBrandingOut)
 def public_branding(request, salon: str):
-    try:
-        s = Salon.objects.get(slug=salon)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
+    s = get_salon_by_slug(salon)
     st = _settings_readonly(s)
-    location = s.locations.filter(is_default=True).first() or s.locations.first()
+    location = default_location(s)
     return {
         "name": s.name,
         "slug": s.slug,

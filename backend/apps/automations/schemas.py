@@ -65,7 +65,3 @@ class EventsCatalogOut(Schema):
 class WebhookTriggerOut(Schema):
     ok: bool = True
     automation_id: int
-
-
-class OkOut(Schema):
-    ok: bool = True

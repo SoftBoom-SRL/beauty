@@ -166,7 +166,3 @@ class PublicBrandingOut(Schema):
     # «24h» a codice fisso, e un salone con una soglia diversa prometteva alle
     # clienti una regola che il server poi non applicava.
     cancel_min_hours: int = 24
-
-
-class OkOut(Schema):
-    ok: bool = True

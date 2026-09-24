@@ -35,7 +35,3 @@ class StatusOut(Schema):
     # Ultimo errore di sincronizzazione ("" se nessuno): la riga diceva
     # «Connesso · sincronizzati» anche con la sync ferma o parziale.
     last_error: str = ""
-
-
-class OkOut(Schema):
-    ok: bool = True
