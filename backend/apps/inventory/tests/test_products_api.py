@@ -1,3 +1,11 @@
+"""Prodotti e categorie del magazzino: API, validazione, elenchi.
+
+Caccia del 22/09:
+- 09-10: ordinamenti univoci sotto la paginazione;
+- 15-05 (C8, verifica): i prodotti disattivati si ritrovano e si riattivano.
+"""
+
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -8,137 +16,18 @@ from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.auth import StaffContext
 
+from .. import api as inventory_api
 from ..api import (
     create_category,
     create_product,
-    load_product,
-    send_order,
     unload_product,
     update_category,
-    update_order,
     update_product,
 )
-from ..models import Product, ProductCategory, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
-from ..schemas import CategoryIn, MovementOut, ProductIn, ProductLoadIn, ProductUnloadIn
-from ..services import apply_movement, generate_draft_orders, receive_order
-
-
-class InventoryTests(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.supplier_a = Supplier.objects.create(salon=self.salon, name="Davines")
-        self.supplier_b = Supplier.objects.create(salon=self.salon, name="Kerastase")
-
-    def _product(self, name, *, supplier=None, stock=0, threshold=0, reorder=0, **extra):
-        return Product.objects.create(
-            salon=self.salon,
-            name=name,
-            supplier=supplier or self.supplier_a,
-            stock_qty=Decimal(stock),
-            min_threshold=Decimal(threshold),
-            reorder_qty=Decimal(reorder),
-            **extra,
-        )
-
-    # ---- apply_movement ------------------------------------------------------
-
-    def test_apply_movement_updates_stock(self):
-        product = self._product("Shampoo")
-        movement = apply_movement(product, StockMovement.Kind.LOAD, Decimal("10"))
-        self.assertEqual(movement.kind, "load")
-        self.assertEqual(product.stock_qty, Decimal("10"))
-        apply_movement(product, StockMovement.Kind.INTERNAL_USE, Decimal("-4"))
-        self.assertEqual(product.stock_qty, Decimal("6"))
-        self.assertEqual(product.movements.count(), 2)
-
-    def test_apply_movement_blocks_negative_stock(self):
-        product = self._product("Shampoo", stock=6)
-        with self.assertRaises(HttpError) as caught:
-            apply_movement(product, StockMovement.Kind.SALE, Decimal("-7"))
-        self.assertEqual(caught.exception.status_code, 422)
-        self.assertIn("Giacenza insufficiente", str(caught.exception))
-        product.refresh_from_db()
-        self.assertEqual(product.stock_qty, Decimal("6"))
-        self.assertEqual(product.movements.count(), 0)  # nessun movimento creato
-
-    def test_stock_state_property(self):
-        product = self._product("Shampoo", stock=2, threshold=5)
-        self.assertEqual(product.stock_state, "low")
-        product.stock_qty = Decimal("7")  # ≤ 5×1.5
-        self.assertEqual(product.stock_state, "warning")
-        product.stock_qty = Decimal("8")
-        self.assertEqual(product.stock_state, "ok")
-
-    # ---- generate_draft_orders -----------------------------------------------
-
-    def test_generate_draft_orders_groups_by_supplier(self):
-        p1 = self._product("Shampoo", supplier=self.supplier_a, stock=1, threshold=5, reorder=10)
-        p2 = self._product("Balsamo", supplier=self.supplier_a, stock=0, threshold=3)  # reorder 0
-        p3 = self._product("Maschera", supplier=self.supplier_b, stock=2, threshold=2, reorder=6)
-        self._product("Olio", supplier=self.supplier_b, stock=50, threshold=2)  # sopra soglia
-        self._product("Vecchio", supplier=self.supplier_b, stock=0, threshold=2, reorder=1, active=False)
-
-        orders = generate_draft_orders(self.salon)
-        self.assertEqual(len(orders), 2)
-        by_supplier = {o.supplier_id: o for o in orders}
-
-        order_a = by_supplier[self.supplier_a.id]
-        self.assertEqual(order_a.status, PurchaseOrder.Status.DRAFT)
-        qty_by_product = {line.product_id: line.qty_ordered for line in order_a.lines.all()}
-        self.assertEqual(qty_by_product[p1.id], Decimal("10"))  # reorder_qty
-        self.assertEqual(qty_by_product[p2.id], Decimal("3"))  # soglia − stock
-
-        order_b = by_supplier[self.supplier_b.id]
-        self.assertEqual(order_b.lines.count(), 1)
-        self.assertEqual(order_b.lines.get().product_id, p3.id)
-
-        # secondo run: i prodotti sono già in bozza → niente duplicati
-        self.assertEqual(generate_draft_orders(self.salon), [])
-
-    # ---- receive_order ---------------------------------------------------------
-
-    def test_receive_complete_marks_received(self):
-        product = self._product("Shampoo", stock=0, threshold=1, reorder=4)
-        [order] = generate_draft_orders(self.salon)
-        line = order.lines.get()
-        order, discrepancies = receive_order(
-            order, [{"id": line.id, "qty_received": Decimal("4")}]
-        )
-        self.assertEqual(order.status, PurchaseOrder.Status.RECEIVED)
-        self.assertEqual(discrepancies, [])
-        product.refresh_from_db()
-        self.assertEqual(product.stock_qty, Decimal("4"))
-        movement = product.movements.get()
-        self.assertEqual(movement.kind, "load")
-        self.assertEqual(movement.order_id, order.id)
-
-    def test_receive_with_discrepancy_marks_partial(self):
-        p1 = self._product("Shampoo", stock=0, threshold=2, reorder=10)
-        p2 = self._product("Balsamo", stock=0, threshold=2, reorder=5)
-        [order] = generate_draft_orders(self.salon)
-        line1 = order.lines.get(product=p1)
-        line2 = order.lines.get(product=p2)
-
-        order, discrepancies = receive_order(
-            order,
-            [
-                {"id": line1.id, "qty_received": Decimal("10")},  # combacia
-                {"id": line2.id, "qty_received": Decimal("3")},  # ordinati 5
-            ],
-        )
-        self.assertEqual(order.status, PurchaseOrder.Status.PARTIAL)
-        self.assertEqual(len(discrepancies), 1)
-        self.assertEqual(discrepancies[0]["line_id"], line2.id)
-        self.assertEqual(discrepancies[0]["delta"], Decimal("-2"))
-
-        p1.refresh_from_db()
-        p2.refresh_from_db()
-        self.assertEqual(p1.stock_qty, Decimal("10"))
-        self.assertEqual(p2.stock_qty, Decimal("3"))
-
-        # una seconda ricezione è vietata
-        with self.assertRaises(HttpError):
-            receive_order(order, [])
+from ..models import Product, ProductCategory, StockMovement, Supplier
+from ..schemas import CategoryIn, MovementOut, ProductIn, ProductUnloadIn
+from ..services import apply_movement
+from .base import _InventorySetup
 
 
 class InventoryApiTests(TestCase):
@@ -224,46 +113,6 @@ class InventoryApiTests(TestCase):
         self.assertEqual(MovementOut.resolve_operator_name(movement), "")
         product.refresh_from_db()
         self.assertEqual(product.stock_qty, Decimal("4"))
-
-
-class ReceiveOrderConcurrencyTests(TestCase):
-    """La stessa ricezione non deve poter essere registrata due volte.
-
-    Il controllo «ordine già ricevuto» guardava l'istanza arrivata con la
-    richiesta e stava fuori dalla transazione: due schermate aperte sullo stesso
-    ordine caricavano dieci pezzi ciascuna, la giacenza saliva a venti e la riga
-    d'ordine ne dichiarava dieci.
-    """
-
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.supplier = Supplier.objects.create(salon=self.salon, name="Fornitore")
-        self.product = Product.objects.create(
-            salon=self.salon, supplier=self.supplier, name="Shampoo", stock_qty=0
-        )
-        self.order = PurchaseOrder.objects.create(
-            salon=self.salon, supplier=self.supplier, status=PurchaseOrder.Status.SENT
-        )
-        self.line = PurchaseOrderLine.objects.create(
-            order=self.order, product=self.product, qty_ordered=10
-        )
-
-    def test_the_second_receipt_is_refused_and_changes_nothing(self):
-        stale = PurchaseOrder.objects.get(pk=self.order.pk)  # copia letta prima
-        receive_order(self.order, [{"id": self.line.pk, "qty_received": 10}])
-
-        with self.assertRaises(HttpError) as caught:
-            receive_order(stale, [{"id": self.line.pk, "qty_received": 10}])
-        self.assertEqual(caught.exception.status_code, 400)
-
-        self.product.refresh_from_db()
-        self.line.refresh_from_db()
-        self.assertEqual(self.product.stock_qty, 10)
-        self.assertEqual(self.line.qty_received, 10)
-        self.assertEqual(
-            StockMovement.objects.filter(product=self.product, kind=StockMovement.Kind.LOAD).count(),
-            1,
-        )
 
 
 class ProductCrudTests(TestCase):
@@ -369,182 +218,6 @@ class CategoryValidationTests(TestCase):
         self.assertEqual(caught.exception.status_code, 400)
 
 
-class InvoiceUrlTests(TestCase):
-    """Il link alla fattura del carico deve essere firmato: `inventory/invoices/`
-    è un prefisso riservato e senza token la vista /media/ risponde 403."""
-
-    def test_invoice_url_carries_the_signature(self):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        from common.media import TOKEN_PARAM, verify_media_token
-
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        supplier = Supplier.objects.create(salon=salon, name="Davines")
-        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
-        movement = apply_movement(
-            product,
-            StockMovement.Kind.LOAD,
-            Decimal("5"),
-            invoice=SimpleUploadedFile("fattura.pdf", b"%PDF-1.4", content_type="application/pdf"),
-        )
-        # Il link esce solo a titolare e cassa (10-09): lo chiede il titolare.
-        owner = StaffContext(user=None, salon=salon, membership=None, scopes=set(), is_owner=True)
-        url = MovementOut.resolve_invoice_url(movement, {"request": SimpleNamespace(auth=owner)})
-        self.assertIn(f"?{TOKEN_PARAM}=", url)
-        self.assertTrue(verify_media_token(movement.invoice.name, url.split(f"{TOKEN_PARAM}=")[1]))
-        movement.invoice.delete(save=False)
-
-    def test_without_invoice_the_url_is_none(self):
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        supplier = Supplier.objects.create(salon=salon, name="Davines")
-        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
-        movement = apply_movement(product, StockMovement.Kind.LOAD, Decimal("5"))
-        self.assertIsNone(MovementOut.resolve_invoice_url(movement))
-
-
-class InvoiceUploadValidationTests(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        supplier = Supplier.objects.create(salon=self.salon, name="Davines")
-        self.product = Product.objects.create(salon=self.salon, name="Shampoo", supplier=supplier)
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
-        self.request = SimpleNamespace(auth=ctx)
-
-    def test_executable_attachment_is_refused(self):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        upload = SimpleUploadedFile(
-            "fattura.exe", b"MZ", content_type="application/x-msdownload"
-        )
-        with self.assertRaises(HttpError) as caught:
-            load_product(self.request, self.product.id, ProductLoadIn(qty=Decimal("1")), upload)
-        self.assertEqual(caught.exception.status_code, 400)
-        self.assertEqual(StockMovement.objects.count(), 0)
-
-    def test_oversized_attachment_is_refused(self):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        upload = SimpleUploadedFile("fattura.pdf", b"%PDF", content_type="application/pdf")
-        upload.size = 20 * 1024 * 1024
-        with self.assertRaises(HttpError) as caught:
-            load_product(self.request, self.product.id, ProductLoadIn(qty=Decimal("1")), upload)
-        self.assertEqual(caught.exception.status_code, 400)
-
-
-class ProductDeletionProtectsHistoryTests(TestCase):
-    """Cancellare davvero un prodotto (dall'admin) portava via i movimenti:
-    la prova contabile di che cosa è entrato e uscito dal magazzino."""
-
-    def test_a_product_with_movements_cannot_be_deleted(self):
-        from django.db.models import ProtectedError as ModelProtectedError
-
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        supplier = Supplier.objects.create(salon=salon, name="Davines")
-        product = Product.objects.create(salon=salon, name="Shampoo", supplier=supplier)
-        apply_movement(product, StockMovement.Kind.LOAD, Decimal("5"))
-        with self.assertRaises(ModelProtectedError):
-            product.delete()
-        self.assertEqual(StockMovement.objects.count(), 1)
-
-
-class DraftOrderThresholdTests(TestCase):
-    """Giacenza esattamente pari alla soglia con reorder_qty a zero: il prodotto
-    era «sotto scorta» in elenco ma «Genera ordini» lo scartava in silenzio."""
-
-    def test_product_exactly_at_threshold_is_ordered(self):
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        supplier = Supplier.objects.create(salon=salon, name="Davines")
-        product = Product.objects.create(
-            salon=salon, name="Balsamo", supplier=supplier,
-            stock_qty=Decimal("5"), min_threshold=Decimal("5"), reorder_qty=Decimal("0"),
-        )
-        self.assertEqual(product.stock_state, "low")
-        [order] = generate_draft_orders(salon)
-        line = order.lines.get()
-        self.assertEqual(line.product_id, product.id)
-        self.assertEqual(line.qty_ordered, Decimal("1"))
-
-
-class OrderWorkflowTests(TestCase):
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.supplier = Supplier.objects.create(salon=self.salon, name="Davines")
-        self.p1 = Product.objects.create(salon=self.salon, name="Shampoo", supplier=self.supplier)
-        self.p2 = Product.objects.create(salon=self.salon, name="Balsamo", supplier=self.supplier)
-        self.order = PurchaseOrder.objects.create(salon=self.salon, supplier=self.supplier)
-        self.l1 = PurchaseOrderLine.objects.create(
-            order=self.order, product=self.p1, qty_ordered=Decimal("4")
-        )
-        self.l2 = PurchaseOrderLine.objects.create(
-            order=self.order, product=self.p2, qty_ordered=Decimal("2")
-        )
-        ctx = StaffContext(
-            user=None, salon=self.salon, membership=None, scopes={"inventory"}, is_owner=False
-        )
-        self.request = SimpleNamespace(auth=ctx)
-
-    def test_update_order_is_all_or_nothing(self):
-        from ..schemas import OrderLineUpdateIn, OrderUpdateIn
-
-        with self.assertRaises(HttpError) as caught:
-            update_order(
-                self.request,
-                self.order.id,
-                OrderUpdateIn(
-                    lines=[
-                        OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("9")),
-                        OrderLineUpdateIn(id=999999, qty_ordered=Decimal("1")),
-                    ]
-                ),
-            )
-        self.assertEqual(caught.exception.status_code, 404)
-        self.l1.refresh_from_db()
-        self.assertEqual(self.l1.qty_ordered, Decimal("4"))  # nulla è stato scritto
-
-    def test_update_order_applies_every_line(self):
-        from ..schemas import OrderLineUpdateIn, OrderUpdateIn
-
-        update_order(
-            self.request,
-            self.order.id,
-            OrderUpdateIn(
-                lines=[
-                    OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("9")),
-                    OrderLineUpdateIn(id=self.l2.id, qty_ordered=Decimal("0")),  # riga rimossa
-                ]
-            ),
-        )
-        self.l1.refresh_from_db()
-        self.assertEqual(self.l1.qty_ordered, Decimal("9"))
-        self.assertFalse(PurchaseOrderLine.objects.filter(pk=self.l2.pk).exists())
-
-    def test_the_second_send_is_refused(self):
-        from ..schemas import OrderSendIn
-
-        send_order(self.request, self.order.id, OrderSendIn())
-        stale = PurchaseOrder.objects.get(pk=self.order.pk)
-        stale.status = PurchaseOrder.Status.DRAFT  # copia letta prima dell'invio
-        with self.assertRaises(HttpError) as caught:
-            send_order(self.request, stale.id, OrderSendIn())
-        self.assertEqual(caught.exception.status_code, 400)
-        self.order.refresh_from_db()
-        self.assertEqual(self.order.status, PurchaseOrder.Status.SENT)
-
-    def test_update_order_refuses_a_sent_order(self):
-        from ..schemas import OrderLineUpdateIn, OrderSendIn, OrderUpdateIn
-
-        send_order(self.request, self.order.id, OrderSendIn())
-        with self.assertRaises(HttpError) as caught:
-            update_order(
-                self.request,
-                self.order.id,
-                OrderUpdateIn(lines=[OrderLineUpdateIn(id=self.l1.id, qty_ordered=Decimal("1"))]),
-            )
-        self.assertEqual(caught.exception.status_code, 400)
-
-
 class InventoryHttpSmokeTests(TestCase):
     """Una richiesta HTTP vera per router: senza, un endpoint irraggiungibile
     resterebbe verde in una suite che chiama le view come funzioni."""
@@ -603,3 +276,47 @@ class InventoryHttpSmokeTests(TestCase):
             **self.auth,
         )
         self.assertEqual(refused.status_code, 400, refused.content)
+
+
+class StableOrderingTests(_InventorySetup):
+    """09-10: con LIMIT/OFFSET l'ordine deve essere univoco."""
+
+    def _request(self):
+        ctx = StaffContext(user=None, salon=self.salon, membership=None, scopes={"inventory"})
+        return SimpleNamespace(auth=ctx)
+
+    def test_products_end_with_the_id(self):
+        qs = inventory_api.list_products.__wrapped__(self._request())
+        self.assertEqual(list(qs.query.order_by), ["below_threshold", "name", "id"])
+
+    def test_movements_end_with_the_id(self):
+        qs = inventory_api._filter_movements(StockMovement.objects.all(), "", "", "")
+        self.assertEqual(list(qs.query.order_by), ["-created_at", "-id"])
+
+    def test_homonyms_are_paged_without_repeats(self):
+        ids = [self._product("Shampoo idratante", brand=f"Marca {n}").id for n in range(3)]
+        seen = []
+        for offset in range(3):
+            res = self.client.get(f"/api/inventory/products?limit=1&offset={offset}", **self.auth)
+            seen.extend(item["id"] for item in res.json()["items"])
+        self.assertEqual(seen, ids)
+
+
+class DeactivatedProductsTests(_InventorySetup):
+    """15-05 (C8, verifica): «Disattiva» sul prodotto è reversibile dall'API."""
+
+    def test_deactivated_products_are_listed_on_request_and_can_be_reactivated(self):
+        gel = self._product("Gel", active=False)
+        default = self.client.get("/api/inventory/products", **self.auth).json()["items"]
+        self.assertEqual(default, [])
+        listed = self.client.get("/api/inventory/products?include_inactive=true", **self.auth).json()
+        self.assertEqual([p["id"] for p in listed["items"]], [gel.id])
+        self.assertIs(listed["items"][0]["active"], False)
+        body = {"name": "Gel", "supplier_id": self.sup_a.id, "active": True}
+        res = self.client.put(
+            f"/api/inventory/products/{gel.id}", data=json.dumps(body),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        gel.refresh_from_db()
+        self.assertTrue(gel.active)
