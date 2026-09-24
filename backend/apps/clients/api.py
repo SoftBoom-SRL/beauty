@@ -3,41 +3,52 @@
 Letture base → solo `staff_auth`. Scritture → scope "clients" (vedi
 common.permissions). Le schede tecniche sono uno storico immutabile: solo
 GET (lista) e POST (creazione), nessun endpoint di update/delete.
+
+Qui stanno permessi, lettura delle righe del salone (`salon_get`) e scelta
+della risposta; le regole sono nei moduli accanto: `labels` (etichette),
+`search` (ricerca), `fields` e `profiles` (la scheda), `importer` (import
+CSV), `history` (storico), `records` (note, allegati, schede tecniche), `hook`
+(form pubblico). `services` resta il modulo di `client_stats`/`client_facts`
+che leggono le altre app.
 """
 
 import logging
 from decimal import Decimal
 from typing import Optional
 
-from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from ninja import File, Form, Router
 from ninja.errors import HttpError
 from ninja.files import UploadedFile
 from ninja.pagination import LimitOffsetPagination, paginate
 
 from apps.agenda.schemas import AppointmentOut
-from apps.core.models import SalonSettings
-from apps.core.services import emit_event, get_salon_by_slug, log_activity
+from apps.core.services import get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
-from common.phone import canonical_phone, find_client_by_phone
+from common.phone import canonical_phone
 from common.schemas import OkOut
 from common.utils import salon_get
 
 from .fields import client_payload
 from .history import build_history, client_appointments
+from .hook import record_lead
 from .importer import import_rows
 from .labels import create_label, delete_label, label_payload, update_label
+from .models import (
+    Client,
+    ClientCategory,
+    ClientNote,
+    ClientNoteAttachment,
+    TechnicalSheet,
+)
 from .profiles import (
     archive_profile,
     archived_phone_message,
     check_phone_unique,
     create_profile,
-    notify_marketing,
     update_profile,
 )
 from .records import (
@@ -47,13 +58,6 @@ from .records import (
     replace_sheet_photo,
     sheet_out,
     validate_attachment,
-)
-from .models import (
-    Client,
-    ClientCategory,
-    ClientNote,
-    ClientNoteAttachment,
-    TechnicalSheet,
 )
 from .schemas import (
     CategoryIn,
@@ -472,15 +476,6 @@ def upload_sheet_photo(request, client_id: int, sheet_id: int, photo: UploadedFi
 # Form pubblico di raccolta contatti — /<slug>/hook nell'app cliente
 # ---------------------------------------------------------------------------
 
-HOOK_LABEL = "Da form"
-HOOK_LABEL_COLOR = "#8B5CF6"
-# Soglia per IP e per salone. Non troppo bassa: un salone che fa compilare il
-# form da un tablet sul bancone, o clienti sulla stessa rete pubblica, arrivano
-# tutti dallo stesso IP. Serve a fermare uno script, non a contare le persone —
-# contro lo spam mirato la difesa è l'honeypot.
-HOOK_MAX_PER_WINDOW = 20
-HOOK_WINDOW_SECONDS = 3600
-
 
 @router.post("/public/hook", auth=None, response=HookLeadOut)
 def public_hook(request, data: HookLeadIn):
@@ -510,149 +505,5 @@ def public_hook(request, data: HookLeadIn):
         raise HttpError(400, "Nome e telefono sono obbligatori")
 
     salon = get_salon_by_slug(data.salon_slug)
-
-    # Il modulo raccoglie anche se il salone non ha configurato l'informativa:
-    # bloccarlo spegnerebbe la raccolta contatti alla maggior parte dei saloni
-    # attivi, ed è una decisione commerciale, non tecnica. Resta il WARNING qui
-    # e l'avviso in dashboard — il consenso senza informativa da leggere è
-    # debole, e chi lo raccoglie deve poterlo sapere.
-    # values_list().first() e non _settings(): un endpoint pubblico non deve
-    # creare righe (get_or_create) su richiesta di uno sconosciuto.
-    privacy_url = (
-        SalonSettings.objects.filter(salon=salon)
-        .values_list("privacy_policy_url", flat=True)
-        .first()
-    )
-    if not privacy_url:
-        logger.warning(
-            "hook: consenso raccolto senza informativa privacy configurata (salone=%s)", salon.slug
-        )
-
-    # Rate limit per IP, sul contatore condiviso di common.ratelimit: è una
-    # UPDATE atomica sul database, mentre il vecchio leggi-poi-scrivi sulla
-    # cache lasciava passare un flood in parallelo contandolo come una
-    # richiesta sola (ogni richiesta qui crea una scheda e un evento).
-    key = f"hook:{salon.id}:{ratelimit.client_ip(request)}"
-    if not ratelimit.hit(key, HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS):
-        logger.warning("hook: rate limit superato per %s", key)
-        return {"ok": True}
-
-    now = timezone.now().isoformat()
-    client = find_client_by_phone(salon, phone)
-
-    if client is None:
-        try:
-            with transaction.atomic():
-                lang = (data.lang or "").strip().lower()
-                client = Client.objects.create(
-                    salon=salon,
-                    first_name=first_name,
-                    last_name=data.last_name.strip(),
-                    phone=phone,
-                    email=data.email.strip(),
-                    lang=lang if lang in Client.Lang.values else Client.Lang.IT,
-                    origin="hook",
-                    since=timezone.localdate(),
-                    consents={
-                        "privacy": True,
-                        "privacy_at": now,
-                        "marketing": bool(data.marketing),
-                        "marketing_at": now if data.marketing else "",
-                        "card_charge": False,
-                    },
-                )
-        except IntegrityError:
-            # Doppio tocco su «Invia», o due invii in parallelo: il controllo
-            # qui sopra non è atomico, il vincolo di unicità sì. Si riprende la
-            # scheda appena nata e si prosegue come per chi è già in rubrica —
-            # questo endpoint risponde 200 in ogni caso, un 500 racconterebbe a
-            # uno sconosciuto che quel numero è cliente del salone.
-            client = find_client_by_phone(salon, phone)
-            if client is None:
-                logger.warning(
-                    "hook: creazione rifiutata e scheda non ritrovata (salone=%s)", salon.slug
-                )
-                return {"ok": True}
-        else:
-            _mark_as_hook_lead(salon, client)
-            return {"ok": True}
-
-    if not client.is_active:
-        # Scheda archiviata dallo staff: il modulo la riattivava da solo, con un
-        # consenso marketing «fresco» dato da chiunque conoscesse nome e numero
-        # — anche la cliente tolta di proposito, o chi ha chiesto di non
-        # essere più contattata (10-15). Non si tocca: il salone riceve la
-        # segnalazione e decide, come quando la stessa persona prova a entrare
-        # dall'app (accounts). Il numero può essere passato a un'altra persona.
-        _notify_archived_client(salon, client)
-        return {"ok": True}
-
-    # Cliente già in rubrica: si aggiornano i consensi (è il senso del form) e
-    # si riempiono solo i campi vuoti. Sovrascrivere nome o email con quanto
-    # digitato da uno sconosciuto rovinerebbe una scheda reale, e l'etichetta
-    # "Da form" non va messa a chi è già cliente.
-    stored = client.consents or {}
-    marketing_before = bool(stored.get("marketing"))
-    client.consents = {
-        **stored,
-        "privacy": True,
-        "privacy_at": now,
-        "marketing": bool(data.marketing) or marketing_before,
-        "marketing_at": now if data.marketing else stored.get("marketing_at", ""),
-    }
-    if data.marketing:
-        client.consents.pop("marketing_revoked_at", None)
-    fields = ["consents"]
-    if not client.email and data.email.strip():
-        client.email = data.email.strip()
-        fields.append("email")
-    if not client.last_name and data.last_name.strip():
-        client.last_name = data.last_name.strip()
-        fields.append("last_name")
-    client.save(update_fields=fields)
-    if bool(client.consents["marketing"]) != marketing_before:
-        # Consenso ridato dopo una revoca: Yourang deve togliere il blocco.
-        notify_marketing("marketing_consent_changed", client, accepted=True)
-    # Con il suo id la scheda aperta in dashboard si ricarica: senza, la
-    # reception continuava a vedere i consensi di prima (06-10).
-    log_activity(
-        salon,
-        "client.updated",
-        f"Consensi aggiornati dal form: {client.full_name}",
-        payload={"client_id": client.id, "fields": fields},
-    )
-
+    record_lead(salon, data, first_name=first_name, phone=phone, ip=ratelimit.client_ip(request))
     return {"ok": True}
-
-
-# Una segnalazione al giorno per scheda archiviata. La chiave è la stessa
-# delle segnalazioni dell'accesso dall'app (accounts, «archived-notice:<id>»):
-# app e modulo nello stesso giorno sono un avviso solo.
-ARCHIVED_NOTICE_WINDOW_SECONDS = 24 * 3600
-
-
-def _notify_archived_client(salon, client: Client) -> None:
-    """Segnala al salone (feed, scope clienti) la scheda archiviata che si è fatta viva."""
-    if not ratelimit.hit(f"archived-notice:{client.id}", 1, ARCHIVED_NOTICE_WINDOW_SECONDS):
-        return
-    log_activity(
-        salon,
-        "client.reactivation_requested",
-        f"{client.full_name}: scheda archiviata, ha compilato il modulo contatti. "
-        "Riattivala se vuoi che entri.",
-        payload={"client_id": client.id, "source": "hook"},
-    )
-
-
-def _mark_as_hook_lead(salon, client: Client) -> None:
-    """Etichetta «Da form», evento SSE e registro: la scheda è un lead nuovo."""
-    label, _ = ClientCategory.objects.get_or_create(
-        salon=salon, name=HOOK_LABEL, defaults={"color": HOOK_LABEL_COLOR}
-    )
-    client.categories.add(label)
-    emit_event(
-        salon,
-        "client.created",
-        {"client_id": client.id, "name": client.full_name, "phone": client.phone, "source": "hook"},
-    )
-    log_activity(salon, "client.created", f"Contatto dal form: {client.full_name}")

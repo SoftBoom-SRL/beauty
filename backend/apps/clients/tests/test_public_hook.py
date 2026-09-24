@@ -117,8 +117,9 @@ class PublicHookTests(TestCase):
         self.assertEqual(self._post().status_code, 200)
         # find_client_by_phone cieco = le due richieste che partono insieme e
         # non vedono ancora la scheda dell'altra.
-        with patch("apps.clients.api.find_client_by_phone", side_effect=[None, Client.objects.get()]):
+        with patch("apps.clients.hook.find_client_by_phone", side_effect=[None, Client.objects.get()]) as finder:
             self.assertEqual(self._post().status_code, 200)
+        self.assertEqual(finder.call_count, 2)
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
 
     def test_a_disabled_card_is_signalled_not_revived(self):
