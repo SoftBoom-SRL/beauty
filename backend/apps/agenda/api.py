@@ -8,7 +8,6 @@ from collections import Counter, defaultdict
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -16,14 +15,14 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from apps.core.models import Location, Salon
-from apps.core.services import default_location, emit_event, log_activity
+from apps.core.services import default_location
 from common import ratelimit
 from common.auth import client_auth, staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
 
 from . import undo as undo_log
-from .models import Appointment, Pause, UndoEntry, WaitlistEntry
+from .models import Appointment, Pause, WaitlistEntry
 from .presenters import (
     _appointment_out,
     _client_appointment_out,
@@ -31,7 +30,6 @@ from .presenters import (
     _fmt_min,
     _gifts_out,
     _item_out,  # noqa: F401 — compat refactoring: rimuovere dopo l'integrazione (i test lo cercano qui)
-    _pause_label,
     _pause_out,
     _undo_out,
     _waitlist_out,
@@ -69,7 +67,8 @@ from .schemas import (
 # due moduli dei servizi si importano col suffisso.
 from .services import appointments as appointment_services
 from .services import availability as availability_services
-from .services import deposit_holds, deposits, locking, occupancy, refunds, transitions
+from .services import deposit_holds, deposits, margin, occupancy, refunds, transitions, waitlist
+from .services import pauses as pause_services  # «pauses» è anche il nome dei queryset
 
 router = Router(tags=["agenda"])
 
@@ -641,28 +640,7 @@ def appointment_margin(request, appointment_id: int):
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-
-    revenue = supplier_cost = product_cost = labor_cost = Decimal("0")
-    for item in appointment.items.select_related("service", "operator"):
-        revenue += item.price
-        supplier_cost += item.service.supplier_cost
-        product_cost += item.service.product_cost
-        labor_cost += Decimal(item.duration_min) / Decimal("60") * item.operator.hourly_cost
-    labor_cost = labor_cost.quantize(Decimal("0.01"))
-    margin = revenue - supplier_cost - product_cost - labor_cost
-    margin_pct = (
-        (margin / revenue * Decimal("100")).quantize(Decimal("0.1"))
-        if revenue
-        else Decimal("0")
-    )
-    return {
-        "revenue": revenue,
-        "supplier_cost": supplier_cost,
-        "product_cost": product_cost,
-        "labor_cost": labor_cost,
-        "margin": margin,
-        "margin_pct": margin_pct,
-    }
+    return margin.appointment_margin(appointment)
 
 
 # Registrato DOPO le rotte con suffisso letterale (/move, /check-in, .../margin)
@@ -733,32 +711,9 @@ def create_pause(request, data: PauseIn):
     from apps.staff.models import Operator  # lazy
 
     operator = salon_get(Operator, ctx, data.operator_id)
-    # Una pausa blocca l'agenda esattamente come un appuntamento: si crea sotto
-    # lo stesso lock, altrimenti una prenotazione in corso su quello slot non la
-    # vede e le due scritture finiscono sovrapposte.
-    with transaction.atomic():
-        locking.lock_salon(ctx.salon)
-        pause = Pause.objects.create(
-            salon=ctx.salon,
-            operator=operator,
-            start=data.start,
-            duration_min=data.duration_min,
-            note=data.note,
-        )
-    log_activity(
-        ctx.salon,
-        "pause.created",
-        f"Pausa per {operator.full_name}",
-        actor=ctx.user,
-        payload={"pause_id": pause.id, "start": pause.start.isoformat()},
-    )
-    undo_log.record(
-        ctx.salon,
-        kind=UndoEntry.Kind.PAUSE_CREATE,
-        label=_pause_label("Pausa aggiunta", pause),
-        actor=ctx.user,
-        after={"pauses": [undo_log.pause_snapshot(pause)]},
-        created={"pauses": [pause.id]},
+    pause = pause_services.create_pause(
+        ctx.salon, operator,
+        start=data.start, duration_min=data.duration_min, note=data.note, actor=ctx.user,
     )
     return _pause_out(pause)
 
@@ -772,28 +727,9 @@ def update_pause(request, pause_id: int, data: PauseIn):
     from apps.staff.models import Operator  # lazy
 
     operator = salon_get(Operator, ctx, data.operator_id)
-    before = undo_log.pause_snapshot(pause)
-    with transaction.atomic():
-        locking.lock_salon(ctx.salon)  # stesso lock delle prenotazioni
-        pause.operator = operator
-        pause.start = data.start
-        pause.duration_min = data.duration_min
-        pause.note = data.note
-        pause.save(update_fields=["operator", "start", "duration_min", "note", "updated_at"])
-    log_activity(
-        ctx.salon,
-        "pause.updated",
-        f"Pausa di {pause.operator.full_name} aggiornata",
-        actor=ctx.user,
-        payload={"pause_id": pause.id, "start": pause.start.isoformat()},
-    )
-    undo_log.record(
-        ctx.salon,
-        kind=UndoEntry.Kind.PAUSE_UPDATE,
-        label=_pause_label("Pausa spostata", pause),
-        actor=ctx.user,
-        before={"pauses": [before]},
-        after={"pauses": [undo_log.pause_snapshot(pause)]},
+    pause = pause_services.update_pause(
+        ctx.salon, pause, operator,
+        start=data.start, duration_min=data.duration_min, note=data.note, actor=ctx.user,
     )
     return _pause_out(pause)
 
@@ -803,25 +739,7 @@ def delete_pause(request, pause_id: int):
     ctx = request.auth
     require_scope(ctx, "agenda")
     pause = salon_get(Pause, ctx, pause_id)
-    operator_name = pause.operator.full_name
-    start = pause.start.isoformat()
-    label = _pause_label("Pausa rimossa", pause)
-    before = undo_log.pause_snapshot(pause)
-    pause.delete()
-    log_activity(
-        ctx.salon,
-        "pause.deleted",
-        f"Pausa di {operator_name} rimossa",
-        actor=ctx.user,
-        payload={"pause_id": pause_id, "start": start},
-    )
-    undo_log.record(
-        ctx.salon,
-        kind=UndoEntry.Kind.PAUSE_DELETE,
-        label=label,
-        actor=ctx.user,
-        before={"pauses": [before]},
-    )
+    pause_services.delete_pause(ctx.salon, pause, actor=ctx.user)
     return OkOut()
 
 
@@ -845,16 +763,7 @@ def waitlist_contacted(request, entry_id: int):
     ctx = request.auth
     require_scope(ctx, "agenda")
     entry = salon_get(WaitlistEntry, ctx, entry_id)
-    entry.status = WaitlistEntry.Status.CONTACTED
-    entry.save(update_fields=["status"])
-    log_activity(
-        ctx.salon,
-        "waitlist.contacted",
-        f"{entry.client.full_name} contattata dalla lista d'attesa",
-        actor=ctx.user,
-        payload={"entry_id": entry.id},
-    )
-    return _waitlist_out(entry)
+    return _waitlist_out(waitlist.mark_contacted(ctx.salon, entry, actor=ctx.user))
 
 
 # ---- Disponibilità (staff) -------------------------------------------------------
@@ -1153,25 +1062,9 @@ def client_create_waitlist(request, data: WaitlistIn):
         from apps.staff.models import Operator  # lazy
 
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
-    if data.preference not in WaitlistEntry.Preference.values:
-        raise HttpError(400, "Preferenza non valida")
-    if any(not isinstance(d, int) or d < 0 or d > 6 for d in data.exact_days):
-        raise HttpError(400, "Giorni non validi (attesi 0=lunedì … 6=domenica)")
-
-    entry = WaitlistEntry.objects.create(
-        salon=ctx.salon,
-        client=ctx.client,
-        service=service,
-        operator=operator,
-        preference=data.preference,
-        exact_days=data.exact_days,
-        exact_time=data.exact_time,
-    )
-    log_activity(
-        ctx.salon,
-        "waitlist.created",
-        f"{ctx.client.full_name} in lista d'attesa per {service.name_it}",
-        payload={"entry_id": entry.id},
+    entry = waitlist.join_waitlist(
+        ctx.salon, ctx.client, service, operator,
+        preference=data.preference, exact_days=data.exact_days, exact_time=data.exact_time,
     )
     return _waitlist_out(entry)
 
@@ -1180,19 +1073,5 @@ def client_create_waitlist(request, data: WaitlistIn):
 def client_delete_waitlist(request, entry_id: int):
     ctx = request.auth
     entry = salon_get(WaitlistEntry, ctx, entry_id, client=ctx.client)
-    service_name = entry.service.name_it
-    entry.delete()
-    # L'iscrizione spariva senza lasciare traccia: l'operatrice che aveva appena
-    # visto la cliente in lista non capiva più perché non ci fosse.
-    log_activity(
-        ctx.salon,
-        "waitlist.deleted",
-        f"{ctx.client.full_name} si è tolta dalla lista d'attesa per {service_name}",
-        payload={"entry_id": entry_id, "client_id": ctx.client.id},
-    )
-    emit_event(
-        ctx.salon,
-        "waitlist.deleted",
-        {"entry_id": entry_id, "client_id": ctx.client.id, "service_name": service_name},
-    )
+    waitlist.leave_waitlist(ctx.salon, ctx.client, entry)
     return OkOut()

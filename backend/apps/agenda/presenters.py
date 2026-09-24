@@ -8,8 +8,6 @@ Solo lettura e forma dei dati: nessuna regola di dominio (quelle stanno in
 import datetime as dt
 from collections import defaultdict
 
-from django.utils import timezone
-
 from . import undo as undo_log
 from .services import deposits
 
@@ -128,11 +126,6 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
         "gifts": _gifts_out(appointment, gifts_by_client, _codes_hidden(viewer)),
         "updated_at": appointment.updated_at,
     }
-
-
-def _pause_label(action: str, pause) -> str:
-    """«Pausa spostata · Laura, 13:00» — la frase che compare in «torna indietro»."""
-    return f"{action} · {pause.operator.full_name}, {timezone.localtime(pause.start):%H:%M}"
 
 
 def _pause_out(pause) -> dict:
