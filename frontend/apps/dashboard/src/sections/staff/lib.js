@@ -280,14 +280,11 @@ export function perfStats(perf) {
 }
 
 /** € per ricavi e costi: lo 0 dev'essere «€0», non il «Gratis» di fmtEur
- *  (convenzione dei listini servizi).
+ *  (convenzione dei listini servizi), e un valore che manca conta zero.
  *  I centesimi si scrivono sempre: senza minimumFractionDigits un costo orario
- *  di 12,50 € finiva a video come «€12,5» e uno di 8,415 € come «€8,415». */
-export function eur(v, lang) {
-  const n = Number(v) || 0;
-  if (n === 0) return '€0';
-  return '€' + n.toLocaleString(lang === 'en' ? 'en-GB' : 'it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+ *  di 12,50 € finiva a video come «€12,5» e uno di 8,415 € come «€8,415».
+ *  È la regola di fmtEurOrZero, con il nome che usa lo staff. */
+export { fmtEurOrZero as eur } from '@youty/shared';
 
 /** derive the today-status pill from OperatorStatusOut (port of staffTodayStatus) */
 export function todayStatus(op, t, lang) {

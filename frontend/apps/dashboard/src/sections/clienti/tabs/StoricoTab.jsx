@@ -5,13 +5,10 @@
 // Da ogni visita si aggiunge una nota di trattamento (con allegati) o si apre
 // la scheda tecnica, senza uscire dal profilo.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, EmptyState, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, statusMeta } from '@youty/shared';
+import { api, ApiError, EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
-
-/** fmtEur(0) scrive «Gratis» (convenzione dei listini): una caparra a zero è «€0». */
-const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
 
 export default function StoricoTab({ c }) {
   const { t, lang, fireToast, hasScope, openModal, modal } = useDash();
@@ -160,14 +157,14 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
   const saleHidden = salesHidden && !upcoming;
   const dep = depositBadge(a);
   const depLook = dep && {
-    paid: { color: 'var(--ok)', label: eur0(dep.amount, lang),
+    paid: { color: 'var(--ok)', label: fmtEurNoFree(dep.amount, lang),
       title: dep.refunded > 0
-        ? t(`Caparra incassata: ${eur0(dep.amount, lang)} ancora a credito, ${eur0(dep.refunded, lang)} già rimborsati`, `Deposit collected: ${eur0(dep.amount, lang)} still on credit, ${eur0(dep.refunded, lang)} already refunded`)
+        ? t(`Caparra incassata: ${fmtEurNoFree(dep.amount, lang)} ancora a credito, ${fmtEurNoFree(dep.refunded, lang)} già rimborsati`, `Deposit collected: ${fmtEurNoFree(dep.amount, lang)} still on credit, ${fmtEurNoFree(dep.refunded, lang)} already refunded`)
         : t('Caparra incassata', 'Deposit collected') },
-    refund_due: { color: 'var(--warn)', label: t(`Caparra da rimborsare ${eur0(dep.amount, lang)}`, `Deposit to refund ${eur0(dep.amount, lang)}`), title: t('Annullata in tempo: la caparra va restituita', 'Cancelled in time: the deposit must be returned') },
-    refunding: { color: 'var(--warn)', label: t('Rimborso caparra in corso', 'Deposit refund in progress'), title: eur0(dep.amount, lang) },
-    refunded: { color: 'var(--muted)', label: t(`Caparra rimborsata ${eur0(dep.amount, lang)}`, `Deposit refunded ${eur0(dep.amount, lang)}`), title: '' },
-    forfeited: { color: 'var(--ink-2)', label: t(`Caparra trattenuta ${eur0(dep.amount, lang)}`, `Deposit retained ${eur0(dep.amount, lang)}`), title: '' },
+    refund_due: { color: 'var(--warn)', label: t(`Caparra da rimborsare ${fmtEurNoFree(dep.amount, lang)}`, `Deposit to refund ${fmtEurNoFree(dep.amount, lang)}`), title: t('Annullata in tempo: la caparra va restituita', 'Cancelled in time: the deposit must be returned') },
+    refunding: { color: 'var(--warn)', label: t('Rimborso caparra in corso', 'Deposit refund in progress'), title: fmtEurNoFree(dep.amount, lang) },
+    refunded: { color: 'var(--muted)', label: t(`Caparra rimborsata ${fmtEurNoFree(dep.amount, lang)}`, `Deposit refunded ${fmtEurNoFree(dep.amount, lang)}`), title: '' },
+    forfeited: { color: 'var(--ink-2)', label: t(`Caparra trattenuta ${fmtEurNoFree(dep.amount, lang)}`, `Deposit retained ${fmtEurNoFree(dep.amount, lang)}`), title: '' },
   }[dep.kind];
   return (
     <div className="dk-card" style={{ boxShadow: 'none', border: '1px solid ' + (upcoming ? 'color-mix(in srgb, var(--clay) 40%, var(--hair))' : 'var(--hair)'), overflow: 'hidden', opacity: cancelled ? 0.75 : 1 }}>

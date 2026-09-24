@@ -4,15 +4,11 @@
 // merito in ordine non garantito su PostgreSQL) poteva non trovarla mai, e la
 // cliente a 9 timbri su 10 risultava «non iscritta» (14-06, 07-06).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, Icon, ProgressBar, fmtEur } from '@youty/shared';
+import { api, Icon, ProgressBar, fmtEurNoFree } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
 import { dateLabel, rewardLabel } from '../helpers.js';
-
-/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): una gift card
- *  consumata ha saldo «€0», non è un regalo. */
-const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
 
 /* Caricamento fallito: non è «nessun coupon». Prima un errore di rete si
  * leggeva come elenco vuoto, e alla cliente si diceva che non aveva buoni. */
@@ -85,7 +81,7 @@ export default function WalletTab({ c }) {
     return () => { dead = true; };
   }, [c.id, rev]);
 
-  const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + eur0(cp.value, lang);
+  const couponValue = (cp) => cp.kind === 'percent' ? `-${Number(cp.value)}%` : '-' + fmtEurNoFree(cp.value, lang);
 
   const couponList = Array.isArray(coupons) ? coupons : [];
   const available = couponList.filter((x) => x.status === 'active').length;
@@ -233,7 +229,7 @@ export default function WalletTab({ c }) {
                   </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div className="t-num" style={{ fontSize: 19, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>{eur0(g.balance, lang)}</div>
+                  <div className="t-num" style={{ fontSize: 19, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>{fmtEurNoFree(g.balance, lang)}</div>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, marginTop: 3, color: spent ? 'var(--muted-2)' : 'var(--ok)' }}>
                     <Icon name={spent ? 'check' : 'clock'} size={12} color={spent ? 'var(--muted-2)' : 'var(--ok)'} />{spent ? t('Esaurita', 'Spent') : t('Attiva', 'Active')}
                   </span>
@@ -256,7 +252,7 @@ export default function WalletTab({ c }) {
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '6px 0 16px' }}>
             <QrGlyph code={giftView.code} size={160} />
             <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '4px 12px', borderRadius: 8 }}>{giftView.code}</span>
-            <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{eur0(giftView.balance, lang)}</div>
+            <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{fmtEurNoFree(giftView.balance, lang)}</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 99, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)', background: giftView.status === 'active' ? 'var(--ok-tint)' : 'var(--paper-2)' }}>
               <Icon name={giftView.status === 'active' ? 'clock' : 'check'} size={13} color={giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)'} />
               {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : t('Esaurita', 'Spent')}
@@ -266,8 +262,8 @@ export default function WalletTab({ c }) {
             {[
               [t('Tipo', 'Type'), giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
               [giftView.buyer_client_id === c.id ? t('Destinataria', 'For') : t('Regalata da', 'From'), (giftView.buyer_client_id === c.id ? giftView.recipient_name : giftView.buyer_name) || '—'],
-              [t('Valore iniziale', 'Initial value'), eur0(giftView.initial_value, lang)],
-              [t('Saldo', 'Balance'), eur0(giftView.balance, lang)],
+              [t('Valore iniziale', 'Initial value'), fmtEurNoFree(giftView.initial_value, lang)],
+              [t('Saldo', 'Balance'), fmtEurNoFree(giftView.balance, lang)],
               [t('Pagamento', 'Payment'), giftView.payment_status === 'unpaid' ? t('Da pagare', 'Unpaid') : t('Pagata', 'Paid')],
               [t('Scadenza', 'Expiry'), giftView.expires_at ? dateLabel(giftView.expires_at, lang) : t('Nessuna', 'None')],
             ].map(([l, v], i) => (

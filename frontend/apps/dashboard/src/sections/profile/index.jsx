@@ -8,7 +8,7 @@
 // (DK_OWNER_STAFF) were dropped — the API has no per-location report endpoint;
 // KPIs shown are salon-wide, locations render as a plain list.
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, staffAuth, Icon, Avatar, fmtEur } from '@youty/shared';
+import { api, ApiError, staffAuth, Icon, Avatar, fmtEurOrZero } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 
 export default function ProfileSection() {
@@ -39,10 +39,7 @@ export default function ProfileSection() {
   // Niente arrotondamento all'euro prima di formattare: con i centesimi a
   // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
   // cifra precisa e sbagliata.
-  const eur = (n) => {
-    const v = Number(n) || 0;
-    return v === 0 ? '€0' : fmtEur(v, lang);
-  };
+  const eur = (n) => fmtEurOrZero(n, lang);
 
   const kpiCards = kpis ? [
     [t('Incasso del mese', 'Month revenue'), eur(kpis.revenue), 'wallet'],

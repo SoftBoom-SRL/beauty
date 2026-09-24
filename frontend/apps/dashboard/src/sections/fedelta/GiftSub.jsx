@@ -1,9 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
-
-/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un KPI o un
- *  saldo a zero è «€0», non un omaggio. */
-const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
+import { api, ApiError, fmtEurNoFree, Icon, EmptyState } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
@@ -124,9 +120,9 @@ export default function GiftSub() {
       ) : (
         <div className="dk-card" style={{ display: 'flex', alignItems: 'stretch', gap: 0, padding: '16px 6px', marginBottom: 18, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           {[
-            [t('Valore venduto', 'Sold value'), eur0(kpi?.sold_total || 0, lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
-            [t('Già riscattato', 'Already redeemed'), eur0(kpi?.redeemed_total || 0, lang), 'var(--muted)', t('valore consumato', 'value consumed')],
-            [t('Da riscattare', 'Outstanding'), eur0(kpi?.outstanding || 0, lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
+            [t('Valore venduto', 'Sold value'), fmtEurNoFree(kpi?.sold_total || 0, lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
+            [t('Già riscattato', 'Already redeemed'), fmtEurNoFree(kpi?.redeemed_total || 0, lang), 'var(--muted)', t('valore consumato', 'value consumed')],
+            [t('Da riscattare', 'Outstanding'), fmtEurNoFree(kpi?.outstanding || 0, lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
           ].map(([l, v, c, sub], i) => (
             <div key={i} style={{ flex: 1, padding: '2px 18px', borderLeft: i ? '1px solid var(--hair)' : 'none' }}>
               <div className="t-meta" style={{ marginBottom: 5 }}>{l}</div>
@@ -191,8 +187,8 @@ export default function GiftSub() {
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{eur0(value, lang)}</span>
-                      {used > 0 && status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{eur0(balance, lang)}</strong></span>}
+                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{fmtEurNoFree(value, lang)}</span>
+                      {used > 0 && status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{fmtEurNoFree(balance, lang)}</strong></span>}
                     </div>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
                     {g.gift_service_name && (

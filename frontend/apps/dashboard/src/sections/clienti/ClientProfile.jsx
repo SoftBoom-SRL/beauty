@@ -2,7 +2,7 @@
 // contact actions, editable labels, KPI stats, deposit banner, language card
 // and the 5 tabs (Storico / Scheda tecnica / Note / Wallet / Consensi).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, fmtEur } from '@youty/shared';
+import { api, ApiError, Avatar, Icon, fmtEur, fmtEurOrZero } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import { CatChip, ConfirmModal, ProfStat, RelRing } from './components.jsx';
 import { initialsOf, relMeta, waHref, formatBirthday, daysToBirthday, dateLabel } from './helpers.js';
@@ -276,7 +276,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14, marginBottom: 14 }}>
         <ProfStat label={t('Visite', 'Visits')} value={statsHidden ? '—' : visits} hint={statsHidden ? hiddenNote : null} />
         <ProfStat label={t('Valore totale', 'Lifetime value')}
-          value={statsHidden ? '—' : (totalSpent ? fmtEur(totalSpent, lang) : '€0')}
+          value={statsHidden ? '—' : fmtEurOrZero(totalSpent, lang)}
           hint={statsHidden ? hiddenNote : null} />
         {/* niente Math.round: con 2 visite e 95,00 € lo scontrino medio è
             47,50 €, non 48 € — e il «Valore totale» qui accanto dice 95,00 € */}

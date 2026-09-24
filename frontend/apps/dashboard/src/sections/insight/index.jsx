@@ -9,7 +9,7 @@
 // - AI suggestion cards (INSIGHTS mock) replaced by one static "fase 2" card.
 // - Analyst drawer wired to POST /api/insights/ask which 501s until fase 2.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, EmptyState, Icon, fmtDateIt, fmtEur } from '@youty/shared';
+import { api, ApiError, EmptyState, Icon, fmtDateIt, fmtEurOrZero } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { buildAllKpis, loadFavs, saveFavs, comparisonRanges, DEFAULT_FAVS } from './kpiDefs.js';
 import KpiBand from './KpiBand.jsx';
@@ -126,10 +126,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
   // Niente arrotondamento all'euro prima di formattare: con i centesimi a
   // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
   // cifra precisa e sbagliata.
-  const eur = useCallback((n) => {
-    const v = Number(n) || 0;
-    return v === 0 ? '€0' : fmtEur(v, lang);
-  }, [lang]);
+  const eur = useCallback((n) => fmtEurOrZero(n, lang), [lang]);
   const allKpis = useMemo(() => buildAllKpis(kpis, prevKpis, t, lang, eur, curCmpKpis), [kpis, prevKpis, curCmpKpis, t, lang, eur]);
   const cmpTitle = cmpRange
     ? t('Confronto con lo stesso tratto del periodo precedente: ', 'Compared with the same stretch of the previous period: ')

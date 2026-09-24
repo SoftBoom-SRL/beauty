@@ -1,5 +1,5 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { api, fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { api, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 import { centsToEur, lineCents } from './money.js';
 
 // Il denaro si conta in centesimi interi con gli arrotondamenti del server:
@@ -18,8 +18,9 @@ export function sanitizeAmtInput(raw) {
   return s;
 }
 
-/** money display — decimal strings/numbers; zero shows as "€0" (not "Gratis"). */
-export const money = (x, lang) => (Number(x) === 0 ? '€0' : fmtEur(Number(x), lang));
+/** importi a video — stringhe decimali o numeri; lo zero è «€0», non «Gratis»
+ *  (la regola di fmtEurNoFree, con il nome che usa la cassa). */
+export { fmtEurNoFree as money } from '@youty/shared';
 
 /** payment methods (API enum order: cash | card | other | gift_card) */
 export const payMethods = (t) => [
