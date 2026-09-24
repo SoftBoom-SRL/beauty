@@ -2,7 +2,8 @@
 // Le funzioni pure sono in ../lib/*.js, dove le provano i test con
 // `node --test`; da qui per ora si ri-esportano.
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, toDateStr, todayStr, salonTzOpts } from '@youty/shared';
+import { ApiError, Icon, fmtEur, toDateStr, todayStr, salonTzOpts } from '@youty/shared';
+import { createDepositLink, getAppointments, getPublicOperators, getPublicServices } from '../api/client.js';
 import { headFont } from '../theme.js';
 import { depositDueMs, depositExpired } from '../lib/appointments.js';
 import { errToast } from '../lib/errors.js';
@@ -98,7 +99,7 @@ export function DepositDue({ appt, t, lang, fireToast, compact = false, onStale 
       // arrivato con l'appuntamento: la sessione di pagamento scade e l'importo
       // può cambiare, e solo questa chiamata la rifà. Per una visita non più
       // attiva risponde 400 con il motivo, e non si apre niente.
-      const res = await api.post(`/api/sales/client/appointments/${appt.id}/deposit-link`, {});
+      const res = await createDepositLink(appt.id);
       // Dopo l'attesa il gesto è scaduto e Safari su iPhone blocca la finestra
       // nuova: il pulsante sembrava non fare niente. Si naviga nella stessa
       // scheda, e Stripe riporta qui a pagamento concluso.
@@ -168,7 +169,7 @@ export function usePublicServices(slug) {
   const [error, setError] = React.useState(null);
   React.useEffect(() => {
     let alive = true;
-    api.get('/api/catalog/public/services', { params: { salon: slug }, auth: false })
+    getPublicServices(slug)
       .then((d) => { if (alive) setCats(d); })
       .catch((e) => { if (alive) setError(e); });
     return () => { alive = false; };
@@ -182,7 +183,7 @@ export function usePublicOperators(slug) {
   const [error, setError] = React.useState(null);
   React.useEffect(() => {
     let alive = true;
-    api.get('/api/staff/public/operators', { params: { salon: slug }, auth: false })
+    getPublicOperators(slug)
       .then((d) => { if (alive) setOperators(d); })
       .catch((e) => { if (alive) setError(e); });
     return () => { alive = false; };
@@ -206,7 +207,7 @@ export function useClientAppointments() {
     // Conta solo l'ultima richiesta: al rientro possono partirne due insieme
     // (cambio di giorno e primo piano) e non devono arrivare fuori ordine.
     const n = ++seq.current;
-    api.get('/api/agenda/client/appointments')
+    getAppointments()
       .then((d) => { if (n !== seq.current) return; loaded.current = true; setData(d); setError(null); })
       .catch((e) => {
         if (n !== seq.current) return;

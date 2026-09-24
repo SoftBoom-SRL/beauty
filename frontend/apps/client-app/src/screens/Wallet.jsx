@@ -2,8 +2,9 @@
 // expiry), loyalty programs (points/threshold/progress bar).
 // Data: GET /api/marketing/client/wallet. Gift card detail → view 'giftcard'.
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { getWallet } from '../api/client.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
 
@@ -14,7 +15,7 @@ export default function Wallet() {
 
   React.useEffect(() => {
     let alive = true;
-    api.get('/api/marketing/client/wallet')
+    getWallet()
       .then((d) => { if (alive) setWallet(d); })
       .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
     return () => { alive = false; };

@@ -1,8 +1,9 @@
 // Profilo.jsx — identity + contacts (GET/PUT /api/auth/client/me), language
 // toggle, WhatsApp reminders toggle, waitlist summary, loyalty snapshot, logout.
 import React from 'react';
-import { Icon, Toggle, api, clientAuth } from '@youty/shared';
+import { Icon, Toggle, clientAuth } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { getMe, getWaitlist, getWallet, setMarketingConsent, updateMe } from '../api/client.js';
 import { headFont } from '../theme.js';
 import { ClientSubHead, errToast } from './lib.jsx';
 
@@ -16,13 +17,13 @@ export default function Profilo() {
 
   React.useEffect(() => {
     let alive = true;
-    api.get('/api/auth/client/me')
+    getMe()
       .then((d) => { if (alive) setMe(d); })
       .catch((e) => { if (alive) errToast(e, fireToast, t); });
-    api.get('/api/agenda/client/waitlist')
+    getWaitlist()
       .then((l) => { if (alive) setWlCount((l || []).filter((w) => w.status === 'active').length); })
       .catch(() => { if (alive) setWlCount(0); });
-    api.get('/api/marketing/client/wallet')
+    getWallet()
       .then((w) => { if (alive) setPoints((w?.loyalty || []).reduce((s, p) => s + Number(p.points || 0), 0)); })
       .catch(() => { if (alive) setPoints(0); });
     return () => { alive = false; };
@@ -34,7 +35,7 @@ export default function Profilo() {
     const prev = me;
     setMe((m) => (m ? { ...m, ...patch } : m)); // optimistic
     try {
-      const updated = await api.put('/api/auth/client/me', patch);
+      const updated = await updateMe(patch);
       setMe(updated);
       if (localToo) localToo(updated);
     } catch (err) {
@@ -57,7 +58,7 @@ export default function Profilo() {
     const prev = me.marketing_consent;
     setMe((m) => (m ? { ...m, marketing_consent: accepted } : m)); // optimistic
     try {
-      await api.post('/api/marketing/client/marketing-consent', { accepted });
+      await setMarketingConsent(accepted);
       fireToast({
         msg: accepted
           ? t('Riceverai offerte e novità dal salone', 'You will receive offers and news from the salon')

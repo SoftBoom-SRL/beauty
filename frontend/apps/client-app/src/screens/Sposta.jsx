@@ -5,8 +5,9 @@
 // Il 400 del preavviso minimo (ore configurabili per salone) si mostra
 // inline (banner) + toast, con il testo che arriva dal server.
 import React from 'react';
-import { ApiError, Icon, api, fmtDur, fmtTime, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, fmtDur, fmtTime, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { getAvailability, moveAppointment } from '../api/client.js';
 import { headFont } from '../theme.js';
 import {
   ClientSubHead, Meta, StickyCta, nextDays, useTodayKey, dayStripLabel, fmtDayMed, toDateStr,
@@ -45,7 +46,7 @@ export default function Sposta() {
     let alive = true;
     setSlots(null);
     setSlot(null);
-    api.get('/api/agenda/client/availability', { params: availabilityParams(days[dayIdx]) })
+    getAvailability(availabilityParams(days[dayIdx]))
       .then((list) => { if (alive) setSlots(list); })
       .catch((err) => {
         if (!alive) return;
@@ -98,7 +99,7 @@ export default function Sposta() {
     setMoving(true);
     setPolicyErr(null);
     try {
-      await api.post(`/api/agenda/client/appointments/${appt.id}/move`, { start: slot.start });
+      await moveAppointment(appt.id, slot.start);
       setDone(slot.start);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
@@ -108,7 +109,7 @@ export default function Sposta() {
         fireToast({ msg: t('Questo orario è appena stato preso: scegline un altro.', 'That time was just taken: pick another.'), icon: 'alert' });
         setSlot(null);
         setSlots(null);
-        api.get('/api/agenda/client/availability', { params: availabilityParams(days[dayIdx]) })
+        getAvailability(availabilityParams(days[dayIdx]))
           .then(setSlots).catch(() => setSlots([]));
       } else {
         errToast(err, fireToast, t);

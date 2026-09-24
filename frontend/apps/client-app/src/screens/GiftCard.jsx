@@ -2,8 +2,9 @@
 // form (POST /api/marketing/client/gift-cards — unpaid, si paga in salone;
 // Stripe checkout arriverà in fase 2).
 import React from 'react';
-import { Icon, ProgressBar, api, fmtEur, NumInput } from '@youty/shared';
+import { Icon, ProgressBar, fmtEur, NumInput } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { buyGiftCard, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, errToast } from './lib.jsx';
 import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
@@ -23,7 +24,7 @@ export default function GiftCard() {
   const [bought, setBought] = React.useState(null); // GiftCardOut
 
   const load = React.useCallback(() => {
-    api.get('/api/marketing/client/wallet')
+    getWallet()
       .then(setWallet)
       .catch((e) => { setError(e); errToast(e, fireToast, t); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -44,7 +45,7 @@ export default function GiftCard() {
     if (!valid || busy) return;
     setBusy(true);
     try {
-      const card = await api.post('/api/marketing/client/gift-cards', {
+      const card = await buyGiftCard({
         value: Number(value).toFixed(2),
         recipient_name: recipient.trim(),
       });

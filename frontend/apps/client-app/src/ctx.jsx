@@ -1,7 +1,8 @@
 // ctx.jsx — AppProvider for the client web app: branding boot, session, view routing.
 // Gli schermi lo leggono con useApp().
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api, clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
+import { clientAuth, mediaUrl, SALON_SLUG, setSalonTz, storedLang, useT, useToastHost } from '@youty/shared';
+import { getBranding } from './api/client.js';
 import { makeBrand } from './theme.js';
 
 /* Il salone servito da questa pagina è il primo segmento del path
@@ -30,7 +31,7 @@ export function AppProvider({ children }) {
   const loadBrand = useCallback(async () => {
     setBrandError(null);
     try {
-      const b = await api.get('/api/core/public/branding', { params: { salon: SALON_SLUG }, auth: false });
+      const b = await getBranding(SALON_SLUG);
       // Orari sempre quelli del salone: dall'estero la cliente leggeva l'ora
       // del proprio telefono e si presentava all'ora sbagliata.
       setSalonTz(b.timezone);

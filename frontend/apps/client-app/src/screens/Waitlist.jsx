@@ -1,8 +1,9 @@
 // Waitlist.jsx — the client's active waitlist requests + leave + join CTA.
 // Data: GET /api/agenda/client/waitlist, DELETE /api/agenda/client/waitlist/{id}.
 import React from 'react';
-import { Icon, api } from '@youty/shared';
+import { Icon } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { getWaitlist, leaveWaitlist } from '../api/client.js';
 import { ClientSubHead, Meta, prefLabel, fmtDayMed, errToast } from './lib.jsx';
 
 export default function Waitlist() {
@@ -15,7 +16,7 @@ export default function Waitlist() {
   const [removing, setRemoving] = React.useState(() => new Set());
 
   const load = React.useCallback(() => {
-    api.get('/api/agenda/client/waitlist')
+    getWaitlist()
       .then(setList)
       .catch((e) => { setError(e); errToast(e, fireToast, t); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -31,7 +32,7 @@ export default function Waitlist() {
     if (removing.has(id)) return;
     mark(id, true);
     try {
-      await api.del(`/api/agenda/client/waitlist/${id}`);
+      await leaveWaitlist(id);
       setList((l) => (l || []).filter((w) => w.id !== id));
       fireToast({ msg: t('Richiesta rimossa', 'Request removed'), icon: 'check' });
     } catch (err) {

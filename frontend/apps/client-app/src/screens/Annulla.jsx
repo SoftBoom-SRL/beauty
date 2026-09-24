@@ -2,8 +2,9 @@
 // POST /api/agenda/client/appointments/{id}/cancel. 400 policy errors are
 // surfaced inline + toast.
 import React from 'react';
-import { ApiError, Icon, api, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/shared';
+import { ApiError, Icon, fmtEur, fmtDur, fmtTime, depositMeta } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
+import { cancelAppointment } from '../api/client.js';
 import { headFont } from '../theme.js';
 import {
   ClientSubHead, Meta, fmtDayMed, apptServiceNames, errToast,
@@ -54,7 +55,7 @@ export default function Annulla() {
     setBusy(true);
     setPolicyErr(null);
     try {
-      await api.post(`/api/agenda/client/appointments/${appt.id}/cancel`);
+      await cancelAppointment(appt.id);
       setDone(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {

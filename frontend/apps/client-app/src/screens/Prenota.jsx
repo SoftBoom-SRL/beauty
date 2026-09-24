@@ -4,8 +4,9 @@
 //        (GET /api/staff/public/operators) → 2 review
 //        → POST /api/agenda/client/appointments → success (deposit messaging).
 import React from 'react';
-import { ApiError, Icon, PhoneInput, api, clientAuth, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, clientAuth, fmtEur, fmtDur, isPlausiblePhone, minutesOfDay, timeLabel } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
+import { createAppointment, getAppointments, getAvailability, getPublicAvailability, getWallet } from '../api/client.js';
 import { headFont } from '../theme.js';
 import {
   ClientSubHead, DetailRow, StickyCta, DepositDue, usePublicServices, usePublicOperators, svcLangName, catIcon,
@@ -66,7 +67,7 @@ export default function Prenota() {
   React.useEffect(() => {
     if (!session) { setGiftCards([]); return undefined; }
     let alive = true;
-    api.get('/api/marketing/client/wallet')
+    getWallet()
       // Solo le carte che la cassa applica a lei (isSpendable, la regola di
       // gift_index): quella che ho COMPRATO per un'altra persona non è un mio
       // regalo, mentre quella «a trattamento» comprata per me senza
@@ -129,11 +130,8 @@ export default function Prenota() {
       // un CGNAT la griglia si svuotava per tutte insieme. Stessa risposta,
       // senza il contatore condiviso.
       const list = session
-        ? await api.get('/api/agenda/client/availability', { params: { date: toDateStr(days[dIdx]), items } })
-        : await api.get('/api/agenda/public/availability', {
-          params: { salon: SALON_SLUG, date: toDateStr(days[dIdx]), items },
-          auth: false,
-        });
+        ? await getAvailability({ date: toDateStr(days[dIdx]), items })
+        : await getPublicAvailability({ salon: SALON_SLUG, date: toDateStr(days[dIdx]), items });
       if (seq !== slotsReq.current) return;
       setSlots(list);
     } catch (err) {
@@ -160,18 +158,18 @@ export default function Prenota() {
   const postedFor = React.useRef(null);
   const findBooked = async (startIso, ids) => {
     try {
-      const data = await api.get('/api/agenda/client/appointments');
+      const data = await getAppointments();
       return (data?.upcoming || []).find((a) => sameBooking(a, startIso, ids)) || null;
     } catch { return null; }
   };
-  const createAppointment = async () => {
+  const createAppointmentOnce = async () => {
     const attempt = slot.start + '|' + [...serviceIds].sort((a, b) => a - b).join(',');
     if (postedFor.current === attempt) {
       const existing = await findBooked(slot.start, serviceIds);
       if (existing) return existing;
     }
     postedFor.current = attempt;
-    return api.post('/api/agenda/client/appointments', { items, start: slot.start });
+    return createAppointment({ items, start: slot.start });
   };
 
   /* ---- confirm booking ---- */
@@ -179,7 +177,7 @@ export default function Prenota() {
     if (booking || !slot) return;
     setBooking(true);
     try {
-      const appt = await createAppointment();
+      const appt = await createAppointmentOnce();
       setBooked(appt);
       setStep(9);
     } catch (err) {
@@ -268,7 +266,7 @@ export default function Prenota() {
     }
     // 2) sessione creata → crea l'appuntamento
     try {
-      const appt = await createAppointment();
+      const appt = await createAppointmentOnce();
       setBooked(appt);
       setStep(9);
     } catch (err) {

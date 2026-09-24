@@ -2,8 +2,9 @@
 // Vive su /<slug>/hook: nessuna sessione, nessun OTP, solo lascia i tuoi dati.
 // Il branding (logo, colore) è quello del salone, già caricato da ctx.
 import React, { useState } from 'react';
-import { api, Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
+import { Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
+import { sendHook } from '../api/client.js';
 import { headFont } from '../theme.js';
 
 export default function Hook() {
@@ -24,7 +25,7 @@ export default function Hook() {
     setError(null);
     setBusy(true);
     try {
-      await api.post('/api/clients/public/hook', {
+      await sendHook({
         salon_slug: SALON_SLUG,
         first_name: f.first_name.trim(),
         last_name: f.last_name.trim(),
@@ -37,7 +38,7 @@ export default function Hook() {
         // il contatto nuovo nasceva sempre in italiano, e conferme e promemoria
         // le arrivavano in una lingua che magari non legge (06-20).
         lang,
-      }, { auth: false });
+      });
       setDone(true);
     } catch (err) {
       setError(err?.message || t('Errore di rete', 'Network error'));

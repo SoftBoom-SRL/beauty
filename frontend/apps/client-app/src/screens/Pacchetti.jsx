@@ -4,8 +4,9 @@
 // original price → discount badge). Il numero per il `tel:` arriva dal branding
 // pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.
 import React from 'react';
-import { Icon, api, fmtEur } from '@youty/shared';
+import { Icon, fmtEur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
+import { getPublicPackages } from '../api/client.js';
 import { headFont } from '../theme.js';
 import { ClientSubHead, DashedEmpty, usePublicServices, svcLangName, errToast } from './lib.jsx';
 
@@ -17,7 +18,7 @@ export default function Pacchetti() {
 
   React.useEffect(() => {
     let alive = true;
-    api.get('/api/catalog/public/packages', { params: { salon: SALON_SLUG }, auth: false })
+    getPublicPackages(SALON_SLUG)
       .then((d) => { if (alive) setPkgs(d); })
       .catch((e) => { if (alive) { setError(e); errToast(e, fireToast, t); } });
     return () => { alive = false; };

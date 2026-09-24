@@ -4,8 +4,9 @@
 // Niente scelta dell'operatrice: la richiesta non manda `operator_id` e vale
 // per chiunque si liberi (il campo c'è, e /api/staff/public/operators pure).
 import React from 'react';
-import { Icon, api, fmtEur, fmtDur } from '@youty/shared';
+import { Icon, fmtEur, fmtDur } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
+import { joinWaitlist } from '../api/client.js';
 import {
   ClientSubHead, StickyCta, usePublicServices, svcLangName, catIcon, errToast,
 } from './lib.jsx';
@@ -40,7 +41,7 @@ export default function WaitlistNew() {
         body.exact_days = exactDays;
         body.exact_time = exactTime;
       }
-      await api.post('/api/agenda/client/waitlist', body);
+      await joinWaitlist(body);
       fireToast({ msg: t('Sei in lista! Ti avvisiamo su WhatsApp.', 'You’re on the list! We’ll ping you on WhatsApp.'), icon: 'check' });
       setView('waitlist');
     } catch (err) {
