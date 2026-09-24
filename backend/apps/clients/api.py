@@ -24,7 +24,6 @@ from apps.core.services import emit_event, get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import has_scope, require_scope
-from common.media import signed_media_url, stored_upload_name, validate_upload
 from common.phone import canonical_phone, find_client_by_phone
 from common.schemas import OkOut
 from common.utils import salon_get
@@ -32,6 +31,14 @@ from common.utils import salon_get
 from .fields import client_payload, stamped_consents
 from .importer import import_rows
 from .labels import create_label, delete_label, label_payload, set_categories, update_label
+from .records import (
+    appointment_for,
+    attach_files,
+    note_out,
+    replace_sheet_photo,
+    sheet_out,
+    validate_attachment,
+)
 from .models import (
     Client,
     ClientCategory,
@@ -376,59 +383,6 @@ def list_client_appointments(request, client_id: int):
 # ---- Storico unificato (visite + note + schede) ---------------------------------
 
 
-def _note_out(note: ClientNote) -> dict:
-    author = getattr(note, "author", None)
-    return {
-        "id": note.id,
-        "client_id": note.client_id,
-        "appointment_id": note.appointment_id,
-        "text": note.text,
-        "visibility": note.visibility,
-        "author_id": note.author_id,
-        "author_name": (author.get_full_name() or author.email) if author else "",
-        "attachments": [_attachment_out(a) for a in note.attachments.all()],
-        "created_at": note.created_at,
-        "updated_at": note.updated_at,
-    }
-
-
-def _attachment_out(att: ClientNoteAttachment) -> dict:
-    # URL firmato e a scadenza: gli allegati delle note sono riservati e il
-    # download sotto /media/ non passa dall'autenticazione delle API.
-    return {
-        "id": att.id,
-        "name": att.name,
-        "url": signed_media_url(att.file),
-        "content_type": att.content_type,
-        "size": att.size,
-        "is_image": att.is_image,
-        "created_at": att.created_at,
-    }
-
-
-def _sheet_out(sheet: TechnicalSheet) -> dict:
-    author = getattr(sheet, "author", None)
-    return {
-        "id": sheet.id,
-        "client_id": sheet.client_id,
-        "appointment_id": sheet.appointment_id,
-        "category": sheet.category,
-        "treatment": sheet.treatment,
-        "zone": sheet.zone,
-        "products": sheet.products,
-        "params": sheet.params,
-        "outcome": sheet.outcome,
-        "duration_hold": sheet.duration_hold,
-        "advice": sheet.advice,
-        "protocol": sheet.protocol,
-        "next_step": sheet.next_step,
-        "photo": signed_media_url(sheet.photo) if sheet.photo else None,
-        "author_id": sheet.author_id,
-        "author_name": (author.get_full_name() or author.email) if author else "",
-        "created_at": sheet.created_at,
-    }
-
-
 @router.get("/{int:client_id}/history", auth=staff_auth)
 def client_history(request, client_id: int):
     """Storico completo del cliente in un'unica timeline (più recente prima).
@@ -507,18 +461,18 @@ def client_history(request, client_id: int):
                 "operator_name": a.operator.full_name if a.operator_id else "",
                 "sale": _sale_out(sale) if sale else None,
                 "deposit_sale": _sale_out(deposit) if deposit else None,
-                "notes": [_note_out(n) for n in notes_by_appt.get(a.id, [])],
-                "sheets": [_sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
+                "notes": [note_out(n) for n in notes_by_appt.get(a.id, [])],
+                "sheets": [sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
             }
         )
     for s in counter_sales:
         entries.append({"kind": "sale", "date": s.created_at, "sale": _sale_out(s)})
     for n in notes:
         if not n.appointment_id:
-            entries.append({"kind": "note", "date": n.created_at, "note": _note_out(n)})
+            entries.append({"kind": "note", "date": n.created_at, "note": note_out(n)})
     for sh in sheets:
         if not sh.appointment_id:
-            entries.append({"kind": "sheet", "date": sh.created_at, "sheet": _sheet_out(sh)})
+            entries.append({"kind": "sheet", "date": sh.created_at, "sheet": sheet_out(sh)})
     entries.sort(key=lambda e: e["date"], reverse=True)
     return {
         "client_id": client.id,
@@ -541,53 +495,6 @@ def client_history(request, client_id: int):
 # ---- Note interne (con allegati: foto e documenti) -------------------------------
 
 
-def _appointment_for(ctx, client: Client, appointment_id):
-    if not appointment_id:
-        return None
-    from apps.agenda.models import Appointment  # lazy
-
-    appointment = Appointment.objects.filter(salon=ctx.salon, client=client, id=appointment_id).first()
-    if appointment is None:
-        raise HttpError(404, "Appuntamento non trovato per questo cliente")
-    return appointment
-
-
-# Tipi ammessi negli allegati di una nota: quelli del modello, che l'interfaccia
-# già dichiara. Il controllo vero (estensione coerente col tipo e nome generato
-# dal server) sta in common.media, unico posto dove vive questa regola.
-ATTACHMENT_TYPES = ClientNoteAttachment.IMAGE_TYPES + ClientNoteAttachment.DOC_TYPES
-
-
-def _validate_upload(f: UploadedFile) -> None:
-    """Controlla un allegato prima di scrivere qualunque cosa su disco.
-
-    Guardava solo il tipo DICHIARATO dal client — che si falsifica cambiando una
-    riga della richiesta — e salvava il file col nome scelto da chi caricava: un
-    «foto.png.html» spacciato per image/png finiva su /media/ con estensione
-    .html, sullo stesso origin di /admin/.
-    """
-    validate_upload(f, allowed_types=ATTACHMENT_TYPES, max_bytes=ClientNoteAttachment.MAX_BYTES)
-
-
-def _attach_files(note: ClientNote, files: list[UploadedFile]) -> None:
-    # Prima tutti i controlli, poi le scritture: un file rifiutato a metà elenco
-    # lasciava a terra gli allegati già salvati.
-    names = [
-        stored_upload_name(f, allowed_types=ATTACHMENT_TYPES, max_bytes=ClientNoteAttachment.MAX_BYTES)
-        for f in files
-    ]
-    for f, stored in zip(files, names):
-        # Il nome originale resta nel campo descrittivo (è quello che
-        # l'operatrice ha scritto e riconosce); sul disco ci va quello nostro.
-        att = ClientNoteAttachment(
-            note=note,
-            name=(f.name or "")[:200],
-            content_type=(f.content_type or "")[:100],
-            size=f.size,
-        )
-        att.file.save(stored, f, save=True)
-
-
 @router.get("/{int:client_id}/notes", auth=staff_auth, response=list[NoteOut])
 def list_notes(request, client_id: int):
     ctx = request.auth
@@ -595,7 +502,7 @@ def list_notes(request, client_id: int):
     # conserva: leggerli richiede il permesso «clienti», come scriverli.
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    return [_note_out(n) for n in client.notes.select_related("author").prefetch_related("attachments")]
+    return [note_out(n) for n in client.notes.select_related("author").prefetch_related("attachments")]
 
 
 @router.post("/{int:client_id}/notes", auth=staff_auth, response=NoteOut)
@@ -607,7 +514,7 @@ def create_note(request, client_id: int, data: NoteIn):
         raise HttpError(400, "Il testo della nota è obbligatorio")
     note = ClientNote.objects.create(
         client=client,
-        appointment=_appointment_for(ctx, client, data.appointment_id),
+        appointment=appointment_for(ctx, client, data.appointment_id),
         text=data.text.strip(),
         visibility=data.visibility,
         author=ctx.user,
@@ -619,7 +526,7 @@ def create_note(request, client_id: int, data: NoteIn):
         actor=ctx.user,
         payload={"client_id": client.id, "note_id": note.id},
     )
-    return _note_out(note)
+    return note_out(note)
 
 
 @router.post("/{int:client_id}/notes/upload", auth=staff_auth, response=NoteOut)
@@ -638,17 +545,17 @@ def create_note_with_files(
     if not files and not text.strip():
         raise HttpError(400, "Scrivi una nota o allega almeno un file")
     for f in files:
-        _validate_upload(f)
+        validate_attachment(f)
     note = ClientNote.objects.create(
         client=client,
-        appointment=_appointment_for(ctx, client, appointment_id),
+        appointment=appointment_for(ctx, client, appointment_id),
         text=text.strip(),
         # "shared" non è una scelta di ClientNote.Visibility: era ammesso qui e
         # finiva in archivio come valore che nessuna lettura sa interpretare.
         visibility=visibility if visibility in ("private", "ai") else "private",
         author=ctx.user,
     )
-    _attach_files(note, files)
+    attach_files(note, files)
     log_activity(
         ctx.salon,
         "client.note_added",
@@ -656,7 +563,7 @@ def create_note_with_files(
         actor=ctx.user,
         payload={"client_id": client.id, "note_id": note.id, "attachments": len(files)},
     )
-    return _note_out(note)
+    return note_out(note)
 
 
 @router.put("/{int:client_id}/notes/{int:note_id}", auth=staff_auth, response=NoteOut)
@@ -672,7 +579,7 @@ def update_note(request, client_id: int, note_id: int, data: NoteUpdateIn):
     if data.visibility is not None:
         note.visibility = data.visibility
     note.save()
-    return _note_out(note)
+    return note_out(note)
 
 
 @router.post("/{int:client_id}/notes/{int:note_id}/attachments", auth=staff_auth, response=NoteOut)
@@ -681,9 +588,9 @@ def add_attachments(request, client_id: int, note_id: int, files: list[UploadedF
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     note = get_object_or_404(ClientNote, pk=note_id, client=client)
-    _attach_files(note, files)
+    attach_files(note, files)
     note.save(update_fields=["updated_at"])
-    return _note_out(note)
+    return note_out(note)
 
 
 @router.delete(
@@ -730,7 +637,7 @@ def list_sheets(request, client_id: int):
     # conserva: leggerli richiede il permesso «clienti», come scriverli.
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    return [_sheet_out(sh) for sh in client.sheets.select_related("author")]
+    return [sheet_out(sh) for sh in client.sheets.select_related("author")]
 
 
 @router.post("/{int:client_id}/sheets", auth=staff_auth, response=TechnicalSheetOut)
@@ -744,7 +651,7 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
     # un id di un altro salone (o di un'altra cliente) veniva salvato lo
     # stesso, facendo sparire la scheda dallo storico — lo storico la cerca fra
     # gli appuntamenti di questa cliente, dove quell'id non c'è.
-    appointment = _appointment_for(ctx, client, payload.pop("appointment_id", None))
+    appointment = appointment_for(ctx, client, payload.pop("appointment_id", None))
     sheet = TechnicalSheet.objects.create(
         client=client,
         author=ctx.user,
@@ -758,7 +665,7 @@ def create_sheet(request, client_id: int, data: TechnicalSheetIn):
         actor=ctx.user,
         payload={"client_id": client.id, "sheet_id": sheet.id},
     )
-    return _sheet_out(sheet)
+    return sheet_out(sheet)
 
 
 @router.post("/{int:client_id}/sheets/{int:sheet_id}/photo", auth=staff_auth, response=TechnicalSheetOut)
@@ -768,18 +675,8 @@ def upload_sheet_photo(request, client_id: int, sheet_id: int, photo: UploadedFi
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
     sheet = get_object_or_404(TechnicalSheet, pk=sheet_id, client=client)
-    # Stessa regola degli allegati: tipo dichiarato nella whitelist, estensione
-    # coerente e nome generato dal server. La foto finisce sotto
-    # technical_sheets/, servito dallo stesso origin di /admin/.
-    stored = stored_upload_name(
-        photo,
-        allowed_types=ClientNoteAttachment.IMAGE_TYPES,
-        max_bytes=ClientNoteAttachment.MAX_BYTES,
-    )
-    if sheet.photo:
-        sheet.photo.delete(save=False)
-    sheet.photo.save(stored, photo, save=True)
-    return _sheet_out(sheet)
+    replace_sheet_photo(sheet, photo)
+    return sheet_out(sheet)
 
 
 # ---------------------------------------------------------------------------

@@ -221,6 +221,8 @@ class AttachmentOut(Schema):
     created_at: datetime
 
 
+# Il docstring è la description OpenAPI e resta com'è: `api._note_out` è ora
+# `records.note_out`.
 class NoteOut(Schema):
     """Serializzata da api._note_out (dizionari), non da istanze: niente resolver."""
 
@@ -256,6 +258,8 @@ class NoteUpdateIn(Schema):
 # ---- Schede tecniche (sola lettura dopo la creazione) -------------------------
 
 
+# Il docstring è la description OpenAPI e resta com'è: `api._sheet_out` è ora
+# `records.sheet_out`.
 class TechnicalSheetOut(Schema):
     """Serializzata da api._sheet_out (dizionari), non da istanze: niente resolver.
 
