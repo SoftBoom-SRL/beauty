@@ -1,18 +1,10 @@
 // api.js — fetch wrapper for the youty Django Ninja backend.
 // JSON in/out, Bearer auth via pluggable token provider, 401 hook with
 // single retry (used by staffAuth for refresh-and-retry).
-import { readableDetail } from './apiErrors.js';
+// ApiError sta in apiErrors.js, modulo puro: così la importano anche i test.
+import { ApiError, readableDetail } from './apiErrors.js';
 
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
-export class ApiError extends Error {
-  constructor(status, message, data) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.data = data;
-  }
-}
 
 /* ---- pluggable auth ---- */
 let tokenProvider = null;      // () => string | null

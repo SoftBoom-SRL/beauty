@@ -1,6 +1,9 @@
 // @youty/shared — raw ESM, consumed directly by Vite (no build step).
 
-export { api, ApiError, qs, mediaUrl, API_URL, setTokenProvider, setOnUnauthorized } from './api.js';
+export { api, qs, mediaUrl, API_URL, setTokenProvider, setOnUnauthorized } from './api.js';
+// L'errore dell'API e il testo o il toast che se ne mostra (logica pura).
+//   catch (err) { toastApiError(err, fireToast, t); }  ·  setErr(apiErrorText(err, t))
+export { ApiError, apiErrorText, toastApiError } from './apiErrors.js';
 
 // Auth stores are namespaced (both expose login/logout/getSession/subscribe):
 //   import { staffAuth, clientAuth } from '@youty/shared';
