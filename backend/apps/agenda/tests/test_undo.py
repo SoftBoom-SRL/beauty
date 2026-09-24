@@ -11,7 +11,7 @@ from unittest.mock import patch
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.core.models import DepositRule, OutboxEvent
+from apps.core.models import DepositRule, OutboxEvent, Salon, SalonSettings
 from common.testing import bearer, put_json
 
 from ..models import Appointment, Pause, UndoEntry, WaitlistEntry
@@ -643,6 +643,42 @@ class UndoOfACancellationSendsANewLinkTests(UndoTestBase):
         self.assertEqual(sent, [""])  # link svuotato: ensure_deposit_link ne crea uno nuovo
         appointment.refresh_from_db()
         self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+
+class UndoKeepsTheDepositDeadlineOnTheRealStartTests(UndoTestBase):
+    """Seguito della voce 4 (24/09): con «Indietro» la scadenza della caparra segue l'orario vero."""
+
+    def setUp(self):
+        super().setUp()
+        # Due giorni di termine: per una visita di domani la scadenza è
+        # tagliata sull'inizio, per una della settimana prossima no.
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"deposit_hold_minutes": 48 * 60})
+        DepositRule.objects.create(
+            salon=self.salon, name="Sempre", conditions={}, amount_type="fixed", amount=Decimal("10.00")
+        )
+        self.salon = Salon.objects.get(pk=self.salon.pk)
+        enabled = patch("apps.sales.stripe_service.payments_enabled", return_value=True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
+
+    def test_undoing_a_move_cuts_the_deadline_on_the_start_again(self):
+        tomorrow = _aware(timezone.localdate() + dt.timedelta(days=1), 10)
+        with patch("apps.clients.services.client_facts", return_value={}):
+            appointment = self._book(tomorrow)
+        self.assertEqual(appointment.deposit_due_at, tomorrow)
+        move_appointment(appointment, _aware(self.day, 10), actor=self.user)
+        appointment.refresh_from_db()
+        self.assertGreater(appointment.deposit_due_at, tomorrow)
+        # lo spostamento è già partito: «Indietro» manda un messaggio nuovo
+        OutboxEvent.objects.update(status=OutboxEvent.Status.SENT, sent_at=timezone.now(), attempts=1)
+        self.assertEqual(self._undo().status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.start, tomorrow)
+        self.assertEqual(appointment.deposit_due_at, tomorrow)
+        (event,) = OutboxEvent.objects.filter(
+            status=OutboxEvent.Status.PENDING, event_type="appointment.moved"
+        )
+        self.assertEqual(parse_datetime(event.payload["deposit_due_at"]), tomorrow)
 
 
 class UndoOfANoShowSendsANewLinkTests(UndoTestBase):

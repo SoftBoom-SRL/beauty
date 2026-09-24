@@ -36,6 +36,7 @@ from apps.core.services import log_activity
 from common.money import CENT
 
 from .models import Appointment, AppointmentService, Pause, UndoEntry
+from .services.deposit_holds import realign_deposit_due
 from .services.deposits import close_deposit_link_after_commit, renew_deposit_link_after_commit
 from .services.freed_slots import _appointment_spans, _chain_spans, _spans_minus, emit_with_freed_slots
 from .services.locking import lock_salon
@@ -371,11 +372,17 @@ def _restore_appointment(snap: dict) -> Appointment:
     for field in _SNAPSHOT_FIELDS:
         setattr(appointment, field, snap[field])
     appointment.deposit_amount = Decimal(snap["deposit_amount"])
+    # La scadenza della caparra segue l'inizio rimesso a posto, come nello
+    # spostamento: annullando lo spostamento di una visita di domani restava la
+    # scadenza calcolata per il nuovo orario, oltre l'inizio vero, e il
+    # messaggio di «Indietro» la riportava.
+    due = ["deposit_due_at"] if realign_deposit_due(appointment) else []
     appointment.save(
         update_fields=[
             "start",
             *(field.removesuffix("_id") for field in _SNAPSHOT_FIELDS),
             "deposit_amount",
+            *due,
             "updated_at",
         ]
     )

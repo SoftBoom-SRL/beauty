@@ -996,6 +996,30 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         appointment.refresh_from_db()
         self.assertEqual(appointment.deposit_due_at, due)
 
+    def test_detaching_the_first_service_moves_the_deadline_with_the_start(self):
+        """Seguito della voce 4: staccando il primo servizio la visita comincia
+        dopo, e la scadenza tagliata sull'inizio lo segue."""
+        from ..services.appointments import split_appointment
+
+        self._settings(hold=48 * 60)
+        tomorrow = timezone.localdate() + dt.timedelta(days=1)
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            with patch("apps.clients.services.client_facts", return_value={}):
+                appointment = create_appointment(
+                    self.salon, self.client_obj,
+                    [
+                        {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                        {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                    ],
+                    _aware(tomorrow, 10), via="dashboard",
+                )
+            self.assertEqual(appointment.deposit_due_at, _aware(tomorrow, 10))
+            first = appointment.items.order_by("order").first()
+            original, _created = split_appointment(appointment, first.id, _aware(self.day, 15))
+        original.refresh_from_db()
+        self.assertEqual(original.start, _aware(tomorrow, 11))
+        self.assertEqual(original.deposit_due_at, _aware(tomorrow, 11))
+
     def test_a_visit_moved_earlier_gets_the_deadline_cut_on_the_new_start(self):
         from ..services.deposit_holds import process_deposit_holds
 

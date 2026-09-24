@@ -17,7 +17,7 @@ from apps.core.services import log_activity
 
 from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, UndoEntry
-from .deposit_holds import _effective_deposit_due, _hold_settings, schedule_deposit_hold
+from .deposit_holds import realign_deposit_due, schedule_deposit_hold
 from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_total
 from .freed_slots import _appointment_spans, _chain_spans, _spans_union, emit_with_freed_slots
 from .locking import _lock_and_reload, lock_salon
@@ -388,20 +388,13 @@ def move_appointment(
             if item.operator_id != target.id:
                 item.operator = target
                 item.save(update_fields=["operator"])
-    if (
-        appointment.deposit_status == Appointment.DepositStatus.REQUIRED
-        and appointment.deposit_due_at is not None
-    ):
-        # La scadenza della caparra non supera mai l'inizio: segue quello
-        # nuovo con la regola del rilascio (`_effective_deposit_due`). Si
-        # riallineava solo alla lettura dopo o col cron: prenotata lunedì alle
-        # 18 per martedì alle 10 con 24 ore di termine e spostata a giovedì,
-        # il messaggio dello spostamento diceva «entro martedì alle 10» invece
-        # che alle 18, e così la risposta dell'API.
-        hold, _ = _hold_settings(appointment.salon)
-        if hold > 0:
-            appointment.deposit_due_at = _effective_deposit_due(appointment, hold)
-            changed.append("deposit_due_at")
+    # La scadenza della caparra non supera mai l'inizio: segue quello nuovo
+    # con la regola del rilascio. Si riallineava solo alla lettura dopo o col
+    # cron: prenotata lunedì alle 18 per martedì alle 10 con 24 ore di termine
+    # e spostata a giovedì, il messaggio dello spostamento diceva «entro
+    # martedì alle 10» invece che alle 18, e così la risposta dell'API.
+    if realign_deposit_due(appointment):
+        changed.append("deposit_due_at")
     appointment.save(update_fields=changed)
 
     log_activity(
@@ -510,6 +503,10 @@ def split_appointment(
         # Il primo servizio rimasto resta all'ora in cui era: la visita inizia da lì.
         appointment.start = appointment.start + dt.timedelta(minutes=was_at[remaining[0].id])
         changed.append("start")
+        # E la scadenza della caparra, tagliata sull'inizio di prima, lo segue
+        # come nello spostamento: restava all'ora di un servizio staccato.
+        if realign_deposit_due(appointment):
+            changed.append("deposit_due_at")
     elif position < len(remaining):
         # Staccato in mezzo: chi veniva dopo resta alla sua ora, e il tempo del
         # servizio tolto diventa attesa dopo quello che lo precedeva.
