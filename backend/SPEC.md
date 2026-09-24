@@ -409,6 +409,11 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   `deposit.paid` ha la stessa forma online e con l'incasso al banco: i campi
   dell'appuntamento, come gli altri eventi dell'agenda, più `amount`;
   setup_intent.succeeded → salva payment_method sul cliente.
+  Caparra pagata per un appuntamento che non c'è più → rimborso e una sola riga
+  `deposit.orphan_payment` (prima «in corso», poi l'esito; la chiamata a Stripe è
+  fuori dalla transazione). Mentre un'altra consegna sta rimborsando, 503 «Rimborso
+  della caparra in corso: riprova tra poco», così Stripe ritenta; una riga ferma
+  «in corso» da più di 10 minuti si riprende con la stessa chiave di idempotenza.
 
 **Tests**: finalize_sale ok e mismatch pagamenti → errore; sconto/omaggio amounts;
 deposito detratto; today-summary.

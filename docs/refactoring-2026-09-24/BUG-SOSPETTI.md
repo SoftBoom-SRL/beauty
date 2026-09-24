@@ -958,7 +958,7 @@ commit riproduce il difetto: fallisce sul codice di prima e passa dopo.
 | 7 | `d704b8b` | |
 | 8 | `1d761ed` | i SetupIntent creati prima del deploy non hanno `acct`: si confrontano come prima |
 | 9 | `cc07b51` | |
-| 10 | `9467e35`, `7daf7a3`, `5a72643`, … | rimborso fuori dal lock; riga «in corso» ripresa dopo 10 minuti |
+| 10 | `9467e35`, `7daf7a3`, `5a72643`, `acd71f4` | rimborso fuori dal lock; una riga «in corso» ferma da più di 10 minuti si riprende; nel frattempo il webhook risponde 503 e Stripe riprova |
 | 11 | `c379327`, `d678667` | anche una vendita senza cliente, come in cassa |
 | 12 | `39b28c5` | «gift_card» resta un metodo ammesso per pagare una gift card: scelta di prodotto |
 | 13 | `92f7323`, `cffa308` | |
