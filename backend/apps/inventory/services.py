@@ -16,6 +16,20 @@ from apps.core.services import log_activity
 
 from .models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement
 
+# Causali ammesse per uno scarico a mano dal magazzino.
+UNLOAD_KINDS = {
+    StockMovement.Kind.INTERNAL_USE,
+    StockMovement.Kind.ADJUSTMENT,
+    StockMovement.Kind.TRANSFER,
+}
+
+# Tetto alla quantità di un carico. La colonna è numeric(10,2): oltre i cento
+# milioni PostgreSQL risponde «numeric field overflow», cioè un 500 (su SQLite
+# dei test passa e basta). Il caso vero è l'EAN di tredici cifre che il CSV
+# della bolla mette nell'ultima colonna, letto come quantità (09-06). Nessun
+# salone carica centomila confezioni in una volta.
+MAX_LOAD_QTY = Decimal("100000")
+
 
 def _lock_salon(salon) -> None:
     """Serializza dentro la transazione corrente le scritture di magazzino del salone.

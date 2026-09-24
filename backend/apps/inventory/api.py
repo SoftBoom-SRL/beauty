@@ -1,8 +1,7 @@
-import logging
 from decimal import Decimal
 from typing import Optional
 
-from django.db import DatabaseError, transaction
+from django.db import transaction
 from django.db.models import Case, F, IntegerField, ProtectedError, Q, Value, When
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -19,6 +18,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 
+from .csv_load import load_rows
 from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
     CategoryIn,
@@ -38,16 +38,9 @@ from .schemas import (
     SupplierIn,
     SupplierOut,
 )
-from .services import apply_movement, generate_draft_orders, receive_order
+from .services import MAX_LOAD_QTY, UNLOAD_KINDS, apply_movement, generate_draft_orders, receive_order
 
 router = Router(tags=["inventory"])
-logger = logging.getLogger(__name__)
-
-UNLOAD_KINDS = {
-    StockMovement.Kind.INTERNAL_USE,
-    StockMovement.Kind.ADJUSTMENT,
-    StockMovement.Kind.TRANSFER,
-}
 
 # PositiveSmallIntegerField: sopra questo valore il database rifiuta la riga, e
 # al cliente arriva un 500 invece del 400 che gli spiega cosa ha sbagliato.
@@ -55,7 +48,8 @@ MAX_CATEGORY_ORDER = MAX_POSITIVE_SMALL_INT
 
 # La fattura del carico finisce in uno storage servito da noi: senza un tetto
 # alla dimensione e un elenco di formati, il campo «allega fattura» è un
-# caricamento libero di file arbitrari (stesso controllo di clients/api.py).
+# caricamento libero di file arbitrari (stesso controllo degli allegati delle
+# note cliente, clients/records.py).
 INVOICE_TYPES = (
     "application/pdf",
     "image/jpeg",
@@ -65,13 +59,6 @@ INVOICE_TYPES = (
     "image/heif",
 )
 INVOICE_MAX_BYTES = 15 * 1024 * 1024
-
-# Tetto alla quantità di un carico. La colonna è numeric(10,2): oltre i cento
-# milioni PostgreSQL risponde «numeric field overflow», cioè un 500 (su SQLite
-# dei test passa e basta). Il caso vero è l'EAN di tredici cifre che il CSV
-# della bolla mette nell'ultima colonna, letto come quantità (09-06). Nessun
-# salone carica centomila confezioni in una volta.
-MAX_LOAD_QTY = Decimal("100000")
 
 
 def _products_qs(ctx):
@@ -290,63 +277,6 @@ def unload_product(request, product_id: int, data: ProductUnloadIn):
     return movement
 
 
-def _single_active_match(qs, what: str) -> Optional[Product]:
-    """L'unico prodotto ATTIVO che corrisponde, None se nessuno; più di uno = errore di riga.
-
-    Nome e SKU non sono univoci: la marca è un campo a parte e un prodotto
-    sostituito eredita spesso il codice del fornitore. Con `.first()` sui
-    prodotti di ogni stato il carico finiva sull'omonimo di un'altra marca o
-    sul vecchio articolo disattivato, invisibile in elenco, e la risposta
-    diceva «caricato» (09-02, 15-04).
-    """
-    matches = list(qs.filter(active=True).order_by("id")[:2])
-    if len(matches) > 1:
-        raise HttpError(
-            400, f"{what} ambiguo: più prodotti attivi corrispondono, scegli il prodotto dall'elenco"
-        )
-    return matches[0] if matches else None
-
-
-def _csv_row_product(ctx, row, default_supplier_id) -> tuple[Product, str]:
-    """(prodotto, esito) di una riga di carico. HttpError = errore della riga."""
-    if row.qty <= 0:
-        raise HttpError(422, "Quantità non valida")
-    if row.qty > MAX_LOAD_QTY:
-        raise HttpError(422, f"Quantità fuori scala: {row.qty} (controlla le colonne della riga)")
-    if row.product_id is not None:
-        # Il prodotto scelto dall'elenco: l'id vince su SKU e nome (C7).
-        product = Product.objects.filter(salon=ctx.salon, pk=row.product_id).first()
-        if product is None:
-            raise HttpError(400, "Prodotto non trovato")
-        return product, "loaded"
-    if not row.sku and not row.name:
-        raise HttpError(400, "Riga senza nome né SKU")
-    products = Product.objects.filter(salon=ctx.salon)
-    product = None
-    if row.sku:
-        product = _single_active_match(products.filter(sku__iexact=row.sku), "SKU")
-    if product is None and row.name:
-        product = _single_active_match(products.filter(name__iexact=row.name), "Nome")
-    if product is not None:
-        return product, "loaded"
-
-    # Prodotto nuovo. Le lunghezze si controllano qui: oltre il limite della
-    # colonna PostgreSQL risponde «value too long», cioè un 500.
-    name = row.name or row.sku
-    if len(name) > Product._meta.get_field("name").max_length:
-        raise HttpError(400, "Nome del nuovo prodotto troppo lungo")
-    if len(row.sku) > Product._meta.get_field("sku").max_length:
-        raise HttpError(400, "SKU del nuovo prodotto troppo lungo")
-    supplier_id = row.supplier_id or default_supplier_id
-    if not supplier_id:
-        raise HttpError(400, "Fornitore mancante per il nuovo prodotto")
-    supplier = Supplier.objects.filter(salon=ctx.salon, pk=supplier_id).first()
-    if supplier is None:
-        raise HttpError(400, "Fornitore non trovato")
-    product = Product.objects.create(salon=ctx.salon, name=name, sku=row.sku, supplier=supplier)
-    return product, "created"
-
-
 @router.post("/load-csv", auth=staff_auth, response=LoadCsvOut)
 def load_csv(request, data: LoadCsvIn):
     """Carico multiplo da CSV: per `product_id`, altrimenti per SKU poi per nome
@@ -360,40 +290,8 @@ def load_csv(request, data: LoadCsvIn):
     """
     ctx = request.auth
     require_scope(ctx, "inventory")
-    results = []
-    loaded = created = errors = 0
-    for idx, row in enumerate(data.rows, start=1):
-        label = row.name or row.sku
-        try:
-            with transaction.atomic():
-                product, status = _csv_row_product(ctx, row, data.supplier_id)
-                apply_movement(
-                    product,
-                    kind=StockMovement.Kind.LOAD,
-                    qty=row.qty,
-                    reason="Carico CSV",
-                    author=ctx.user,
-                )
-        except HttpError as exc:
-            errors += 1
-            results.append({"row": idx, "name": label, "status": "error", "error": str(exc)})
-            continue
-        except DatabaseError:
-            logger.exception("load-csv: riga %s non salvata (salone=%s)", idx, ctx.salon.id)
-            errors += 1
-            results.append(
-                {
-                    "row": idx,
-                    "name": label,
-                    "status": "error",
-                    "error": "Riga non salvata: valori fuori dai limiti del magazzino",
-                }
-            )
-            continue
-        loaded += 1
-        if status == "created":
-            created += 1
-        results.append({"row": idx, "product_id": product.id, "name": product.name, "status": status})
+    outcome = load_rows(ctx, data.rows, data.supplier_id)
+    loaded, created, errors = outcome["loaded"], outcome["created"], outcome["errors"]
     log_activity(
         ctx.salon,
         "stock.csv_loaded",
@@ -401,7 +299,7 @@ def load_csv(request, data: LoadCsvIn):
         actor=ctx.user,
         payload={"loaded": loaded, "created": created, "errors": errors},
     )
-    return {"results": results, "loaded": loaded, "created": created, "errors": errors}
+    return outcome
 
 
 # ---- Movimenti ---------------------------------------------------------------
