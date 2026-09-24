@@ -1,0 +1,59 @@
+# Controlli automatici: lint, test e build di backend e frontend.
+#
+# Girano sulle pull request e sui push su main. Il deploy (Coolify) parte dal
+# push su main indipendentemente da qui: questa è la rete che dice se il codice
+# arrivato su main è sano, non un cancello davanti al deploy.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # come backend/Dockerfile
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Nessuna variabile d'ambiente: con DEBUG di serie acceso bastano SQLite e le
+      # chiavi di sviluppo; Stripe e Yourang nei test sono finti. Non impostare
+      # DEBUG=0 qui: il controllo di produzione pretende segreti veri.
+      - run: ruff check .
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test --noinput --parallel auto
+
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"   # come frontend/Dockerfile
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

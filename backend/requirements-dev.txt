@@ -1,0 +1,5 @@
+# Strumenti di sviluppo e CI, NON nell'immagine di produzione (quella installa
+# solo requirements.txt). Uso: pip install -r requirements.txt -r requirements-dev.txt
+ruff==0.15.8
+# traceback leggibili dai test lanciati con --parallel
+tblib==3.2.2
