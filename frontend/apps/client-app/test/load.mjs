@@ -1,9 +1,11 @@
 // Carica un modulo dell'app cliente che `node --test` da solo non saprebbe
 // caricare, perché importa api.js, React o degli schermi .jsx: esbuild lo
 // impacchetta con un '@youty/shared' finto (il sorgente `shared`, solo i nomi
-// che servono alla prova), con ogni .jsx sostituito da un componente muto che
-// porta il nome del file e, a richiesta, con un React finto per provare gli
-// hook (vedi renderHook). Non è un file di test: lo importano i *.test.js.
+// che servono alla prova) e, a richiesta, con un React finto per provare hook
+// e schermi (vedi renderHook e mount). I .jsx diventano componenti muti che
+// portano il nome del file, oppure, con `jsx: true`, si compilano davvero
+// (salvo quelli in `stubs`), con ctx.jsx sostituito dal sorgente `ctx`.
+// Non è un file di test: lo importano i *.test.js.
 import { build } from 'esbuild';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,24 +55,50 @@ export function useMemo(fn, deps) {
   inst.slots[i] = { v, deps };
   return v;
 }
-export default { useState, useRef, useEffect, useCallback, useMemo };
+export const Fragment = 'Fragment';
+export default { useState, useRef, useEffect, useCallback, useMemo, Fragment };
+`;
+
+/* Il runtime JSX «automatico», come nel build di Vite: elementi { type, props, key }. */
+const JSX_RUNTIME = `
+export const Fragment = 'Fragment';
+export function jsx(type, props, key) {
+  const p = { ...(props || {}) };
+  return { type, props: p, key: key === undefined ? null : key };
+}
+export const jsxs = jsx;
 `;
 
 /** `entry` è un percorso da apps/client-app/ (es. 'src/api/client.js'). */
-export async function loadModule(entry, { shared = '', react = false } = {}) {
+export async function loadModule(entry, { shared = '', react = false, jsx = false, stubs = [], ctx = '' } = {}) {
+  const muto = (a) => ({ path: a.path.split('/').pop().replace(/\.jsx$/, ''), namespace: 'muto' });
   const res = await build({
     entryPoints: [join(APP, entry)],
     bundle: true, write: false, format: 'esm', platform: 'neutral', logLevel: 'silent',
+    jsx: 'automatic', loader: { '.js': 'jsx', '.jsx': 'jsx' },
     plugins: [{
       name: 'finti',
       setup(b) {
         b.onResolve({ filter: /^@youty\/shared$/ }, () => ({ path: 'shared', namespace: 'finto' }));
-        if (react) b.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'finto' }));
-        b.onResolve({ filter: /\.jsx$/ }, (a) => ({ path: a.path.split('/').pop().replace(/\.jsx$/, ''), namespace: 'muto' }));
-        b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => ({ contents: a.path === 'react' ? REACT : shared, loader: 'js' }));
-        b.onLoad({ filter: /.*/, namespace: 'muto' }, (a) => ({
-          contents: `export default function ${a.path.replace(/\W/g, '_')}() { return null; }`, loader: 'js',
-        }));
+        if (react) {
+          b.onResolve({ filter: /^react$/ }, () => ({ path: 'react', namespace: 'finto' }));
+          b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx-runtime', namespace: 'finto' }));
+        }
+        if (jsx) {
+          b.onResolve({ filter: /(^|\/)ctx\.jsx$/ }, () => ({ path: 'ctx', namespace: 'finto' }));
+          b.onResolve({ filter: /\.jsx$/ }, (a) => (stubs.includes(a.path.split('/').pop()) ? muto(a) : undefined));
+        } else {
+          b.onResolve({ filter: /\.jsx$/ }, muto);
+        }
+        const SRC = { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared, ctx };
+        b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => ({ contents: SRC[a.path], loader: 'js', resolveDir: APP }));
+        b.onLoad({ filter: /.*/, namespace: 'muto' }, (a) => {
+          const name = a.path.replace(/\W/g, '_');
+          return {
+            contents: `export default function ${name}() { return null; }\n${name}.stub = true;\nexport { ${name} };`,
+            loader: 'js',
+          };
+        });
       },
     }],
   });
@@ -102,6 +130,62 @@ export function renderHook(hook, ...args) {
   };
   h.render();
   return h;
+}
+
+/** Monta uno schermo col React finto: `tree` è l'albero degli elementi che
+ *  restituisce, con i componenti figli già espansi (vedi expand). */
+export function mount(Comp, props = {}) {
+  const h = renderHook(Comp, props);
+  return {
+    get tree() { return expand(h.result); },
+    render: () => h.render(props),
+    unmount: () => h.unmount(),
+  };
+}
+
+/** Sostituisce ogni componente figlio con quello che disegna. Si possono
+ *  espandere solo i componenti senza hook (un hook fuori dal render dello
+ *  schermo si ferma con un errore): quelli con gli hook vanno fra gli stub.
+ *  Gli stub (funzioni con `.stub = true`) restano nell'albero con le loro
+ *  props, così la prova li trova (il campo del telefono, l'icona). */
+export function expand(node) {
+  if (Array.isArray(node)) return node.map(expand);
+  if (!node || typeof node !== 'object' || !('props' in node)) return node;
+  if (typeof node.type === 'function' && !node.type.stub) return expand(node.type(node.props));
+  const kids = node.props.children;
+  return kids === undefined ? node : { ...node, props: { ...node.props, children: expand(kids) } };
+}
+
+const kids = (el) => {
+  const c = el && typeof el === 'object' ? el.props?.children : null;
+  if (c == null || c === false || c === true) return [];
+  return (Array.isArray(c) ? c : [c]).flat(Infinity);
+};
+/** Gli elementi dell'albero che soddisfano `pred`. */
+export function findAll(tree, pred) {
+  const out = [];
+  const walk = (el) => {
+    if (Array.isArray(el)) { el.forEach(walk); return; }
+    if (!el || typeof el !== 'object' || !('props' in el)) return;
+    if (pred(el)) out.push(el);
+    kids(el).forEach(walk);
+  };
+  walk(tree);
+  return out;
+}
+/** Il testo di un elemento, figli compresi. */
+export function textOf(el) {
+  if (el == null || el === false || el === true) return '';
+  if (typeof el === 'string' || typeof el === 'number') return String(el);
+  if (Array.isArray(el)) return el.map(textOf).join('');
+  return kids(el).map(textOf).join('');
+}
+/** Il pulsante (o link) il cui testo è `label` (stringa esatta o RegExp). */
+export function button(tree, label) {
+  const ok = (s) => (label instanceof RegExp ? label.test(s) : s === label);
+  const found = findAll(tree, (el) => (el.type === 'button' || el.type === 'a') && ok(textOf(el).trim()));
+  if (found.length !== 1) throw new Error(`pulsante «${label}»: ${found.length} trovati`);
+  return found[0];
 }
 
 /** Una Promise da risolvere o rifiutare a mano, per decidere l'ordine delle risposte. */
