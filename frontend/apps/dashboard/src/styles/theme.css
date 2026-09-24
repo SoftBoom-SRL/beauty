@@ -99,7 +99,6 @@
 .dk-side-collapsed .dk-salon .dk-salon-chev { display: none !important; }
 .dk-side-collapsed .dk-navitem { justify-content: center; padding-left: 0; padding-right: 0; }
 .dk-side-collapsed .dk-logo { justify-content: center; padding-left: 0; padding-right: 0; }
-.dk-side-collapsed .dk-side-extlink { display: none !important; }
 .dk-side-collapsed .dk-logo > span { display: none; }
 .dk-side-collapsed .dk-salon { justify-content: center; padding-left: 0; padding-right: 0; }
 .dk-side-collapsed .dk-subtabs { display: none !important; }

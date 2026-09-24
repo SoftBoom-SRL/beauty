@@ -18,7 +18,7 @@ export * from '../packages/shared/src/labels.js';
 // li importano dal file).
 export {
   COUNTRIES, DEFAULT_ISO2, countryOf,
-  splitPhone, joinPhone, formatNational, formatPhone, normalizePhone, isPlausiblePhone,
+  splitPhone, joinPhone, formatNational, normalizePhone, isPlausiblePhone,
 } from '../packages/shared/src/phone.js';
 
 // La classe vera (non una copia): il test che costruisce l'errore e il modulo

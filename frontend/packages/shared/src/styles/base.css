@@ -98,11 +98,6 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 input, textarea, select { font-family: inherit; }
 
 /* ---------- Type utilities ---------- */
-.t-serif { font-family: var(--serif); }
-.t-display {
-  font-family: var(--serif); font-weight: 400; font-size: 30px;
-  line-height: 1.08; letter-spacing: -0.01em; color: var(--ink);
-}
 .t-title {
   font-family: var(--serif); font-weight: 500; font-size: 23px;
   line-height: 1.12; letter-spacing: -0.005em; color: var(--ink);
@@ -129,15 +124,6 @@ input, textarea, select { font-family: inherit; }
   box-shadow: var(--sh-card);
 }
 
-/* ---------- Pills / chips ---------- */
-.chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 32px; padding: 0 13px; border-radius: var(--r-pill);
-  font-size: 13px; font-weight: 600; white-space: nowrap;
-  background: var(--surface); color: var(--ink-2);
-  border: 1px solid var(--hair); transition: all 160ms var(--ease);
-}
-.chip--active { background: var(--ink); color: #fff; border-color: var(--ink); }
 
 /* ---------- Buttons ---------- */
 .btn {
@@ -167,7 +153,6 @@ input, textarea, select { font-family: inherit; }
 
 /* ---------- Animations ---------- */
 @keyframes slideUp { from { transform: translateY(16px); } to { transform: translateY(0); } }
-@keyframes sheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 @keyframes fadeIn { from { opacity: 0.2; } to { opacity: 1; } }
 @keyframes popIn { from { transform: scale(0.95); } to { transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }

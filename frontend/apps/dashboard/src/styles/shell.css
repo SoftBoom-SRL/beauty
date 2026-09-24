@@ -41,4 +41,3 @@
 .dk-iconbtn { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--hair); cursor: pointer; transition: all 150ms var(--ease); }
 .dk-iconbtn:hover { background: var(--surface-2); border-color: var(--line-strong); }
 .dk-page { padding: 28px 30px 40px; }
-.dk-pagehead { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; gap: 20px; }

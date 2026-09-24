@@ -1,10 +1,10 @@
 export { Icon, ICON_PATHS } from './Icon.jsx';
 export {
-  Avatar, Chip, SegBar, Toggle, Sheet, Toast,
+  Avatar, Toggle, Toast,
   Sparkline, ProgressBar, Delta,
-  SectionLabel, EmptyState, SubHeader,
+  EmptyState,
 } from './primitives.jsx';
 export { NumInput } from './NumInput.jsx';
 export { PhoneInput } from './PhoneInput.jsx';
 export { useToastHost } from './useToastHost.js';
-export { statusMeta, depositMeta, segMeta } from './meta.js';
+export { statusMeta, depositMeta } from './meta.js';
