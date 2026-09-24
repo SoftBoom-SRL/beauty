@@ -18,7 +18,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from . import wallet
-from .codes import COUPON_CODE_LENGTH, codes_hidden, status_q, unique_code
+from .codes import COUPON_CODE_LENGTH, codes_hidden, mark_expired_if_past, status_q, unique_code
 from .communications import (
     already_sent,
     cancel_pending_send,
@@ -179,9 +179,7 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
     coupon = salon_get(Coupon, ctx, coupon_id)
     if coupon.status != Coupon.Status.ACTIVE:
         raise HttpError(422, "Coupon non più valido")
-    if coupon.expires_at and coupon.expires_at < timezone.now():
-        coupon.status = Coupon.Status.EXPIRED
-        coupon.save(update_fields=["status"])
+    if mark_expired_if_past(coupon):
         raise HttpError(422, "Coupon scaduto")
     sale = None
     if data.sale_id:

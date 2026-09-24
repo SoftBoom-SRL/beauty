@@ -17,7 +17,7 @@ from ninja.errors import HttpError
 
 from apps.core.services import log_activity
 
-from .codes import GIFT_CARD_CODE_LENGTH, unique_code
+from .codes import GIFT_CARD_CODE_LENGTH, mark_expired_if_past, not_expired_q, unique_code
 from .models import GiftCard
 
 # Metodo di pagamento delle carte che il programma fedeltà regala come premio:
@@ -119,9 +119,7 @@ def redeem_gift_card(salon, code, amount):
             error = HttpError(404, "Gift card non trovata")
         elif card.status != GiftCard.Status.ACTIVE:
             error = HttpError(422, "Gift card non attiva")
-        elif card.expires_at and card.expires_at < timezone.now():
-            card.status = GiftCard.Status.EXPIRED
-            card.save(update_fields=["status"])
+        elif mark_expired_if_past(card):
             error = HttpError(422, "Gift card scaduta")
         elif card.payment_status != GiftCard.PaymentStatus.PAID:
             # Le carte comprate dall'app nascono "da pagare": finché il salone
@@ -164,7 +162,7 @@ def gift_card_kpis(qs) -> dict:
     spendable = (
         Q(status=GiftCard.Status.ACTIVE)
         & Q(payment_status=GiftCard.PaymentStatus.PAID)
-        & (Q(expires_at__isnull=True) | Q(expires_at__gte=timezone.now()))
+        & not_expired_q(timezone.now())
     )
     return qs.aggregate(
         sold_total=Coalesce(Sum("initial_value", filter=sold), _ZERO),
@@ -236,9 +234,7 @@ def cash_gift_card(salon, card, *, method: str, actor=None) -> GiftCard:
     """Incasso al banco di una carta «da pagare» (comprata dall'app): pagata e in cassa."""
     # La marcatura «scaduta» si scrive FUORI dalla transazione dell'incasso: se
     # stesse dentro, il rollback provocato dall'errore se la porterebbe via.
-    if card.status == GiftCard.Status.ACTIVE and card.expires_at and card.expires_at < timezone.now():
-        card.status = GiftCard.Status.EXPIRED
-        card.save(update_fields=["status"])
+    if mark_expired_if_past(card):
         raise HttpError(422, "Gift card scaduta: non può essere incassata")
     # Tutto l'incasso sta in una transazione con la riga bloccata: il doppio clic
     # su «Segna come pagata» trovava la carta ancora da pagare in entrambe le

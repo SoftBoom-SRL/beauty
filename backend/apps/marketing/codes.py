@@ -63,6 +63,11 @@ def code_for(obj, context) -> str:
 # ---- Scadenza ------------------------------------------------------------------
 
 
+def is_past_expiry(obj) -> bool:
+    """Coupon o gift card attivo ma con la scadenza già passata (scaduto, anche se non scritto)."""
+    return bool(obj.status == "active" and obj.expires_at and obj.expires_at < timezone.now())
+
+
 def effective_status(obj) -> str:
     """Lo stato come lo vede chi legge: attivo ma oltre la scadenza = scaduto.
 
@@ -71,9 +76,28 @@ def effective_status(obj) -> str:
     la nuova prenotazione la prometteva come regalo) mentre il filtro «Scadute»
     non la trovava. Coupon e gift card hanno gli stessi valori di stato.
     """
-    if obj.status == "active" and obj.expires_at and obj.expires_at < timezone.now():
+    if is_past_expiry(obj):
         return "expired"
     return obj.status
+
+
+def mark_expired_if_past(obj) -> bool:
+    """Se è oltre la scadenza, lo scrive «scaduto» (solo quella colonna) e dice True.
+
+    È il momento in cui EXPIRED arriva a database: chi prova a usare il coupon
+    o la carta. L'errore da dare lo decide chi chiama, e se la scrittura deve
+    sopravvivere all'errore sta a lui farla fuori da una transazione.
+    """
+    if not is_past_expiry(obj):
+        return False
+    obj.status = obj.Status.EXPIRED
+    obj.save(update_fields=["status"])
+    return True
+
+
+def not_expired_q(now) -> Q:
+    """Senza scadenza, o con la scadenza non ancora passata a `now`."""
+    return Q(expires_at__isnull=True) | Q(expires_at__gte=now)
 
 
 def status_q(model, status: str) -> Q:
@@ -87,9 +111,7 @@ def status_q(model, status: str) -> Q:
     """
     now = timezone.now()
     if status == model.Status.ACTIVE:
-        return Q(status=model.Status.ACTIVE) & (
-            Q(expires_at__isnull=True) | Q(expires_at__gte=now)
-        )
+        return Q(status=model.Status.ACTIVE) & not_expired_q(now)
     if status == model.Status.EXPIRED:
         return Q(status=model.Status.EXPIRED) | Q(
             status=model.Status.ACTIVE, expires_at__lt=now

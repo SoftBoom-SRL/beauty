@@ -33,16 +33,22 @@ SEND_EVENT = "communication.send"
 CANCEL_EVENT = "communication.cancel"
 
 
+def _parse_scheduled(value):
+    """La data programmata scritta nel payload, con il fuso. ValueError se illeggibile."""
+    when = datetime.fromisoformat(str(value))
+    if timezone.is_naive(when):
+        when = timezone.make_aware(when)
+    return when
+
+
 def _scheduled_ahead(value, now) -> bool:
     """La data programmata scritta nel payload è ancora da venire?"""
     if not value:
         return False  # invio immediato: è già partito, non c'è niente da fermare
     try:
-        when = datetime.fromisoformat(str(value))
+        when = _parse_scheduled(value)
     except ValueError:
         return True  # illeggibile: meglio un annullamento inutile che un invio in più
-    if timezone.is_naive(when):
-        when = timezone.make_aware(when)
     return when > now
 
 
@@ -116,11 +122,9 @@ def _latest_scheduled(events):
         if not value:
             continue
         try:
-            when = datetime.fromisoformat(str(value))
+            when = _parse_scheduled(value)
         except ValueError:
             continue
-        if timezone.is_naive(when):
-            when = timezone.make_aware(when)
         if latest is None or when > latest:
             latest = when
     return latest

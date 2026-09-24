@@ -13,6 +13,7 @@ from ninja.errors import HttpError
 
 from common.money import CENT, MAX_MONEY
 
+from .codes import mark_expired_if_past
 from .models import Coupon
 
 
@@ -38,9 +39,7 @@ def validate_coupon(salon, code, client=None):
     coupon = Coupon.objects.filter(salon=salon, code=code).first()
     if coupon is None:
         raise HttpError(404, "Coupon non trovato")
-    if coupon.status == Coupon.Status.ACTIVE and coupon.expires_at and coupon.expires_at < timezone.now():
-        coupon.status = Coupon.Status.EXPIRED
-        coupon.save(update_fields=["status"])
+    if mark_expired_if_past(coupon):
         raise HttpError(422, "Coupon scaduto")
     if coupon.status != Coupon.Status.ACTIVE:
         raise HttpError(422, "Coupon non più valido")

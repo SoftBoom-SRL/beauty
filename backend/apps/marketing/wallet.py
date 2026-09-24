@@ -8,6 +8,7 @@ contratto C3).
 from django.db.models import Q
 from django.utils import timezone
 
+from .codes import not_expired_q
 from .models import Coupon, GiftCard, LoyaltyAccount
 
 
@@ -18,7 +19,7 @@ def client_wallet(salon, client) -> dict:
     # soltanto quando qualcuno prova a riscattare: una carta scaduta da mesi
     # continuava a comparire nel «Saldo totale» e la cassa poi la rifiutava
     # davanti alla cliente. La scadenza va quindi verificata in lettura.
-    not_expired = Q(expires_at__isnull=True) | Q(expires_at__gte=now)
+    not_expired = not_expired_q(now)
     # Le carte ancora da pagare restano visibili a CHI LE HA COMPRATE (l'app le
     # mostra con l'etichetta «Da pagare in salone»: nasconderle farebbe sparire
     # un acquisto appena fatto), ma non a chi le riceve: annunciare a una
@@ -57,7 +58,7 @@ def client_wallet(salon, client) -> dict:
         Coupon.objects.filter(
             salon=salon, client=client, status=Coupon.Status.ACTIVE
         )
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gte=now))
+        .filter(not_expired_q(now))
         .order_by("-created_at")
     )
     loyalty = []
