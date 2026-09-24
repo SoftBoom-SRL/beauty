@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./styles/base.css": "./src/styles/base.css"
   },
   "peerDependencies": {
     "react": "^18.3.1"

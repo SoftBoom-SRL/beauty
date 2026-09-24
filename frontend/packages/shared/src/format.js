@@ -18,6 +18,27 @@ export function fmtEur(n, lang) {
   });
 }
 
+/* Il «Gratis» di fmtEur è la convenzione dei listini: un saldo, un incasso o
+ * una caparra a zero sono «€0», senza decimali, come li scrivevano le sezioni
+ * (chi scrive «€0,00» — riepiloghi dell'agenda, buono d'ordine, crediti
+ * dell'app clienti — ha regole sue, diverse da queste). Qui due regole, che
+ * differiscono solo su ciò che non è un numero (undefined, un testo non
+ * numerico): */
+
+/** Zero → «€0», tutto il resto come fmtEur — anche «€NaN» per un valore che
+ *  non è un numero. È la regola di `money` del banco e degli `eur0` di
+ *  fedeltà, schede cliente e grafici. */
+export function fmtEurNoFree(n, lang) {
+  const v = Number(n);
+  return v === 0 ? '€0' : fmtEur(v, lang);
+}
+
+/** Come fmtEurNoFree, ma ciò che non è un numero conta zero: «€0» anche per
+ *  un KPI che manca. È la regola di `eur` di staff, profilo e insight. */
+export function fmtEurOrZero(n, lang) {
+  return fmtEurNoFree(Number(n) || 0, lang);
+}
+
 /** minutes from midnight → "HH:MM" */
 export function timeLabel(min) {
   const h = Math.floor(min / 60), m = min % 60;

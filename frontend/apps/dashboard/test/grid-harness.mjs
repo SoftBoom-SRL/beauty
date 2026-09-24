@@ -80,15 +80,22 @@ export const jsxs = jsx;
 
 /* @youty/shared: gli helper veri di format.js, componenti muti, api finta. */
 const SHARED = `
+import * as apiErrors from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'apiErrors.js'))};
 export * from ${JSON.stringify(FORMAT)};
+export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
 export const Avatar = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
 export const statusMeta = (s) => ({ label: String(s || ''), color: '#999' });
-// la stessa classe per il componente e per il test (globalThis.__ApiError)
-export const ApiError = globalThis.__ApiError || (globalThis.__ApiError = class ApiError extends Error {
-  constructor(status, message, data) { super(message); this.name = 'ApiError'; this.status = status; this.data = data; }
-});
+// ApiError, apiErrorText e toastApiError sono quelli veri di apiErrors.js, con
+// la stessa classe per il componente, per gli aiuti e per il test
+// (globalThis.__ApiError). Ogni loadComponent è un bundle con la sua copia del
+// modulo: si tiene quella del primo, altrimenti con due componenti caricati
+// nello stesso file di test gli aiuti dell'uno non riconoscerebbero gli
+// ApiError dell'altro.
+const E = globalThis.__apiErrors || (globalThis.__apiErrors = apiErrors);
+globalThis.__ApiError = E.ApiError;
+export const { ApiError, apiErrorText, toastApiError } = E;
 const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
 `;

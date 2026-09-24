@@ -1,5 +1,38 @@
-// apiErrors.js — il campo d'errore di una risposta dell'API → testo leggibile.
-// Logica pura (la usa api.js; i test la provano da sola, senza fetch).
+// apiErrors.js — gli errori dell'API → testo leggibile.
+// Logica pura (la usa api.js; i test la provano da sola, senza fetch). Qui
+// stanno anche la classe ApiError e il testo/toast che se ne mostra: i moduli
+// provati con `npm test` li importano senza tirarsi dietro api.js, che al
+// caricamento legge import.meta.env (in Node non c'è).
+
+/** Risposta dell'API con uno status d'errore: `status`, il messaggio già
+ *  leggibile (vedi readableDetail) e il corpo della risposta in `data`. La
+ *  lancia api.js; un errore di rete o un'eccezione nel codice non è un ApiError. */
+export class ApiError extends Error {
+  constructor(status, message, data) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
+/** L'errore di una chiamata all'API → il testo da mostrare: il messaggio del
+ *  server se una risposta è arrivata, altrimenti «Errore di rete». È la regola
+ *  che le sezioni riscrivevano a mano in ogni catch
+ *  (`err instanceof ApiError ? err.message : t('Errore di rete', 'Network error')`). */
+export function apiErrorText(err, t) {
+  return err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+}
+
+/** Il toast d'errore di una chiamata all'API:
+ *  fireToast({ msg: apiErrorText(err, t), icon: 'alert' }).
+ *  Argomenti (err, fireToast, t): l'ordine dei due aiuti già usati da più file,
+ *  `toastErr` delle Impostazioni e `errToast` dell'app clienti, che così ne
+ *  diventano sinonimi senza toccare le chiamate. Attenzione al `toastErr`
+ *  dell'agenda: è (err, t, fireToast), con gli ultimi due scambiati. */
+export function toastApiError(err, fireToast, t) {
+  fireToast({ msg: apiErrorText(err, t), icon: 'alert' });
+}
 
 /* Nomi dei campi dei moduli, come li chiama il backend → come li legge chi usa
  * l'app. Un campo che non è qui si legge col suo nome, senza trattini bassi. */

@@ -4,7 +4,7 @@ import App from './App.jsx';
 import OAuthPopup from './oauth/OAuthPopup.jsx';
 import StripeConnectPopup from './oauth/StripeConnectPopup.jsx';
 import { reloadOnce } from './shell/chunkReload.js';
-import './styles/styles.css';
+import '@youty/shared/styles/base.css';
 import './styles/desktop.css';
 import './styles/app.css';
 

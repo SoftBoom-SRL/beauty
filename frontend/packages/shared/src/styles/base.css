@@ -4,6 +4,12 @@
    Espresso ink · porcelain paper · clay accent.
    ============================================================ */
 
+/* Foglio di base comune alle due app, importato come
+   '@youty/shared/styles/base.css': token, tipografia, carte, pulsanti,
+   animazioni. Ogni main.jsx lo importa per PRIMO: i fogli dell'app
+   (desktop.css, app.css) vengono dopo e ne ridefiniscono alcune regole, e
+   nel CSS finale l'ordine delle regole è quello degli import. */
+
 :root {
   /* ---- Neutrals (warm) ---- */
   --ink:        #211C18;   /* espresso near-black, primary text */

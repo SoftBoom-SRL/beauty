@@ -9,7 +9,7 @@ import { useDash } from '../src/ctx.jsx';
 import DkModals from '../src/modals/DkModals.jsx';
 import DkToast from '../src/ui/DkToast.jsx';
 import { OPERATORS, SERVICES, SERVICE_CATEGORIES, DAY_ROWS, WEEK, SALON, TODAY, APPOINTMENT, moveAppointment, editAppointment, rememberUndo, UNDO_STACK, undoLast } from './fixtures.js';
-import '../src/styles/styles.css';
+import '@youty/shared/styles/base.css';
 import '../src/styles/desktop.css';
 import '../src/styles/app.css';
 
