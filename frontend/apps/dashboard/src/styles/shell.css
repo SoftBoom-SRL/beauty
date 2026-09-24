@@ -1,0 +1,44 @@
+/* shell.css — il guscio della dashboard: token di impaginazione, barra
+   laterale, area di lavoro, barra in alto e ricerca. Primo dei fogli di
+   desktop.css: gli altri (theme.css soprattutto) ridefiniscono regole di
+   questo, e a parità di selettore vince chi viene dopo. */
+
+:root { --side-w: 252px; --top-h: 70px; --rail-w: 312px; --dk-bg: #EFE9E1; }
+
+.dk-root { display: flex; height: 100vh; width: 100vw; overflow: hidden; background: var(--dk-bg); color: var(--ink); }
+
+/* Sidebar */
+.dk-side { width: var(--side-w); flex-shrink: 0; height: 100%; background: var(--ink); color: #fff; display: flex; flex-direction: column; padding: 22px 16px 16px; }
+.dk-logo { display: flex; align-items: center; gap: 9px; padding: 4px 10px 22px; }
+.dk-logo b { font-size: 21px; font-weight: 800; letter-spacing: -0.025em; color: #fff; }
+.dk-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; overflow-y: auto; }
+.dk-nav::-webkit-scrollbar { width: 0; }
+.dk-navitem { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 12px; color: rgba(255,255,255,0.62); font-weight: 600; font-size: 14.5px; cursor: pointer; transition: all 150ms var(--ease); text-align: left; width: 100%; position: relative; }
+.dk-navitem:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.92); }
+.dk-navitem--active { background: rgba(255,255,255,0.10); color: #fff; }
+.dk-navitem--active::before { content: ""; position: absolute; left: -16px; top: 50%; transform: translateY(-50%); width: 4px; height: 22px; border-radius: 0 4px 4px 0; background: var(--clay); }
+.dk-navitem .badge { margin-left: auto; background: var(--clay); color: #fff; font-size: 11px; font-weight: 700; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: grid; place-items: center; }
+.dk-navsection { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.32); padding: 18px 12px 8px; }
+.dk-salon { margin-top: 8px; padding: 12px; border-radius: 14px; background: rgba(255,255,255,0.07); display: flex; align-items: center; gap: 11px; cursor: pointer; transition: background 150ms; }
+.dk-salon:hover { background: rgba(255,255,255,0.11); }
+
+/* Main */
+.dk-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; transition: padding-right 220ms var(--ease-emph); }
+/* Pannello laterale aperto (DkPanel): l'area di lavoro si restringe della sua
+   larghezza, così l'agenda resta INTERA di fianco e si continua a vedere il
+   blocco su cui si sta intervenendo. Sotto i 1100 px non c'è spazio per due
+   cose accanto: il pannello copre e basta. */
+@media (min-width: 1100px) {
+  body.dk-with-panel .dk-main { padding-right: var(--dk-panel-w, 560px); }
+}
+.dk-top { height: var(--top-h); flex-shrink: 0; background: rgba(247,243,238,0.86); backdrop-filter: blur(18px); border-bottom: 1px solid var(--hair); display: flex; align-items: center; gap: 18px; padding: 0 30px; z-index: 40; }
+.dk-content { flex: 1; overflow-y: auto; min-height: 0; position: relative; }
+.dk-content::-webkit-scrollbar { width: 10px; }
+.dk-content::-webkit-scrollbar-thumb { background: rgba(33,28,24,0.14); border-radius: 99px; border: 3px solid var(--paper); }
+.dk-search { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 999px; padding: 0 16px; height: 42px; width: 320px; transition: border-color 150ms, box-shadow 150ms; }
+.dk-search:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 4px var(--hair-2); }
+.dk-search input { flex: 1; border: none; outline: none; background: transparent; font-size: 14.5px; }
+.dk-iconbtn { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--hair); cursor: pointer; transition: all 150ms var(--ease); }
+.dk-iconbtn:hover { background: var(--surface-2); border-color: var(--line-strong); }
+.dk-page { padding: 28px 30px 40px; }
+.dk-pagehead { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; gap: 20px; }

@@ -1,0 +1,34 @@
+/* agenda.css — i segni dell'agenda: trascinamento, colonna bersaglio,
+   orari chiusi, maniglia di ridimensionamento. Con loro, perché stavano qui
+   nel file unico, il bottone «quasi disabilitato» (.dk-btn[aria-disabled])
+   e la campanella: restano in questo punto per non cambiare l'ordine. */
+
+/* ============================================================
+   Agenda — feedback drag & drop e indicatore slot
+   ============================================================ */
+.dk-dragging, .dk-dragging * { cursor: grabbing !important; user-select: none; }
+.dk-drag-badge { position: fixed; z-index: 96; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 7px 11px; border-radius: 10px; background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 700; box-shadow: var(--sh-pop); white-space: nowrap; animation: dkPop 120ms var(--ease-emph); }
+.dk-drag-badge--warn { background: var(--warn); }
+.dk-drag-badge small { font-weight: 500; opacity: 0.85; }
+.dk-drag-ghost { position: absolute; left: 4px; right: 4px; border-radius: 12px; border: 1.5px dashed color-mix(in srgb, var(--ink) 35%, transparent); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 6%, transparent) 0 6px, transparent 6px 12px); pointer-events: none; z-index: 1; }
+.dk-col--target { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ink) 40%, transparent); }
+/* Colonna bersaglio «fuori regola»: ambra, mai rossa — l'incastro si può
+   sempre fare, l'agenda lo segnala e basta. */
+.dk-col--target-warn { box-shadow: inset 0 0 0 2px var(--warn); }
+/* Sopra i blocchi (z 2): l'indicatore compare solo passando su spazio libero
+   della colonna — compreso il corridoio a destra di un appuntamento — e lì deve
+   essere leggibile per intero, non sbucare per venti pixel da dietro una card. */
+.dk-slot-hint { position: absolute; left: 4px; right: 4px; border-radius: 8px; pointer-events: none; z-index: 5; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; border: 1.5px dashed transparent; }
+.dk-slot-hint--ok { background: color-mix(in srgb, var(--ok) 16%, #fff); border-color: var(--ok); color: var(--ok); }
+.dk-slot-hint--warn { background: color-mix(in srgb, var(--warn) 22%, #fff); border-color: var(--warn); color: color-mix(in srgb, var(--warn) 80%, var(--ink)); }
+.dk-closed-label { position: absolute; left: 0; right: 0; text-align: center; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); pointer-events: none; z-index: 1; }
+
+/* pulsante primario "quasi disabilitato": cliccabile per spiegare cosa manca */
+.dk-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+
+/* campanella con badge non letti */
+.dk-bell-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--danger); color: #fff; font-size: 10.5px; font-weight: 800; display: grid; place-items: center; border: 2px solid var(--surface); }
+
+/* maniglia di ridimensionamento: visibile solo al passaggio sul blocco (evita prese accidentali) */
+.dk-resize-handle > div { opacity: 0; transition: opacity 120ms var(--ease); }
+.dk-resize-handle:hover > div, [style*="cursor: grab"]:hover > .dk-resize-handle > div { opacity: 1; }

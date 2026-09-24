@@ -1,0 +1,26 @@
+/* pills.css — pillole e orari selezionabili (.dk-pill, .dk-slot), con lo
+   stato «scelto» che si legge senza ambiguità. */
+
+/* ============================================================
+   Selezione esplicita — pillole/chip selezionabili
+   Stato "on" inequivocabile: bordo pieno scuro, testo in grassetto, spunta.
+   Stato "off": neutro. Le sfumature pastello da sole non bastavano a leggere
+   la selezione (feedback utenti).
+   ============================================================ */
+.dk-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1.5px solid var(--hair); background: var(--surface); color: var(--ink-2); transition: border-color 120ms var(--ease), background 120ms var(--ease), box-shadow 120ms var(--ease), transform 120ms var(--ease); white-space: nowrap; user-select: none; }
+.dk-pill:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.dk-pill:active { transform: scale(0.98); }
+.dk-pill--on { border-color: var(--ink); background: var(--ink); color: #fff; font-weight: 700; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent); }
+.dk-pill--on:hover { background: var(--ink); border-color: var(--ink); }
+/* variante colorata (operatrici): bordo 2px del colore, sfondo tinta piena, ring */
+.dk-pill--tint { border-width: 2px; }
+.dk-pill--tint.dk-pill--on { color: var(--ink); background: var(--pill-c, var(--clay-tint)); border-color: color-mix(in srgb, var(--pill-c, var(--clay)) 55%, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pill-c, var(--clay)) 35%, transparent); }
+.dk-pill--tint.dk-pill--on:hover { background: var(--pill-c, var(--clay-tint)); }
+.dk-pill--muted { opacity: 0.55; filter: grayscale(0.6); }
+.dk-pill--muted:hover { opacity: 0.85; filter: none; }
+.dk-pill[aria-disabled="true"] { cursor: not-allowed; opacity: 0.5; }
+
+/* chip "tempo" per gli slot orari */
+.dk-slot { padding: 6px 10px; border-radius: 9px; font-size: 12.5px; font-weight: 700; cursor: pointer; border: 1.5px solid var(--hair); background: var(--surface); color: var(--ink); font-variant-numeric: tabular-nums; transition: all 120ms var(--ease); }
+.dk-slot:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.dk-slot--on { background: var(--ink); border-color: var(--ink); color: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent); }

@@ -12,7 +12,7 @@
 // due metà smettono di leggersi come un gesto solo. L'ancora è
 // `calc(100% - 2.5rem)` su entrambi gli assi: la stessa che usano
 // yourang (web/src/app/globals.css) e il portale food. Non cambiarla da un lato
-// solo — la geometria sta accanto ai keyframe in desktop.css.
+// solo — la geometria sta accanto ai keyframe in styles/yourang-return.css.
 //
 // Il telo è dipinto col brand di YOURANG e porta il suo logo, non quelli del
 // salone: chi guarda il telo sta andando A yourang, quindi è yourang che deve
