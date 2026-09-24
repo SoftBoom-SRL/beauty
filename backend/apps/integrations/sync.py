@@ -28,8 +28,15 @@ from apps.catalog.models import Package, Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.services import held_events, log_activity, supersede_events
 from apps.staff.models import Operator
+# La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
+# common.phone: è la stessa usata da login, registrazione, form pubblico e
+# import CSV, così il telefono che è la chiave naturale dei contatti Yourang
+# coincide con quello con cui il cliente accede all'app.
+from common.phone import find_client_by_phone, normalize_phone, phone_key
 
 from .client import YourangClient
+from .connection import same_link
+from .constants import PLACEHOLDER_SERVICE_NAME
 from .models import YourangConnection, YourangEventSync
 
 # Stati evento Yourang (EventStatusEnum, uppercase) → stato Appointment beauty.
@@ -60,28 +67,11 @@ _EVENT_STATUS = {
 # all'infinito la stessa pagina e il webhook resterebbe appeso per sempre.
 MAX_CONTACT_PAGES = 200
 
-# Nome del servizio segnaposto delle prenotazioni importate (non è un servizio
-# del listino: esiste solo perché un evento Yourang non porta un servizio nostro).
-PLACEHOLDER_SERVICE_NAME = "Prenotazione Yourang"
-
 logger = logging.getLogger("youty.integrations")
 
 
-# La normalizzazione dei numeri (E.164, regole sullo 0 interurbano) vive in
-# common.phone: è la stessa usata da login, registrazione, form pubblico e
-# import CSV, così il telefono che è la chiave naturale dei contatti Yourang
-# coincide con quello con cui il cliente accede all'app.
-from common.phone import (  # noqa: E402,F401
-    COUNTRY_CODES,
-    TRUNK_ZERO_KEPT,
-    _drop_trunk_zero,
-    find_client_by_phone,
-    normalize_phone,
-    phone_key,
-)
-
-
-def _split_name(full: str) -> tuple[str, str]:
+def split_name(full: str) -> tuple[str, str]:
+    """(nome, cognome) da un nome completo; «Cliente» se è vuoto (lo usa anche login)."""
     parts = (full or "").strip().split()
     if not parts:
         return ("Cliente", "")
@@ -111,9 +101,7 @@ def _ensure_linked(conn: YourangConnection) -> None:
     nuova le salterebbe come «già collegate». Una query indicizzata per giro,
     niente in confronto alla chiamata HTTP che segue.
     """
-    if not YourangConnection.objects.filter(
-        pk=conn.pk, yourang_org_id=conn.yourang_org_id
-    ).exists():
+    if not same_link(conn).exists():
         raise SyncAborted("collegamento Yourang cambiato durante la sincronizzazione: interrotta")
 
 
@@ -435,11 +423,11 @@ def initial_sync(conn_id: int) -> None:
         services = sync_services(conn)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Yourang initial sync failed (salone %s)", conn.salon_id)
-        YourangConnection.objects.filter(pk=conn.pk, yourang_org_id=conn.yourang_org_id).update(
+        same_link(conn).update(
             last_error=str(exc)[:500], updated_at=timezone.now()
         )
         return
-    YourangConnection.objects.filter(pk=conn.pk, yourang_org_id=conn.yourang_org_id).update(
+    same_link(conn).update(
         last_sync_at=timezone.now(),
         last_error=summarize_errors(clients.errors + services.errors),
         updated_at=timezone.now(),
@@ -542,7 +530,7 @@ def _client_for_event(salon, data: dict) -> Client:
     telefono (non sulla stringa grezza: «348 221 0094» e «+39 348 2210094» sono
     la stessa cliente, e due schede spaccherebbero storico, fedeltà e caparre).
     """
-    first, last = _split_name(data.get("client_full_name", ""))
+    first, last = split_name(data.get("client_full_name", ""))
     phone = normalize_phone(data.get("client_phone_number", "") or "") or ""
     defaults = {
         "first_name": first or "Cliente",

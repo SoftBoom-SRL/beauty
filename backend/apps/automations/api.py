@@ -8,7 +8,8 @@ from ninja.errors import HttpError
 from apps.core.services import emit_event, log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import require_scope
+from common.permissions import has_scope, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
 from .models import Automation
@@ -16,9 +17,14 @@ from .schemas import (
     AutomationIn,
     AutomationOut,
     EventsCatalogOut,
-    OkOut,
     WebhookTriggerOut,
 )
+from .services import definition, publish_definition
+
+# compat refactoring: rimuovere dopo l'integrazione. clients/api.py
+# (`_rename_label_in_conditions`) li importa ancora da qui, con un import pigro.
+from .services import automation_event_key  # noqa: F401
+from .services import definition as _definition  # noqa: F401
 
 router = Router(tags=["automations"])
 
@@ -65,32 +71,6 @@ FILTER_FIELDS = [
 
 def _catalog_items(rows):
     return [{"value": value, "label_it": label_it, "label_en": label_en} for value, label_it, label_en in rows]
-
-
-def automation_event_key(automation_id) -> str:
-    """Chiave degli eventi di un'automazione: flush_outbox consegna in ordine
-    quelli con la stessa chiave, così Yourang non riceve una versione vecchia
-    dopo una nuova (un invio fallito e ritentato passava dopo il successivo)."""
-    return f"automation:{automation_id}"
-
-
-def _definition(automation: Automation) -> dict:
-    """Definizione completa della regola, inviata a Yourang per la sincronizzazione."""
-    return {
-        "id": automation.id,
-        "salon_id": automation.salon_id,
-        "name": automation.name,
-        "event": automation.event,
-        "offset_direction": automation.offset_direction,
-        "offset_value": automation.offset_value,
-        "offset_unit": automation.offset_unit,
-        "send_time": automation.send_time.isoformat() if automation.send_time else None,
-        "conditions": automation.conditions,
-        "trigger_origin": automation.trigger_origin,
-        "webhook_token": str(automation.webhook_token),
-        "message_preview": automation.message_preview,
-        "active": automation.active,
-    }
 
 
 # ---- CRUD --------------------------------------------------------------
@@ -148,7 +128,7 @@ def list_automations(request):
     # desk e Operatrice non hanno «marketing»), che fino a ieri la consultavano.
     # La sezione era già progettata come lettura a tutti e scrittura ai soli
     # marketing: qui si nasconde il segreto, non la pagina.
-    mask = not (ctx.is_owner or "marketing" in ctx.scopes)
+    mask = not has_scope(ctx, "marketing")
     rows = list(ctx.salon.automations.all())
     for row in rows:
         row._mask_secrets = mask
@@ -167,10 +147,7 @@ def create_automation(request, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(
-        ctx.salon, "automation.updated", _definition(automation),
-        coalesce_key=automation_event_key(automation.id),
-    )
+    publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -192,10 +169,7 @@ def update_automation(request, automation_id: int, data: AutomationIn):
         actor=ctx.user,
         payload={"automation_id": automation.id},
     )
-    emit_event(
-        ctx.salon, "automation.updated", _definition(automation),
-        coalesce_key=automation_event_key(automation.id),
-    )
+    publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -206,8 +180,8 @@ def delete_automation(request, automation_id: int):
     automation = salon_get(Automation, ctx, automation_id)
     name = automation.name
     automation_id_value = automation.id
-    definition = _definition(automation)
-    definition["deleted"] = True
+    removed = definition(automation)
+    removed["deleted"] = True
     automation.delete()
     log_activity(
         ctx.salon,
@@ -216,10 +190,7 @@ def delete_automation(request, automation_id: int):
         actor=ctx.user,
         payload={"automation_id": automation_id_value},
     )
-    emit_event(
-        ctx.salon, "automation.updated", definition,
-        coalesce_key=automation_event_key(automation_id_value),
-    )
+    publish_definition(ctx.salon, removed)
     return OkOut()
 
 
@@ -243,10 +214,7 @@ def toggle_automation(request, automation_id: int):
             actor=ctx.user,
             payload={"automation_id": automation.id, "active": automation.active},
         )
-        emit_event(
-            ctx.salon, "automation.updated", _definition(automation),
-            coalesce_key=automation_event_key(automation.id),
-        )
+        publish_definition(ctx.salon, definition(automation))
     return automation
 
 
@@ -290,10 +258,10 @@ def trigger_webhook(request, webhook_token: str):
     # L'endpoint è pubblico (il token nell'URL è l'unica credenziale): senza
     # tetto, chi lo intercetta può far partire messaggi a raffica a spese del
     # salone, e ogni chiamata scrive una riga nel registro attività.
-    if not ratelimit.hit(
-        f"automation-hook:{automation.id}", HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS
-    ):
-        raise HttpError(429, "Troppe attivazioni: riprova tra qualche minuto")
+    ratelimit.enforce(
+        f"automation-hook:{automation.id}", HOOK_MAX_PER_WINDOW, HOOK_WINDOW_SECONDS,
+        "Troppe attivazioni: riprova tra qualche minuto",
+    )
 
     body = request.body or b""
     # Il corpo finisce nel registro attività e nell'outbox: un payload enorme

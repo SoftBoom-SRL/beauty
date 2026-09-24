@@ -261,7 +261,7 @@ class ClientOTPSecurityTests(TestCase):
 
     def test_the_cap_per_address_stops_the_enumeration(self):
         """Senza tetto per IP uno script cicla i numeri finché non li trova tutti."""
-        from ..api import OTP_MAX_PER_IP
+        from ..api.client import OTP_MAX_PER_IP
 
         for n in range(OTP_MAX_PER_IP):
             self.assertEqual(self._request_otp(f"+39333444{n:04d}").status_code, 200)
@@ -363,7 +363,7 @@ class OtpSalonCapTests(TestCase):
         self.assertEqual(ClientOTP.objects.filter(client=self.sofia).count(), 1)
 
     def test_many_requests_are_still_reported(self):
-        from ..api import OTP_ALERT_PER_SALON
+        from ..api.client import OTP_ALERT_PER_SALON
 
         with self.assertLogs("apps.accounts.api", level="WARNING") as logs:
             for i in range(OTP_ALERT_PER_SALON + 1):
@@ -372,7 +372,7 @@ class OtpSalonCapTests(TestCase):
 
     def test_the_cap_on_issued_codes_answers_the_same_for_every_number(self):
         """Pieno di codici veri, il salone si ferma per tutti allo stesso modo."""
-        with mock.patch("apps.accounts.api.OTP_MAX_ISSUED_PER_SALON", 1):
+        with mock.patch("apps.accounts.api.client.OTP_MAX_ISSUED_PER_SALON", 1):
             self.assertEqual(self._otp("+393331234567", "198.51.100.7").status_code, 200)
             known = self._otp("+393331234567", "198.51.100.8")
             unknown = self._otp("+393339999999", "198.51.100.9")
@@ -407,14 +407,14 @@ class RegisterSalonCapTests(TestCase):
         )
 
     def test_refused_attempts_do_not_fill_the_salon_cap(self):
-        with mock.patch("apps.accounts.api.REGISTER_MAX_PER_SALON", 2):
+        with mock.patch("apps.accounts.api.client.REGISTER_MAX_PER_SALON", 2):
             for n in range(4):
                 self.assertEqual(self._register("+393331234567", f"203.0.113.{n + 1}").status_code, 400)
             res = self._register("+393335550001", "198.51.100.7")
         self.assertEqual(res.status_code, 200, res.content)
 
     def test_created_profiles_are_still_capped(self):
-        with mock.patch("apps.accounts.api.REGISTER_MAX_PER_SALON", 2):
+        with mock.patch("apps.accounts.api.client.REGISTER_MAX_PER_SALON", 2):
             statuses = [
                 self._register(f"+39333555000{n}", f"203.0.113.{n + 1}").status_code for n in range(3)
             ]
@@ -432,7 +432,7 @@ class RegisterDoubleSubmitTests(TestCase):
         # superato il controllo sul numero quando la prima non era ancora visibile.
         Client.objects.create(salon=salon, first_name="Sofia", last_name="Ricci", phone="+393331234567")
         self.client.raise_request_exception = False
-        with mock.patch("apps.accounts.api.find_client_by_phone", return_value=None):
+        with mock.patch("apps.accounts.api.client.find_client_by_phone", return_value=None):
             res = post_json(
                 self.client,
                 "/api/auth/client/register",

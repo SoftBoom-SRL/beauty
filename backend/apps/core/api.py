@@ -1,13 +1,5 @@
-import re
-from datetime import timedelta
-from decimal import Decimal, InvalidOperation
-
 from django.conf import settings as django_settings
-from django.core.exceptions import ValidationError
-from django.core.validators import URLValidator
 from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
 from django.utils.dateparse import parse_date
 from ninja import File, Router
 from ninja.errors import HttpError
@@ -17,9 +9,12 @@ from ninja.pagination import LimitOffsetPagination, paginate
 from common.auth import staff_auth
 from common.media import stored_upload_name
 from common.permissions import require_owner, require_scope
+from common.schemas import OkOut
 from common.utils import salon_get
 
-from .models import ActivityLog, DepositRule, Location, Salon, SalonSettings
+from .livefeed import feed_page
+from .models import ActivityLog, DepositRule, Location, SalonSettings
+from .outbox import delivery_status
 from .schemas import (
     ActivityFeedOut,
     OutboxStatusOut,
@@ -28,13 +23,14 @@ from .schemas import (
     DepositRuleOut,
     LocationIn,
     LocationOut,
-    OkOut,
     PublicBrandingOut,
     SalonOut,
     SettingsIn,
     SettingsOut,
 )
-from .services import log_activity, normalize_opening_hours_week, opening_hours_text
+from .services import default_location, get_salon_by_slug, log_activity
+from .validation import clean_settings_payload, deposit_rule_fields
+from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
 router = Router(tags=["core"])
 
@@ -102,118 +98,12 @@ def get_salon(request):
     }
 
 
-# Limiti dei campi numerici delle impostazioni: [min, max] INCLUSI. Senza,
-# `int(None)` esplodeva con un 500 e un valore fuori scala finiva a database su
-# colonne PositiveSmallInteger (che su Postgres si ferma a 32767).
-_SETTINGS_INT_RANGES = {
-    "slot_interval_min": (15, 30),
-    "lastminute_discount_cap": (0, 100),
-    "flexible_window_min": (0, 24 * 60),
-    "flexible_reward_pct": (0, 100),
-    "deposit_hold_minutes": (0, 7 * 24 * 60),
-    "deposit_reminder_minutes": (0, 7 * 24 * 60),
-    # Oltre i dieci minuti non è più un ritardo di sicurezza: è un messaggio che
-    # la cliente riceve quando non se lo aspetta più.
-    "automation_delay_seconds": (0, 600),
-}
-_BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
-MAX_OPENING_HOURS_CHARS = 500
-MAX_MONTHLY_BUDGET = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
-
-
-def _validate_url(raw: str, label: str) -> str:
-    """URL assoluto http/https, o stringa vuota per cancellarlo.
-
-    Il valore viene reso come `href` nell'app pubblica delle clienti: un
-    "javascript:…" o un "www.qualcosa" finivano tali e quali nel link.
-    """
-    value = (raw or "").strip()
-    if not value:
-        return ""
-    if len(value) > 200:
-        raise HttpError(400, f"{label} troppo lungo (max 200 caratteri)")
-    try:
-        URLValidator(schemes=["http", "https"])(value)
-    except ValidationError:
-        raise HttpError(400, f"{label} non valido: serve un indirizzo http(s) completo")
-    return value
-
-
 @router.put("/settings", auth=staff_auth, response=SettingsOut)
 def update_settings(request, data: SettingsIn):
     ctx = request.auth
     require_owner(ctx)
     s = _settings(ctx.salon)
-    payload = data.dict(exclude_unset=True)
-    default_lang = payload.pop("default_lang", None)
-    if default_lang is not None and default_lang not in Salon.Lang.values:
-        raise HttpError(400, "Lingua non valida (it o en)")
-    # I campi sono tutti Optional nello schema, quindi `exclude_unset` lascia
-    # passare i null mandati esplicitamente: finivano per `setattr` su colonne
-    # NOT NULL (IntegrityError) o dentro `int()` (500). Un null significa «non
-    # tocco questo campo», non «azzeralo».
-    payload = {k: v for k, v in payload.items() if v is not None}
-    if "slot_interval_min" in payload and payload["slot_interval_min"] not in (15, 20, 30):
-        raise HttpError(400, "Intervallo fasce orarie non valido (15, 20 o 30 minuti)")
-    for key, (low, high) in _SETTINGS_INT_RANGES.items():
-        if key in payload:
-            try:
-                value = int(payload[key])
-            except (TypeError, ValueError):
-                raise HttpError(400, f"Valore non numerico per {key}")
-            if not low <= value <= high:
-                raise HttpError(400, f"Valore fuori scala per {key} ({low}–{high})")
-            payload[key] = value
-    for key, choices in (
-        ("agenda_fill", SalonSettings.AgendaFill.values),
-        ("slot_recovery", SalonSettings.SlotRecovery.values),
-    ):
-        if key in payload and payload[key] not in choices:
-            raise HttpError(400, f"Valore non valido per {key}: usa {' o '.join(choices)}")
-    if "brand_color" in payload and not _BRAND_COLOR_RE.match(str(payload["brand_color"])):
-        raise HttpError(400, "Colore non valido: usa il formato #RRGGBB")
-    if "opening_hours" in payload:
-        text = str(payload["opening_hours"])
-        if len(text) > MAX_OPENING_HOURS_CHARS:
-            raise HttpError(400, f"Orari troppo lunghi (max {MAX_OPENING_HOURS_CHARS} caratteri)")
-        payload["opening_hours"] = text
-    if "lastminute_monthly_budget" in payload:
-        try:
-            budget = Decimal(str(payload["lastminute_monthly_budget"]))
-        except (InvalidOperation, TypeError, ValueError):
-            raise HttpError(400, "Budget non valido")
-        if not 0 <= budget <= MAX_MONTHLY_BUDGET:
-            raise HttpError(400, "Budget fuori scala")
-        payload["lastminute_monthly_budget"] = budget
-    if "privacy_policy_url" in payload:
-        payload["privacy_policy_url"] = _validate_url(
-            payload["privacy_policy_url"], "Indirizzo dell'informativa privacy"
-        )
-    # L'invariante va verificata sui valori EFFETTIVI dopo il salvataggio, non
-    # solo quando arriva il sollecito: abbassando la sola scadenza il sollecito
-    # restava oltre, non partiva più e in Impostazioni continuava a comparire.
-    hold = payload.get("deposit_hold_minutes", s.deposit_hold_minutes)
-    reminder = payload.get("deposit_reminder_minutes", s.deposit_reminder_minutes)
-    if hold and reminder and reminder >= hold:
-        raise HttpError(
-            400,
-            "Il sollecito deve precedere la scadenza della caparra: "
-            f"riduci anche il sollecito sotto i {hold} minuti",
-        )
-    for key in ("cancel_reasons", "no_show_reasons"):
-        if key in payload:
-            cleaned = [str(x).strip()[:80] for x in (payload[key] or []) if str(x).strip()]
-            if len(cleaned) > 30:
-                raise HttpError(400, "Troppe motivazioni (max 30)")
-            payload[key] = cleaned
-    if "opening_hours_week" in payload:
-        try:
-            payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
-        except ValueError as exc:
-            raise HttpError(400, str(exc))
-        # il testo per l'app cliente segue gli orari strutturati, salvo testo esplicito
-        if "opening_hours" not in payload:
-            payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
+    payload, default_lang = clean_settings_payload(data.dict(exclude_unset=True), s)
     for name, value in payload.items():
         setattr(s, name, value)
     # Solo le colonne del payload: `s` è la copia letta a inizio richiesta, e un
@@ -328,28 +218,6 @@ def delete_location(request, location_id: int):
 
 # ---- Regole deposito -------------------------------------------------------
 
-MAX_RULE_AMOUNT = Decimal("99999999.99")  # DecimalField(max_digits=10, decimal_places=2)
-
-
-def _deposit_rule_fields(data: DepositRuleIn) -> dict:
-    """Campi della regola, validati.
-
-    Lo schema accettava qualunque importo: convertendo una regola da «Importo
-    fisso» 150 € a «% del totale» la dashboard salvava un acconto del 150 %, e
-    `compute_deposit` chiedeva come caparra l'intero prezzo del servizio.
-    """
-    fields = data.dict()
-    if fields["amount_type"] not in DepositRule.AmountType.values:
-        raise HttpError(400, "Tipo di acconto non valido: usa pct o fixed")
-    amount = fields["amount"]
-    if amount < 0:
-        raise HttpError(400, "L'acconto non può essere negativo")
-    if fields["amount_type"] == DepositRule.AmountType.PERCENT and amount > 100:
-        raise HttpError(400, "Un acconto in percentuale va da 0 a 100")
-    if amount > MAX_RULE_AMOUNT:
-        raise HttpError(400, "Importo dell'acconto fuori scala")
-    return fields
-
 
 @router.get("/deposit-rules", auth=staff_auth, response=list[DepositRuleOut])
 def list_deposit_rules(request):
@@ -361,7 +229,7 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **_deposit_rule_fields(data))
+    rule = DepositRule.objects.create(salon=ctx.salon, **deposit_rule_fields(data))
     log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
@@ -371,7 +239,7 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in _deposit_rule_fields(data).items():
+    for name, value in deposit_rule_fields(data).items():
         setattr(rule, name, value)
     rule.save()
     # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
@@ -434,14 +302,6 @@ def list_activity(
     return qs
 
 
-# I prefissi di evento del feed live e i permessi richiesti sono definiti UNA
-# volta in core.views (stream SSE) e riusati qui dal polling di riserva: due
-# elenchi separati avevano perso `settings.` e `client_category.` solo lato HTTP.
-from .views import LIVE_FEED_SAFETY_SECONDS, allowed_prefixes  # noqa: E402
-
-LIVE_FEED_LIMIT = 50
-
-
 @router.get("/activity/feed", auth=staff_auth, response=ActivityFeedOut)
 def activity_feed(request, after: int | None = None):
     """Feed live per il polling della dashboard.
@@ -458,53 +318,7 @@ def activity_feed(request, after: int | None = None):
     a chi il permesso d'area li nega (lo stream SSE applica lo stesso filtro).
     """
     ctx = request.auth
-    qs = ActivityLog.objects.filter(salon=ctx.salon)
-    latest = qs.order_by("-id").values_list("id", flat=True).first() or 0
-    if after is None:
-        return {"cursor": latest, "events": []}
-
-    prefixes = allowed_prefixes(ctx.is_owner, ctx.scopes)
-    events = []
-    if prefixes:
-        prefix_q = Q()
-        for prefix in prefixes:
-            prefix_q |= Q(type__startswith=prefix)
-        events = list(
-            qs.filter(id__gt=after).filter(prefix_q).order_by("id")[:LIVE_FEED_LIMIT]
-        )
-        # Un id sotto il cursore che si vede solo ora è una transazione che ha
-        # committato dopo una successiva: senza rileggerli il cursore l'aveva già
-        # scavalcato e l'evento non arrivava più a nessuno. Il cursore stesso è
-        # un evento che il client ha già.
-        horizon = timezone.now() - timedelta(seconds=LIVE_FEED_SAFETY_SECONDS)
-        late = list(
-            qs.filter(id__lt=after, created_at__gte=horizon)
-            .filter(prefix_q)
-            .order_by("id")[:LIVE_FEED_LIMIT]
-        )
-        events = late + events
-    # Il cursore avanza sempre fino all'ultimo id visto (anche se filtrato via),
-    # così un evento amministrativo non viene richiesto all'infinito.
-    scanned = qs.filter(id__gt=after).order_by("id").values_list("id", flat=True)[:LIVE_FEED_LIMIT]
-    scanned = list(scanned)
-    cursor = max([after] + scanned + [e.id for e in events])
-    if len(scanned) < LIVE_FEED_LIMIT:
-        cursor = max(cursor, latest)
-    return {
-        "cursor": cursor,
-        "events": [
-            {
-                "id": e.id,
-                "type": e.type,
-                "summary": e.summary,
-                "actor_id": e.actor_id,
-                "actor_name": e.actor_name,
-                "payload": e.payload,
-                "created_at": e.created_at,
-            }
-            for e in events
-        ],
-    }
+    return feed_page(ctx.salon, after, is_owner=ctx.is_owner, scopes=ctx.scopes)
 
 
 @router.get("/outbox/status", auth=staff_auth, response=OutboxStatusOut)
@@ -516,55 +330,14 @@ def outbox_status(request):
     quell'URL — o senza il comando schedulato — restano in coda: è la causa più
     comune, e va detta al titolare invece di lasciarlo aspettare un SMS.
     """
-    from datetime import timedelta
-
-    from django.db.models.functions import Coalesce
-
-    from .models import OutboxEvent
-
     ctx = request.auth
     require_owner(ctx)
-    now = timezone.now()
-    qs = OutboxEvent.objects.filter(salon=ctx.salon)
-    # `sending` = preso in carico da un worker in questo momento: per chi guarda
-    # la diagnostica è ancora un messaggio che non è arrivato.
-    active = qs.filter(
-        status__in=(OutboxEvent.Status.PENDING, OutboxEvent.Status.SENDING)
-    )
-    # Trattenuti fino a un istante futuro e mai tentati (una campagna
-    # programmata, il ritardo di sicurezza dell'agenda): non sono una coda
-    # ferma. Contati fra quelli «in coda», una campagna programmata per sabato
-    # faceva dire da lunedì che i messaggi aspettavano da giorni.
-    scheduled = active.filter(status=OutboxEvent.Status.PENDING, attempts=0, due_at__gt=now)
-    pending = active.exclude(pk__in=scheduled.values("pk"))
-    sent = qs.filter(status=OutboxEvent.Status.SENT)
-    day_ago = now - timedelta(hours=24)
-    return {
-        "configured": bool(django_settings.YOURANG_API_URL),
-        "pending": pending.count(),
-        "scheduled": scheduled.count(),
-        "failed": qs.filter(status=OutboxEvent.Status.FAILED).count(),
-        # Scaduti prima di partire (un promemoria oltre l'orario della visita,
-        # un codice oltre i suoi dieci minuti): restano fino alla pulizia.
-        "expired": qs.filter(status=OutboxEvent.Status.EXPIRED).count(),
-        "sent_24h": sent.filter(sent_at__gte=day_ago).count(),
-        # Da quando aspetta: la fine della trattenuta, non la creazione.
-        "oldest_pending_at": (
-            pending.annotate(since=Coalesce("due_at", "created_at"))
-            .order_by("since")
-            .values_list("since", flat=True)
-            .first()
-        ),
-        "last_sent_at": sent.order_by("-sent_at").values_list("sent_at", flat=True).first(),
-        "pending_types": sorted(set(pending.order_by("-id").values_list("event_type", flat=True)[:50])),
-    }
+    return delivery_status(ctx.salon)
 
 
 @router.post("/activity/stream-ticket", auth=staff_auth)
 def activity_stream_ticket(request):
     """Ticket effimero per aprire lo stream SSE (EventSource non manda header)."""
-    from .views import STREAM_TICKET_TTL, issue_stream_ticket
-
     ctx = request.auth
     # Il biglietto dice chi sta ascoltando (lo stream non ha altro modo di
     # saperlo): utente e versione della password, con cui lo stream rilegge la
@@ -586,12 +359,9 @@ def activity_stream_ticket(request):
 
 @router.get("/public/branding", response=PublicBrandingOut)
 def public_branding(request, salon: str):
-    try:
-        s = Salon.objects.get(slug=salon)
-    except Salon.DoesNotExist:
-        raise HttpError(404, "Salone non trovato")
+    s = get_salon_by_slug(salon)
     st = _settings_readonly(s)
-    location = s.locations.filter(is_default=True).first() or s.locations.first()
+    location = default_location(s)
     return {
         "name": s.name,
         "slug": s.slug,

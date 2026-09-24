@@ -304,7 +304,7 @@ class InvitationSingleUseTests(_TeamSetup):
                 status=Invitation.Status.ACCEPTED
             )
 
-        with mock.patch("apps.accounts.api.validate_password", side_effect=accepted_meanwhile):
+        with mock.patch("apps.accounts.api.team.validate_password", side_effect=accepted_meanwhile):
             res = self._accept()
         self.assertEqual(res.status_code, 400, res.content)
         self.assertFalse(User.objects.filter(email="nora@parlour.it").exists())
@@ -314,7 +314,7 @@ class InvitationSingleUseTests(_TeamSetup):
             User.objects.create_user(email="nora@parlour.it", password="Altra-Password-9")
 
         self.client.raise_request_exception = False
-        with mock.patch("apps.accounts.api.validate_password", side_effect=user_created_meanwhile):
+        with mock.patch("apps.accounts.api.team.validate_password", side_effect=user_created_meanwhile):
             res = self._accept()
         self.assertEqual(res.status_code, 400, res.content)
         self.invitation.refresh_from_db()

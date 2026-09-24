@@ -17,23 +17,20 @@ Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Youran
 
 import logging
 
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
 from apps.accounts.models import Membership, User
+from apps.accounts.sessions import session_payload
 from apps.core.models import Location, Salon, SalonSettings
 from common.auth import create_staff_tokens
 
 from . import client as yc
-from . import crypto
-from .connection import OrgConflict, link_org
+from .connection import OrgConflict, attach_tokens, link_org
 from .models import YourangConnection
-from .sync import _split_name, schedule_initial_sync
+from .sync import schedule_initial_sync, split_name
 
 logger = logging.getLogger("youty.integrations")
-
-WEBHOOK_EVENT_TYPES = ["contact.*", "event.*"]
 
 
 def _unique_salon_slug(seed: str) -> str:
@@ -53,7 +50,7 @@ def _get_or_create_user(email: str, name: str, email_verified: bool) -> User:
         if not email_verified:
             raise ValueError("Email Yourang non verificata: account già esistente")
         return user
-    first, last = _split_name(name)
+    first, last = split_name(name)
     # password=None → set_unusable_password: l'accesso avviene solo via Yourang.
     return User.objects.create_user(email=email, password=None, first_name=first, last_name=last)
 
@@ -73,17 +70,6 @@ def _provision_salon(user: User, display_name: str) -> Salon:
     Location.objects.create(salon=salon, name=display_name, is_default=True)
     Membership.objects.create(user=user, salon=salon, is_owner=True)
     return salon
-
-
-def _session_payload(membership: Membership, tokens: dict) -> dict:
-    salon, user = membership.salon, membership.user
-    return {
-        "user": {"id": user.id, "email": user.email, "name": user.get_full_name() or user.email},
-        "salon": {"id": salon.id, "name": salon.name, "slug": salon.slug},
-        "scopes": sorted(membership.role.scopes or []) if membership.role else [],
-        "is_owner": membership.is_owner,
-        **tokens,
-    }
 
 
 def _unlinked_memberships(user: User) -> list[Membership]:
@@ -179,28 +165,6 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
     return _membership_for(salon, user), conn
 
 
-def attach_tokens(conn: YourangConnection, token_resp: dict, *, renew_webhook: bool = False) -> None:
-    """Token del flusso diretto sulla connessione e, se serve, il webhook.
-
-    Fuori dalla transazione del collegamento: registrare il webhook è una
-    chiamata a Yourang, e una rete lenta non deve tenere i lock del salone.
-    `renew_webhook`: registrarlo anche se c'è già un segreto (il connect lo fa
-    sempre, a una riconnessione il segreto di prima non vale più).
-    """
-    yc.store_tokens(conn, token_resp)
-    fields = ["access_token_enc", "refresh_token_enc", "expires_at", "scope", "updated_at"]
-    if settings.YOURANG_WEBHOOK_RECEIVER_URL and (renew_webhook or not conn.webhook_secret_enc):
-        try:
-            secret = yc.YourangClient(conn).register_webhook(
-                settings.YOURANG_WEBHOOK_RECEIVER_URL, WEBHOOK_EVENT_TYPES
-            )
-            conn.webhook_secret_enc = crypto.encrypt(secret)
-            fields.append("webhook_secret_enc")
-        except Exception:
-            logger.exception("Yourang webhook registration failed")
-    conn.save(update_fields=fields)
-
-
 def login_with_yourang(code: str, code_verifier: str) -> dict:
     token_resp = yc.exchange_code(code, code_verifier)
     org = yc.org_id_from_access_token(token_resp["access_token"])
@@ -239,4 +203,6 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
         # dalla richiesta; il suo esito finisce su last_sync_at / last_error.
         schedule_initial_sync(conn)
     tokens = create_staff_tokens(membership.user, membership.salon)
-    return _session_payload(membership, tokens)
+    # Lo stesso payload del login con password: la dashboard non distingue
+    # da dove arriva la sessione.
+    return session_payload(membership, tokens)

@@ -11,6 +11,12 @@ Un evento può essere TRATTENUTO per qualche secondo prima della consegna
 nessuno l'ha ancora ricevuto, quindi si può ancora fondere con un evento
 successivo sullo stesso oggetto o farlo sparire del tutto: è così che un
 appuntamento inserito e spostato un istante dopo produce un messaggio solo.
+
+Un tipo nuovo di evento o di riga del registro va scritto anche in altri due
+posti, se serve: la scadenza del messaggio per Yourang in core.outbox
+(`EXPIRY_FIELDS`/`EXPIRY_AGES`: senza, non scade mai) e l'area che lo riceve
+nel feed live in core.livefeed (`LIVE_FEED_SCOPES`: senza, il feed non lo
+consegna a nessuno, nemmeno al titolare).
 """
 
 import logging
@@ -53,10 +59,10 @@ def emit_event(
     delay_seconds: int = 0,
     coalesce_key: str = "",
 ):
-    """Accoda un evento per Yourang. La consegna avverrà quando le API saranno attive.
+    """Accoda un evento per Yourang: lo consegna il worker `flush_outbox` (core.outbox).
 
     `delay_seconds` > 0 trattiene l'evento: prima di quell'istante nessun worker
-    lo consegna (vedi `flush_outbox._due`). `coalesce_key` lo lega a un oggetto,
+    lo consegna (vedi `core.outbox._due`). `coalesce_key` lo lega a un oggetto,
     così chi emette l'evento successivo può ritrovarlo con `held_events` e
     fonderlo invece di accodarne un altro; il worker consegna inoltre gli eventi
     con la stessa chiave nell'ordine in cui sono nati.

@@ -156,10 +156,6 @@ class StaffRefreshToken(models.Model):
         stato = "revocato" if self.revoked_at else "attivo"
         return f"Sessione {self.user_id} ({stato})"
 
-    @property
-    def is_live(self) -> bool:
-        return self.revoked_at is None and self.expires_at > timezone.now()
-
 
 def default_invitation_expiry():
     return timezone.now() + dt.timedelta(days=7)

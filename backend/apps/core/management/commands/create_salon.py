@@ -31,8 +31,8 @@ from django.core.validators import validate_email
 from django.db import transaction
 
 from apps.accounts.models import Membership, User
-from apps.accounts.services import ensure_default_roles
-from apps.core.models import Location, Salon, SalonSettings
+from apps.accounts.provisioning import create_salon_foundation
+from apps.core.models import Salon
 
 # Lo slug è il primo segmento dell'URL dell'app cliente, che riconosce solo
 # /^[A-Za-z0-9][A-Za-z0-9_-]*$/ (packages/shared/src/salon.js): con spazi o
@@ -86,16 +86,9 @@ class Command(BaseCommand):
                     "dargli un salone."
                 )
 
-        salon = Salon.objects.create(name=o["name"], slug=slug)
-        Location.objects.create(
-            salon=salon,
-            name=o["location"],
-            address=o["address"],
-            phone=o["phone"],
-            is_default=True,
+        salon, _location = create_salon_foundation(
+            o["name"], slug, location_name=o["location"], address=o["address"], phone=o["phone"]
         )
-        SalonSettings.objects.create(salon=salon)
-        ensure_default_roles(salon)
 
         created = owner is None
         if created:

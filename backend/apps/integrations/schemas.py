@@ -7,7 +7,7 @@ from ninja import Schema
 class AuthorizeOut(Schema):
     authorize_url: str
     # Da tenere nel sessionStorage della finestra che avvia il flusso e da
-    # rimandare all'exchange: lega il codice a chi ha iniziato (vedi api.py).
+    # rimandare all'exchange: lega il codice a chi ha iniziato (vedi oauth.py).
     nonce: str
 
 
@@ -35,7 +35,3 @@ class StatusOut(Schema):
     # Ultimo errore di sincronizzazione ("" se nessuno): la riga diceva
     # «Connesso · sincronizzati» anche con la sync ferma o parziale.
     last_error: str = ""
-
-
-class OkOut(Schema):
-    ok: bool = True

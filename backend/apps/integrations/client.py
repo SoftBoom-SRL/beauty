@@ -24,7 +24,9 @@ REFRESH_MARGIN = dt.timedelta(seconds=60)
 # Scope OAuth richiesti (hardcoded come in food/real_estate auth.ts).
 # `contacts:write` autorizza anche le scritture sul catalogo (qualsiasi scope
 # :write rende il token READ_WRITE lato Yourang; non esiste `catalogues:write`).
-SCOPES = "openid profile email offline_access contacts:read contacts:write events:read"
+# OAUTH_ e non SCOPES: SCOPES nel progetto sono i permessi dello staff
+# (common.permissions), un'altra cosa.
+OAUTH_SCOPES = "openid profile email offline_access contacts:read contacts:write events:read"
 
 
 def _issuer() -> str:
@@ -69,7 +71,7 @@ def build_authorize_url(state: str, code_challenge: str, nonce: str) -> str:
         "response_type": "code",
         "client_id": settings.YOURANG_CLIENT_ID,
         "redirect_uri": redirect_uri(),
-        "scope": SCOPES,
+        "scope": OAUTH_SCOPES,
         "state": state,
         "nonce": nonce,
         "code_challenge": code_challenge,

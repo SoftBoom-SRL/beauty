@@ -114,7 +114,7 @@ class ClientIpTests(TestCase):
 
     def test_a_very_long_email_does_not_blow_up_the_login(self):
         """S11: la chiave del contatore finiva in un CharField(200)."""
-        from ..api import _login_account_key
+        from ..api.staff import _login_account_key
 
         chiave = _login_account_key("a" * 400 + "@example.com")
         self.assertLessEqual(len(chiave), 200)
@@ -125,11 +125,11 @@ class StreamPermissionTests(TestCase):
 
     Un'operatrice con agenda e clienti riceveva in tempo reale incassi, gift
     card, magazzino e cambi di impostazioni. La mappa che decide chi vede cosa
-    sta accanto a chi consegna gli eventi, in apps.core.views: il test guarda
-    quella, non una copia, perché una copia diverge in silenzio."""
+    è una sola, in apps.core.livefeed, e la usano lo stream e il polling: il
+    test guarda quella, non una copia, perché una copia diverge in silenzio."""
 
     def test_an_event_needs_the_scope_of_its_area(self):
-        from apps.core.views import allowed_prefixes
+        from apps.core.livefeed import allowed_prefixes
 
         consentiti = allowed_prefixes(False, {"agenda", "clients"})
         self.assertIn("appointment.", consentiti)
@@ -139,25 +139,25 @@ class StreamPermissionTests(TestCase):
         self.assertNotIn("coupon.", consentiti)
 
     def test_the_owner_sees_everything(self):
-        from apps.core.views import LIVE_FEED_PREFIXES, allowed_prefixes
+        from apps.core.livefeed import LIVE_FEED_PREFIXES, allowed_prefixes
 
         self.assertEqual(allowed_prefixes(True, set()), LIVE_FEED_PREFIXES)
 
     def test_an_unmapped_event_reaches_nobody_but_the_owner(self):
-        from apps.core.views import allowed_prefixes
+        from apps.core.livefeed import allowed_prefixes
 
         tutti = allowed_prefixes(False, set(SCOPES))
         self.assertNotIn("qualcosa.", tutti)
 
     def test_a_renamed_label_reaches_marketing_too(self):
         """15-07: le etichette stanno anche nelle condizioni delle automazioni."""
-        from apps.core.views import allowed_prefixes
+        from apps.core.livefeed import allowed_prefixes
 
         self.assertIn("client_category.", allowed_prefixes(False, {"marketing"}))
 
     def test_deposit_rules_reach_only_the_owner(self):
         """Le regole caparra le legge e le scrive solo il titolare."""
-        from apps.core.views import LIVE_FEED_PREFIXES, allowed_prefixes
+        from apps.core.livefeed import LIVE_FEED_PREFIXES, allowed_prefixes
 
         self.assertIn("deposit_rule.", LIVE_FEED_PREFIXES)
         self.assertNotIn("deposit_rule.", allowed_prefixes(False, set(SCOPES)))
@@ -168,7 +168,7 @@ class StreamPermissionTests(TestCase):
         Riservarli al titolare significava che un cambio di orari non
         raggiungeva piu le altre postazioni fino al ricaricamento della pagina.
         """
-        from apps.core.views import allowed_prefixes
+        from apps.core.livefeed import allowed_prefixes
 
         self.assertIn("settings.", allowed_prefixes(False, {"agenda"}))
         self.assertIn("settings.", allowed_prefixes(False, set()))

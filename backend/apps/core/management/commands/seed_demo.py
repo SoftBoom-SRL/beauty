@@ -28,12 +28,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Membership, User
-from apps.accounts.services import ensure_default_roles
+from apps.accounts.provisioning import create_salon_foundation
 from apps.agenda.models import Appointment, AppointmentService, Pause, WaitlistEntry
 from apps.automations.models import Automation
 from apps.catalog.models import Package, Service, ServiceCategory
 from apps.clients.models import Client, ClientCategory
-from apps.core.models import DepositRule, Location, Salon, SalonSettings
+from apps.core.models import DepositRule, Salon
 from apps.inventory.models import (
     Product,
     ProductCategory,
@@ -44,6 +44,7 @@ from apps.inventory.models import (
 from apps.marketing.models import Communication, Coupon, GiftCard, LoyaltyProgram
 from apps.sales.models import Sale
 from apps.staff.models import Operator, WeeklyShift
+from common.money import CENT
 
 
 DEMO_SLUG = "the-parlour"
@@ -205,10 +206,10 @@ class Command(BaseCommand):
                 return
             _teardown(existing)
 
-        salon = Salon.objects.create(name="The Parlour", slug=DEMO_SLUG, is_demo=True)
-        location = Location.objects.create(salon=salon, name="Firenze", address="Via dei Servi 12, Firenze", is_default=True)
-        SalonSettings.objects.create(salon=salon)
-        ensure_default_roles(salon)
+        salon, location = create_salon_foundation(
+            "The Parlour", DEMO_SLUG, location_name="Firenze", address="Via dei Servi 12, Firenze",
+            is_demo=True,
+        )
 
         owner, password = self._demo_owner(owner, options["password"])
         Membership.objects.get_or_create(user=owner, salon=salon, defaults={"is_owner": True})
@@ -275,7 +276,7 @@ class Command(BaseCommand):
                 salon=salon, location=location, client=clients[client_idx],
                 operator=operators[op_key], start=start, status=status,
                 deposit_status=deposit,
-                deposit_amount=(total * Decimal("0.3")).quantize(Decimal("0.01")) if deposit != "none" else 0,
+                deposit_amount=(total * Decimal("0.3")).quantize(CENT) if deposit != "none" else 0,
             )
             for order, i in enumerate(svc_idxs):
                 AppointmentService.objects.create(

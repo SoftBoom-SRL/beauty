@@ -92,7 +92,7 @@ class StaffLoginThrottleTests(TestCase):
         )
 
     def test_repeated_wrong_passwords_get_throttled(self):
-        from ..api import LOGIN_MAX_PER_ACCOUNT
+        from ..api.staff import LOGIN_MAX_PER_ACCOUNT
 
         statuses = [self._login("sbagliata").status_code for _ in range(LOGIN_MAX_PER_ACCOUNT)]
         self.assertEqual(set(statuses), {401})
@@ -110,7 +110,7 @@ class StaffLoginThrottleTests(TestCase):
         self.assertEqual(set(statuses), {401})
 
     def test_the_cap_per_address_covers_many_accounts(self):
-        from ..api import LOGIN_MAX_PER_IP
+        from ..api.staff import LOGIN_MAX_PER_IP
 
         for n in range(LOGIN_MAX_PER_IP):
             post_json(
@@ -282,7 +282,7 @@ class PasswordChangeThrottleTests(TestCase):
         )
 
     def test_guessing_the_current_password_is_capped(self):
-        from ..api import PASSWORD_CHANGE_MAX_PER_USER
+        from ..api.staff import PASSWORD_CHANGE_MAX_PER_USER
 
         for n in range(PASSWORD_CHANGE_MAX_PER_USER):
             self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)
@@ -292,7 +292,7 @@ class PasswordChangeThrottleTests(TestCase):
         self.assertTrue(self.user.check_password("segretissima"))
 
     def test_the_right_current_password_clears_the_count(self):
-        from ..api import PASSWORD_CHANGE_MAX_PER_USER
+        from ..api.staff import PASSWORD_CHANGE_MAX_PER_USER
 
         for n in range(PASSWORD_CHANGE_MAX_PER_USER - 1):
             self.assertEqual(self._change(f"tentativo-{n}").status_code, 400)

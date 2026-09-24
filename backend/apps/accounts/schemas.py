@@ -5,10 +5,6 @@ from uuid import UUID
 from ninja import Schema
 
 
-class OkOut(Schema):
-    ok: bool = True
-
-
 # ---- Staff auth --------------------------------------------------------------
 
 

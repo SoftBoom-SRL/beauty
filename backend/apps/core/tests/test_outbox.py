@@ -26,7 +26,7 @@ class FlushOutboxTests(TestCase):
     def test_delivery_marks_sent_and_failures_are_retried(self):
         from unittest.mock import MagicMock, patch
 
-        from apps.core.management.commands.flush_outbox import MAX_ATTEMPTS, flush_pending
+        from apps.core.outbox import MAX_ATTEMPTS, flush_pending
 
         from ..models import OutboxEvent
 
@@ -67,7 +67,7 @@ class FlushOutboxTests(TestCase):
 
     @override_settings(YOURANG_API_URL="https://yourang.example/events")
     def test_the_wait_before_a_retry_doubles(self):
-        from apps.core.management.commands.flush_outbox import _backoff_seconds
+        from apps.core.outbox import _backoff_seconds
 
         waits = [_backoff_seconds(n) for n in range(1, 9)]
         self.assertEqual(waits[:4], [30, 60, 120, 240])
@@ -79,7 +79,7 @@ class FlushOutboxTests(TestCase):
     def test_an_event_already_taken_by_another_worker_is_not_sent_twice(self):
         from unittest.mock import MagicMock, patch
 
-        from apps.core.management.commands.flush_outbox import flush_pending
+        from apps.core.outbox import flush_pending
 
         from ..models import OutboxEvent
 
@@ -111,7 +111,7 @@ class FlushOutboxTests(TestCase):
         from itertools import count
         from unittest.mock import MagicMock, patch
 
-        from apps.core.management.commands.flush_outbox import (
+        from apps.core.outbox import (
             STALE_CLAIM_SECONDS,
             flush_pending,
             release_stale_claims,
@@ -150,7 +150,7 @@ class FlushOutboxTests(TestCase):
     def test_an_event_stuck_in_sending_goes_back_in_the_queue(self):
         from datetime import timedelta
 
-        from apps.core.management.commands.flush_outbox import (
+        from apps.core.outbox import (
             STALE_CLAIM_SECONDS,
             release_stale_claims,
         )
@@ -170,7 +170,7 @@ class FlushOutboxTests(TestCase):
     def test_the_access_code_is_wiped_once_the_message_is_delivered(self):
         from unittest.mock import MagicMock, patch
 
-        from apps.core.management.commands.flush_outbox import flush_pending
+        from apps.core.outbox import flush_pending
 
         event = emit_event(
             self.salon, "client.otp", {"code": "123456", "phone": "+393331112222"}
@@ -185,7 +185,7 @@ class FlushOutboxTests(TestCase):
     def test_delivered_events_are_purged_after_the_retention_window(self):
         from datetime import timedelta
 
-        from apps.core.management.commands.flush_outbox import (
+        from apps.core.outbox import (
             PURGE_AFTER_DAYS,
             purge_delivered,
         )
@@ -214,7 +214,7 @@ class FlushOutboxTests(TestCase):
     def test_an_unexpected_network_error_does_not_escape(self):
         from unittest.mock import patch
 
-        from apps.core.management.commands.flush_outbox import flush_pending
+        from apps.core.outbox import flush_pending
 
         from ..models import OutboxEvent
 
@@ -413,7 +413,7 @@ class DeliveryOrderPerObjectTests(TestCase):
     def _flush(self, sent, **kwargs):
         from unittest.mock import patch
 
-        from ..management.commands.flush_outbox import flush_pending
+        from ..outbox import flush_pending
 
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent, **kwargs)):
             return flush_pending()
@@ -462,7 +462,7 @@ class ClaimRereadsTheEventTests(TestCase):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
 
     def test_a_hold_extended_after_the_listing_is_respected(self):
-        from ..management.commands.flush_outbox import _claim
+        from ..outbox import _claim
 
         event = emit_event(self.salon, "appointment.created", {"start": "x"}, delay_seconds=30)
         OutboxEvent.objects.filter(pk=event.pk).update(next_attempt_at=timezone.now())
@@ -477,7 +477,7 @@ class ClaimRereadsTheEventTests(TestCase):
     def test_what_leaves_is_what_is_in_the_database(self):
         from unittest.mock import MagicMock
 
-        from ..management.commands.flush_outbox import _claim, deliver_event
+        from ..outbox import _claim, deliver_event
 
         event = emit_event(self.salon, "appointment.created", {"start": "10:00"})
         stale = OutboxEvent.objects.select_related("salon").get(pk=event.pk)
@@ -511,7 +511,7 @@ class StaleMessagesExpireTests(TestCase):
     def _flush(self):
         from unittest.mock import patch
 
-        from ..management.commands.flush_outbox import flush_pending
+        from ..outbox import flush_pending
 
         sent = []
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent)):
@@ -553,7 +553,7 @@ class StaleMessagesExpireTests(TestCase):
         self.assertEqual(self._flush(), {campaign.id})
 
     def test_expired_messages_are_purged_like_the_superseded_ones(self):
-        from ..management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
+        from ..outbox import PURGE_AFTER_DAYS, purge_delivered
 
         event = emit_event(self.salon, "client.otp", {"code": "1"})
         OutboxEvent.objects.filter(pk=event.pk).update(
@@ -607,7 +607,7 @@ class LastDeliveredMessageSurvivesThePurgeTests(TestCase):
     è ciò che la cliente sa, e l'agenda lo confronta prima di rettificare."""
 
     def test_only_the_last_message_about_an_upcoming_visit_is_kept(self):
-        from ..management.commands.flush_outbox import PURGE_AFTER_DAYS, purge_delivered
+        from ..outbox import PURGE_AFTER_DAYS, purge_delivered
 
         salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         future = (timezone.now() + dt.timedelta(days=20)).isoformat()
@@ -639,7 +639,7 @@ class HeldEventsDoNotBlockTests(TestCase):
     def _flush(self, sent, **kwargs):
         from unittest.mock import patch
 
-        from ..management.commands.flush_outbox import flush_pending
+        from ..outbox import flush_pending
 
         with patch("httpx.Client.post", side_effect=_fake_yourang(sent, **kwargs)):
             return flush_pending()
