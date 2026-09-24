@@ -2552,9 +2552,21 @@ def _close_deposit_link_after_commit(appointment: Appointment) -> None:
 
 
 def cancel_appointment(
-    appointment: Appointment, *, reason: str = "", actor=None, by_client: bool = False
+    appointment: Appointment,
+    *,
+    reason: str = "",
+    actor=None,
+    by_client: bool = False,
+    undoable: bool | None = None,
 ) -> Appointment:
-    """Annulla la visita. `by_client=True` quando è la cliente dall'app.
+    """Annulla la visita. `by_client=True` quando è la cliente a disdire: dall'app,
+    oppure al telefono o al banco con la reception che lo registra.
+
+    `undoable`: se il gesto entra in «torna indietro». Di serie sì per il
+    salone e no per la cliente dall'app (chi sta al banco non deve poter
+    rimettere in agenda una visita che la cliente ha disdetto da sé); la
+    disdetta registrata dalla reception è un gesto della postazione, e un clic
+    sbagliato si deve poter disfare.
 
     La penale — caparra trattenuta e `cancelled_late`, che alimenta le regole
     caparra dei prossimi appuntamenti — si applica SOLO all'annullamento della
@@ -2563,7 +2575,9 @@ def cancel_appointment(
     (_client_policy_ok), quindi «tardivo» capitava solo quando era il SALONE ad
     annullare. Se l'operatrice si ammalava e la reception disdiceva due ore
     prima, la cliente perdeva la caparra e si ritrovava schedata come
-    inaffidabile.
+    inaffidabile. E siccome l'app manda la cliente in ritardo a «contattare il
+    salone», la sua disdetta tardiva arriva proprio alla reception: che la
+    registra con `by_client=True` perché la penale valga.
 
     Deposito pagato: forfeited se tardivo, altrimenti «da rimborsare»; subito
     dopo si tenta il rimborso su Stripe (fuori dalla transazione) e solo se
@@ -2598,9 +2612,15 @@ def cancel_appointment(
             appointment.salon,
             "appointment.cancelled",
             f"Appuntamento di {appointment.client.full_name} annullato"
+            + (" su richiesta della cliente" if by_client else "")
             + (" (tardivo)" if late else ""),
             actor=actor,
-            payload={"appointment_id": appointment.id, "reason": reason, "late": late},
+            payload={
+                "appointment_id": appointment.id,
+                "reason": reason,
+                "late": late,
+                "by_client": by_client,
+            },
         )
         unpaid_link = appointment.deposit_status == Appointment.DepositStatus.REQUIRED
         if unpaid_link:
@@ -2613,13 +2633,13 @@ def cancel_appointment(
         emit_appointment_event(
             appointment,
             "appointment.cancelled",
-            {**_event_payload(appointment), "reason": reason, "late": late},
+            {**_event_payload(appointment), "reason": reason, "late": late, "by_client": by_client},
         )
         _sync_freed_slots(appointment, occupied, {}, knowledge)
         # L'annullamento della CLIENTE dall'app non entra nello storico della
         # postazione: chi sta al banco non deve poter rimettere in agenda una
-        # visita che la cliente ha disdetto.
-        if not by_client:
+        # visita che la cliente ha disdetto (vedi `undoable`).
+        if (not by_client) if undoable is None else undoable:
             undo_log.record(
                 appointment.salon,
                 kind=UndoEntry.Kind.CANCEL,

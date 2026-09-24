@@ -6,7 +6,7 @@ import DkModal from '../../../ui/DkModal.jsx';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
-import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, isoAtMin, hmToMin } from '../lib.js';
+import { aStartMin, aEndMin, initialsOf, toastErr, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin } from '../lib.js';
 import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
@@ -31,6 +31,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const [flow, setFlow] = useState(null); // 'reschedule' | 'noshow' | 'cancel'
   const [reason, setReason] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
+  // Annullamento: chi l'ha chiesto. La cliente che disdice al telefono (l'app
+  // sotto le ore minime la manda dal salone) ha le regole dell'app: in ritardo
+  // la caparra resta al salone. Prima la reception poteva solo annullare «come
+  // salone», e la penale non si applicava mai.
+  const [cancelByClient, setCancelByClient] = useState(false);
+  const cancelMinHours = settings?.cancel_min_hours ?? 24;
   const [busy, setBusy] = useState(false);
   const noShowReasons = customReasons(settings?.no_show_reasons, NOSHOW_REASONS);
   const cancelReasons = customReasons(settings?.cancel_reasons, CANCEL_REASONS);
@@ -648,9 +654,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     const label = (reasons.find((r) => r[0] === reason) || [])[1] || '';
     const fullReason = joinReason(label, reasonNote);
     const freed = apptRef.current;
+    const byClient = kind === 'cancel' && cancelByClient;
+    const kept = byClient && freed.deposit_status === 'paid' && lateCancel(freed, cancelMinHours);
     const ok = await lifecycle(
-      kind, { reason: fullReason },
-      kind === 'no-show' ? t('No-show registrato · slot liberato', 'No-show recorded · slot freed') : t('Appuntamento cancellato · slot liberato', 'Appointment cancelled · slot freed'),
+      kind, { reason: fullReason, ...(kind === 'cancel' ? { by_client: byClient } : {}) },
+      kind === 'no-show' ? t('No-show registrato · slot liberato', 'No-show recorded · slot freed')
+        : kept ? t('Appuntamento cancellato · caparra trattenuta', 'Appointment cancelled · deposit kept')
+          : t('Appuntamento cancellato · slot liberato', 'Appointment cancelled · slot freed'),
       kind === 'no-show' ? 'alert' : 'x'
     );
     if (!ok || !alive.current) return;
@@ -732,9 +742,23 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             </button>
           </React.Fragment>
         }>
+        <div className="t-meta" style={{ marginBottom: 9 }}>{t('Chi annulla', 'Who is cancelling')}</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+          {[[false, t('Il salone', 'The salon')], [true, t('La cliente, che ha disdetto', 'The client, who cancelled')]].map(([k, label]) => {
+            const on = cancelByClient === k;
+            return <button key={String(k)} type="button" onClick={() => setCancelByClient(k)} style={{ padding: '8px 14px', borderRadius: 99, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1.5px solid ' + (on ? 'var(--ink)' : 'var(--hair)'), background: on ? 'var(--ink)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>{label}</button>;
+          })}
+        </div>
+        <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.45, marginBottom: 16 }}>
+          {!cancelByClient
+            ? t('Il salone non può tenere la visita: la caparra torna alla cliente, senza penali.', 'The salon cannot keep the appointment: the deposit goes back to the client, with no penalty.')
+            : lateCancel(appt, cancelMinHours)
+              ? t(`Mancano meno di ${cancelMinHours} ore: come dall'app, la caparra resta al salone e la disdetta si segna come tardiva nella scheda della cliente.`, `Less than ${cancelMinHours} hours to go: as in the app, the salon keeps the deposit and the cancellation is marked late on the client's profile.`)
+              : t(`Mancano più di ${cancelMinHours} ore: la caparra torna alla cliente, come dall'app.`, `More than ${cancelMinHours} hours to go: the deposit goes back to the client, as in the app.`)}
+        </div>
         <div className="t-meta" style={{ marginBottom: 12 }}>{t('Cosa succederà', 'What will happen')}</div>
         <div style={{ padding: '16px 16px 14px', borderRadius: 14, background: 'var(--surface-2)', marginBottom: 18 }}>
-          <FlowSteps steps={cancelSteps(appt, matchCount, t, lang)} />
+          <FlowSteps steps={cancelSteps(appt, matchCount, t, lang, { byClient: cancelByClient, minHours: cancelMinHours })} />
         </div>
         {reasonPicker({ reasons: cancelReasons })}
       </DkPanel>
@@ -805,7 +829,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                 </button>
               )}
               <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
-                onClick={() => { setFlow('cancel'); setReason(null); setReasonNote(''); }}>
+                onClick={() => { setFlow('cancel'); setReason(null); setReasonNote(''); setCancelByClient(false); }}>
                 <Icon name="x" size={14} color="var(--danger)" />{t('Cancella', 'Cancel booking')}
               </button>
             </div>

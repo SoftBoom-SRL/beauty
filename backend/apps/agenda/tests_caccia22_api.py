@@ -335,3 +335,66 @@ class GiftFromNameTests(Caccia22Base):
                                 paid=True, paid_method="cash")
         names = {g["gift_card_id"]: g["from_name"] for g in _appointment_out(appt)["gifts"]}
         self.assertEqual(names, {own.id: "", gift.id: self.bea.full_name})
+
+
+# ---- La reception registra la disdetta della cliente (seguito di 13-02) --------
+
+
+class StaffRecordsClientCancellationTests(Caccia22Base):
+    """L'app rifiuta l'annullamento sotto le ore minime e manda la cliente dal
+    salone; la reception, annullando sempre «come salone», non poteva applicare
+    la penale: caparra rimborsata e nessuna disdetta tardiva nella scheda."""
+
+    def _paid(self, hours_ahead):
+        start = timezone.now() + dt.timedelta(hours=hours_ahead)
+        appointment = self.book(self.anna, self.giulia, start, [(self.cut30, 30, 0)])
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.PAID, deposit_amount=Decimal("20.00"),
+        )
+        appointment.refresh_from_db()
+        return appointment
+
+    def _cancel(self, appointment, **body):
+        return self.post(
+            f"/api/agenda/appointments/{appointment.id}/cancel",
+            {"reason": "Imprevisto", **body}, self.staff_auth(),
+        )
+
+    def test_a_late_cancellation_by_the_client_keeps_the_deposit(self):
+        from apps.core.models import ActivityLog
+
+        from .models import UndoEntry
+
+        appointment = self._paid(hours_ahead=3)
+        res = self._cancel(appointment, by_client=True)
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual((body["status"], body["deposit_status"], body["cancelled_late"]),
+                         ("cancelled", "forfeited", True))
+        log = ActivityLog.objects.filter(salon=self.salon, type="appointment.cancelled").latest("id")
+        self.assertIn("su richiesta della cliente", log.summary)
+        self.assertTrue(log.payload["by_client"])
+        event = OutboxEvent.objects.filter(salon=self.salon, event_type="appointment.cancelled").latest("id")
+        self.assertEqual((event.payload["by_client"], event.payload["late"]), (True, True))
+        # è un gesto della postazione: si può disfare
+        self.assertTrue(UndoEntry.objects.filter(salon=self.salon, kind=UndoEntry.Kind.CANCEL).exists())
+
+    def test_in_time_the_client_gets_the_deposit_back(self):
+        appointment = self._paid(hours_ahead=72)
+        body = self._cancel(appointment, by_client=True).json()
+        self.assertEqual((body["deposit_status"], body["cancelled_late"]), ("refund_due", False))
+
+    def test_the_salon_cancelling_late_still_refunds(self):
+        appointment = self._paid(hours_ahead=3)
+        body = self._cancel(appointment).json()
+        self.assertEqual((body["deposit_status"], body["cancelled_late"]), ("refund_due", False))
+
+    def test_undo_puts_back_the_deposit_and_clears_the_late_mark(self):
+        appointment = self._paid(hours_ahead=3)
+        self.assertEqual(self._cancel(appointment, by_client=True).status_code, 200)
+        res = self.post("/api/agenda/undo", {}, self.staff_auth())
+        self.assertEqual(res.status_code, 200, res.content)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.PAID)
+        self.assertFalse(appointment.cancelled_late)

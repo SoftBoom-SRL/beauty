@@ -128,6 +128,16 @@ class ReasonIn(Schema):
     reason: str = Field("", max_length=255)
 
 
+class CancelIn(ReasonIn):
+    # Annullamento chiesto dalla CLIENTE (al telefono, al banco) e registrato
+    # dallo staff: valgono le sue regole, come dall'app. Sotto le ore minime la
+    # caparra resta al salone e la disdetta conta come tardiva. L'app rifiuta
+    # l'annullamento tardivo e manda la cliente dal salone: senza questo il
+    # salone annullava sempre come se fosse colpa sua, e la penale non si
+    # applicava mai.
+    by_client: bool = False
+
+
 class DepositCashedIn(Schema):
     """Caparra incassata al banco: come è stata pagata (contanti, POS, …)."""
 

@@ -276,12 +276,16 @@ finestre lavorabili in minuti per quella data = turno del weekday
 - POST `/appointments/{id}/no-show` {reason} (scope agenda) → status no_show,
   deposit paid→forfeited, cancel_reason, log, emit `appointment.no_show`, free_slot_event.
   (L'addebito Stripe dell'intero importo è responsabilità di sales: qui solo evento+stato.)
-- POST `/appointments/{id}/cancel` {reason} (scope agenda) → status cancelled;
-  cancelled_late = start − now < settings.CLIENT_MOVE_CANCEL_MIN_HOURS ore;
-  se late: deposit paid→forfeited, altrimenti paid→refund_due; fuori transazione si tenta il
-  rimborso Stripe (sales.stripe_service.refund_deposit) e solo se riesce → refunded, altrimenti
-  resta refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
-  Log, emit, free_slot_event.
+- POST `/appointments/{id}/cancel` {reason, by_client?} (scope agenda) → status cancelled.
+  Di serie annulla il SALONE: nessuna penale, deposit paid→refund_due. Con `by_client: true`
+  la reception registra la disdetta della cliente (al telefono, al banco: l'app sotto le ore
+  minime la manda dal salone) e valgono le regole dell'app: cancelled_late = start − now <
+  settings.CLIENT_MOVE_CANCEL_MIN_HOURS ore, e se late deposit paid→forfeited, altrimenti
+  paid→refund_due. Resta un gesto della postazione: entra in «torna indietro».
+  Con refund_due, fuori transazione si tenta il rimborso Stripe
+  (sales.stripe_service.refund_deposit) e solo se riesce → refunded, altrimenti resta
+  refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
+  Log, emit `appointment.cancelled` {…, reason, late, by_client}, free_slot_event.
 - PUT `/appointments/{id}` {items?, note?} (scope agenda) → modifica trattamenti (snapshot nuovi), log.
 - GET `/appointments/{id}/margin` → stima margine: revenue = Σ item.price;
   supplier_cost/product_cost da Service (snapshot corrente); labor = Σ(duration/60 × operator.hourly_cost);
@@ -305,7 +309,8 @@ finestre lavorabili in minuti per quella data = turno del weekday
 - POST `/client/appointments/{id}/move` {start} → consentito solo se mancano ≥
   settings.CLIENT_MOVE_CANCEL_MIN_HOURS ore (altrimenti 400 con messaggio policy); rivalida slot.
 - POST `/client/appointments/{id}/cancel` → stessa policy; oltre il limite → 400
-  "Annullamento non consentito: contatta il salone".
+  "Annullamento non consentito: contatta il salone" (la reception la registra poi con
+  `by_client: true`). Non entra in «torna indietro».
 - GET/POST/DELETE `/client/waitlist` {service_id, operator_id?, preference, exact_days?, exact_time?}.
 
 **Tests**: get_free_slots (turni+overlap+idoneità), compute_deposit (regola pct),

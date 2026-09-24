@@ -33,6 +33,7 @@ from .schemas import (
     AppointmentCreateIn,
     AppointmentOut,
     AppointmentUpdateIn,
+    CancelIn,
     ClientAppointmentCreateIn,
     ClientAppointmentOut,
     ClientMoveIn,
@@ -718,14 +719,20 @@ def no_show_appointment(request, appointment_id: int, data: ReasonIn):
 
 
 @router.post("/appointments/{int:appointment_id}/cancel", auth=staff_auth, response=AppointmentOut)
-def cancel_appointment(request, appointment_id: int, data: ReasonIn):
+def cancel_appointment(request, appointment_id: int, data: CancelIn):
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-    # Annulla il salone: nessuna penale alla cliente, la caparra torna indietro.
+    # Di norma annulla il salone: nessuna penale, la caparra torna indietro.
+    # Con `by_client` la reception registra la disdetta della cliente, con le
+    # regole dell'app; resta un gesto della postazione, quindi si può disfare.
     return _appointment_out(
         services.cancel_appointment(
-            appointment, reason=data.reason, actor=ctx.user, by_client=False
+            appointment,
+            reason=data.reason,
+            actor=ctx.user,
+            by_client=data.by_client,
+            undoable=True,
         ),
         viewer=ctx,
     )

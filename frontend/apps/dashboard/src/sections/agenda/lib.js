@@ -315,21 +315,38 @@ export function noShowSteps(appt, matchCount, t, lang) {
   ];
 }
 
-/* Niente «annullamento tardivo» qui: dal gestionale il server rimborsa sempre
- * la caparra pagata (cancel_appointment con by_client=False). L'anteprima
- * scriveva «Caparra trattenuta» sotto le 24 ore, la reception confermava
- * convinta di tenerla e intanto partiva il rimborso sulla carta. */
-export function cancelSteps(appt, matchCount, t, lang) {
+/** Disdetta tardiva: mancano meno di `minHours` ore all'inizio (le stesse ore
+ *  minime dell'app cliente, `cancel_min_hours` delle impostazioni). */
+export function lateCancel(appt, minHours, now = Date.now()) {
+  const start = Date.parse(appt?.start);
+  const hours = Number(minHours);
+  if (!Number.isFinite(start) || minHours == null || !Number.isFinite(hours)) return false;
+  return start - now < hours * 3600000;
+}
+
+/* Quando annulla il salone il server rimborsa sempre la caparra pagata:
+ * l'anteprima scriveva «Caparra trattenuta» sotto le 24 ore, la reception
+ * confermava convinta di tenerla e intanto partiva il rimborso sulla carta.
+ * La disdetta della CLIENTE registrata dalla reception (`opts.byClient`) segue
+ * invece le regole dell'app: sotto le ore minime (`opts.minHours`) la caparra
+ * resta al salone e la disdetta si segna come tardiva. */
+export function cancelSteps(appt, matchCount, t, lang, opts = {}) {
+  const late = !!opts.byClient && lateCancel(appt, opts.minHours, opts.now);
   let dep;
   if (!_paid(appt)) {
     dep = { n: 2, title: t('Nessuna caparra', 'No deposit'), detail: '—', tone: 'muted' };
+  } else if (late) {
+    dep = { n: 2, title: t('Caparra trattenuta', 'Deposit forfeited'), detail: _depEur(appt, lang), tone: 'danger' };
   } else {
     // Il rimborso avviene su Stripe se la caparra è stata pagata online; altrimenti
     // resta «da rimborsare» finché lo staff non lo conferma dal dettaglio.
     dep = { n: 2, title: t('Caparra da rimborsare', 'Deposit to refund'), detail: _depEur(appt, lang), tone: 'default' };
   }
   return [
-    { n: 1, title: t('Cancellazione confermata', 'Cancellation confirmed'), tone: 'danger' },
+    {
+      n: 1, title: t('Cancellazione confermata', 'Cancellation confirmed'), tone: 'danger',
+      ...(late ? { detail: t('Disdetta tardiva', 'Late cancellation') } : {}),
+    },
     dep,
     _slotStep(appt, t),
     _waitlistStep(matchCount, t),
