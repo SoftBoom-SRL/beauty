@@ -3,13 +3,14 @@
 // mini-barre per operatrice, primi appuntamenti; il popover al passaggio del mouse
 // mostra il resto. In testa il riepilogo del mese e il filtro operatrice locale.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, toastApiError, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
+import { toastApiError, todayStr, parseISO, minutesOfDay, timeLabel, fmtDur, statusMeta, Avatar, Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DOW_IT, DOW_EN, MONTHS_IT, MONTHS_EN, dowIndex, fmtMoney, opDisplay, AGENDA_LIVE_RE } from './lib.js';
 import {
   monthGrid, filterDay, monthSummary, loadRatio, loadTone, LOAD_TONES, LOAD_WARN, LOAD_FULL,
   statusCounts, sortByStart, operatorRows, dayLabel, pctLabel, EMPTY_DAY,
 } from './monthLib.js';
+import * as agendaApi from './agendaApi.js';
 
 const MAX_OP_ROWS = 5;      // righe operatrice in cella, poi "+N"
 const MAX_APPTS = 3;        // appuntamenti in cella, poi "+N altri"
@@ -34,7 +35,7 @@ export default function MonthView({ anchor, onOpenDay }) {
   const load = useCallback((silent) => {
     const my = ++seq.current;
     if (!silent) { setData(null); setError(false); }
-    api.get('/api/agenda/range', { params: { start: grid.start, end: grid.end, location_id: locationId } })
+    agendaApi.getRange(grid.start, grid.end, locationId)
       .then((rows) => { if (my !== seq.current) return; setData(rows); setError(false); })
       .catch((err) => {
         if (my !== seq.current) return;

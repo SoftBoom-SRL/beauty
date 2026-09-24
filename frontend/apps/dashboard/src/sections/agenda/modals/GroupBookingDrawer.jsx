@@ -3,12 +3,13 @@
 // so staff can stagger times against the live grid. Submits each row sequentially to
 // POST /api/agenda/appointments, tracks per-row status, and never aborts the batch on one failure.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, apiErrorText, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
+import { ApiError, apiErrorText, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { initialsOf, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
+import * as agendaApi from '../agendaApi.js';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, fireToast, hasScope, locationId } = useDash();
@@ -63,7 +64,7 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
     for (const row of snapshot) {
       patchRow(row.key, { status: 'creating', error: '' });
       try {
-        const res = await api.post('/api/agenda/appointments', {
+        const res = await agendaApi.createAppointment({
           client_id: row.client.id,
           items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
           start: row.selStart,
@@ -238,7 +239,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
     if (!row.items.length || !row.date) { setSlots([]); return; }
     let alive = true;
     setSlots(null);
-    api.get('/api/agenda/availability', { params: { date: row.date, location_id: locationId, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
+    agendaApi.getAvailability({ date: row.date, location_id: locationId, items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) })
       .then((res) => {
         if (!alive) return;
         setSlots(res);

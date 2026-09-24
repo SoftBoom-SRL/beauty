@@ -9,7 +9,7 @@
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, ApiError, toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
+import { toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
@@ -18,6 +18,8 @@ import {
   slotStep, openApptIdOf, hoverPlacement,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
+import { retryForced } from './lib/retry.js';
+import * as agendaApi from './agendaApi.js';
 import {
   weekDays, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
 } from './lib/week.js';
@@ -68,11 +70,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   weekRef.current = weekStart;
   const locRef = useRef(locationId);
   locRef.current = locationId;
-  const weekParams = (start, loc) => ({ params: { start, ...(loc ? { location_id: loc } : {}) } });
   const refetchWeek = useCallback(() => {
     const my = ++weekSeq.current;
     const forWeek = weekRef.current, forLoc = locRef.current;
-    return api.get('/api/agenda/week', weekParams(forWeek, forLoc))
+    return agendaApi.getWeek(forWeek, forLoc)
       .then((rows) => {
         if (my === weekSeq.current && forWeek === weekRef.current && forLoc === locRef.current) setDays(rows);
       })
@@ -93,7 +94,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   useEffect(() => {
     const my = ++weekSeq.current;
     setDays(null);
-    api.get('/api/agenda/week', weekParams(weekStart, locationId))
+    agendaApi.getWeek(weekStart, locationId)
       .then((rows) => { if (my === weekSeq.current) setDays(rows); })
       .catch((err) => { if (my === weekSeq.current) { setDays([]); toastApiError(err, fireToast, t); } });
   }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -317,7 +318,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     const mark = undoMark();   // voce più recente di «torna indietro» prima del gesto
     setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
     try {
-      await api.post(`/api/agenda/appointments/${d.id}/move`, body);
+      await agendaApi.moveAppointment(d.id, body);
       fireToast({
         msg: t('Spostato · ', 'Moved · ') + whereLabel(dayData, operators, d.dayIdx, d.nop, d.ns, t),
         icon: 'calendar',
@@ -330,7 +331,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       });
       await refetchWeek();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
+      if (retryForced(err, opts.force, canWrite)) {
         await commitMove(d, { ...opts, force: true });
         return;
       }
@@ -347,7 +348,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     // lo dice la sezione, senza nemmeno caricarlo.
     if (pickMode) { onOpenAppt(appt); return; }
     try {
-      const full = await api.get(`/api/agenda/appointments/${appt.id}`);
+      const full = await agendaApi.getAppointment(appt.id);
       // Il pannello lo apre la sezione, che gli passa anche il ricarico della
       // settimana. Il ricarico passa dalla ref: quello catturato all'apertura
       // rileggeva la settimana di allora anche dopo averne sfogliata un'altra.

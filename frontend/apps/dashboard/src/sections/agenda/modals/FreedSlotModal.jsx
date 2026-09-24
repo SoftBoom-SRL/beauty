@@ -1,9 +1,10 @@
 // FreedSlotModal — after a staff cancel/no-show: matching waitlist entries for the freed
 // slot, ranked client-side, with WhatsApp-suggestion copy (display only — Yourang sends).
 import React, { useState } from 'react';
-import { api, toastApiError, Avatar, Icon, timeLabel, toDateStr } from '@youty/shared';
+import { toastApiError, Avatar, Icon, timeLabel, toDateStr } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
+import * as agendaApi from '../agendaApi.js';
 import { aStartMin, aEndMin, initialsOf, prefLabel, svcLabel, wlRank, wlDaysWaiting, wlWhatsAppMsg, MODAL_SWAP_MS } from '../lib.js';
 
 export default function FreedSlotModal({ appointment, matches: rawMatches, onClose }) {
@@ -45,7 +46,7 @@ export default function FreedSlotModal({ appointment, matches: rawMatches, onClo
     if (busyId) return;
     setBusyId(w.id);
     try {
-      await api.post(`/api/agenda/waitlist/${w.id}/contacted`);
+      await agendaApi.markWaitlistContacted(w.id);
       setEntries((l) => l.map((x) => (x.id === w.id ? { ...x, status: 'contacted' } : x)));
       fireToast({ msg: t(`${w.client_name.split(' ')[0]} segnata come contattata · l'invio è gestito da Yourang`, `${w.client_name.split(' ')[0]} marked as contacted · sending handled by Yourang`), icon: 'whatsapp' });
     } catch (err) { toastApiError(err, fireToast, t); }

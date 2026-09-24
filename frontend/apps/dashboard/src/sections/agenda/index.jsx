@@ -1,6 +1,6 @@
 // Agenda — day/week/month calendar wired to /api/agenda/* (port of desktop-agenda.jsx)
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
+import { ApiError, toastApiError, Avatar, Icon, fmtDateIt, nowMinutes, timeLabel, toDateStr, todayStr, parseISO, NumInput } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, DOW_IT, DOW_EN, dayTimeLabel, openingFor, hoverPlacement,
@@ -8,6 +8,8 @@ import {
   DK_START, DK_END, PXM, ZOOM_MIN, ZOOM_MAX, DAY_HOURS_W, HOVER_CLEAR_DAY, BREAK_PRESETS, BREAK_DEFAULT_MIN, clampZoom, zoomStep,
   moveIsNoop, moveHereTarget, AGENDA_LIVE_RE, plausibleDate,
 } from './lib.js';
+import { isConflict, retryForced } from './lib/retry.js';
+import * as agendaApi from './agendaApi.js';
 import DayGrid, { ApptHoverCard } from './DayGrid.jsx';
 import WeekView from './WeekView.jsx';
 import MonthView from './MonthView.jsx';
@@ -102,18 +104,18 @@ export default function AgendaSection() {
   const fetchDay = useCallback(async () => {
     const my = ++daySeq.current;
     const forDate = date;
-    const rows = await api.get('/api/agenda/day', { params: { date: forDate, location_id: locationId } });
+    const rows = await agendaApi.getDay(forDate, locationId);
     if (my === daySeq.current && forDate === dateRef.current) setDayData(rows);
   }, [date, locationId]);
-  const fetchWaitlist = useCallback(() => api.get('/api/agenda/waitlist').then(setWaitlist).catch(() => {}), []);
+  const fetchWaitlist = useCallback(() => agendaApi.getWaitlist().then(setWaitlist).catch(() => {}), []);
   /* «Torna indietro»: la pila dei gesti che CHI GUARDA può ancora annullare.
    * Arriva dal server perché l'annullamento è vero — rimette a posto i dati e
    * ferma i messaggi non ancora partiti — e perché deve rifiutarsi di
    * sovrascrivere quello che nel frattempo ha fatto un'altra postazione. */
   // restituisce anche la pila letta: serve a trovare la voce del gesto appena fatto (undoAfter)
-  const fetchUndo = useCallback(() => api.get('/api/agenda/undo').then((list) => { setUndoStack(list); return list; }).catch(() => null), []);
-  const fetchSummary = useCallback(() => api.get('/api/sales/today-summary').then(setSummary).catch(() => {}), []);
-  const fetchReleased = useCallback(() => api.get('/api/agenda/released').then(setReleased).catch(() => {}), []);
+  const fetchUndo = useCallback(() => agendaApi.getUndoStack().then((list) => { setUndoStack(list); return list; }).catch(() => null), []);
+  const fetchSummary = useCallback(() => agendaApi.getTodaySummary().then(setSummary).catch(() => {}), []);
+  const fetchReleased = useCallback(() => agendaApi.getReleased().then(setReleased).catch(() => {}), []);
   const refetchAll = useCallback(() => { fetchDay().catch(() => {}); fetchWaitlist(); fetchSummary(); fetchReleased(); fetchUndo(); }, [fetchDay, fetchWaitlist, fetchSummary, fetchReleased, fetchUndo]);
   /* Le callback date ai modali (onMutate, onCreated) vivono quanto il modale,
    * ma `refetchAll` cambia a ogni giorno sfogliato: quella catturata
@@ -139,7 +141,7 @@ export default function AgendaSection() {
     const m = modalRef.current;
     if (!m || m.name !== 'apptdetail' || m.props?.appointment?.id !== id) return;
     const my = ++freshSeq.current;
-    api.get(`/api/agenda/appointments/${id}`)
+    agendaApi.getAppointment(id)
       .then((fresh) => {
         if (my === freshSeq.current && modalRef.current?.id === m.id) setApptFresh({ modalId: m.id, appt: fresh });
       })
@@ -149,7 +151,7 @@ export default function AgendaSection() {
   useEffect(() => {
     const my = ++daySeq.current;
     setDayData(null);
-    api.get('/api/agenda/day', { params: { date, location_id: locationId } })
+    agendaApi.getDay(date, locationId)
       .then((rows) => { if (my === daySeq.current) setDayData(rows); })
       .catch((err) => { if (my === daySeq.current) { setDayData([]); toastApiError(err, fireToast, t); } });
   }, [date, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -322,7 +324,7 @@ export default function AgendaSection() {
     setUndoing(true);
     toastDoneRef.current?.();
     try {
-      const res = await api.post('/api/agenda/undo', entryId ? { entry_id: entryId } : {});
+      const res = await agendaApi.undoGesture(entryId);
       // Il gesto può aver riportato l'appuntamento su un altro giorno: senza
       // questo salto si annullava «a vuoto», con la griglia ferma dov'era.
       if (res.date && res.date !== dateRef.current) setDate(res.date);
@@ -400,7 +402,7 @@ export default function AgendaSection() {
     const mark = undoMark();   // voce più recente prima del gesto (vedi undoAfter)
     setPending({ kind: 'appt', id: a.id, startMin, opId: toOp, fromOp });
     try {
-      await api.post(`/api/agenda/appointments/${a.id}/move`, {
+      await agendaApi.moveAppointment(a.id, {
         start: isoAtMin(date, startMin),
         // L'operatrice si manda solo se cambia davvero: mandarla sempre faceva
         // rivalidare l'idoneità anche a un semplice spostamento d'orario, e un
@@ -433,12 +435,12 @@ export default function AgendaSection() {
       await fetchDay().catch(() => {});
       return true;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
+      if (retryForced(err, opts.force, canWrite)) {
         // Lo slot non è libero: si sposta comunque, senza fermare chi lavora.
         // `await` qui dentro: il `finally` deve aspettare il secondo tentativo.
         return await moveAppt(a, startMin, opId, { ...opts, force: true });
       }
-      if (err instanceof ApiError && err.status === 409) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
+      if (isConflict(err)) fireToast({ msg: t('Spostamento rifiutato', 'Move refused'), icon: 'alert' });
       else toastApiError(err, fireToast, t);
       await fetchDay().catch(() => {}); // revert to server truth
       return false;
@@ -460,7 +462,7 @@ export default function AgendaSection() {
     const mark = undoMark();
     setPending({ kind: 'appt', id: appt.id, startMin: aStartMin(appt), opId: appt.operator_id });
     try {
-      await api.post(`/api/agenda/appointments/${appt.id}/split`, {
+      await agendaApi.splitAppointment(appt.id, {
         item_id: item.id,
         start: isoAtMin(iso, startMin),
         operator_id: opId && opId !== item.operator_id ? opId : null,
@@ -475,7 +477,7 @@ export default function AgendaSection() {
       });
       await fetchDay();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+      if (retryForced(err, opts.force)) {
         await splitItem(appt, item, startMin, opId, { ...opts, force: true });
         return;
       }
@@ -506,7 +508,7 @@ export default function AgendaSection() {
     // operatrice di partenza devono essere quelli veri, non quelli di quando
     // si è aperto il pannello (lì può essere cambiato, o altrove).
     let cur = a;
-    try { cur = await api.get(`/api/agenda/appointments/${a.id}`); } catch { /* si prova con la copia che c'è */ }
+    try { cur = await agendaApi.getAppointment(a.id); } catch { /* si prova con la copia che c'è */ }
     const target = moveHereTarget(cur, slot);
     const from = { startMin: aStartMin(cur), opId: target.fromOp, date: toDateStr(cur.start) };
     if (moveIsNoop(target.startMin, target.opId ?? target.fromOp, from, date)) {
@@ -530,7 +532,7 @@ export default function AgendaSection() {
     try {
       // Come per gli spostamenti in griglia: prima senza forzare, così un giorno
       // libero non lascia l'appuntamento marcato «forzato» senza motivo.
-      await api.post(`/api/agenda/appointments/${a.id}/move`, { start: isoAtMin(iso, startMin), force: !!opts.force });
+      await agendaApi.moveAppointment(a.id, { start: isoAtMin(iso, startMin), force: !!opts.force });
       const when = dayTimeLabel(iso, startMin, t);
       fireToast({
         msg: t('Spostato a ' + when, 'Moved to ' + when),
@@ -540,7 +542,7 @@ export default function AgendaSection() {
       });
       refetchAll();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && !opts.force) {
+      if (retryForced(err, opts.force)) {
         await moveApptToDate(a, iso, startMin, { force: true });
         return;
       }
@@ -580,14 +582,14 @@ export default function AgendaSection() {
   /* «da richiamare»: ripristino di uno slot liberato per caparra non pagata */
   const restoreReleased = async (a, force = false) => {
     try {
-      await api.post(`/api/agenda/appointments/${a.id}/restore`, { force });
+      await agendaApi.restoreAppointment(a.id, force);
       fireToast({ msg: t(`Appuntamento di ${firstName(a.client?.full_name)} ripristinato`, `${firstName(a.client?.full_name)}'s appointment restored`), icon: 'check' });
       refetchAll();
     } catch (err) {
       // Lo slot nel frattempo si è riempito: si rimette comunque dov'era. Chi
       // preme «ripristina» ha già deciso, e la barra di conferma era l'ennesima
       // finestra da chiudere.
-      if (err instanceof ApiError && err.status === 409 && !force) { restoreReleased(a, true); return; }
+      if (retryForced(err, force)) { restoreReleased(a, true); return; }
       toastApiError(err, fireToast, t);
     }
   };
@@ -596,7 +598,7 @@ export default function AgendaSection() {
     const mark = undoMark();
     setPending({ kind: 'pause', id: p.id, startMin, opId });
     try {
-      await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
+      await agendaApi.updatePause(p.id, { operator_id: opId, start: isoAtMin(date, startMin), duration_min: p.duration_min, note: p.note || '' });
       fireToast({
         msg: t('Pausa spostata alle ' + timeLabel(startMin), 'Break moved to ' + timeLabel(startMin)),
         icon: 'clock',
@@ -612,7 +614,7 @@ export default function AgendaSection() {
     if (dur === p.duration_min) return;
     setPending({ kind: 'pause', id: p.id, startMin: aStartMin(p), opId: p.operator_id, dur });
     try {
-      await api.put(`/api/agenda/pauses/${p.id}`, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
+      await agendaApi.updatePause(p.id, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
       await fetchDay();
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
@@ -622,7 +624,7 @@ export default function AgendaSection() {
   const deletePause = async (p) => {
     const mark = undoMark();
     try {
-      await api.del(`/api/agenda/pauses/${p.id}`);
+      await agendaApi.deletePause(p.id);
       // `undoAfter` rilegge anche la pila di «torna indietro»
       fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: undoAfter(mark) });
       await fetchDay();
@@ -645,7 +647,7 @@ export default function AgendaSection() {
        * server che non lo manda — si scrive come prima. */
       const body = { items, force: !!opts.force };
       if (appt.updated_at) body.expected_updated_at = appt.updated_at;
-      await api.put(`/api/agenda/appointments/${appt.id}`, body);
+      await agendaApi.updateAppointment(appt.id, body);
       fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
       await fetchDay();
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
@@ -661,7 +663,7 @@ export default function AgendaSection() {
       // l'orario di chiusura) rispondeva «Orario non più disponibile» e il
       // blocco tornava com'era: al banco si allunga e basta, come per gli
       // spostamenti. Si riprova forzando, una volta sola.
-      if (err instanceof ApiError && err.status === 409 && !opts.force && canWrite) {
+      if (retryForced(err, opts.force, canWrite)) {
         await resizeItem(appt, item, newDur, { force: true });
         return;
       }
@@ -673,7 +675,7 @@ export default function AgendaSection() {
   const addBreak = async (opId, startMin, dur) => {
     setSlotMenu(null);
     try {
-      await api.post('/api/agenda/pauses', { operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
+      await agendaApi.createPause({ operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
       const o = operators.find((x) => x.id === opId);
       fireToast({
         msg: t(`Pausa aggiunta · ${firstName(o?.first_name)} alle ${timeLabel(startMin)}`, `Break added · ${firstName(o?.first_name)} at ${timeLabel(startMin)}`),

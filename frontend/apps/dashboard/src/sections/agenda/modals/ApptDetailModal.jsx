@@ -1,12 +1,14 @@
 // ApptDetailModal — full appointment detail: lifecycle actions, note edit, margin,
 // reschedule via availability + move, freed-slot waitlist hand-off on cancel/no-show.
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
+import { ApiError, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr, statusMeta, depositMeta, NumInput, parseISO } from '@youty/shared';
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { aStartMin, aEndMin, initialsOf, fmtMoney, wlMatches, noShowSteps, cancelSteps, lateCancel, isoAtMin, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
 import { depositDueLabel, apptVersion, isOlder, movedMeanwhile, eventConcerns, editRow, rebaseDraft, itemsSig, joinReason, reasonNoteMax, canMarkNoShow, MAX_ITEM_MIN, copyText, usableCode, slotReassignment } from './rules.js';
+import { withForceRetry } from '../lib/retry.js';
+import * as agendaApi from '../agendaApi.js';
 
 const TERMINAL = ['closed', 'no_show', 'cancelled'];
 
@@ -121,7 +123,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     }
   }
 
-  const fetchFresh = () => api.get(`/api/agenda/appointments/${apptRef.current.id}`);
+  const fetchFresh = () => agendaApi.getAppointment(apptRef.current.id);
   const reloadSeq = useRef(0);
   async function reload() {
     if (!apptRef.current?.id) return;
@@ -160,7 +162,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     setLinkBusy(true);
     try {
       const cur = apptRef.current;
-      const res = await api.post(`/api/sales/appointments/${cur.id}/deposit-link`, {});
+      const res = await agendaApi.sendDepositLink(cur.id);
       if (alive.current) adopt({ ...apptRef.current, deposit_payment_link: res.url, deposit_due_at: res.due_at || apptRef.current.deposit_due_at });
       fireToast({ msg: cur.deposit_payment_link ? t('Sollecito inviato alla cliente', 'Reminder sent to the client') : t('Link di pagamento inviato alla cliente', 'Payment link sent to the client'), icon: 'check' });
       onMutate?.(apptRef.current);
@@ -177,7 +179,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (linkBusy) return;
     setLinkBusy(true);
     try {
-      const res = await api.post(`/api/agenda/appointments/${apptRef.current.id}/deposit-cashed`, { method });
+      const res = await agendaApi.cashDeposit(apptRef.current.id, method);
       if (alive.current) adopt(res);
       fireToast({ msg: t('Caparra incassata e registrata in cassa', 'Deposit cashed and recorded in the till'), icon: 'check' });
       onMutate?.(res);
@@ -190,7 +192,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   useEffect(() => {
     if (flow !== 'noshow' && flow !== 'cancel') return;
     setMatchCount(null);
-    api.get('/api/agenda/waitlist')
+    agendaApi.getWaitlist()
       .then((wl) => setMatchCount(wlMatches(wl, appt).length))
       .catch(() => setMatchCount(null));
   }, [flow]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -198,7 +200,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   /* enrich with client stats (visits, spend, categories, deposit_always) */
   const [clientDetail, setClientDetail] = useState(null);
   useEffect(() => {
-    if (appt?.client?.id) api.get(`/api/clients/${appt.client.id}`).then(setClientDetail).catch(() => {});
+    if (appt?.client?.id) agendaApi.getClient(appt.client.id).then(setClientDetail).catch(() => {});
   }, [appt?.client?.id]);
 
   /* Il servizio appena aggiunto finisce in fondo alla lista, spesso sotto il
@@ -276,19 +278,13 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         start: isoAtMin(day, target),
         ...(reassigned ? { operator_id: toOp, from_operator_id: base.operator_id } : {}),
       };
-      let res;
-      try {
-        res = await api.post(`/api/agenda/appointments/${base.id}/move`, { ...body, force: false });
-      } catch (err) {
-        // Slot occupato o fuori turno: si scrive lo stesso, come in griglia — chi
-        // sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
-        if (!(err instanceof ApiError && err.status === 409)) throw err;
-        res = await api.post(`/api/agenda/appointments/${base.id}/move`, { ...body, force: true });
-      }
+      // Slot occupato o fuori turno (409): si scrive lo stesso, come in griglia —
+      // chi sta al banco sa quando sta incastrando. L'idoneità (400) invece no.
+      const { res } = await withForceRetry((force) => agendaApi.moveAppointment(base.id, { ...body, force }));
       if (alive.current) adopt(res);
       // Il gesto da annullare è questo: se ne prende l'id subito, così
       // «Annulla» non disfa un gesto fatto dopo da un'altra scheda.
-      const entry = api.get('/api/agenda/undo').then((list) => (list?.[0]?.kind === 'move' ? list[0].id : null)).catch(() => null);
+      const entry = agendaApi.getUndoStack().then((list) => (list?.[0]?.kind === 'move' ? list[0].id : null)).catch(() => null);
       const who = operators.find((x) => x.id === toOp);
       const when = day === baseDate ? timeLabel(target) : `${fmtDateIt(day)} · ${timeLabel(target)}`;
       fireToast({
@@ -317,7 +313,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   async function undoMove(entryPromise) {
     const entryId = await entryPromise;
     try {
-      const res = await api.post('/api/agenda/undo', entryId ? { entry_id: entryId } : {});
+      const res = await agendaApi.undoGesture(entryId);
       fireToast({ msg: t('Annullato · ' + res.label, 'Undone · ' + res.label), icon: 'undo' });
       if (res.date) onShowDate?.(res.date);
     } catch (err) {
@@ -338,7 +334,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (!showMargin || !appt?.id) return undefined;
     let on = true;
     setMargin(null);
-    api.get(`/api/agenda/appointments/${appt.id}/margin`)
+    agendaApi.getMargin(appt.id)
       .then((m) => { if (on) setMargin(m); })
       .catch((err) => { if (on) { toastApiError(err, fireToast, t); setShowMargin(false); } });
     return () => { on = false; };
@@ -566,17 +562,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         } : {}),
         ...(noteDirty ? { note } : {}),
       };
-      let res, forced = false;
-      try {
-        res = await api.put(`/api/agenda/appointments/${target.id}`, body);
-      } catch (err) {
-        // 409 = l'operatrice scelta è occupata in quella fascia (o si sfora la
-        // chiusura). Come in griglia non ci si ferma: si scrive lo stesso e lo si
-        // dice nell'avviso. Il 400 (non abilitata al servizio) resta un no.
-        if (!(err instanceof ApiError && err.status === 409)) throw err;
-        forced = true;
-        res = await api.put(`/api/agenda/appointments/${target.id}`, { ...body, force: true });
-      }
+      // 409 = l'operatrice scelta è occupata in quella fascia (o si sfora la
+      // chiusura). Come in griglia non ci si ferma: si scrive lo stesso e lo si
+      // dice nell'avviso. Il 400 (non abilitata al servizio) resta un no.
+      const { res, forced } = await withForceRetry((force) => agendaApi.updateAppointment(target.id, force ? { ...body, force: true } : body));
       if (alive.current) adopt(res, 'saved', { sentNote });
       fireToast({
         msg: t('Appuntamento aggiornato', 'Appointment updated') + (forced ? t(' · si sovrappone a un altro impegno', ' · overlaps another booking') : ''),
@@ -609,7 +598,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (busy) return false;
     setBusy(true);
     try {
-      await api.post(`/api/agenda/appointments/${apptRef.current.id}/${action}`, body || {});
+      await agendaApi.appointmentAction(apptRef.current.id, action, body || {});
       fireToast({ msg: toastMsg, icon });
       return true;
     } catch (err) { toastApiError(err, fireToast, t); return false; }
@@ -651,7 +640,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (!ok || !alive.current) return;
     onMutate?.();
     try {
-      const wl = await api.get('/api/agenda/waitlist');
+      const wl = await agendaApi.getWaitlist();
       if (!alive.current) return;
       const matches = wlMatches(wl, freed);
       if (matches.length) { openModal('freedslot', { appointment: freed, matches }); return; }
@@ -1001,7 +990,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
                     if (busy) return;
                     setBusy(true);
                     try {
-                      const res = await api.post(`/api/agenda/appointments/${appt.id}/deposit-refunded`, {});
+                      const res = await agendaApi.markDepositRefunded(appt.id);
                       if (alive.current) adopt(res);
                       fireToast({ msg: t('Caparra segnata come rimborsata', 'Deposit marked as refunded'), icon: 'check' });
                       onMutate?.(res);
@@ -1308,7 +1297,7 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
     const sameDay = lastDay.current === date;
     lastDay.current = date;
     if (!sameDay) { setSlots(null); setSelStart(null); setNeedForce(false); }
-    api.get('/api/agenda/availability', { params: { date, items, location_id: appt.location_id, exclude_appointment_id: appt.id } })
+    agendaApi.getAvailability({ date, items, location_id: appt.location_id, exclude_appointment_id: appt.id })
       .then((res) => {
         if (!on) return;
         setSlots(res);
@@ -1330,28 +1319,24 @@ function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClo
     // non si prenota più: lo spostamento la applica solo se la si manda.
     const sel = (slots || []).find((x) => x.start === selStart);
     const re = sel ? slotReassignment(appt.items, sel.assignment) : { pair: null, extra: 0 };
-    const url = `/api/agenda/appointments/${appt.id}/move`;
     const body = { start: selStart, ...(re.pair ? { operator_id: re.pair.to, from_operator_id: re.pair.from } : {}) };
     try {
-      let res, forced = false;
-      try {
-        // Sempre prima senza forzare: un orario a mano fuori dalla griglia
-        // degli slot ma libero restava segnato «forzato» per niente.
-        res = await api.post(url, { ...body, force: false });
-      } catch (err) {
-        if (!(err instanceof ApiError && err.status === 409)) throw err;
-        if (!needForce) {
+      // Sempre prima senza forzare: un orario a mano fuori dalla griglia
+      // degli slot ma libero restava segnato «forzato» per niente.
+      const out = await withForceRetry((force) => agendaApi.moveAppointment(appt.id, { ...body, force }), {
+        retry: () => {
+          if (needForce) return true;
           // Era fra gli orari liberi: nel frattempo lo ha preso qualcun altro.
           // Si ricarica e si lascia decidere: un altro orario, o di nuovo
           // «Sposta qui» per forzare (prima l'avviso citava un «Sposta
           // comunque» che non c'era).
           if (alive.current) { setNeedForce(true); setReloadKey((k) => k + 1); }
           fireToast({ msg: t(`Le ${when} sono state appena occupate: scegli un altro orario, o premi di nuovo «Sposta qui» per spostarla comunque (resterà segnata come forzata)`, `${when} was just taken: pick another time, or press “Move here” again to move it anyway (it will be marked as forced)`), icon: 'alert' });
-          return;
-        }
-        forced = true;
-        res = await api.post(url, { ...body, force: true });
-      }
+          return false;
+        },
+      });
+      if (out.stopped) return;
+      const { res, forced } = out;
       fireToast({
         msg: t('Appuntamento riprogrammato alle ' + when, 'Rescheduled to ' + when)
           + (forced ? t(' · forzato', ' · forced') : '')

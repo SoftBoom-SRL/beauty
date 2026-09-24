@@ -6,13 +6,15 @@
 // servizio, orario: se l'orario richiesto non è disponibile, spiega PERCHÉ e
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, toastApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
+import { toastApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr, parseISO } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { fmtMoney, explainSlot, firstName, isoAtMin, hmToMin, slotStep, AFTERNOON_MIN } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { copyText, nextSelection, usableCode, usableGiftCards } from './rules.js';
+import { withForceRetry } from '../lib/retry.js';
+import * as agendaApi from '../agendaApi.js';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -24,7 +26,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
 
   /* ---- cliente ---- */
   const [client, setClient] = useState(pf.clientId ? { id: pf.clientId, full_name: pf.clientName || '…' } : null);
-  useEffect(() => { if (pf.clientId) api.get(`/api/clients/${pf.clientId}`).then(setClient).catch(() => {}); }, [pf.clientId]);
+  useEffect(() => { if (pf.clientId) agendaApi.getClient(pf.clientId).then(setClient).catch(() => {}); }, [pf.clientId]);
 
   /* ---- data + richiesta (operatrice/orario cliccati in agenda) ---- */
   // toDateStr e non slice(0, 10): `pf.start` è un istante UTC, e per un
@@ -45,7 +47,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   useEffect(() => {
     if (!client?.id) { setGifts([]); return undefined; }
     let alive = true;
-    api.get('/api/marketing/gift-cards', { params: { client_id: client.id, status: 'active', payment_status: 'paid' } })
+    agendaApi.getClientGiftCards(client.id)
       .then((r) => { if (alive) setGifts(usableGiftCards(r.items, client.id)); })
       .catch(() => { if (alive) setGifts([]); });
     return () => { alive = false; };
@@ -120,7 +122,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const [dayRows, setDayRows] = useState(null);
   useEffect(() => {
     let alive = true;
-    api.get('/api/agenda/day', { params: { date, location_id: locationId } }).then((rows) => { if (alive) setDayRows(rows); }).catch(() => {});
+    agendaApi.getDay(date, locationId).then((rows) => { if (alive) setDayRows(rows); }).catch(() => {});
     return () => { alive = false; };
   }, [date, locationId, liveTick]);
 
@@ -149,7 +151,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     const refreshed = lastAvailKey.current === availKey;
     if (!refreshed) setSlots(null);
     lastAvailKey.current = availKey;
-    api.get('/api/agenda/availability', { params: { date, location_id: locationId, items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) } })
+    agendaApi.getAvailability({ date, location_id: locationId, items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) })
       .then((res) => {
         if (!alive) return;
         setSlots(res);
@@ -257,28 +259,26 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       start: selStart, note, flexible, location_id: locationId,
     };
     try {
-      let res;
-      try {
-        // Sempre prima senza forzare (13-12): un orario a mano libero ma fuori
-        // griglia restava segnato «forzato», e con «Prima disponibile» il
-        // server forzato prendeva la prima operatrice in elenco anche occupata.
-        res = await api.post('/api/agenda/appointments', { ...body, force: false });
-      } catch (err) {
-        if (!(err instanceof ApiError && err.status === 409)) throw err;
-        if (!deliberate) {
+      // Sempre prima senza forzare (13-12): un orario a mano libero ma fuori
+      // griglia restava segnato «forzato», e con «Prima disponibile» il
+      // server forzato prendeva la prima operatrice in elenco anche occupata.
+      const out = await withForceRetry((force) => agendaApi.createAppointment({ ...body, force }), {
+        retry: () => {
+          // Chi prenota al banco ha già deciso: si scrive comunque, invece di
+          // aprire un riquadro «crea comunque» che costava un giro in più nel
+          // momento peggiore della giornata.
+          if (deliberate) return true;
           // L'orario era libero: nel frattempo lo ha preso un'altra
           // prenotazione. Si ricaricano giornata e orari e si lascia scegliere,
           // invece di scrivere sopra l'altra cliente senza che nessuno l'abbia
           // deciso (13-11).
           if (alive.current) { quietDrop.current = true; setLiveTick((n) => n + 1); }
           fireToast({ msg: t(`Le ${when} sono appena state occupate: scegli un altro orario, o scrivilo in «Orario a mano» per inserirla comunque`, `${when} was just taken: pick another time, or type it under “Type a time” to book it anyway`), icon: 'alert' });
-          return;
-        }
-        // Chi prenota al banco ha già deciso: si scrive comunque, invece di
-        // aprire un riquadro «crea comunque» che costava un giro in più nel
-        // momento peggiore della giornata.
-        res = await api.post('/api/agenda/appointments', { ...body, force: true });
-      }
+          return false;
+        },
+      });
+      if (out.stopped) return;
+      const { res } = out;
       // La prenotazione è fatta: il drawer si chiude e basta. Prima restava una
       // schermata di riepilogo con «Chiudi», un clic in più su un'azione già
       // conclusa e visibile in agenda.
