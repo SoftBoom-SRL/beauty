@@ -1,6 +1,6 @@
 // Sostituto di '@youty/shared' per i test: riesporta i VERI helper puri del
-// pacchetto — format.js, phone.js e la classe ApiError con il testo e il toast
-// d'errore di apiErrors.js. Serve perché l'indice del pacchetto tira dentro i
+// pacchetto — format.js, labels.js, phone.js e la classe ApiError con il testo
+// e il toast d'errore di apiErrors.js. Serve perché l'indice del pacchetto tira dentro i
 // componenti React e api.js (che al caricamento legge import.meta.env), che
 // nei test con `node --test` non servono (e senza DOM non si caricano).
 //
@@ -9,6 +9,7 @@
 // con il nome solo qui i test passano e il build si rompe, senza il nome qui
 // è il contrario. Lo controlla packages/shared/test/shims.test.js.
 export * from '../packages/shared/src/format.js';
+export * from '../packages/shared/src/labels.js';
 // Anche le regole del telefono: sono pure come format.js, e i moduli delle
 // app che le importano da '@youty/shared' (import CSV, schede) si possono
 // provare così come sono. Solo i nomi dell'indice: COUNTRY_CODES e

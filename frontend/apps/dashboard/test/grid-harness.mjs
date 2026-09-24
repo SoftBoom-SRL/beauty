@@ -82,6 +82,7 @@ export const jsxs = jsx;
 const SHARED = `
 import * as apiErrors from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'apiErrors.js'))};
 export * from ${JSON.stringify(FORMAT)};
+export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
 export const Avatar = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;

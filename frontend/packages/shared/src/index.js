@@ -23,6 +23,9 @@ export {
   salonDateParts, salonTzOpts, fmtTime, toDateTimeLocal, dateTimeLocalToIso,
 } from './format.js';
 
+// Etichette bilingui (logica pura): nameIn(servizio, lang) → name_en o name_it.
+export { nameIn } from './labels.js';
+
 // Telefoni: elenco prefissi + conversioni da/verso E.164 (logica pura).
 export {
   COUNTRIES, DEFAULT_ISO2, countryOf,
