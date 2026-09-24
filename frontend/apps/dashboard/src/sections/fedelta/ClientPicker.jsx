@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, PhoneInput, isPlausiblePhone, toastApiError } from '@youty/shared';
+import { ApiError, Icon, PhoneInput, isPlausiblePhone, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
+import { clientsApi } from '../../api/clients.js';
 
 /** Client search-picker (predictive) with inline "new client" creation.
  * `client` is null or `{id, full_name}`. Used by GiftCardModal (buyer/recipient)
@@ -29,7 +30,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     const tm = setTimeout(() => {
       // Solo schede attive: un buono intestato al doppione archiviato di Maria
       // Rossi veniva poi rifiutato in cassa alla Maria Rossi vera (14-22).
-      api.get('/api/clients/', { params: { q, is_active: true, limit: 8 } })
+      clientsApi.list({ q, is_active: true, limit: 8 })
         .then((res) => { if (alive) setResults(res.items || []); })
         .catch(() => { if (alive) setResults([]); })
         .finally(() => { if (alive) setLoading(false); });
@@ -56,7 +57,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     if (creating || !nf.first_name.trim() || !phoneOk) return;
     setCreating(true);
     try {
-      const created = await api.post('/api/clients/', {
+      const created = await clientsApi.create({
         first_name: nf.first_name.trim(), last_name: nf.last_name.trim(), phone: nf.phone.trim(),
       });
       onChange(created); // { id, full_name, ... }
@@ -76,7 +77,7 @@ export default function ClientPicker({ client, onChange, placeholder, t }) {
     if (creating || !archived) return;
     setCreating(true);
     try {
-      const saved = await api.put(`/api/clients/${archived.id}`, { is_active: true });
+      const saved = await clientsApi.reactivate(archived.id);
       onChange(saved);
       fireToast({ msg: t(`Scheda di ${saved.full_name} riattivata`, `${saved.full_name}'s profile reactivated`), icon: 'check' });
       setQ(''); close();

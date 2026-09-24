@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { api, Icon, Toggle, NumInput, nameIn, toastApiError } from '@youty/shared';
+import { Icon, Toggle, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
 import { LOYALTY_TYPES, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward, earnFields, earnMetricsFor } from '../meta.js';
+import { loyaltyApi } from '../../../api/marketing.js';
 
 /** Create/edit a loyalty program mapped to the REAL LoyaltyProgramIn fields:
  * name, type, earn_metric, earn_ratio, reward_type, reward_value, reward_service_id,
@@ -50,9 +51,9 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
     setSaving(true);
     try {
       if (isNew) {
-        await api.post('/api/marketing/loyalty-programs', buildPayload());
+        await loyaltyApi.create(buildPayload());
       } else {
-        await api.put(`/api/marketing/loyalty-programs/${draft.id}`, buildPayload());
+        await loyaltyApi.update(draft.id, buildPayload());
       }
       onSaved(isNew ? t('Programma creato', 'Program created') : t('Programma aggiornato', 'Program updated'));
     } catch (err) {
@@ -66,7 +67,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
     if (saving) return;
     setSaving(true);
     try {
-      await api.del(`/api/marketing/loyalty-programs/${draft.id}`);
+      await loyaltyApi.remove(draft.id);
       onDeactivated();
     } catch (err) {
       toastApiError(err, fireToast, t);

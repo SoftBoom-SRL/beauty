@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, fmtEur, Icon, EmptyState, toastApiError } from '@youty/shared';
+import { fmtEur, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
 import CouponEditModal from './modals/CouponEditModal.jsx';
 import { COUPON_ORIGIN_META, COUPON_STATUS_META, effectiveStatus } from './meta.js';
 import { salonDay, shortDate } from './dates.js';
+import { couponsApi } from '../../api/marketing.js';
 
 const LIMIT = 24;
 
@@ -51,13 +52,11 @@ export default function CouponSub() {
   const reload = useCallback(() => {
     const seq = ++reqSeq.current;
     setLoading(true);
-    api.get('/api/marketing/coupons', {
-      params: {
-        origin: originF === 'all' ? undefined : originF,
-        status: statusF === 'all' ? undefined : statusF,
-        q: query || undefined,
-        limit: LIMIT, offset,
-      },
+    couponsApi.list({
+      origin: originF === 'all' ? undefined : originF,
+      status: statusF === 'all' ? undefined : statusF,
+      q: query || undefined,
+      limit: LIMIT, offset,
     }).then((res) => {
       if (seq !== reqSeq.current) return;
       setItems(res.items || []);

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, fmtEurNoFree, Icon, EmptyState, toastApiError } from '@youty/shared';
+import { fmtEurNoFree, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
@@ -7,6 +7,7 @@ import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
+import { giftCardsApi } from '../../api/marketing.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
 // basta: un salone che ne ha vendute di più ne vedeva una parte senza che
@@ -62,13 +63,11 @@ export default function GiftSub() {
   const reload = useCallback(() => {
     const seq = ++reqSeq.current;
     setLoading(true);
-    api.get('/api/marketing/gift-cards', {
-      params: {
-        status: statusF === 'all' ? undefined : statusF,
-        payment_status: payF === 'all' ? undefined : payF,
-        q: query || undefined,
-        limit: LIMIT, offset,
-      },
+    giftCardsApi.list({
+      status: statusF === 'all' ? undefined : statusF,
+      payment_status: payF === 'all' ? undefined : payF,
+      q: query || undefined,
+      limit: LIMIT, offset,
     }).then((res) => {
       if (seq !== reqSeq.current) return;
       setItems(res.items || []);
@@ -86,7 +85,7 @@ export default function GiftSub() {
   const markPaid = async (card, method) => {
     setMarkingId(null);
     try {
-      await api.post(`/api/marketing/gift-cards/${card.id}/mark-paid`, { method });
+      await giftCardsApi.markPaid(card.id, { method });
       fireToast({ msg: t('Gift card segnata come pagata', 'Gift card marked as paid'), icon: 'check' });
       reload();
     } catch (err) {

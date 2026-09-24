@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { api, Icon, todayStr, fmtEur, NumInput, nameIn, toastApiError } from '@youty/shared';
+import { Icon, todayStr, fmtEur, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
 import { expiryInMonthsIso } from '../dates.js';
+import { giftCardsApi } from '../../../api/marketing.js';
 
 const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
 
@@ -54,7 +55,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
         expires_at: expiryMonths ? expiryInMonthsIso(expiryMonths) : null,
       };
-      await api.post('/api/marketing/gift-cards', payload);
+      await giftCardsApi.create(payload);
       onSaved();
     } catch (err) {
       toastApiError(err, fireToast, t);

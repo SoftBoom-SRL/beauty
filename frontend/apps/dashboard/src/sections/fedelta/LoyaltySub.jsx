@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { api, Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
+import { Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import LoyaltyEditModal from './modals/LoyaltyEditModal.jsx';
 import LoyaltyMembersDrawer from './LoyaltyMembersDrawer.jsx';
 import { LOYALTY_TYPES, composeReward } from './meta.js';
+import { loyaltyApi } from '../../api/marketing.js';
 
 export default function LoyaltySub() {
   const { t, lang, hasScope, fireToast, services, setDrawer } = useDash();
@@ -15,7 +16,7 @@ export default function LoyaltySub() {
 
   const reload = () => {
     setLoading(true);
-    api.get('/api/marketing/loyalty-programs')
+    loyaltyApi.list()
       .then((res) => setItems(res || []))
       .catch((err) => {
         setItems([]);

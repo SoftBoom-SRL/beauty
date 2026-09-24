@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { api, Icon, Avatar, EmptyState, toastApiError } from '@youty/shared';
+import { Icon, Avatar, EmptyState, toastApiError } from '@youty/shared';
 import Pager from './Pager.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import { LOYALTY_TYPES } from './meta.js';
 import { shortDate } from './dates.js';
+import { loyaltyApi } from '../../api/marketing.js';
 
 const LIMIT = 25;
 
@@ -29,7 +30,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
     if (!client || enrolling) return;
     setEnrolling(true);
     try {
-      await api.post(`/api/marketing/loyalty-programs/${program.id}/accounts`, { client_id: client.id });
+      await loyaltyApi.enroll(program.id, { client_id: client.id });
       fireToast({ msg: t(`${client.full_name} iscritta al programma`, `${client.full_name} enrolled in the program`), icon: 'check' });
       setAdding(false);
       setOffset(0);
@@ -46,7 +47,7 @@ export default function LoyaltyMembersDrawer({ program, onClose, t, lang, fireTo
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    api.get(`/api/marketing/loyalty-programs/${program.id}/accounts`, { params: { limit: LIMIT, offset } })
+    loyaltyApi.accounts(program.id, { limit: LIMIT, offset })
       .then((res) => { if (alive) { setItems(res.items || []); setCount(res.count || 0); } })
       .catch((err) => {
         if (!alive) return;
