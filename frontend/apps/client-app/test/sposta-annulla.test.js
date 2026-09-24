@@ -123,6 +123,40 @@ test('Sposta: 400 del preavviso (riquadro e toast), 409 (orari ricaricati), altr
   } finally { s.unmount(); }
 });
 
+test('Sposta: dopo un 409 gli orari riletti di un giorno non finiscono sotto un altro (voce 32)', async () => {
+  const { toasts } = fakeCtx({ viewParams: { appt: APPT } });
+  const s = mount(Sposta);
+  try {
+    await reply(pending('get', AVAIL)[0], [{ start: at(today, 660) }]);
+    s.render();
+    await tap(s, '11:00');
+    await tap(s, 'Conferma nuovo orario');
+    await fail(pending('post', '/api/agenda/client/appointments/12/move')[0], 409, 'Occupato');
+    s.render();
+    assert.deepEqual(toasts, [{ msg: 'Questo orario è appena stato preso: scegline un altro.', icon: 'alert' }]);
+    // gli orari di oggi si rileggono; mentre la rilettura è in volo la
+    // cliente tocca domani
+    const reload = pending('get', AVAIL)[1];
+    assert.equal(reload.args[0].params.date, today);
+    chips(s)[1].props.onClick();
+    s.render();
+    const tomorrow = pending('get', AVAIL)[2];
+    assert.equal(tomorrow.args[0].params.date, dayStr(1));
+    // domani risponde prima; la rilettura di oggi arriva dopo e non conta:
+    // i suoi orari portano la data di oggi, e toccandone uno sotto «domani»
+    // la visita sarebbe finita oggi
+    await reply(tomorrow, [{ start: at(dayStr(1), 900) }]);
+    await reply(reload, [{ start: at(today, 480) }]);
+    s.render();
+    assert.match(text(s), /Pomeriggio15:00/);
+    assert.doesNotMatch(text(s), /08:00/);
+    await tap(s, '15:00');
+    await tap(s, 'Conferma nuovo orario');
+    assert.deepEqual(pending('post', '/api/agenda/client/appointments/12/move')[1].args, [{ start: at(dayStr(1), 900) }]);
+    assert.equal(pending('get', AVAIL).length, 3);
+  } finally { s.unmount(); }
+});
+
 test('Annulla senza appuntamento: si torna alle prenotazioni', async () => {
   const { views } = fakeCtx({ viewParams: {} });
   const s = mount(Annulla);

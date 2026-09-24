@@ -46,6 +46,14 @@ export default function Sposta() {
     [items, appt],
   );
 
+  // Cresce dopo un 409: l'effetto qui sotto rilegge gli orari del giorno a
+  // schermo, con la sua guardia. La rilettura scritta a mano nel 409 non
+  // l'aveva: se la cliente toccava un altro giorno mentre era in volo e la
+  // risposta arrivava dopo, sotto il giorno nuovo restavano gli orari di
+  // quello vecchio — e ogni orario porta la data intera, quindi la visita si
+  // spostava nel giorno sbagliato (voce 32).
+  const [reloads, setReloads] = React.useState(0);
+
   React.useEffect(() => {
     if (!appt || done) return;
     let alive = true;
@@ -69,7 +77,7 @@ export default function Sposta() {
     // ma senza ricaricare restavano a video gli orari del giorno prima, con lo
     // stesso chip selezionato. Lo spostamento sarebbe finito nel giorno
     // sbagliato (o rifiutato con un 409 incomprensibile).
-  }, [appt, dayIdx, done, days]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appt, dayIdx, done, days, reloads]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!appt) {
     return (
@@ -104,8 +112,7 @@ export default function Sposta() {
         toastSlotTaken(fireToast, t);
         setSlot(null);
         setSlots(null);
-        getAvailability(availabilityParams(days[dayIdx]))
-          .then(setSlots).catch(() => setSlots([]));
+        setReloads((n) => n + 1);   // la rilettura la fa l'effetto (vedi `reloads`)
       } else {
         toastApiError(err, fireToast, t);
       }
