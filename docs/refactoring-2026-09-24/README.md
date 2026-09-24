@@ -37,7 +37,7 @@ CI.
 | test del frontend, 258 | 434 |
 | nessun lint né CI | ESLint (JSX e regole degli hook), ruff, CI su ogni pull request e su `main` |
 
-Il lavoro sta sul branch `claude/exciting-bohr-5ch9g7`: 216 commit, uniti per
+Il lavoro sta sul branch `claude/exciting-bohr-5ch9g7`: 218 commit, uniti per
 area con un merge ciascuno («Unisci: …»). **Non è su `main`**: un push su
 `main` va in produzione.
 
@@ -63,7 +63,9 @@ area con un merge ciascuno («Unisci: …»). **Non è su `main`**: un push su
   - quattro test trovati facendo girare la suite con l'orologio spostato: le
     pause «di oggi» fra mezzanotte e le 2, due visite che dopo le 22:30
     scavalcavano la mezzanotte, la data del consenso nella prima ora
-    dell'anno.
+    dell'anno;
+  - il test del cambio dell'ora, che usava il 28/03/2027 fisso: da quella
+    mattina sarebbe fallito per sempre.
 
 ## 3. Dove sta cosa adesso
 
@@ -134,11 +136,16 @@ su un branch suo. Dopo ogni integrazione:
   28 nella web app, confrontati con la versione di partenza. Per ogni schermata
   si confrontano testo, campi, errori, chiamate API e screenshot: identici,
   anche sulla versione finale.
-- **Suite con l'orologio spostato**: la suite completa è stata lanciata con
-  l'ora del processo spostata. I momenti provati:
-  - pomeriggio, sera, mezzanotte, notte e alba;
-  - una domenica, il primo del mese e capodanno;
-  - la notte del ritorno all'ora solare.
+- **Suite con l'orologio spostato** (`tools/test_a_ora.py`): la suite completa
+  è stata lanciata con l'ora del processo spostata su 17 momenti:
+  - pomeriggio, sera, le 23:45 e le 23:55, dopo mezzanotte, notte e alba;
+  - una domenica, il primo del mese, l'ultimo dell'anno e capodanno;
+  - la notte del ritorno all'ora solare e il mattino del passaggio all'ora legale;
+  - giugno 2027, gennaio 2028 e luglio 2029.
+
+  Ha trovato cinque dei test elencati nel §2: i quattro che dipendevano
+  dall'ora e quello del cambio dell'ora. Corretti quelli, la versione finale
+  è verde in tutti e 17 i momenti.
 
 ## 5. Cosa resta da fare
 
