@@ -1,7 +1,7 @@
 """Caccia del 22/09 — Stripe con la libreria VERA (stripe==15.6.1).
 
-Solo lo strato HTTP è finto (`FakeStripeHTTP`): richieste, risposte e oggetti
-sono quelli della libreria, quindi `Session`, `Refund`, `Event`… sono
+Solo lo strato HTTP è finto (`FakeStripeHTTP`, in base.py): richieste, risposte
+e oggetti sono quelli della libreria, quindi `Session`, `Refund`, `Event`… sono
 `StripeObject` e non dict. I test di prima mockavano le chiamate con dict e per
 questo non vedevano che ogni `.get()` su una risposta esplodeva (05-01).
 """

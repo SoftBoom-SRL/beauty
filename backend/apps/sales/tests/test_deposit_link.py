@@ -4,7 +4,7 @@ Caccia del 22/09 — vita del link caparra e account Stripe: 05-12 (account dell
 caparra), 05-10 (durata del link), 05-11 (scadenza senza link), 02-06/05-07
 (link vecchio dopo la riduzione, pagamento in eccesso), 11-19 (ritorno della
 cliente senza CLIENT_APP_ORIGIN). Libreria stripe vera, finto solo l'HTTP
-(vedi tests_caccia22_stripe).
+(`FakeStripeHTTP` in base.py; il perché è in test_stripe_library).
 """
 
 import datetime as dt
