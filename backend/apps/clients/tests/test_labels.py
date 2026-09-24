@@ -1,9 +1,4 @@
-"""Caccia 22/09 — etichette cliente e condizioni che le citano.
-
-06-06 + 01-13 + 15-07: le condizioni di regole caparra e automazioni salvano
-il NOME dell'etichetta; rinominarla le spegneva in silenzio. 06-12: un nome
-già usato (o il doppio clic su «Salva») usciva come 500.
-"""
+"""Etichette della cliente (ClientCategory) e le regole che le citano per nome."""
 
 from decimal import Decimal
 from types import SimpleNamespace
@@ -18,6 +13,22 @@ from common.auth import StaffContext
 from ..api import create_category, delete_category, update_category
 from ..models import Client, ClientCategory
 from ..schemas import CategoryIn
+from .base import ClientsTestCase
+
+
+class CategoryTests(ClientsTestCase):
+    def test_create_category(self):
+        category = create_category(self.request, CategoryIn(name="VIP"))
+        self.assertTrue(ClientCategory.objects.filter(id=category.id).exists())
+
+
+# ---------------------------------------------------------------------------
+# Caccia 22/09 — etichette cliente e condizioni che le citano.
+#
+# 06-06 + 01-13 + 15-07: le condizioni di regole caparra e automazioni salvano
+# il NOME dell'etichetta; rinominarla le spegneva in silenzio. 06-12: un nome
+# già usato (o il doppio clic su «Salva») usciva come 500.
+# ---------------------------------------------------------------------------
 
 
 def _label_rule(name, cmp="contains"):

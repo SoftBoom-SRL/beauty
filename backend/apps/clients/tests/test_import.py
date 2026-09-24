@@ -1,8 +1,8 @@
-"""Caccia 22/09 — import CSV della rubrica.
+"""Import CSV della rubrica (upsert): chi c'è già si aggiorna, chi manca si crea.
 
-06-07 + 08-05 «cliente dal» dell'import; 06-08 email di famiglia; 06-13 +
-14-15 29/02 di un anno non bisestile; 06-14 compleanno senza anno; 06-15 note
-duplicate al secondo import; 06-02 schede archiviate; 18-07 colonne scritte.
+Riconoscimento per telefono comunque scritto (per email solo nelle righe
+senza telefono), campi in più, righe che il database rifiuta, conteggi e
+avvisi riga per riga.
 """
 
 import datetime as dt
@@ -13,11 +13,182 @@ from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from apps.core.models import Salon
+from apps.core.models import ActivityLog, Salon
 from common.auth import create_staff_tokens
 
+from ..api import import_clients
 from ..models import Client, ClientNote
+from ..schemas import ImportIn, ImportRowIn
 from ..services import import_rows
+from .base import ClientsTestCase
+
+
+class ImportUpsertTests(ClientsTestCase):
+    def test_import_creates_and_updates(self):
+        existing = self.make_client(phone="+393330001111", first_name="Old", last_name="Name")
+        rows = [
+            {"first_name": "New", "last_name": "Name", "phone": "+393330001111", "email": ""},
+            {"first_name": "Fresh", "last_name": "Client", "phone": "+393339998888", "email": ""},
+        ]
+        result = import_rows(self.salon, rows)
+        self.assertEqual((result["created"], result["updated"]), (1, 1))
+        existing.refresh_from_db()
+        self.assertEqual(existing.first_name, "New")
+        self.assertTrue(Client.objects.filter(salon=self.salon, phone="+393339998888").exists())
+
+    def test_import_matches_by_email_when_no_phone_match(self):
+        # Stessa persona (stesso nome): la riga senza telefono aggiorna la scheda.
+        # Con un nome diverso la salta (06-08, vedi tests_caccia22_import).
+        existing = self.make_client(first_name="Giulia", phone="+393330005555", email="giulia@example.com")
+        result = import_rows(
+            self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": "", "lang": "en"}]
+        )
+        self.assertEqual((result["created"], result["updated"]), (0, 1))
+        existing.refresh_from_db()
+        self.assertEqual(existing.first_name, "Giulia")
+        self.assertEqual(existing.lang, "en")
+
+    def test_import_row_without_phone_or_match_is_skipped(self):
+        result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
+
+    def test_rows_with_their_own_phone_are_never_merged_by_email(self):
+        """L'email è la rete di sicurezza delle righe SENZA telefono.
+
+        Un file esportato con lo stesso indirizzo di servizio su tutte le
+        schede (`info@salone.it`) faceva finire 250 persone su una sola scheda,
+        con la risposta «1 nuovo · 249 aggiornati» e nessun errore.
+        """
+        rows = [
+            {"first_name": "Anna", "last_name": "Uno", "phone": "+393330001111", "email": "info@salone.it"},
+            {"first_name": "Bea", "last_name": "Due", "phone": "+393330002222", "email": "info@salone.it"},
+            {"first_name": "Carla", "last_name": "Tre", "phone": "+393330003333", "email": "info@salone.it"},
+        ]
+        result = import_rows(self.salon, rows)
+        self.assertEqual((result["created"], result["updated"]), (3, 0))
+        self.assertEqual(
+            sorted(Client.objects.filter(salon=self.salon).values_list("first_name", flat=True)),
+            ["Anna", "Bea", "Carla"],
+        )
+
+    def test_an_email_match_never_moves_the_phone_number(self):
+        existing = self.make_client(phone="+393330005555", email="giulia@example.com")
+        import_rows(self.salon, [{"first_name": "Giulia", "email": "giulia@example.com", "phone": ""}])
+        existing.refresh_from_db()
+        self.assertEqual(existing.phone, "+393330005555")
+
+    def test_phones_without_a_single_digit_are_refused(self):
+        """`phone_key("n/d") == ""`: tutte queste righe condividevano la chiave
+        vuota e si sovrascrivevano l'una con l'altra sulla stessa scheda."""
+        rows = [
+            {"first_name": "Anna", "phone": "n/d"},
+            {"first_name": "Bea", "phone": "-"},
+            {"first_name": "Carla", "phone": "nessuno"},
+        ]
+        result = import_rows(self.salon, rows)
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 3))
+        self.assertEqual([e["row"] for e in result["errors"]], [0, 1, 2])
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 0)
+
+    def test_imported_clients_get_a_since_date(self):
+        # «Cliente dal» è quello del file; senza colonna resta vuoto, non la
+        # data dell'import: la rubrica storica non è fatta di clienti nuove
+        # (06-07, 08-05).
+        import_rows(self.salon, [
+            {"first_name": "Anna", "phone": "+393330007777"},
+            {"first_name": "Bea", "phone": "+393330008888", "since": "2019-05-02"},
+        ])
+        self.assertIsNone(Client.objects.get(salon=self.salon, first_name="Anna").since)
+        self.assertEqual(Client.objects.get(salon=self.salon, first_name="Bea").since, dt.date(2019, 5, 2))
+
+    def test_import_refuses_a_file_bigger_than_the_cap(self):
+        """Ogni riga costa 2-5 query in una richiesta sincrona: senza tetto un
+        file enorme tiene occupato un worker finché il proxy non chiude."""
+        from pydantic import ValidationError
+
+        from ..schemas import IMPORT_MAX_ROWS
+
+        rows = [{"first_name": f"C{i}", "phone": f"+3933310{i:05d}"} for i in range(IMPORT_MAX_ROWS + 1)]
+        with self.assertRaises(ValidationError):
+            ImportIn(rows=rows)
+
+    def test_import_endpoint_logs_activity(self):
+        data = ImportIn(rows=[ImportRowIn(first_name="A", phone="+393330000000")])
+        result = import_clients(self.request, data)
+        self.assertEqual(result["created"], 1)
+        self.assertTrue(ActivityLog.objects.filter(type="client.imported").exists())
+
+
+class ImportFlexibleTests(ClientsTestCase):
+    def test_phone_key_matching_and_extra_fields(self):
+        existing = self.make_client(phone="+39 348 221 0094", first_name="Sofia", last_name="")
+        result = import_rows(self.salon, [{
+            "first_name": "Sofia", "last_name": "Ricci", "phone": "3482210094",
+            "gender": "female", "birthday": "--03-15", "categories": ["VIP", " Expat "],
+            "note": "Allergica al nichel", "lang": "en",
+        }])
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 1, 0))
+        existing.refresh_from_db()
+        self.assertEqual(existing.last_name, "Ricci")
+        self.assertEqual(existing.gender, "female")
+        self.assertFalse(existing.birthday_year_known)
+        self.assertEqual(existing.lang, "en")
+        self.assertEqual(existing.phone, "+39 348 221 0094")  # il numero originale resta
+        self.assertEqual(sorted(existing.categories.values_list("name", flat=True)), ["Expat", "VIP"])
+        self.assertEqual(existing.notes.count(), 1)
+
+    def test_update_existing_false_skips_matches(self):
+        self.make_client(phone="+393331112233")
+        result = import_rows(self.salon, [{"first_name": "Sofia", "phone": "+39 333 111 2233"}], update_existing=False)
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
+
+    def test_errors_are_reported_per_row(self):
+        result = import_rows(self.salon, [
+            {"first_name": "", "phone": "+39111"},              # nome mancante
+            {"first_name": "A", "phone": "+39222", "birthday": "--02-30"},  # data impossibile
+            {"first_name": "B", "phone": "+39333", "gender": "male"},       # ok
+        ])
+        # La data impossibile non costa più la cliente: entra senza compleanno,
+        # con un avviso (06-13).
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual([e["row"] for e in result["errors"]], [0])
+        self.assertTrue(any(w["row"] == 1 and "compleanno" in w["reason"] for w in result["warnings"]))
+
+
+class ImportRobustnessTests(ClientsTestCase):
+    """L'import non deve fermarsi a metà lasciando dati scritti e conteggi falsi."""
+
+    def test_a_row_the_database_refuses_does_not_stop_the_import(self):
+        # Due righe con lo stesso telefono: la seconda viola il vincolo di
+        # unicità (salone, telefono). Prima l'eccezione usciva da import_rows e
+        # l'utente vedeva un errore 500 con metà file già importato.
+        rows = [
+            {"first_name": "Prima", "phone": "+393330001111", "email": ""},
+            {"first_name": "Doppia", "phone": "+39 333 000 1111", "email": ""},
+            {"first_name": "Terza", "phone": "+393330002222", "email": ""},
+        ]
+        result = import_rows(self.salon, rows, update_existing=False)
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(
+            sorted(Client.objects.filter(salon=self.salon).values_list("first_name", flat=True)),
+            ["Prima", "Terza"],
+        )
+
+    def test_counters_match_what_was_actually_written(self):
+        rows = [{"first_name": "Solo", "phone": "+393330003333", "email": ""}]
+        result = import_rows(self.salon, rows)
+        written = Client.objects.filter(salon=self.salon).count()
+        self.assertEqual(result["created"] + result["updated"], written)
+
+
+# ---------------------------------------------------------------------------
+# Caccia 22/09 — import CSV della rubrica.
+#
+# 06-07 + 08-05 «cliente dal» dell'import; 06-08 email di famiglia; 06-13 +
+# 14-15 29/02 di un anno non bisestile; 06-14 compleanno senza anno; 06-15 note
+# duplicate al secondo import; 06-02 schede archiviate; 18-07 colonne scritte.
+# ---------------------------------------------------------------------------
 
 
 class _Base(TestCase):
