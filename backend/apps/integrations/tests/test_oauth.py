@@ -390,6 +390,26 @@ class LoginAdoptionTests(_FlowCase):
         self.assertTrue(conn.access_token_enc)
         background.assert_called_once_with(conn.pk)
 
+    def test_the_new_salon_has_the_system_roles(self):
+        """Bug sospetti del 24/09, voce 14: il salone nato qui è come gli altri.
+
+        Nasceva con sede, impostazioni e titolare ma senza i ruoli Manager,
+        Front desk e Operatrice, che `create_salon_foundation` dà a ogni altro
+        salone: in Impostazioni › Team l'elenco era vuoto, e per invitare una
+        collega il titolare doveva prima crearne uno a mano.
+        """
+        from apps.accounts.services import DEFAULT_ROLES
+
+        session, _ = self._login("org-new", "new@p.it", "Nuovo")
+        salon = Salon.objects.get(pk=session["salon"]["id"])
+        self.assertEqual(
+            sorted(Role.objects.filter(salon=salon).values_list("name", "scopes", "is_system")),
+            sorted((name, scopes, True) for name, scopes in DEFAULT_ROLES),
+        )
+        # Il resto della fondazione, come prima: una sede predefinita e le impostazioni.
+        self.assertEqual(list(salon.locations.values_list("name", "is_default")), [("Nuovo", True)])
+        self.assertTrue(hasattr(salon, "settings"))
+
 
 class ConcurrentFirstLoginTests(_FlowCase):
     """18-15: due primi accessi della stessa org corrono su slug, email e vincolo
