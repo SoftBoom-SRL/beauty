@@ -26,8 +26,8 @@ from apps.core.models import Location, Salon
 from apps.sales.models import Sale, SaleLine
 from common.auth import create_staff_tokens
 
-from .models import Operator, WeeklyShift
-from .services import served_clients, today_clients_by_operator
+from ..models import Operator, WeeklyShift
+from ..services import served_clients, today_clients_by_operator
 
 
 def bearer(user, salon):
@@ -303,7 +303,7 @@ class ReplaceShiftsTests(_StaffSetup):
     """18-14: i turni si sostituiscono sotto lock, sull'operatrice riletta."""
 
     def test_rows_are_validated_against_the_cycle_read_under_the_lock(self):
-        from . import api as staff_api
+        from .. import api as staff_api
 
         auth = self._member("titolare@parlour.it", owner=True)
         self.bea.cycle_weeks = 2

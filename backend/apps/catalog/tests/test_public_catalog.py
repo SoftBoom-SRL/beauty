@@ -15,8 +15,8 @@ from apps.accounts.models import Membership, User
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
-from . import api as catalog_api
-from .models import Package, PackageItem, Service, ServiceCategory
+from .. import api as catalog_api
+from ..models import Package, PackageItem, Service, ServiceCategory
 
 
 class _CatalogSetup(TestCase):

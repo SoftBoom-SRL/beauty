@@ -17,7 +17,7 @@ from ninja.errors import HttpError
 from apps.core.models import ActivityLog, Salon
 from common.auth import StaffContext
 
-from .api import (
+from ..api import (
     create_category,
     create_package,
     create_service,
@@ -28,8 +28,8 @@ from .api import (
     update_package,
     update_service,
 )
-from .models import Package, PackageItem, Service, ServiceCategory
-from .schemas import CategoryIn, PackageIn, PackageItemIn, ReorderIn, ServiceIn
+from ..models import Package, PackageItem, Service, ServiceCategory
+from ..schemas import CategoryIn, PackageIn, PackageItemIn, ReorderIn, ServiceIn
 
 
 def fake_request(auth=None):

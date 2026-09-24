@@ -24,9 +24,9 @@ from apps.accounts.models import Membership, Role, User
 from apps.core.models import ActivityLog, Salon
 from common.auth import StaffContext, create_staff_tokens
 
-from . import api as inventory_api
-from .models import Product, StockMovement, Supplier
-from .services import apply_movement, deduct_stock_for_sale
+from .. import api as inventory_api
+from ..models import Product, StockMovement, Supplier
+from ..services import apply_movement, deduct_stock_for_sale
 
 
 class _InventorySetup(TestCase):

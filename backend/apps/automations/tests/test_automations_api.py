@@ -7,7 +7,7 @@ from apps.accounts.models import Membership, Role, User
 from apps.core.models import OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
-from .models import Automation
+from ..models import Automation
 
 
 class AutomationsApiTests(TestCase):

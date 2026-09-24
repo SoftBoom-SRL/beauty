@@ -8,7 +8,7 @@ from django.test import TestCase
 from apps.core.models import OutboxEvent, Salon
 from common.auth import create_staff_tokens
 
-from .models import Automation
+from ..models import Automation
 
 
 class StaleCopyTests(TestCase):

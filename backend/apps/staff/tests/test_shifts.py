@@ -9,8 +9,8 @@ from django.utils import timezone
 
 from apps.core.models import Salon
 
-from .models import Absence, Operator, WeeklyShift
-from .services import shift_windows
+from ..models import Absence, Operator, WeeklyShift
+from ..services import shift_windows
 
 
 class ShiftWindowsTests(TestCase):
@@ -182,7 +182,7 @@ class ShiftCycleAndContiguityTests(TestCase):
     def test_two_week_cycle_keeps_alternating_across_a_53_week_year(self):
         """2026 ha 53 settimane ISO: contando le settimane ISO, la 53ª e la 1ª del
         2027 finivano sullo stesso indice e il ciclo restava invertito per sempre."""
-        from .services import _week_index
+        from ..services import _week_index
 
         mondays = [
             dt.date.fromisocalendar(2026, 52, 1),
@@ -202,7 +202,7 @@ class ShiftCycleAndContiguityTests(TestCase):
 
     def test_week_index_matches_the_hand_computed_values(self):
         """Valori calcolati a mano dalla data, non dalla formula di produzione."""
-        from .services import _week_index
+        from ..services import _week_index
 
         self.assertEqual(_week_index(dt.date(2026, 7, 1), 2), 1)  # mercoledì
         self.assertEqual(_week_index(dt.date(2026, 7, 8), 2), 0)
@@ -491,18 +491,18 @@ class PerformanceSeriesTests(TestCase):
         )
 
     def test_months_are_capped(self):
-        from .services import MAX_PERFORMANCE_MONTHS, performance_series
+        from ..services import MAX_PERFORMANCE_MONTHS, performance_series
 
         series = performance_series(self.operator, months=5_000_000)
         self.assertEqual(len(series), MAX_PERFORMANCE_MONTHS)
 
     def test_months_below_one_fall_back_to_one(self):
-        from .services import performance_series
+        from ..services import performance_series
 
         self.assertEqual(len(performance_series(self.operator, months=0)), 1)
 
     def test_series_is_built_with_a_bounded_number_of_queries(self):
-        from .services import performance_series
+        from ..services import performance_series
 
         with self.assertNumQueries(1):
             series = performance_series(self.operator, months=24)

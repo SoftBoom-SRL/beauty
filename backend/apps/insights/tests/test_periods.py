@@ -19,7 +19,7 @@ from apps.sales.models import Sale
 from apps.staff.models import Operator, WeeklyShift
 from common.auth import create_staff_tokens
 
-from .services import custom_range, kpis, occupancy_by_weekday, period_range
+from ..services import custom_range, kpis, occupancy_by_weekday, period_range
 
 
 def _aware(y, m, d, h=10, mi=0):

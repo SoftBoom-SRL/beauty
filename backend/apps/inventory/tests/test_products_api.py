@@ -8,7 +8,7 @@ from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.auth import StaffContext
 
-from .api import (
+from ..api import (
     create_category,
     create_product,
     load_product,
@@ -18,9 +18,9 @@ from .api import (
     update_order,
     update_product,
 )
-from .models import Product, ProductCategory, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
-from .schemas import CategoryIn, MovementOut, ProductIn, ProductLoadIn, ProductUnloadIn
-from .services import apply_movement, generate_draft_orders, receive_order
+from ..models import Product, ProductCategory, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
+from ..schemas import CategoryIn, MovementOut, ProductIn, ProductLoadIn, ProductUnloadIn
+from ..services import apply_movement, generate_draft_orders, receive_order
 
 
 class InventoryTests(TestCase):
@@ -486,7 +486,7 @@ class OrderWorkflowTests(TestCase):
         self.request = SimpleNamespace(auth=ctx)
 
     def test_update_order_is_all_or_nothing(self):
-        from .schemas import OrderLineUpdateIn, OrderUpdateIn
+        from ..schemas import OrderLineUpdateIn, OrderUpdateIn
 
         with self.assertRaises(HttpError) as caught:
             update_order(
@@ -504,7 +504,7 @@ class OrderWorkflowTests(TestCase):
         self.assertEqual(self.l1.qty_ordered, Decimal("4"))  # nulla è stato scritto
 
     def test_update_order_applies_every_line(self):
-        from .schemas import OrderLineUpdateIn, OrderUpdateIn
+        from ..schemas import OrderLineUpdateIn, OrderUpdateIn
 
         update_order(
             self.request,
@@ -521,7 +521,7 @@ class OrderWorkflowTests(TestCase):
         self.assertFalse(PurchaseOrderLine.objects.filter(pk=self.l2.pk).exists())
 
     def test_the_second_send_is_refused(self):
-        from .schemas import OrderSendIn
+        from ..schemas import OrderSendIn
 
         send_order(self.request, self.order.id, OrderSendIn())
         stale = PurchaseOrder.objects.get(pk=self.order.pk)
@@ -533,7 +533,7 @@ class OrderWorkflowTests(TestCase):
         self.assertEqual(self.order.status, PurchaseOrder.Status.SENT)
 
     def test_update_order_refuses_a_sent_order(self):
-        from .schemas import OrderLineUpdateIn, OrderSendIn, OrderUpdateIn
+        from ..schemas import OrderLineUpdateIn, OrderSendIn, OrderUpdateIn
 
         send_order(self.request, self.order.id, OrderSendIn())
         with self.assertRaises(HttpError) as caught:

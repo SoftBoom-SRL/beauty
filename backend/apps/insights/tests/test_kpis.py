@@ -10,7 +10,7 @@ from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
 from apps.staff.models import Operator
 
-from .services import (
+from ..services import (
     custom_range,
     kpis,
     occupancy_by_weekday,
@@ -82,7 +82,7 @@ class CustomRangeTests(TestCase):
         # scorsi uno per uno, con un thread del server occupato per minuti.
         from ninja.errors import HttpError
 
-        from .services import MAX_RANGE_DAYS
+        from ..services import MAX_RANGE_DAYS
 
         with self.assertRaises(HttpError):
             custom_range(date(202, 1, 1), date(2026, 12, 31))
@@ -379,7 +379,7 @@ class ShiftCapacityQueryBudgetTests(TestCase):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
 
-        from .services import _daily_shift_minutes
+        from ..services import _daily_shift_minutes
 
         start = timezone.localdate()
         days = [start + timedelta(days=i) for i in range(30)]
