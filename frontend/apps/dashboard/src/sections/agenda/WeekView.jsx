@@ -55,6 +55,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   // la settimana: scheletro al cambio, ricarico silenzioso dopo un gesto o un evento live
   const { days, refetchWeek, refetchWeekRef } = useWeekData({ weekStart, locationId, live, t, fireToast });
+  // la griglia è disegnata: lo scheletro non ha il contenitore (scrollRef)
+  const ready = days !== null;
 
   const pxm = PXM * (zoom || 1);   // scala scelta da chi guarda (zoom personale)
   /* Fascia oraria della settimana (12-04): orari del centro dei sette giorni,
@@ -67,8 +69,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const gridH = (G1 - G0) * pxm;
 
   /* Zoom: stessa scala e stesso gesto della vista giorno (⌘/ctrl + rotella o
-   * pinch del trackpad), tenendo fermo il minuto che si stava guardando. */
-  useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '[data-daycol]' });
+   * pinch del trackpad), tenendo fermo il minuto che si stava guardando. Il
+   * gesto si aggancia alla griglia quando c'è (`ready`), anche dopo lo
+   * scheletro del cambio di settimana. */
+  useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '[data-daycol]', ready });
 
   /* Il trascinamento: Esc lo annulla e, qui, anche pointerup e pointercancel su
    * window: se la cattura non è supportata o il rilascio avviene fuori
@@ -79,7 +83,6 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * l'ombra dell'appuntamento aperto finiva fuori schermo. Il minuto in cima si
    * ricorda e si ritrova (anche se la fascia cambia); l'ombra, se resta fuori
    * vista, si porta in vista. */
-  const ready = days !== null;
   const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready });
   function onGridScroll() {
     rememberScroll();
@@ -242,10 +245,14 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     lastOpen.current = { at: now, key };
     onNewAppt && onNewAppt({ operatorId: opId || undefined, start: isoAtMin(dayIso, minutes), date: dayIso });
   };
+  /* La fascia sotto il puntatore, come in vista giorno (onColumnClick di
+   * DayGrid). Arrotondava: con fasce da 30 minuti un clic alle 10:50 apriva la
+   * prenotazione alle 11:00 in settimana e alle 10:30 in giorno (bug sospetti
+   * del 24/09, n. 50). */
   const minutesFrom = (clientY, el) => {
     const rect = el.getBoundingClientRect();
     const raw = G0 + (clientY - rect.top) / pxm;
-    return Math.max(G0, Math.min(G1 - step, Math.round(raw / step) * step));
+    return Math.max(G0, Math.min(G1 - step, Math.floor(raw / step) * step));
   };
 
   function onEmptyClick(e, opId, date) {

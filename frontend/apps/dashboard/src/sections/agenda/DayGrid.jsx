@@ -50,6 +50,7 @@ export default function DayGrid({
   const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
   const scrollRef = useRef(null);
   const headRef = useRef(null);                      // intestazione fissa delle operatrici
+  const onUpRef = useRef(null);                      // ultimo onUp (chiusura fresca) per il rilascio su window
 
   // px per minuto alla scala scelta da chi guarda (zoom personale)
   const pxm = PXM * (zoom || 1);
@@ -98,8 +99,12 @@ export default function DayGrid({
   }
 
   /* Il trascinamento (drag.current mutabile, Esc che lo annulla): alla fine la
-   * striscia dei giorni torna normale (onDragChange). */
-  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ onStop: onDragChange });
+   * striscia dei giorni torna normale (onDragChange). Come in settimana,
+   * pointerup e pointercancel si ascoltano anche su window (onUpRef =
+   * l'ultimo onUp): dove la cattura del puntatore non è supportata o si
+   * perde, il rilascio fuori dalla griglia non arrivava a nessuno e il blocco
+   * restava attaccato al puntatore (bug sospetti del 24/09, n. 51). */
+  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef });
 
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
@@ -317,6 +322,7 @@ export default function DayGrid({
     // giorno sta dicendo «stesso orario, altro giorno».
     if (onDropOnDate) onDropOnDate(d.block.appt, dayTarget, d.apptStart);
   }
+  onUpRef.current = onUp;
 
   /* Rilascio dentro la griglia: spostamento, stacco o pausa (vedi dropIntent). */
   function commitDrop(d) {

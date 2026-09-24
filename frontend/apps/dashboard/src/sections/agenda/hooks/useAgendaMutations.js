@@ -4,6 +4,11 @@
 // Ogni gesto rilegge la giornata (e la pila del «torna indietro») e manda il
 // suo avviso; `pending` è la sovrascrittura ottimistica che la griglia mostra
 // mentre la richiesta è in volo.
+// Il ricarico dopo una scrittura riuscita ha il suo `.catch`: nel `try` del
+// gesto, una giornata che non si rileggeva faceva mostrare «Errore di rete»
+// al posto dell'avviso del gesto, con il suo «Annulla», e la reception rifaceva
+// il gesto — una seconda pausa, un secondo stacco che il server rifiuta (bug
+// sospetti del 24/09, n. 49).
 /* Forzatura: lo staff può andare oltre le regole (fuori turno, centro chiuso,
  * sovrapposizione) e non gli viene chiesto niente, mai. Chi lavora qui tutti
  * i giorni SA quando sta incastrando una cliente: ogni conferma era una
@@ -113,7 +118,8 @@ export function useAgendaMutations({
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
       });
-      await fetchDay();
+      // lo stacco è scritto: un ricarico andato male non lo rende fallito
+      await fetchDay().catch(() => {});
     } catch (err) {
       if (retryForced(err, opts.force)) {
         await splitItem(appt, item, startMin, opId, { ...opts, force: true });
@@ -233,7 +239,8 @@ export function useAgendaMutations({
         undo: t('Annulla', 'Undo'),
         undoFn: undoAfter(mark),   // rilegge anche la pila di «torna indietro»
       });
-      await fetchDay();
+      // la pausa è spostata: un ricarico andato male non rende fallito il gesto
+      await fetchDay().catch(() => {});
     } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
   };
@@ -243,7 +250,8 @@ export function useAgendaMutations({
     setPending({ kind: 'pause', id: p.id, startMin: aStartMin(p), opId: p.operator_id, dur });
     try {
       await agendaApi.updatePause(p.id, { operator_id: p.operator_id, start: p.start, duration_min: dur, note: p.note || '' });
-      await fetchDay();
+      // la durata è scritta: un ricarico andato male non rende fallito il gesto
+      await fetchDay().catch(() => {});
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastApiError(err, fireToast, t); await fetchDay().catch(() => {}); }
     finally { setPending(null); }
@@ -255,7 +263,8 @@ export function useAgendaMutations({
       await agendaApi.deletePause(p.id);
       // `undoAfter` rilegge anche la pila di «torna indietro»
       fireToast({ msg: t('Pausa rimossa', 'Break removed'), icon: 'x', undo: t('Annulla', 'Undo'), undoFn: undoAfter(mark) });
-      await fetchDay();
+      // la pausa è tolta: un ricarico andato male non rende fallito il gesto
+      await fetchDay().catch(() => {});
     } catch (err) { toastApiError(err, fireToast, t); }
   };
 
@@ -277,7 +286,8 @@ export function useAgendaMutations({
       if (appt.updated_at) body.expected_updated_at = appt.updated_at;
       await agendaApi.updateAppointment(appt.id, body);
       fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
-      await fetchDay();
+      // la durata è scritta: un ricarico andato male non rende fallito il gesto
+      await fetchDay().catch(() => {});
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) {
       // 412: l'appuntamento è cambiato nel frattempo. Mai forzare: si ricarica
@@ -309,7 +319,8 @@ export function useAgendaMutations({
         msg: breakAddedText(t, o?.first_name, startMin),
         icon: 'clock',
       });
-      await fetchDay();
+      // la pausa è scritta: un ricarico andato male non rende fallito il gesto
+      await fetchDay().catch(() => {});
       fetchUndo();   // la pila di «torna indietro» segue ogni gesto
     } catch (err) { toastApiError(err, fireToast, t); }
   };
