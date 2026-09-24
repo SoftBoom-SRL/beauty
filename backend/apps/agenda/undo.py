@@ -36,7 +36,7 @@ from apps.core.services import log_activity
 from common.money import CENT
 
 from .models import Appointment, AppointmentService, Pause, UndoEntry
-from .services.deposit_holds import realign_deposit_due
+from .services.deposit_holds import realign_deposit_due, schedule_deposit_hold
 from .services.deposits import close_deposit_link_after_commit, renew_deposit_link_after_commit
 from .services.freed_slots import _appointment_spans, _chain_spans, _spans_minus, emit_with_freed_slots
 from .services.locking import lock_salon
@@ -568,6 +568,25 @@ def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
         )
 
 
+def _reschedule_deposit_holds(appointments, after_snapshots) -> None:
+    """Dopo aver annullato un gesto che aveva azzerato la caparra: una scadenza nuova.
+
+    Togliendo o staccando i servizi a pagamento la caparra da pagare scendeva
+    a 0 € e diventava «nessuna», senza scadenza
+    (services.deposits.shrink_deposit_to_total). «Indietro» la rimetteva
+    «richiesta» ma senza termine: niente sollecito, e se la cliente non pagava
+    il posto non si liberava più. Come nel ripristino di uno slot liberato
+    (`restore_released`), il termine riparte da adesso.
+    """
+    status_after = {snap["id"]: snap.get("deposit_status") for snap in after_snapshots}
+    for appointment in appointments:
+        if (
+            status_after.get(appointment.id) == Appointment.DepositStatus.NONE
+            and appointment.deposit_status == Appointment.DepositStatus.REQUIRED
+        ):
+            schedule_deposit_hold(appointment)
+
+
 def perform(entry: UndoEntry, *, actor=None) -> dict:
     """Annulla il gesto. Ritorna {"label", "appointment_ids", "date"}.
 
@@ -652,6 +671,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             _reissue_deposit_links(touched)
         else:
             _renew_links_for_restored_amount(touched, entry.after.get("appointments", []))
+        _reschedule_deposit_holds(touched, entry.after.get("appointments", []))
 
         # 4. I messaggi: spariscono se erano ancora trattenuti e per la
         #    cliente non cambia niente, si rettificano se ciò che sa è diverso

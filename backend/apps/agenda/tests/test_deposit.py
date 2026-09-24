@@ -11,7 +11,7 @@ from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
-from common.testing import aware
+from common.testing import aware, bearer, post_json
 
 from ..models import Appointment, AppointmentService
 from ..services.appointments import create_appointment
@@ -473,6 +473,34 @@ class DepositDownToZeroTests(AgendaTestBase):
             self.appointment, paid.id, _aware(self.day + dt.timedelta(days=1), 10),
         ))
         self._assert_no_deposit_left(closed)
+
+    def test_going_back_asks_for_it_again_with_a_new_deadline(self):
+        """Seguito della voce 5: «Indietro» la rimetteva «richiesta» senza
+        scadenza, e senza sollecito né rilascio automatico."""
+        from apps.accounts.models import Membership, Role, User
+
+        from ..services.appointments import edit_appointment
+        from ..services.deposit_holds import process_deposit_holds
+
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Banco", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        consult = self.appointment.items.get(service=self.consult)
+        with self._windows(self.windows):
+            edit_appointment(
+                self.appointment,
+                items=[{"id": consult.id, "service_id": self.consult.id, "operator_id": self.op1.id}],
+                actor=user,
+            )
+            res = post_json(self.client, "/api/agenda/undo", {}, **bearer(user, self.salon))
+        self.assertEqual(res.status_code, 200, res.content)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertEqual(appointment.deposit_amount, Decimal("10.00"))
+        self.assertIsNotNone(appointment.deposit_due_at)
+        # il termine riparte da adesso, e allo scadere il posto si libera
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 1)
 
 
 class RefundConcurrencyTests(AgendaTestBase):
