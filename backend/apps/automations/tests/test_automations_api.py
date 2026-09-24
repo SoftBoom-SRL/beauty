@@ -1,13 +1,22 @@
+"""Automazioni dall'API: CRUD e attiva/disattiva con l'evento in outbox, il
+webhook pubblico col suo token, l'elenco leggibile da tutto lo staff ma col
+token solo a chi ha «marketing».
+
+Caccia del 22/09:
+- 18-07: attiva/disattiva e modifica non lavorano su copie vecchie.
+"""
+
 import json
 import uuid
+from unittest.mock import patch
 
 from django.test import TestCase
 
 from apps.accounts.models import Membership, Role, User
 from apps.core.models import OutboxEvent, Salon
-from common.auth import create_staff_tokens
+from common.testing import bearer
 
-from .models import Automation
+from ..models import Automation
 
 
 class AutomationsApiTests(TestCase):
@@ -20,8 +29,7 @@ class AutomationsApiTests(TestCase):
         Membership.objects.create(
             user=self.user, salon=self.salon, role=self.role, is_owner=True
         )
-        tokens = create_staff_tokens(self.user, self.salon)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        self.auth = bearer(self.user, self.salon)
 
     def _post(self, path, payload=None):
         return self.client.post(
@@ -99,8 +107,7 @@ class AutomationsApiTests(TestCase):
         Membership.objects.create(
             user=other_user, salon=self.salon, role=other_role, is_owner=False
         )
-        tokens = create_staff_tokens(other_user, self.salon)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        auth = bearer(other_user, self.salon)
         resp = self.client.post(
             "/api/automations/",
             data=json.dumps({"name": "X", "event": "birthday"}),
@@ -156,8 +163,7 @@ class AutomationsApiTests(TestCase):
         user = User.objects.create_user(email="ops@the-parlour.test", password="pw12345!")
         role = Role.objects.create(salon=self.salon, name="Solo agenda", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
-        tokens = create_staff_tokens(user, self.salon)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        auth = bearer(user, self.salon)
 
         Automation.objects.create(
             salon=self.salon, name="Promemoria", event="appointment_upcoming"
@@ -242,8 +248,7 @@ class AutomationsReadableWithoutMarketingTests(TestCase):
         Membership.objects.create(
             user=user, salon=self.salon, role=role, is_owner=is_owner
         )
-        tokens = create_staff_tokens(user, self.salon)
-        return {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+        return bearer(user, self.salon)
 
     def test_front_desk_still_reads_the_list(self):
         auth = self._auth_for(["agenda", "clients", "sales"], email="fd@the-parlour.test")
@@ -269,3 +274,55 @@ class AutomationsReadableWithoutMarketingTests(TestCase):
         owner = self._auth_for([], is_owner=True, email="ow@the-parlour.test")
         rows = self.client.get("/api/automations/", **owner).json()
         self.assertEqual(rows[0]["webhook_token"], str(self.automation.webhook_token))
+
+
+class StaleCopyTests(TestCase):
+    def setUp(self):
+        from apps.accounts.models import Membership, User
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        user = User.objects.create_user(email="anna@parlour.it", password="segretissima")
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        self.auth = bearer(user, self.salon)
+        self.automation = Automation.objects.create(
+            salon=self.salon, name="Auguri", event="birthday", active=True
+        )
+        # Copia letta a inizio richiesta, prima che un'altra postazione cambiasse la riga.
+        self.stale = Automation.objects.get(pk=self.automation.pk)
+
+    def _stale_salon_get(self):
+        from apps.automations import api as automations_api
+
+        stale = self.stale
+
+        def fake(model, ctx, pk, **extra):
+            return stale if model is Automation else model.objects.get(pk=pk)
+
+        return patch.object(automations_api, "salon_get", fake)
+
+    def test_the_toggle_flips_the_current_state_not_the_stale_one(self):
+        # Un'altra postazione l'ha appena spenta; questo clic la riaccende.
+        Automation.objects.filter(pk=self.automation.pk).update(active=False)
+        with self._stale_salon_get():
+            res = self.client.post(f"/api/automations/{self.automation.pk}/toggle", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.automation.refresh_from_db()
+        self.assertTrue(self.automation.active)
+        self.assertTrue(res.json()["active"])
+        # e a Yourang arriva lo stato vero
+        event = OutboxEvent.objects.filter(salon=self.salon, event_type="automation.updated").last()
+        self.assertTrue(event.payload["active"])
+
+    def test_an_edit_does_not_overwrite_the_preview_synced_meanwhile(self):
+        Automation.objects.filter(pk=self.automation.pk).update(
+            message_preview="Tanti auguri da The Parlour!")
+        with self._stale_salon_get():
+            res = self.client.put(
+                f"/api/automations/{self.automation.pk}",
+                data=json.dumps({"name": "Auguri di compleanno", "event": "birthday"}),
+                content_type="application/json", **self.auth,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.automation.refresh_from_db()
+        self.assertEqual(self.automation.name, "Auguri di compleanno")
+        self.assertEqual(self.automation.message_preview, "Tanti auguri da The Parlour!")

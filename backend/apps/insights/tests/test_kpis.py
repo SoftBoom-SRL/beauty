@@ -1,4 +1,16 @@
-from datetime import date
+"""KPI degli insight: fatturato e scontrini (caparre comprese), clienti nuovi
+e di ritorno, riaggancio, tassi di no-show e disdetta, clienti per categoria,
+il permesso «Analisi dati».
+
+Caccia del 22/09:
+- 08-04: il riaggancio di un periodo passato era ~0 % per costruzione;
+- 08-05: import e sync timbravano `since` a oggi e tutti diventavano «nuovi»;
+- 08-06: i futuri del periodo non possono ancora essere no-show;
+- 15-17 + 17-11 (contratto C11): «Analisi dati» apre gli insight.
+"""
+
+from datetime import date, timedelta
+from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
@@ -9,89 +21,10 @@ from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
 from apps.staff.models import Operator
+from common.testing import bearer
 
-from .services import (
-    custom_range,
-    kpis,
-    occupancy_by_weekday,
-    period_range,
-    resolve_range,
-    revenue_by_category,
-    revenue_series,
-)
-
-
-class PeriodRangeTests(TestCase):
-    def test_month(self):
-        start, end = period_range("month", date(2026, 7, 15))
-        self.assertEqual(start.date(), date(2026, 7, 1))
-        self.assertEqual(end.date(), date(2026, 8, 1))
-
-    def test_quarter(self):
-        start, end = period_range("quarter", date(2026, 8, 10))
-        self.assertEqual(start.date(), date(2026, 7, 1))
-        self.assertEqual(end.date(), date(2026, 10, 1))
-
-    def test_quarter_year_boundary(self):
-        start, end = period_range("quarter", date(2026, 12, 20))
-        self.assertEqual(start.date(), date(2026, 10, 1))
-        self.assertEqual(end.date(), date(2027, 1, 1))
-
-    def test_year(self):
-        start, end = period_range("year", date(2026, 3, 1))
-        self.assertEqual(start.date(), date(2026, 1, 1))
-        self.assertEqual(end.date(), date(2027, 1, 1))
-
-    def test_default_date_is_today(self):
-        start, end = period_range("month")
-        today = timezone.localdate()
-        self.assertLessEqual(start.date(), today)
-        self.assertGreater(end.date(), today)
-
-    def test_invalid_period_raises_400(self):
-        from ninja.errors import HttpError
-
-        with self.assertRaises(HttpError):
-            period_range("week")
-
-
-class CustomRangeTests(TestCase):
-    def test_custom_range_end_is_exclusive_next_day(self):
-        start, end = custom_range(date(2026, 7, 7), date(2026, 7, 14))
-        self.assertEqual(start.date(), date(2026, 7, 7))
-        self.assertEqual(end.date(), date(2026, 7, 15))  # end esclusivo = data finale + 1 giorno
-
-    def test_custom_range_from_after_to_raises_400(self):
-        from ninja.errors import HttpError
-
-        with self.assertRaises(HttpError):
-            custom_range(date(2026, 7, 14), date(2026, 7, 7))
-
-    def test_resolve_range_uses_custom_when_both_dates_given(self):
-        start, end = resolve_range("month", None, date(2026, 3, 3), date(2026, 3, 5))
-        self.assertEqual(start.date(), date(2026, 3, 3))
-        self.assertEqual(end.date(), date(2026, 3, 6))
-
-    def test_resolve_range_falls_back_to_period(self):
-        start, end = resolve_range("month", date(2026, 7, 15), None, None)
-        self.assertEqual(start.date(), date(2026, 7, 1))
-        self.assertEqual(end.date(), date(2026, 8, 1))
-
-    def test_a_range_of_centuries_is_refused(self):
-        # Il selettore non ha un anno minimo: "0202-01-01" sono 666.000 giorni
-        # scorsi uno per uno, con un thread del server occupato per minuti.
-        from ninja.errors import HttpError
-
-        from .services import MAX_RANGE_DAYS
-
-        with self.assertRaises(HttpError):
-            custom_range(date(202, 1, 1), date(2026, 12, 31))
-        with self.assertRaises(HttpError):
-            custom_range(date(1, 1, 1), date(9999, 12, 31))
-        # due anni restano leciti
-        start, end = custom_range(date(2025, 1, 1), date(2026, 12, 31))
-        self.assertEqual((end.date() - start.date()).days, 730)
-        self.assertGreaterEqual(MAX_RANGE_DAYS, 731)
+from ..services import kpis, occupancy_by_weekday, revenue_by_category, revenue_series
+from .base import _Base, _aware
 
 
 class KpisMinimalDatasetTests(TestCase):
@@ -314,136 +247,6 @@ class ClientsByCategoryTests(TestCase):
         self.assertEqual(rows, [{"category": "VIP", "count": 1}])
 
 
-class OccupancyStatusTests(TestCase):
-    """Check-in e trattamento in corso occupano la poltrona come un confermato:
-    l'occupazione non deve scendere quando la cliente arriva."""
-
-    def setUp(self):
-        from apps.staff.models import WeeklyShift
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        category = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
-        service = Service.objects.create(
-            salon=self.salon, category=category, name_it="Piega", duration_min=60, price=25
-        )
-        operator = Operator.objects.create(salon=self.salon, first_name="Sofia", last_name="Ricci")
-        WeeklyShift.objects.create(operator=operator, week_index=0, weekday=2, start_min=540, end_min=1020)
-        client = Client.objects.create(
-            salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
-        )
-        self.day = date(2026, 7, 1)  # mercoledì
-        start = timezone.make_aware(timezone.datetime(2026, 7, 1, 10, 0))
-        self.appointment = Appointment.objects.create(
-            salon=self.salon, client=client, operator=operator, start=start, status="confirmed"
-        )
-        AppointmentService.objects.create(
-            appointment=self.appointment, service=service, operator=operator, duration_min=60, price=25
-        )
-
-    def _wednesday_pct(self):
-        rows = occupancy_by_weekday(self.salon, "month", self.day)
-        return next(r["occupancy_pct"] for r in rows if r["weekday"] == 2)
-
-    def test_check_in_and_in_progress_keep_the_slot_occupied(self):
-        confirmed = self._wednesday_pct()
-        self.assertGreater(confirmed, 0)
-        for status in ("checked_in", "in_progress", "closed"):
-            self.appointment.status = status
-            self.appointment.save(update_fields=["status"])
-            self.assertEqual(self._wednesday_pct(), confirmed, status)
-        self.appointment.status = "cancelled"
-        self.appointment.save(update_fields=["status"])
-        self.assertEqual(self._wednesday_pct(), 0)
-
-
-class ShiftCapacityQueryBudgetTests(TestCase):
-    """La capacità dei turni non deve interrogare il database giorno per giorno.
-
-    Senza precaricare turni, assenze e impostazioni, una sola operatrice su
-    trenta giorni costava 63 query: il conto cresceva con operatrici × giorni.
-    """
-
-    def setUp(self):
-        from apps.core.models import SalonSettings
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        SalonSettings.objects.create(salon=self.salon)
-        self.operators = [
-            Operator.objects.create(salon=self.salon, first_name=f"Op{n}", last_name="Rossi")
-            for n in range(3)
-        ]
-
-    def test_thirty_days_and_three_operators_cost_a_handful_of_queries(self):
-        from datetime import timedelta
-
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
-
-        from .services import _daily_shift_minutes
-
-        start = timezone.localdate()
-        days = [start + timedelta(days=i) for i in range(30)]
-        with CaptureQueriesContext(connection) as captured:
-            _daily_shift_minutes(self.salon, days)
-        # Una lettura per operatrici, turni e assenze: il numero di giorni non
-        # entra nel conto.
-        self.assertLessEqual(len(captured), 5, [q["sql"] for q in captured])
-
-
-class OccupancyAfterStaffChangesTests(TestCase):
-    """L'occupazione di una giornata già chiusa non deve cambiare quando
-    un'operatrice viene disattivata: i suoi appuntamenti restano fra i minuti
-    prenotati, quindi il suo turno deve restare nella capacità.
-    Difetto della caccia ai bug del 21/09/2026 (B22)."""
-
-    def setUp(self):
-        from apps.staff.models import WeeklyShift
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        category = ServiceCategory.objects.create(salon=self.salon, name_it="Capelli")
-        service = Service.objects.create(
-            salon=self.salon, category=category, name_it="Piega", duration_min=180, price=60
-        )
-        client = Client.objects.create(
-            salon=self.salon, first_name="Anna", last_name="Verdi", phone="+393331112233"
-        )
-        self.day = date(2026, 7, 1)  # mercoledì
-        self.operators = []
-        for index, name in enumerate(("Sofia", "Marta")):
-            operator = Operator.objects.create(salon=self.salon, first_name=name, last_name="Ricci")
-            # turno 9–18 = 540 minuti di capacità a testa
-            WeeklyShift.objects.create(
-                operator=operator, week_index=0, weekday=2, start_min=540, end_min=1080
-            )
-            appointment = Appointment.objects.create(
-                salon=self.salon, client=client, operator=operator,
-                start=timezone.make_aware(timezone.datetime(2026, 7, 1, 10 + index * 4, 0)),
-                status="closed",
-            )
-            AppointmentService.objects.create(
-                appointment=appointment, service=service, operator=operator,
-                duration_min=180, price=60,
-            )
-            self.operators.append(operator)
-
-    def _pct(self):
-        return kpis(self.salon, "custom", date_from=self.day, date_to=self.day)["occupancy_pct"]
-
-    def test_deactivating_a_stylist_does_not_rewrite_a_closed_day(self):
-        before = self._pct()
-        self.assertAlmostEqual(before, 33.3, places=1)   # 360' su 1.080'
-        self.operators[1].active = False
-        self.operators[1].save(update_fields=["active"])
-        self.assertAlmostEqual(self._pct(), before, places=1)
-
-    def test_an_inactive_stylist_without_work_does_not_count_as_capacity(self):
-        from apps.staff.models import WeeklyShift
-
-        idle = Operator.objects.create(
-            salon=self.salon, first_name="Lucia", last_name="Neri", active=False
-        )
-        WeeklyShift.objects.create(operator=idle, week_index=0, weekday=2, start_min=540, end_min=1080)
-        self.assertAlmostEqual(self._pct(), 33.3, places=1)
 class DepositIsNotCountedTwiceTests(TestCase):
     """La caparra entra in cassa il giorno in cui arriva, e al checkout il
     servizio viene fatturato per intero con l'anticipo detratto.
@@ -505,3 +308,150 @@ class DepositIsNotCountedTwiceTests(TestCase):
         of_today = [point for point in series if point["date"] == today]
         self.assertEqual(len(of_today), 1)
         self.assertEqual(of_today[0]["revenue"], 100)
+
+
+class RebookingOfPastPeriodsTests(_Base):
+    """08-04: il riaggancio di un periodo passato era ~0 % per costruzione."""
+
+    def test_a_return_visit_booked_within_the_period_counts_even_once_closed(self):
+        anna = self._client()
+        self._appt(anna, _aware(2025, 8, 20))
+        # prenotata alla visita di agosto, fatta e chiusa il 10/9
+        self._appt(anna, _aware(2025, 9, 10), booked_at=_aware(2025, 8, 20, 11))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 15))["rebooking_rate"], 1.0)
+
+    def test_a_visit_booked_after_the_period_does_not_count(self):
+        # come per il periodo in corso, che non può contare prenotazioni non
+        # ancora fatte: altrimenti il passato risulta sempre migliore
+        anna = self._client()
+        self._appt(anna, _aware(2025, 8, 20))
+        self._appt(anna, _aware(2025, 9, 20), booked_at=_aware(2025, 9, 5))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 15))["rebooking_rate"], 0)
+
+    def test_a_cancelled_or_missed_return_visit_does_not_count(self):
+        anna, bea = self._client("Anna"), self._client("Bea")
+        for client, status in ((anna, "cancelled"), (bea, "no_show")):
+            self._appt(client, _aware(2025, 8, 20))
+            self._appt(client, _aware(2025, 9, 10), status=status, booked_at=_aware(2025, 8, 20, 11))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 15))["rebooking_rate"], 0)
+
+
+class NewClientsAreRealNewCustomersTests(_Base):
+    """08-05: import e sync timbravano `since` a oggi e tutti diventavano «nuovi»."""
+
+    def test_an_imported_address_book_is_not_new_and_the_old_client_is_returning(self):
+        today = timezone.localdate()
+        imported = [self._client(f"C{i}", since=today) for i in range(50)]
+        old = imported[0]
+        self._appt(old, timezone.now() - timedelta(days=365))
+        self._appt(old, timezone.now().replace(hour=9, minute=0))
+        result = kpis(self.salon, "month", today)
+        self.assertEqual(result["new_clients"], 0)
+        self.assertEqual(result["returning_clients"], 1)
+
+    def test_a_client_is_new_in_the_month_of_her_first_visit_not_of_her_signup(self):
+        # iscritta dall'app il 25/7, prima visita il 10/8
+        anna = self._client(since=date(2025, 7, 25))
+        self._appt(anna, _aware(2025, 8, 10))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 7, 1))["new_clients"], 0)
+        august = kpis(self.salon, "month", date(2025, 8, 1))
+        self.assertEqual(august["new_clients"], 1)
+        self.assertEqual(august["returning_clients"], 0)
+
+    def test_a_declared_historic_since_keeps_the_client_returning(self):
+        # scheda di carta ricopiata: «cliente dal 2019», prima visita in youty ad agosto
+        carla = self._client("Carla", since=date(2019, 3, 1))
+        self._appt(carla, _aware(2025, 8, 10))
+        august = kpis(self.salon, "month", date(2025, 8, 1))
+        self.assertEqual(august["new_clients"], 0)
+        self.assertEqual(august["returning_clients"], 1)
+
+    def test_cancelled_and_missed_bookings_are_not_a_first_visit(self):
+        anna, bea = self._client("Anna"), self._client("Bea")
+        self._appt(anna, _aware(2025, 7, 10), status="cancelled")
+        self._appt(bea, _aware(2025, 7, 12), status="no_show")
+        for client in (anna, bea):
+            self._appt(client, _aware(2025, 8, 10))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 7, 1))["new_clients"], 0)
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 1))["new_clients"], 2)
+
+    def test_a_deposit_paid_ahead_is_not_a_first_purchase(self):
+        anna = self._client()
+        visit = self._appt(anna, _aware(2025, 8, 10))
+        deposit = Sale.objects.create(
+            salon=self.salon, kind="pos", client=anna, deposit_appointment=visit, total=Decimal("30")
+        )
+        Sale.objects.filter(pk=deposit.pk).update(created_at=_aware(2025, 7, 28))
+        self.assertEqual(kpis(self.salon, "month", date(2025, 7, 1))["new_clients"], 0)
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 1))["new_clients"], 1)
+
+
+class RatesOnElapsedAppointmentsTests(_Base):
+    """08-06: i futuri del periodo non possono ancora essere no-show."""
+
+    def test_future_appointments_do_not_dilute_the_rates(self):
+        anna = self._client()
+        now = timezone.now()
+        for i in range(4):
+            self._appt(anna, now - timedelta(hours=10 + i), status="closed")
+        for i in range(4):
+            self._appt(anna, now - timedelta(hours=20 + i), status="no_show")
+        for i in range(2):
+            self._appt(anna, now - timedelta(hours=30 + i), status="cancelled")
+        for i in range(10):
+            self._appt(anna, now + timedelta(minutes=30 + i), status="confirmed")
+        self._appt(anna, now + timedelta(minutes=45), status="cancelled")
+        result = kpis(self.salon, "year", timezone.localdate())
+        self.assertEqual(result["noshow_rate"], 0.4)
+        self.assertEqual(result["cancel_rate"], 0.2)
+
+    def test_a_past_period_keeps_all_its_appointments(self):
+        anna = self._client()
+        self._appt(anna, _aware(2025, 8, 5), status="no_show")
+        self._appt(anna, _aware(2025, 8, 6), status="closed")
+        self.assertEqual(kpis(self.salon, "month", date(2025, 8, 1))["noshow_rate"], 0.5)
+
+
+class InsightsScopeTests(TestCase):
+    """15-17 + 17-11 / contratto C11: «Analisi dati» apre gli insight."""
+
+    URLS = (
+        "/api/insights/kpis",
+        "/api/insights/revenue-series",
+        "/api/insights/revenue-by-category",
+        "/api/insights/occupancy-by-weekday",
+    )
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        self.salon = Salon.objects.create(name="S", slug="s")
+
+        def member(email, scopes=None, owner=False):
+            user = User.objects.create_user(email=email, password="pw-lunga-123")
+            role = Role.objects.create(salon=self.salon, name=email, scopes=scopes) if scopes is not None else None
+            Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=owner)
+            return bearer(user, self.salon)
+
+        self.owner = member("own@x.it", owner=True)
+        self.manager = member("manager@x.it", ["insights"])
+        self.front_desk = member("desk@x.it", ["agenda", "clients", "sales"])
+
+    def test_the_insights_scope_opens_every_endpoint(self):
+        for auth in (self.owner, self.manager):
+            for url in self.URLS:
+                with self.subTest(url=url):
+                    self.assertEqual(self.client.get(url, **auth).status_code, 200)
+            ask = self.client.post(
+                "/api/insights/ask", data={"question": "?"}, content_type="application/json", **auth
+            )
+            self.assertEqual(ask.status_code, 501)
+
+    def test_without_the_scope_they_stay_closed(self):
+        for url in self.URLS:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url, **self.front_desk).status_code, 403)
+        ask = self.client.post(
+            "/api/insights/ask", data={"question": "?"}, content_type="application/json", **self.front_desk
+        )
+        self.assertEqual(ask.status_code, 403)
