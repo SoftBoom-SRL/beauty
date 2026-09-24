@@ -1,7 +1,8 @@
 # Stato delle correzioni — caccia ai bug del 22 settembre 2026
 
-Aggiornato al 23/09/2026 sul ramo `claude/exciting-bohr-5ch9g7`, partito da `d147276` (il codice
-revisionato, 754ed6b, più le correzioni del 21 settembre e le prime del 22).
+Aggiornato al 24/09/2026 sul ramo `claude/exciting-bohr-5ch9g7`, partito da `d147276` (il codice
+revisionato, 754ed6b, più le correzioni del 21 settembre e le prime del 22) e unito a `main` il 24/09
+(vedi *Unione con main*).
 
 **327 reperti (4 critici, 26 alti, 123 medi, 174 bassi): 327 FATTO, 0
 PARZIALE, 0 NON FATTO.** Il rapporto unico ne contava 326: nella tabella del revisore 10
@@ -21,7 +22,7 @@ Nella colonna «Correzione» c'è il commit che corregge il reperto, e fra paren
 
 ## Verifiche finali
 
-- Test: 1237 backend e 255 frontend verdi (il 22 erano 653 e 27), build di dashboard e
+- Test: 1244 backend e 258 frontend verdi dopo l'unione con `main` (il 22 erano 653 e 27), build di dashboard e
   app cliente verdi, `makemigrations --check` pulito.
 - Revisione di regressione: tre revisori hanno controllato sul codice unito i 23 contratti, da tutti e
   due i lati (server e client), e le cuciture fra i rami: tutti rispettati. Hanno trovato sei difetti,
@@ -40,6 +41,30 @@ Nella colonna «Correzione» c'è il commit che corregge il reperto, e fra paren
     riattivava la scheda sbagliata (`9e246f5`).
 
 
+## Unione con main (24/09)
+
+Nel frattempo `main` aveva annullato il passaggio al proxy Yourang (PR #22: il proxy
+`connect.yourang.ai` non esiste ancora, e dal 17/09 l'accesso con Yourang in produzione rispondeva
+503), tornando al flusso OAuth diretto con i token di ogni salone cifrati a database. Nell'unione si
+è tenuta l'architettura di `main` e ci si sono portate le correzioni dell'area integrazioni, che erano
+state scritte sul proxy:
+
+- il `nonce` della finestra (10-02, 11-01): all'avvio il backend restituisce l'HMAC dello state, il
+  popup lo tiene nel sessionStorage e lo rimanda allo scambio; senza, 400 prima di consumare lo state;
+- un salone collegato non cambia org senza scollegarsi e un'org serve un solo salone (11-01): 409 al
+  posto della riscrittura o di un 500; con un'org nuova i riferimenti remoti si azzerano (11-14);
+- «Accedi con Yourang» collega da solo solo il salone di cui si è titolari, se è l'unico (11-02,
+  10-03), e il collega che accede non tocca una connessione che funziona: la rimette in piedi solo se
+  è senza token o in errore, come serve dopo la `integrations.0005` di `main`, che riparte con le
+  colonne dei token vuote;
+- primo accesso atomico con un nuovo tentativo (18-15), prima sync in background, webhook `contact.*`
+  sul solo contatto e un solo client HTTP per giro di sync (11-12), `last_error` nello stato (C9).
+
+Le migrazioni dell'area sono diventate `integrations.0006` e `0007`, dopo la `0005` di `main`. I test
+del collegamento e del webhook sono stati riscritti per il flusso diretto. DEPLOY.md e SPEC.md ora
+descrivono il flusso diretto: anche su `main` parlavano ancora del proxy, e dicevano di togliere
+`ENCRYPTION_KEY` e le credenziali OAuth, che invece servono.
+
 ## Da controllare in produzione (sono verifiche, non codice)
 
 Tutti i passi sono in DEPLOY.md §9.4. In breve:
@@ -55,16 +80,17 @@ Tutti i passi sono in DEPLOY.md §9.4. In breve:
    `process_deposit_holds` ogni 5 minuti.
 5. **Database in UTF8** (`SHOW server_encoding;`) per la ricerca clienti senza accenti.
 6. **Tessere a timbri**: `marketing.0004` è irreversibile; vedi §9.4 per il controllo prima del deploy.
+7. **Yourang**: devono esserci `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`,
+   `YOURANG_CLIENT_SECRET` e `YOURANG_WEBHOOK_RECEIVER_URL` (e si tolgono le `YOURANG_PROXY_*`).
+   Dopo la `integrations.0005` ogni salone si ricollega una volta, da Impostazioni o accedendo con
+   Yourang.
 
 ## Aperti
 
-Non sono reperti rimasti indietro: sono decisioni da prendere, verifiche che richiedono servizi esterni
-e migliorie facoltative segnalate dai fixer.
+Non sono reperti rimasti indietro: sono verifiche che richiedono servizi esterni e migliorie
+facoltative segnalate dai fixer. L'unica decisione rimasta aperta al 23 — la disdetta della cliente
+registrata dalla reception, con la caparra trattenuta se in ritardo — è stata fatta il 24 (`819e426`).
 
-- **Decisione di prodotto (da 13-02).** Lo staff non ha un «annullato per conto della cliente»: se la
-  cliente disdice tardi per telefono, il salone non può trattenere la caparra, perché il no-show si
-  segna solo dopo l'inizio della visita. Serve decidere la regola lato server (la semantica esiste già
-  per l'annullamento dall'app: tardivo → caparra trattenuta).
 - **Prenotazione dall'app ripetuta (resto di 16-08).** La seconda prova riconosce ora la prenotazione
   già fatta; resta scoperto il caso del primo invio ancora in volo, che chiuderebbe solo una chiave di
   idempotenza nella richiesta di creazione.
@@ -73,9 +99,7 @@ e migliorie facoltative segnalate dai fixer.
   purché l'endpoint riceva anche `refund.created`, `refund.updated` e `refund.failed` (DEPLOY.md §8):
   provare un rimborso parziale che resta «pending» e uno che fallisce.
 - **Yourang, da concordare.** Deve gestire gli eventi nuovi `communication.cancel` e
-  `client.marketing_consent`, altrimenti gli invii già consegnati partono comunque. Il proxy deve
-  rimandare intatta la query del `return_to` (mode e state, circa 200 caratteri): da provare in
-  staging. La sincronizzazione presume sul proxy la rotta `GET /contacts/{id}`.
+  `client.marketing_consent`, altrimenti gli invii già consegnati partono comunque.
 - **Preesistente, fuori dai reperti.** Un utente nato da un'identità Yourang con email non verificata
   non riesce a rientrare (`_get_or_create_user` rifiuta l'account esistente).
 - **Facoltativi non fatti.** `undo_id` nelle risposte di sposta, stacca e pausa (oggi la dashboard lo
@@ -85,6 +109,7 @@ e migliorie facoltative segnalate dai fixer.
 
 ## Correzioni fatte nell'integrazione
 
+- `819e426` Agenda: la reception registra la disdetta della cliente, con le regole dell'app
 - `0ce7b03` Outbox: link e sollecito della caparra non aspettano i messaggi solo trattenuti
 - `e8fc422` Comunicazioni: l'annullamento di una campagna vale fino alla sua data
 - `9e246f5` Picker cliente: correggendo il numero sparisce l'avviso della scheda archiviata
@@ -383,7 +408,7 @@ e migliorie facoltative segnalate dai fixer.
 | ID | Gravità | Difetto | Stato | Correzione |
 |---|---|---|---|---|
 | 13-01 | alto | «Sposta qui» alla stessa ora e nella stessa colonna di un altro giorno non sposta niente (proprio dove l'ombra dice «qui») | FATTO | `4a8d330` (fe-griglia) |
-| 13-02 | alto | L'anteprima dell'annullamento promette «Caparra trattenuta» sotto le 24 h, ma dal gestionale la caparra viene sempre rimborsata (anche su Stripe, in automatico) | FATTO | `f143772` (fe-modali) — l'annullamento «per conto della cliente» dallo staff è una decisione aperta: vedi Aperti |
+| 13-02 | alto | L'anteprima dell'annullamento promette «Caparra trattenuta» sotto le 24 h, ma dal gestionale la caparra viene sempre rimborsata (anche su Stripe, in automatico) | FATTO | `f143772` (fe-modali), `819e426` (integrazione) — dal 24/09 la reception registra anche la disdetta della cliente, con le regole dell'app |
 | 13-03 | alto | Il pannello di dettaglio non si aggiorna quando l'appuntamento cambia altrove: i suoi comandi ripartono dalla copia vecchia e disfano o raddoppiano le modifiche | FATTO | `6542814` (ag-disp), `8d34f0b` (ag-disp), `b472859` (fe-modali) |
 | 13-04 | medio | Riassegnare gli appuntamenti di un'operatrice disattivata risponde «Not Found» (pannello e trascinamento) | FATTO | `1e47625b` (prima del pool) |
 | 13-05 | medio | Le modifiche ai servizi non salvate spariscono con qualunque altro gesto del pannello (e «Incassa» fattura i servizi vecchi) | FATTO | `b472859` (fe-modali), `5f1666d` (integrazione) |
