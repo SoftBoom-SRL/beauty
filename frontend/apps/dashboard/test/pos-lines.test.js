@@ -33,11 +33,11 @@ test('check-out: prodotto, servizio extra e gift card aggiunti al banco', () => 
     key: 'sl1', operator_id: 7, line_type: 'service', service_id: 5, name: 'Piega',
     unit_price: 20, qty: 1, discount_pct: 0, is_gift: false, extra: true,
   });
-  assert.deepEqual(checkoutGiftLine('gl1', 7, 50, '  Anna '), {
-    key: 'gl1', operator_id: 7, line_type: 'gift_card', name: 'Gift card · €50', value: 50,
+  assert.deepEqual(checkoutGiftLine('gl1', 7, 50, '  Anna ', 'it'), {
+    key: 'gl1', operator_id: 7, line_type: 'gift_card', name: 'Gift card · €50,00', value: 50,
     recipient_name: 'Anna', qty: 1, discount_pct: 0, is_gift: false, extra: true,
   });
-  assert.equal(checkoutGiftLine('gl2', 7, 50, undefined).recipient_name, '');
+  assert.equal(checkoutGiftLine('gl2', 7, 50, undefined, 'it').recipient_name, '');
 });
 
 test('banco: il prodotto porta la giacenza, la gift card il destinatario', () => {
@@ -45,14 +45,21 @@ test('banco: il prodotto porta la giacenza, la gift card il destinatario', () =>
     key: 'p12_1', line_type: 'product', product_id: 12, name: 'Shampoo', unit_price: 18.5,
     qty: 1, is_gift: false, disc: 0, stock: 4,
   });
-  assert.deepEqual(counterGiftLine('g1', 25, ' Bea '), {
-    key: 'g1', line_type: 'gift_card', name: 'Gift card · €25', value: 25, recipient_name: 'Bea',
+  assert.deepEqual(counterGiftLine('g1', 25, ' Bea ', 'it'), {
+    key: 'g1', line_type: 'gift_card', name: 'Gift card · €25,00', value: 25, recipient_name: 'Bea',
     qty: 1, is_gift: false, disc: 0,
   });
 });
 
-test('il nome della gift card scrive il valore così com’è (anche «€12.5»)', () => {
-  assert.equal(giftLineName(12.5), 'Gift card · €12.5');
+test('il nome della gift card scrive l’importo come ogni prezzo, nella lingua dell’interfaccia (voce 41)', () => {
+  // era il numero così com'è: «€12.5», «€1000»; ora come fmtEur scrive ogni
+  // prezzo (in italiano le migliaia si separano da 10.000 in su)
+  assert.equal(giftLineName(12.5, 'it'), 'Gift card · €12,50');
+  assert.equal(giftLineName(1000, 'it'), 'Gift card · €1000,00');
+  assert.equal(giftLineName(12.5, 'en'), 'Gift card · €12.50');
+  assert.equal(giftLineName(1000, 'en'), 'Gift card · €1,000.00');
+  assert.equal(checkoutGiftLine('gl3', 7, 12.5, '', 'en').name, 'Gift card · €12.50');
+  assert.equal(counterGiftLine('g3', 1000, '', 'it').name, 'Gift card · €1000,00');
 });
 
 test('sconti: omaggi a zero; al banco vale quello della riga, altrimenti quello sulla vendita', () => {

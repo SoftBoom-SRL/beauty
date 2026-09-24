@@ -69,7 +69,7 @@ export default function CartTab({ onGoHistory }) {
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftAmt));
     if (!(v > 0)) return;
-    setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName)]);
+    setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName, lang)]);
     setGiftName('');
   };
   const patchLine = (key, patch) => setCart((c) => c.map((l) => (l.key === key ? { ...l, ...patch } : l)));
