@@ -1,17 +1,19 @@
-"""Caccia del 22/09 — prenotazioni Yourang in agenda.
+"""Prenotazioni Yourang in agenda: import_event e cancel_event.
 
+Dalla caccia del 22/09:
 11-03 stato remoto su una visita già in mano al salone · 11-04/01-09 segnaposto
 idoneo per ogni operatrice · 11-05/18-13 annullamento remoto dal dominio ·
 11-06 registro attività (feed live) · 11-07 ri-consegne che annullavano ciò che
 il salone aveva deciso · 11-16 consegne concorrenti · 11-17 prenotazioni senza
 telefono · 08-05 (lato sync) rubrica senza «since» di oggi.
 
-    python manage.py test apps.integrations.tests_caccia22_eventi
+    python manage.py test apps.integrations.tests.test_events
 """
 
 import datetime as dt
 import importlib
 from unittest import mock
+from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.test import TestCase
@@ -25,8 +27,222 @@ from apps.clients.models import Client
 from apps.core.models import ActivityLog, OutboxEvent, Salon
 from apps.integrations import sync
 from apps.integrations.models import YourangConnection, YourangEventSync
+from apps.integrations.sync import cancel_event, import_event
 from apps.staff.models import Operator
 from common.phone import phone_key
+
+
+class ImportEventIdempotencyTests(TestCase):
+    def setUp(self):
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="Test Salon", slug="test-salon")
+        Operator.objects.create(salon=self.salon, first_name="Anna", last_name="B")
+        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org1")
+
+    def test_same_event_upserts_once(self):
+        from apps.agenda.models import Appointment
+
+        event = {
+            "id": "evt-1",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-1")
+            import_event(self.conn, "evt-1")
+
+        self.assertEqual(Appointment.objects.filter(yourang_event_id="evt-1").count(), 1)
+
+    def test_redelivery_keeps_what_the_salon_decided(self):
+        """Contare le righe non basta: la ri-consegna riscriveva operatrice,
+        stato e nota decisi in salone (check-in annullato, nota sparita,
+        appuntamento riportato sull'operatrice di default)."""
+        from apps.agenda.models import Appointment
+        from apps.staff.models import Operator
+
+        giulia = Operator.objects.create(salon=self.salon, first_name="Giulia", order=9)
+        event = {
+            "id": "evt-3",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-3")
+
+        appt = Appointment.objects.get(yourang_event_id="evt-3")
+        appt.operator = giulia
+        appt.status = Appointment.Status.CHECKED_IN
+        appt.note = "Allergica alla tinta"
+        appt.save()
+
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-3")
+
+        appt.refresh_from_db()
+        self.assertEqual(appt.operator_id, giulia.id)
+        self.assertEqual(appt.status, Appointment.Status.CHECKED_IN)
+        self.assertEqual(appt.note, "Allergica alla tinta")
+
+    def test_redelivery_does_not_reopen_a_closed_appointment(self):
+        from apps.agenda.models import Appointment
+
+        event = {
+            "id": "evt-4",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-4")
+        appt = Appointment.objects.get(yourang_event_id="evt-4")
+        appt.status = Appointment.Status.CLOSED
+        appt.save(update_fields=["status"])
+
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-4")
+        appt.refresh_from_db()
+        self.assertEqual(appt.status, Appointment.Status.CLOSED)
+
+    def test_remote_cancellation_still_wins(self):
+        """Non riportare indietro lo stato non deve diventare "ignorare Yourang":
+        una disdetta remota su un appuntamento confermato passa."""
+        from apps.agenda.models import Appointment
+
+        event = {
+            "id": "evt-5",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-5")
+        with patch("apps.integrations.sync.YourangClient.get_event",
+                   return_value={**event, "status": "cancelled"}):
+            import_event(self.conn, "evt-5")
+
+        self.assertEqual(
+            Appointment.objects.get(yourang_event_id="evt-5").status,
+            Appointment.Status.CANCELLED,
+        )
+
+    def test_client_is_deduplicated_on_the_phone_key(self):
+        """La scheda si ritrova sulla chiave normalizzata: "348 221 0094" e
+        "+39 348 2210094" sono la stessa cliente, non due."""
+        from apps.clients.models import Client
+
+        existing = Client.objects.create(
+            salon=self.salon, first_name="Anna", last_name="Verdi", phone="348 221 0094"
+        )
+        event = {
+            "id": "evt-6",
+            "client_full_name": "Anna Verdi",
+            "client_phone_number": "+39 348 2210094",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            appt = import_event(self.conn, "evt-6")
+
+        self.assertEqual(appt.client_id, existing.id)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
+
+    def test_new_client_gets_since(self):
+        from apps.clients.models import Client
+
+        event = {
+            "id": "evt-7",
+            "client_full_name": "Nuova Cliente",
+            "client_phone_number": "3480000001",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-7")
+        self.assertIsNotNone(Client.objects.get(salon=self.salon, phone="+393480000001").since)
+
+    def test_placeholder_service_is_not_public(self):
+        """Il segnaposto non deve comparire nel listino pubblico né essere
+        rispinto su Yourang a 0 €."""
+        from apps.catalog.models import Service
+
+        event = {
+            "id": "evt-8",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=event):
+            import_event(self.conn, "evt-8")
+        svc = Service.objects.get(salon=self.salon, name_it="Prenotazione Yourang")
+        self.assertFalse(svc.active)
+
+    def test_changed_duration_updates_the_local_item(self):
+        from apps.agenda.models import Appointment
+
+        base = {
+            "id": "evt-2",
+            "client_full_name": "Mario Rossi",
+            "client_phone_number": "3331234567",
+            "starting_date": "2026-08-01T10:00:00+02:00",
+            "ending_date": "2026-08-01T11:00:00+02:00",
+            "status": "confirmed",
+        }
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=base):
+            import_event(self.conn, "evt-2")
+        appt = Appointment.objects.get(yourang_event_id="evt-2")
+        self.assertEqual(appt.total_duration_min, 60)
+
+        longer = {**base, "ending_date": "2026-08-01T12:00:00+02:00"}
+        with patch("apps.integrations.sync.YourangClient.get_event", return_value=longer):
+            import_event(self.conn, "evt-2")
+        appt.refresh_from_db()
+        self.assertEqual(appt.items.count(), 1)
+        self.assertEqual(appt.total_duration_min, 120)
+
+
+class CancelEventGuardTests(TestCase):
+    """Stessa guardia del webhook (WebhookRouteTests in test_webhook), un gradino
+    più in basso: chi chiama cancel_event direttamente (sync, comandi futuri)
+    non deve poter svuotare l'agenda."""
+
+    def setUp(self):
+        from apps.clients.models import Client
+        from apps.core.models import Salon
+        from apps.integrations.models import YourangConnection
+        from apps.staff.models import Operator
+
+        self.salon = Salon.objects.create(name="Salone Cancel", slug="salone-cancel")
+        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-cancel")
+        self.client_obj = Client.objects.create(
+            salon=self.salon, first_name="Ada", phone="+393331110001"
+        )
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Anna")
+
+    def test_empty_event_id_cancels_nothing(self):
+        from datetime import timedelta
+
+        from django.utils import timezone as dj_timezone
+
+        from apps.agenda.models import Appointment
+
+        appt = Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.operator,
+            start=dj_timezone.now() + timedelta(days=1),
+        )
+        for empty in ("", None, "   "):
+            cancel_event(self.conn, empty)
+        appt.refresh_from_db()
+        self.assertEqual(appt.status, Appointment.Status.CONFIRMED)
 
 
 class _EventCase(TestCase):
