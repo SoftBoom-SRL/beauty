@@ -123,6 +123,18 @@ class SettingsApiTests(TestCase):
         self.assertEqual(saved.agenda_fill, "max_revenue")
         self.assertEqual(saved.flexible_reward_pct, 10)
 
+    def test_a_brand_colour_with_a_trailing_newline_is_refused(self):
+        """Bug sospetti del 24/09, voce 13: il colore si controllava con `$`.
+
+        Con `re.match`, `$` accetta anche un a capo finale: «#AABBCC\\n»
+        passava e arrivava a una colonna di sette caratteri, che PostgreSQL
+        rifiuta (500); su SQLite il colore con l'a capo restava salvato.
+        """
+        resp = self._put({"brand_color": "#AABBCC\n"})
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertEqual(SalonSettings.objects.get(salon=self.salon).brand_color, "#6366F1")
+        self.assertEqual(self._put({"brand_color": "#AABBCC"}).status_code, 200)
+
     def test_privacy_policy_url_must_be_a_real_address(self):
         # Il valore è reso come href nell'app pubblica delle clienti.
         self.assertEqual(self._put({"privacy_policy_url": "javascript:alert(1)"}).status_code, 400)
