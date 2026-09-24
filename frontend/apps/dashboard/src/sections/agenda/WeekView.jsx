@@ -8,13 +8,13 @@
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { toastApiError, Icon, minutesOfDay, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
+import React, { useRef, useState } from 'react';
+import { toastApiError, Icon, nowMinutes, timeLabel, todayStr, parseISO, statusMeta } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ApptHoverCard } from './DayGrid.jsx';
 import {
-  DK_START, PXM, WEEK_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, HOVER_CLEAR_WEEK, clampZoom, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
-  GRID_LINE_STYLE, gridMarks, visibleMarks, opSegments, serviceBands, AGENDA_LIVE_RE, apptRevenue, weekGridRange,
+  DK_START, PXM, WEEK_HOURS_W, NOW_LINE_COLOR, HOVER_CLEAR_WEEK, DOW_IT, DOW_EN, weekLayout, fmtMoney, opDisplay, isoAtMin,
+  GRID_LINE_STYLE, gridMarks, visibleMarks, opSegments, serviceBands, apptRevenue, weekGridRange,
   slotStep, openApptIdOf, hoverPlacement,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
@@ -24,6 +24,10 @@ import * as agendaApi from './agendaApi.js';
 import {
   weekDays, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
 } from './lib/week.js';
+import { useWeekData } from './hooks/useWeekData.js';
+import { useGridZoom } from './hooks/useGridZoom.js';
+import { useScrollMemo } from './hooks/useScrollMemo.js';
+import { useGridDrag } from './hooks/useGridDrag.js';
 
 // oggi: tinta discreta derivata dal tema (era #D6E4F7 hardcoded); bordo giorno più leggero di --clay
 const TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
@@ -38,163 +42,49 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const canWrite = hasScope('agenda');
   const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
-  const [days, setDays] = useState(null); // null = loading
   const [opTip, setOpTip] = useState(null); // { name, x, y }
   const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop }: il blocco resta dove è stato lasciato durante la POST
-  const [, force] = useState(0);            // re-render on drag ghost changes
   // Anteprima al passaggio del mouse, come nella vista giorno: in settimana i
   // blocchi sono stretti e il solo `title` del browser arriva tardi e dice poco.
   const [hover, setHover] = useState(null);
   const scrollRef = useRef(null);
   const headRef = useRef(null);             // intestazione fissa dei giorni
-  const drag = useRef(null);                // active drag { id, obj, ns, nop, dayIdx, moved, ... }
-  const justDragged = useRef(false);        // suppress the click that follows a drop
   const onUpRef = useRef(null);             // ultimo onUp (chiusura fresca) per il fallback su window
-  // evento di un puntatore diverso da quello che ha cominciato il trascinamento
-  const otherPointer = (e) => {
-    const d = drag.current;
-    return !!(d && e && e.pointerId != null && d.pointerId != null && e.pointerId !== d.pointerId);
-  };
   /* Apre la nuova prenotazione una volta sola: il doppio clic manda due click
    * più un dblclick, e senza questa guardia il drawer si rimontava tre volte. */
   const lastOpen = useRef({ at: 0, key: '' });
 
-  /* reusable refetch (no skeleton flash) — used after a move and passed to the detail modal.
-   * Settimana e sede si leggono da una ref, e un numero di sequenza scarta le
-   * risposte superate, come fa fetchDay in vista giorno. Il pannello teneva il
-   * ricarico di quando si era aperto: sfogliata la settimana dopo, «Salva»
-   * rileggeva la 21–27 e la mostrava sotto l'intestazione «28 set – 4 ott», e
-   * clic e trascinamenti lavoravano sulle date vecchie. Stessa corsa fra un
-   * evento live e un cambio di settimana. */
-  const weekSeq = useRef(0);
-  const weekRef = useRef(weekStart);
-  weekRef.current = weekStart;
-  const locRef = useRef(locationId);
-  locRef.current = locationId;
-  const refetchWeek = useCallback(() => {
-    const my = ++weekSeq.current;
-    const forWeek = weekRef.current, forLoc = locRef.current;
-    return agendaApi.getWeek(forWeek, forLoc)
-      .then((rows) => {
-        if (my === weekSeq.current && forWeek === weekRef.current && forLoc === locRef.current) setDays(rows);
-      })
-      .catch((err) => {
-        if (my !== weekSeq.current) return;
-        toastApiError(err, fireToast, t);
-        setDays((cur) => cur ?? []);   // mai uno scheletro senza fine
-      });
-  }, [t, fireToast]);
-  const refetchWeekRef = useRef(refetchWeek);
-  refetchWeekRef.current = refetchWeek;
-
-  // live: modifiche dalle altre postazioni → ricarica la settimana senza skeleton
-  useEffect(() => live.subscribe(({ events }) => {
-    if (events.some((e) => AGENDA_LIVE_RE.test(e.type))) refetchWeek();
-  }), [live, refetchWeek]);
-
-  useEffect(() => {
-    const my = ++weekSeq.current;
-    setDays(null);
-    agendaApi.getWeek(weekStart, locationId)
-      .then((rows) => { if (my === weekSeq.current) setDays(rows); })
-      .catch((err) => { if (my === weekSeq.current) { setDays([]); toastApiError(err, fireToast, t); } });
-  }, [weekStart, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // smontaggio: le risposte in volo non scrivono più niente
-  useEffect(() => () => { weekSeq.current++; }, []);
-
-  /* Zoom: stessa scala e stesso gesto della vista giorno (⌘/ctrl + rotella o
-   * pinch del trackpad), tenendo fermo il minuto che si stava guardando. */
-  const zoomAnchor = useRef(null);
-  const lastZoom = useRef(zoom);
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const prev = lastZoom.current;
-    if (!el || prev === zoom) return;
-    lastZoom.current = zoom;
-    const body = el.querySelector('[data-daycol]')?.parentElement;
-    if (!body) return;
-    const top0 = body.offsetTop;
-    const offset = zoomAnchor.current?.offset ?? el.clientHeight / 2;
-    zoomAnchor.current = null;
-    const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
-    el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
-    // Solo lo zoom sposta lo scroll. G0 non può stare fra le dipendenze: è
-    // dichiarata più sotto, e leggerla qui durante il render sarebbe un errore.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !onZoom) return undefined;
-    const onWheel = (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      zoomAnchor.current = { offset: e.clientY - el.getBoundingClientRect().top };
-      // valore precedente dallo stato: il pinch manda una raffica di eventi
-      // nello stesso istante, e partendo tutti dallo stesso numero se ne
-      // sarebbe sentito uno solo
-      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR)));
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [onZoom]);
-
-  useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
-  // Esc annulla il drag; pointerup/pointercancel su window:
-  // se la capture non è supportata o il rilascio avviene fuori dall'area, il drag
-  // non resta mai "appeso".
-  // Esc con `preventDefault` (contratto di ui/layers.js), e in cattura: annulla
-  // il trascinamento e basta, senza chiudere anche il pannello aperto sotto.
-  // Gli eventi di un altro dito non chiudono il trascinamento (vedi otherPointer).
-  useEffect(() => {
-    const cancel = () => { drag.current = null; document.body.classList.remove('dk-dragging'); force((x) => x + 1); };
-    const onKey = (e) => {
-      if (e.key !== 'Escape' || !drag.current) return;
-      e.preventDefault();
-      cancel();
-    };
-    const onWinUp = (e) => { if (drag.current && !otherPointer(e)) onUpRef.current?.(e); };
-    const onWinCancel = (e) => { if (drag.current && !otherPointer(e)) cancel(); };
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('pointerup', onWinUp);
-    window.addEventListener('pointercancel', onWinCancel);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('pointerup', onWinUp);
-      window.removeEventListener('pointercancel', onWinCancel);
-    };
-  }, []);
+  // la settimana: scheletro al cambio, ricarico silenzioso dopo un gesto o un evento live
+  const { days, refetchWeek, refetchWeekRef } = useWeekData({ weekStart, locationId, live, t, fireToast });
 
   const pxm = PXM * (zoom || 1);   // scala scelta da chi guarda (zoom personale)
   /* Fascia oraria della settimana (12-04): orari del centro dei sette giorni,
    * allargata per gli appuntamenti e l'ombra (vedi weekGridRange). Era fissa
    * 08–20, e la sposa delle 07:00 in settimana non c'era. I turni in settimana
-   * non arrivano: la vista giorno li vede. */
+   * non arrivano: la vista giorno li vede. Si calcola prima degli hook che la
+   * leggono (zoom, scroll), anche durante il caricamento. */
   const { start: G0, end: G1 } = weekGridRange(days, settings?.opening_hours_week, ghost);
   const hours = []; for (let h = G0 / 60; h <= G1 / 60; h++) hours.push(h);
   const marks = gridMarks(step, G0, G1);   // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (G1 - G0) * pxm;
 
+  /* Zoom: stessa scala e stesso gesto della vista giorno (⌘/ctrl + rotella o
+   * pinch del trackpad), tenendo fermo il minuto che si stava guardando. */
+  useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '[data-daycol]' });
+
+  /* Il trascinamento: Esc lo annulla e, qui, anche pointerup e pointercancel su
+   * window: se la cattura non è supportata o il rilascio avviene fuori
+   * dall'area, il drag non resta mai "appeso" (onUpRef = l'ultimo onUp). */
+  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ windowUpRef: onUpRef });
+
   /* Cambiando settimana la griglia passa dallo scheletro e tornava in cima:
    * l'ombra dell'appuntamento aperto finiva fuori schermo. Il minuto in cima si
    * ricorda e si ritrova (anche se la fascia cambia); l'ombra, se resta fuori
    * vista, si porta in vista. */
-  const scrollMemo = useRef(null);
   const ready = days !== null;
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!ready || !el || scrollMemo.current == null) return;
-    el.scrollTop = Math.max(0, (scrollMemo.current - G0) * pxm);
-  }, [ready, G0]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!ready || !el || !ghost) return;
-    const top = (minutesOfDay(ghost.start) - G0) * pxm;
-    const visible = el.clientHeight - (headRef.current?.offsetHeight || 0);
-    if (top < el.scrollTop || top + 24 > el.scrollTop + visible) el.scrollTop = Math.max(0, top - 40);
-  }, [ready, ghost?.id, ghost?.start, ghostDate]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready });
   function onGridScroll() {
-    const el = scrollRef.current;
-    if (el) scrollMemo.current = G0 + el.scrollTop / pxm;
+    rememberScroll();
     onDragScroll();
   }
   const today = todayStr();
@@ -286,22 +176,12 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     force((x) => x + 1);
   }
 
-  function endDrag() {
-    const d = drag.current;
-    drag.current = null;
-    document.body.classList.remove('dk-dragging');
-    force((x) => x + 1);
-    return d;
-  }
-  function onCancel(e) { if (!otherPointer(e)) endDrag(); }
-
   function onUp(e) {
     if (otherPointer(e)) return;   // si solleva un altro dito: il trascinamento continua
     const d = endDrag();
     if (!d) return;
     if (!d.moved) { openDetail(d.obj); return; }   // click semplice → dettaglio; il drag no
-    justDragged.current = true;
-    setTimeout(() => { justDragged.current = false; }, 0);
+    markDropped();   // il click nativo che segue non apre niente
     if (weekDropChanged(d) && canWrite) commitMove(d);
   }
   onUpRef.current = onUp;

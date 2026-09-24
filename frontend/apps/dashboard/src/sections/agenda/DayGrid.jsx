@@ -14,12 +14,12 @@
 // destinazione evidenziata, badge con orario di arrivo. Niente indicatore al
 // passaggio del mouse: chi lavora in salone conosce i propri orari, e la
 // striscia sotto il cursore era solo rumore su una griglia già piena.
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Avatar, Icon, fmtDur, timeLabel, statusMeta, parseISO } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import {
-  DK_START, PXM, COLW, DAY_HOURS_W, NOW_LINE_COLOR, WHEEL_ZOOM_FACTOR, clampZoom, aStartMin, aEndMin, svcLabel, fmtMoney,
+  DK_START, PXM, COLW, DAY_HOURS_W, NOW_LINE_COLOR, aStartMin, aEndMin, svcLabel, fmtMoney,
   initialsOf, firstName, lastName, opDisplay, itemBlocks, visitSpines, laneLayout, laneCss, explainSlot, GRID_LINE_STYLE, gridMarks,
   ghostBlockAt, apptRevenue, dayGridRange, openingFor, dayLabel, slotStep, openApptIdOf, visibleMarks, closedIntervals,
 } from './lib.js';
@@ -27,6 +27,9 @@ import {
   dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, resizeStep, dragDy, dropIntent,
   itemPosition, pausePosition, verdictTone, dragBadge,
 } from './lib/drag.js';
+import { useGridZoom } from './hooks/useGridZoom.js';
+import { useScrollMemo } from './hooks/useScrollMemo.js';
+import { useGridDrag } from './hooks/useGridDrag.js';
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
@@ -39,9 +42,6 @@ export default function DayGrid({
    * in agenda, così si vede sempre su cosa si sta intervenendo. */
   const openApptId = openApptIdOf(modal);
   const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
-  const drag = useRef(null);
-  const justDragged = useRef(false);                 // sopprime il click che segue un rilascio
-  const [, force] = useState(0);
   const scrollRef = useRef(null);
   const headRef = useRef(null);                      // intestazione fissa delle operatrici
 
@@ -81,77 +81,21 @@ export default function DayGrid({
       : t('ATTESA', 'WAIT')
   );
 
-  /* ---- Zoom: la scala si cambia senza perdere il punto in cui si stava
-   * guardando. Cambiando l'altezza dell'ora, lo stesso minuto resta dov'era
-   * sullo schermo — sotto il puntatore col pinch, al centro coi pulsanti —
-   * altrimenti a ogni scatto ci si ritrova in un'altra parte della giornata. */
-  const zoomAnchor = useRef(null);   // { offset } px dal bordo alto dell'area visibile
-  const lastZoom = useRef(zoom);
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const prev = lastZoom.current;
-    if (!el || prev === zoom) return;
-    lastZoom.current = zoom;
-    // il corpo della griglia è il PADRE delle colonne: `.dk-tl-cols` è
-    // posizionata dentro di lui, quindi il suo offsetTop è zero e l'ancoraggio
-    // sbagliava di tutta l'altezza dell'intestazione
-    const cols = el.querySelector('.dk-tl-cols')?.parentElement;
-    if (!cols) return;
-    const top0 = cols.offsetTop;                       // dove comincia la griglia nel contenuto
-    const offset = zoomAnchor.current?.offset ?? el.clientHeight / 2;
-    zoomAnchor.current = null;
-    const minute = G0 + (el.scrollTop + offset - top0) / (PXM * prev);
-    el.scrollTop = (minute - G0) * (PXM * zoom) + top0 - offset;
-    // Solo lo zoom sposta lo scroll. G0 non può stare fra le dipendenze: è
-    // dichiarata più sotto, e leggerla qui durante il render sarebbe un errore.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom]);
-  /* Pinch del trackpad (che arriva come ctrl+rotella) e ⌘/ctrl+rotella: il
-   * listener è nativo e NON passivo, altrimenti il browser ingrandisce la
-   * pagina intera invece della griglia. */
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !onZoom) return undefined;
-    const onWheel = (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      zoomAnchor.current = { offset: e.clientY - el.getBoundingClientRect().top };
-      // valore precedente dallo stato: il pinch manda una raffica di eventi
-      // nello stesso istante, e partendo tutti dallo stesso numero se ne
-      // sarebbe sentito uno solo
-      onZoom((z) => clampZoom(z * (e.deltaY < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR)));
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [onZoom]);
-
-  /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica) e
-   * tornava in cima: l'ombra dell'appuntamento aperto nel pannello — il motivo
-   * per cui si sfoglia — finiva fuori schermo. Il minuto in cima alla griglia
-   * si ricorda in `scrollMemo` (vive nella sezione, sopravvive al rimontaggio)
-   * e si ritrova sul giorno dopo, anche quando la fascia oraria cambia; se poi
-   * l'ombra resta fuori vista, la si porta in vista. */
-  const ownMemo = useRef(null);
-  const memo = scrollMemo || ownMemo;
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el || memo.current == null) return;
-    el.scrollTop = Math.max(0, (memo.current - G0) * pxm);
-  }, [G0]); // eslint-disable-line react-hooks/exhaustive-deps
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !ghost) return;
-    const top = (aStartMin(ghost) - G0) * pxm;                 // nella griglia, sotto l'intestazione
-    const visible = el.clientHeight - (headRef.current?.offsetHeight || 0);
-    if (top < el.scrollTop || top + 24 > el.scrollTop + visible) el.scrollTop = Math.max(0, top - 40);
-  }, [ghost?.id, ghost?.start, date]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Zoom: cambiando scala lo stesso minuto resta dov'era; ⌘/ctrl + rotella e pinch
+  useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '.dk-tl-cols' });
+  /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica): il
+   * minuto in cima si ricorda in `scrollMemo`, che vive nella sezione e
+   * sopravvive al rimontaggio, e l'ombra fuori vista si porta in vista. */
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, memo: scrollMemo, g0: G0, pxm, ghost, dayKey: date });
   function onGridScroll() {
-    const el = scrollRef.current;
-    if (el) memo.current = G0 + el.scrollTop / pxm;
+    rememberScroll();
     onDragScroll();
   }
 
-  useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
+  /* Il trascinamento (drag.current mutabile, Esc che lo annulla): alla fine la
+   * striscia dei giorni torna normale (onDragChange). */
+  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ onStop: onDragChange });
+
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
    * proprio lì. */
@@ -160,25 +104,6 @@ export default function DayGrid({
     const el = scrollRef.current?.querySelector(`[data-appt="${openApptId}"]`);
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }, [openApptId]);
-  /* Esc annulla il drag in corso. `preventDefault` è il contratto di
-   * ui/layers.js: quell'Esc è del trascinamento, e il pannello di dettaglio
-   * aperto sotto non deve chiudersi insieme a lui. In cattura, così arriva
-   * prima di chi ascolta su `window` e guarda `defaultPrevented` subito (il
-   * drawer della prenotazione). */
-  const onDragChangeRef = useRef(onDragChange);
-  onDragChangeRef.current = onDragChange;
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== 'Escape' || !drag.current) return;
-      e.preventDefault();
-      drag.current = null;
-      document.body.classList.remove('dk-dragging');
-      onDragChangeRef.current?.(false);   // la striscia dei giorni torna normale
-      force((x) => x + 1);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
 
   /* Operatrice sotto il puntatore, o null se si è usciti dalla griglia.
    * Senza il null (prima si "agganciava" alla colonna di bordo) trascinare
@@ -226,20 +151,15 @@ export default function DayGrid({
     return best;
   }
 
-  /* Un secondo dito sul tablet non prende il trascinamento in corso: prima lo
-   * spostava e al primo sollevamento lo rilasciava. Si tiene il puntatore che
-   * ha cominciato (pointerId) e i suoi soli eventi; `startScroll` serve a
-   * seguire la rotella (vedi track). */
+  /* Un secondo dito sul tablet non prende il trascinamento in corso: si
+   * tiene il puntatore che ha cominciato (pointerId, vedi otherPointer) e i
+   * suoi soli eventi; `startScroll` serve a seguire la rotella (vedi track). */
   function beginDrag(e, d) {
     if (e.isPrimary === false) return false;
     drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, startScroll: scrollRef.current?.scrollTop || 0 };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
     return true;
   }
-  const otherPointer = (e) => {
-    const d = drag.current;
-    return !!(d && e && e.pointerId != null && d.pointerId != null && e.pointerId !== d.pointerId);
-  };
 
   // Drag di un blocco-servizio → muove QUEL servizio e basta.
   // Prima muoveva tutta la visita e per spostarne uno solo bisognava prima
@@ -348,16 +268,6 @@ export default function DayGrid({
     force((x) => x + 1);
   }
 
-  function endDrag() {
-    const d = drag.current;
-    drag.current = null;
-    document.body.classList.remove('dk-dragging');
-    onDragChange && onDragChange(false);
-    force((x) => x + 1);
-    return d;
-  }
-  function onCancel(e) { if (!otherPointer(e)) endDrag(); }
-
   function onUp(e) {
     if (otherPointer(e)) return;   // si solleva un altro dito: il trascinamento continua
     const d = endDrag();
@@ -375,8 +285,7 @@ export default function DayGrid({
       if (d.kind === 'item') { onLeave && onLeave(); onOpenAppt(d.block.appt); }
       return;
     }
-    justDragged.current = true;
-    setTimeout(() => { justDragged.current = false; }, 0);
+    markDropped();   // il click nativo che segue non apre niente
     // Fuori dalla griglia conta solo una pillola della striscia; altrove il
     // rilascio annulla (vedi track).
     if (!d.outside) { commitDrop(d); return; }
