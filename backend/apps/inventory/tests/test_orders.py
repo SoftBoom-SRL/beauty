@@ -12,7 +12,7 @@ from common.testing import staff_context
 
 from ..api import send_order, update_order
 from ..models import Product, PurchaseOrder, PurchaseOrderLine, StockMovement, Supplier
-from ..services import generate_draft_orders, receive_order
+from ..orders import generate_draft_orders, receive_order
 
 
 class ReceiveOrderConcurrencyTests(TestCase):

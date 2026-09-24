@@ -49,6 +49,12 @@ class ProductCategory(TimeStampedModel):
         return self.name
 
 
+# Sopra la soglia ma entro questo multiplo il prodotto è «in esaurimento»
+# (warning): lo stesso confine per `Product.stock_state` e per il filtro
+# `stock_state` della lista prodotti.
+STOCK_WARNING_FACTOR = Decimal("1.5")
+
+
 class Product(TimeStampedModel):
     """Prodotto a magazzino.
 
@@ -93,7 +99,7 @@ class Product(TimeStampedModel):
         """low se stock ≤ soglia, warning se ≤ soglia×1.5, altrimenti ok."""
         if self.stock_qty <= self.min_threshold:
             return "low"
-        if self.stock_qty <= self.min_threshold * Decimal("1.5"):
+        if self.stock_qty <= self.min_threshold * STOCK_WARNING_FACTOR:
             return "warning"
         return "ok"
 

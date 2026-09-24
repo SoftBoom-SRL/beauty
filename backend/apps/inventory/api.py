@@ -1,9 +1,6 @@
-from decimal import Decimal
 from typing import Optional
 
-from django.db import transaction
 from django.db.models import Case, F, IntegerField, ProtectedError, Q, Value, When
-from django.utils import timezone
 from django.utils.dateparse import parse_date
 from ninja import File, Form, Router
 from ninja.errors import HttpError
@@ -19,7 +16,7 @@ from common.utils import salon_get
 from common.validation import MAX_POSITIVE_SMALL_INT, validate_category_in
 
 from .csv_load import load_rows
-from .models import Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
+from .models import STOCK_WARNING_FACTOR, Product, ProductCategory, PurchaseOrder, StockMovement, Supplier
 from .schemas import (
     CategoryIn,
     CategoryOut,
@@ -38,7 +35,14 @@ from .schemas import (
     SupplierIn,
     SupplierOut,
 )
-from .services import MAX_LOAD_QTY, UNLOAD_KINDS, apply_movement, generate_draft_orders, receive_order
+from .orders import (
+    generate_draft_orders,
+    mark_order_sent,
+    receive_order,
+    supplier_order_payload,
+    update_draft_order,
+)
+from .services import MAX_LOAD_QTY, UNLOAD_KINDS, apply_movement, save_product
 
 router = Router(tags=["inventory"])
 
@@ -70,23 +74,7 @@ def _apply_product_payload(product: Product, ctx, data: ProductIn) -> Product:
     supplier = salon_get(Supplier, ctx, payload.pop("supplier_id"))
     category_id = payload.pop("category_id")
     category = salon_get(ProductCategory, ctx, category_id) if category_id else None
-    if payload["usage"] not in Product.Usage.values:
-        raise HttpError(400, "Tipo di utilizzo non valido")
-    for name, value in payload.items():
-        setattr(product, name, value)
-    product.supplier = supplier
-    product.category = category
-    if product.pk is None:
-        product.salon = ctx.salon
-        product.save()
-        return product
-    # In modifica si scrivono SOLO i campi anagrafici arrivati nel payload.
-    # `models.Product` dichiara che `stock_qty` non va mai scritta direttamente:
-    # un save() pieno la riportava al valore letto a inizio richiesta, e i
-    # movimenti registrati nel frattempo (una vendita al banco mentre si
-    # correggeva il prezzo) sparivano dalla giacenza pur restando nello storico.
-    product.save(update_fields=[*payload.keys(), "supplier", "category", "updated_at"])
-    return product
+    return save_product(product, ctx.salon, payload, supplier=supplier, category=category)
 
 
 def _invoice_upload_name(upload: UploadedFile) -> str:
@@ -138,10 +126,10 @@ def list_products(
     elif stock_state == "warning":
         qs = qs.filter(
             stock_qty__gt=F("min_threshold"),
-            stock_qty__lte=F("min_threshold") * Decimal("1.5"),
+            stock_qty__lte=F("min_threshold") * STOCK_WARNING_FACTOR,
         )
     elif stock_state == "ok":
-        qs = qs.filter(stock_qty__gt=F("min_threshold") * Decimal("1.5"))
+        qs = qs.filter(stock_qty__gt=F("min_threshold") * STOCK_WARNING_FACTOR)
     # default: prodotti sotto soglia prima. L'id in coda rende l'ordine univoco:
     # con due omonimi (marche diverse) a cavallo fra due pagine, LIMIT/OFFSET su
     # PostgreSQL poteva ripeterne uno e saltare l'altro (09-10).
@@ -498,29 +486,7 @@ def update_order(request, order_id: int, data: OrderUpdateIn):
     ctx = request.auth
     require_scope(ctx, "inventory")
     order = salon_get(PurchaseOrder, ctx, order_id)
-    # Tutto o niente: prima si risolvono TUTTE le righe, poi si scrive. Applicarle
-    # una per una lasciava l'ordine a metà quando l'ultima riga era sconosciuta —
-    # 404 al client, ma le quantità precedenti già cambiate a magazzino.
-    with transaction.atomic():
-        if (
-            PurchaseOrder.objects.select_for_update()
-            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
-            .first()
-            is None
-        ):
-            raise HttpError(400, "Solo le bozze d'ordine sono modificabili")
-        rows = []
-        for row in data.lines:
-            line = order.lines.filter(pk=row.id).first()
-            if line is None:
-                raise HttpError(404, "Riga d'ordine non trovata")
-            rows.append((line, row.qty_ordered))
-        for line, qty_ordered in rows:
-            if qty_ordered <= 0:
-                line.delete()
-            else:
-                line.qty_ordered = qty_ordered
-                line.save(update_fields=["qty_ordered"])
+    update_draft_order(order, data.lines)
     log_activity(
         ctx.salon,
         "order.updated",
@@ -539,50 +505,8 @@ def send_order(request, order_id: int, data: OrderSendIn):
     method = data.method or order.supplier.order_method
     if method not in Supplier.OrderMethod.values:
         raise HttpError(400, "Metodo d'invio non valido")
-    # Come in `receive_order`: lo stato si guarda sulla riga BLOCCATA e riletta,
-    # non sulla copia arrivata con la richiesta. Due schermate aperte sullo
-    # stesso ordine mandavano altrimenti due volte la stessa ordinazione al
-    # fornitore, che spediva la merce due volte.
-    with transaction.atomic():
-        locked = (
-            PurchaseOrder.objects.select_for_update()
-            .filter(pk=order.pk, status=PurchaseOrder.Status.DRAFT)
-            .first()
-        )
-        if locked is None:
-            raise HttpError(400, "L'ordine è già stato inviato")
-        order = locked
-        lines = list(order.lines.select_related("product"))
-        if not lines:
-            raise HttpError(400, "Impossibile inviare un ordine senza righe")
-        order.status = PurchaseOrder.Status.SENT
-        order.sent_method = method
-        order.sent_at = timezone.now()
-        order.save(update_fields=["status", "sent_method", "sent_at", "updated_at"])
-    emit_event(
-        ctx.salon,
-        "supplier.order",
-        {
-            "order_id": order.id,
-            "method": method,
-            "supplier": {
-                "id": order.supplier_id,
-                "name": order.supplier.name,
-                "email": order.supplier.email,
-                "phone": order.supplier.phone,
-            },
-            "lines": [
-                {
-                    "product_id": line.product_id,
-                    "name": line.product.name,
-                    "sku": line.product.sku,
-                    "qty": float(line.qty_ordered),
-                    "package_unit": line.product.package_unit,
-                }
-                for line in lines
-            ],
-        },
-    )
+    order, lines = mark_order_sent(order, method)
+    emit_event(ctx.salon, "supplier.order", supplier_order_payload(order, method, lines))
     log_activity(
         ctx.salon,
         "order.sent",
