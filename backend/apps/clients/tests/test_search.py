@@ -45,6 +45,34 @@ class ClientListTests(ClientsTestCase):
         self.assertNotIn(inactive.id, ids)
 
 
+class PhoneKeyOnNumbersTests(ClientsTestCase):
+    """Bug sospetti del 24/09, voce 20: la chiave telefonica si calcolava su
+    tutta la ricerca e andava in OR con il resto. Da «Anna 3» usciva la chiave
+    «3», e rispondeva ogni scheda con un 3 nel numero: tutti i cellulari
+    italiani (+39 3…). Aggiungendo una cifra al nome la lista si allargava
+    invece di restringersi."""
+
+    def setUp(self):
+        super().setUp()
+        self.anna = self.make_client(first_name="Anna", last_name="Rossi", phone="+393331112222")
+        self.sofia = self.make_client(first_name="Sofia", last_name="Bianchi", phone="+393339998888")
+        self.anna_uk = self.make_client(first_name="Anna", last_name="Smith", phone="+447911124567")
+
+    def found(self, q):
+        return {c.id for c in list_clients(self.request, q=q)["items"]}
+
+    def test_a_digit_after_the_name_narrows_the_list(self):
+        self.assertEqual(self.found("Anna 3"), {self.anna.id})
+
+    def test_a_formatted_number_after_the_name_still_needs_the_name(self):
+        self.assertEqual(self.found("Anna 333-111-2222"), {self.anna.id})
+        self.assertEqual(self.found("Sofia 333-111-2222"), set())
+
+    def test_a_search_made_only_of_a_number_finds_it_however_written(self):
+        for written in ("0039 333 111 2222", "333-111-2222", "(333) 111.22.22", "+39 333 1112222", "333 - 1112222"):
+            self.assertEqual(self.found(written), {self.anna.id}, written)
+
+
 class PhoneLookupTests(ClientsTestCase):
     """La ricerca per numero usa una colonna indicizzata, non una scansione."""
 

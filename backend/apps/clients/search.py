@@ -66,6 +66,11 @@ def _accent_insensitive(word: str) -> str:
     return "".join(parts)
 
 
+def _is_number(word: str) -> bool:
+    """La parola è (un pezzo di) un numero: niente lettere, solo cifre e simboli."""
+    return not any(ch.isalpha() for ch in word)
+
+
 def search_filter(q: str) -> Q:
     """Filtro della ricerca in anagrafica: nome completo e numero formattato.
 
@@ -77,20 +82,32 @@ def search_filter(q: str) -> Q:
     Ogni parola deve comparire da qualche parte nella scheda (AND fra le
     parole, OR fra i campi): «Sofia Ricci» trova solo Sofia Ricci, non tutte
     le Sofia. Nome e cognome si confrontano senza accenti né apostrofi
-    tipografici. Il numero si cerca sulla chiave normalizzata, la stessa che
-    riconosce la cliente al login.
+    tipografici. Il numero si cerca anche sulla chiave normalizzata, la stessa
+    che riconosce la cliente al login, calcolata sulle sole parole che sono
+    numeri: vale come alternativa per quelle parole, non per le altre.
     """
     words = [w for w in q.split() if w]
     condition = Q()
+    numbers = Q()
     for word in words:
         pattern = _accent_insensitive(word)
-        condition &= (
+        match = (
             Q(first_name__iregex=pattern)
             | Q(last_name__iregex=pattern)
             | Q(phone__icontains=word)
             | Q(email__icontains=word)
         )
-    key = phone_key(q)
+        if _is_number(word):
+            numbers &= match
+        else:
+            condition &= match
+    # La chiave si calcolava su tutta la ricerca e andava in OR con il resto:
+    # da «Anna 3» usciva la chiave «3», e rispondeva ogni scheda con un 3 nel
+    # numero, cioè tutti i cellulari italiani (+39 3…). Aggiungere una cifra al
+    # nome allargava la lista invece di restringerla (voce 20 dei bug sospetti
+    # del 24/09). Una ricerca fatta solo da un numero resta com'era: le parole
+    # sono tutte numeri, e la chiave è quella di tutta la ricerca.
+    key = phone_key(" ".join(w for w in words if _is_number(w)))
     if key:
-        condition |= Q(phone_key__contains=key)
-    return condition
+        numbers |= Q(phone_key__contains=key)
+    return condition & numbers
