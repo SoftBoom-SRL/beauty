@@ -1,7 +1,7 @@
 // Vista giorno (DayGrid.jsx vero, montato con test/grid-harness.mjs):
 // trascinamenti, ridimensionamenti, ombra e colore. Reperti della caccia ai
 // bug del 22/09/2026: 12-02, 12-03, 12-05, 12-06, 12-08, 12-14, 12-15, 12-16,
-// 12-18, 12-23.
+// 12-18, 12-23. Bug sospetti del 24/09/2026: n. 51 (rilascio su window).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -165,6 +165,36 @@ test('la rotella durante il trascinamento sposta l\'orario sotto il puntatore', 
   g.root().props.onPointerUp(ptr(300, 400));
   assert.deepEqual(g.cb.onMoveAppt.calls.map(([a, start, op]) => [a.id, start, op]), [[42, 16 * 60, 1]]);
   assert.deepEqual(g.cb.onOpenAppt.calls, [], 'non è un clic');
+});
+
+test('il rilascio arriva anche da window: il blocco non resta attaccato al puntatore', () => {
+  // dove la cattura del puntatore non c'è o si perde, il pointerup fuori dal
+  // contenitore lo sente solo window
+  const g = setup();
+  g.block(421).props.onDown(ptr(300, 400, { id: 1 }));
+  moveAll(g, 300, 481, 1);                        // +60': Sara alle 16:00
+  g.win.fire('pointerup', ptr(800, 700, { id: 2, primary: false }));
+  assert.equal(moves(g.cb), 0, 'il sollevamento di un secondo dito non rilascia');
+  g.win.fire('pointerup', ptr(300, 481, { id: 1 }));
+  assert.deepEqual(g.cb.onMoveAppt.calls.map(([a, start, op]) => [a.id, start, op]), [[42, 16 * 60, 1]]);
+  assert.equal(g.cb.onDragChange.calls.at(-1)?.[0], false, 'la striscia dei giorni torna normale');
+  // il rilascio sul contenitore sale fino a window: si sposta una volta sola
+  g.m.render();
+  g.block(421).props.onDown(ptr(300, 400));
+  moveAll(g, 300, 481);
+  g.root().props.onPointerUp(ptr(300, 481));
+  g.win.fire('pointerup', ptr(300, 481));
+  assert.equal(g.cb.onMoveAppt.calls.length, 2);
+});
+
+test('un pointercancel su window annulla il trascinamento', () => {
+  const g = setup();
+  g.block(421).props.onDown(ptr(300, 400));
+  moveAll(g, 300, 481);
+  g.win.fire('pointercancel', ptr(300, 481));
+  assert.equal(g.cb.onDragChange.calls.at(-1)?.[0], false, 'la striscia dei giorni torna normale');
+  g.root().props.onPointerUp(ptr(300, 481));
+  assert.equal(moves(g.cb), 0, 'dopo l\'annullamento il rilascio non sposta niente');
 });
 
 test('Esc durante il trascinamento lo annulla e lo dichiara (preventDefault)', () => {
