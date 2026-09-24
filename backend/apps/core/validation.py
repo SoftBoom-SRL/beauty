@@ -34,7 +34,9 @@ _SETTINGS_INT_RANGES = {
     # la cliente riceve quando non se lo aspetta più.
     "automation_delay_seconds": (0, 600),
 }
-_BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# `\Z` e non `$`: con `.match`, `$` accetta anche un a capo finale, e
+# «#AABBCC\n» arrivava a una colonna di sette caratteri (500 su PostgreSQL).
+_BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 MAX_OPENING_HOURS_CHARS = 500
 
 

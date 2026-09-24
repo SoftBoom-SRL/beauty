@@ -123,6 +123,18 @@ class SettingsApiTests(TestCase):
         self.assertEqual(saved.agenda_fill, "max_revenue")
         self.assertEqual(saved.flexible_reward_pct, 10)
 
+    def test_a_brand_colour_with_a_trailing_newline_is_refused(self):
+        """Bug sospetti del 24/09, voce 13: il colore si controllava con `$`.
+
+        Con `re.match`, `$` accetta anche un a capo finale: «#AABBCC\\n»
+        passava e arrivava a una colonna di sette caratteri, che PostgreSQL
+        rifiuta (500); su SQLite il colore con l'a capo restava salvato.
+        """
+        resp = self._put({"brand_color": "#AABBCC\n"})
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertEqual(SalonSettings.objects.get(salon=self.salon).brand_color, "#6366F1")
+        self.assertEqual(self._put({"brand_color": "#AABBCC"}).status_code, 200)
+
     def test_privacy_policy_url_must_be_a_real_address(self):
         # Il valore è reso come href nell'app pubblica delle clienti.
         self.assertEqual(self._put({"privacy_policy_url": "javascript:alert(1)"}).status_code, 400)
@@ -347,6 +359,37 @@ class LocationDefaultTests(TestCase):
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertFalse(Location.objects.get(pk=first["id"]).is_default)
         self.assertTrue(Location.objects.get(pk=second["id"]).is_default)
+
+    def test_the_admin_keeps_a_single_default_too(self):
+        """Bug sospetti del 24/09, voce 29: anche da /admin/ la sede predefinita resta una.
+
+        L'API toglie il segno alle altre sedi, il salvataggio dell'admin no:
+        segnando «predefinita» una seconda sede ne restavano due, e l'app
+        clienti continuava a lavorare sulla più vecchia.
+        """
+        from apps.accounts.models import User
+
+        from ..services import default_location
+
+        Location.objects.create(salon=self.salon, name="Centro", address="Via Roma 1", is_default=True)
+        second = Location.objects.create(salon=self.salon, name="Nuova sede", address="Via Milano 2")
+        self.client.force_login(User.objects.create_superuser(email="root@x.it", password="pw-lunga-123"))
+
+        def defaults():
+            return list(Location.objects.filter(salon=self.salon, is_default=True).values_list("name", flat=True))
+
+        form = {"salon": self.salon.pk, "address": "", "phone": "", "is_default": "on"}
+        resp = self.client.post(
+            f"/admin/core/location/{second.pk}/change/",
+            {**form, "name": "Nuova sede", "address": "Via Milano 2"},
+        )
+        self.assertEqual(resp.status_code, 302, resp.content)
+        self.assertEqual(defaults(), ["Nuova sede"])
+        self.assertEqual(default_location(self.salon), second)
+        # Lo stesso per una sede nuova.
+        resp = self.client.post("/admin/core/location/add/", {**form, "name": "Terza sede"})
+        self.assertEqual(resp.status_code, 302, resp.content)
+        self.assertEqual(defaults(), ["Terza sede"])
 
 
 class SettingsAuditExtrasTests(TestCase):

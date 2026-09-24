@@ -41,7 +41,9 @@ MAX_EARN_RATIO = Decimal("100")
 MAX_POINTS_EXPIRY_MONTHS = 120
 MAX_THRESHOLD = 1_000_000
 
-_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# `\Z` e non `$`: con `.match`, `$` accetta anche un a capo finale, e
+# «#AABBCC\n» arrivava a una colonna di sette caratteri (500 su PostgreSQL).
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 
 def _issue_reward(program, client):

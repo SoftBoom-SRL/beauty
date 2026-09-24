@@ -5,11 +5,11 @@ Salone, sede predefinita, impostazioni e ruoli di sistema. I comandi
 Parlour) li creavano ciascuno per conto proprio, nello stesso ordine: un
 oggetto aggiunto alla fondazione di un salone andava ricordato in due posti.
 
-Il titolare e la sua membership restano ai comandi, che li trattano in modo
+Il titolare e la sua membership restano a chi chiama, che li tratta in modo
 diverso (utente senza password utilizzabile, account demo con password
-stampata). L'accesso con Yourang crea il suo salone in
-`integrations.login._provision_salon`, senza passare di qui: niente ruoli di
-sistema.
+stampata, identità Yourang). Passa di qui anche l'accesso con Yourang
+(`integrations.login._provision_salon`): prima creava il salone per conto suo,
+e il salone nasceva senza ruoli di sistema.
 """
 
 from apps.core.models import Location, Salon, SalonSettings

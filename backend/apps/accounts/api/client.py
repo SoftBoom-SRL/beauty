@@ -27,9 +27,11 @@ from ..schemas import (
 )
 from ..services import issue_otp, verify_otp
 
-# Il nome è quello di quando gli endpoint stavano tutti in apps/accounts/api.py:
-# i test lo leggono con assertLogs, e cambiarlo cambierebbe anche i log.
-logger = logging.getLogger("apps.accounts.api")
+# Sotto «youty», come gli altri logger del progetto: la configurazione
+# (LOGGING) stampa gli INFO solo lì. Col nome di prima, «apps.accounts.api», le
+# righe passavano dalla radice, che è a WARNING, e gli INFO (per esempio
+# «codice non inviato») non comparivano mai.
+logger = logging.getLogger("youty.accounts")
 
 router = Router()
 

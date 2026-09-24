@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from ninja import Schema
+from ninja import Field, Schema
 
 from .codes import code_for, effective_status
 
@@ -58,7 +58,10 @@ class GiftCardIn(Schema):
     recipient_client_id: Optional[int] = None
     recipient_name: str = ""
     paid: bool = False
-    paid_method: str = ""
+    # Non più lungo della colonna `GiftCard.paid_method`: un metodo più lungo
+    # arrivava al database e PostgreSQL rifiutava la riga (500). Il valore lo
+    # controlla `gift_cards` sulle scelte della cassa.
+    paid_method: str = Field("", max_length=20)
     delivery_date: Optional[date] = None
     expires_at: Optional[datetime] = None
 
@@ -113,7 +116,7 @@ class GiftCardListOut(Schema):
 
 
 class MarkPaidIn(Schema):
-    method: str
+    method: str = Field(max_length=20)  # come GiftCardIn.paid_method
 
 
 # ---- Fedeltà -----------------------------------------------------------------

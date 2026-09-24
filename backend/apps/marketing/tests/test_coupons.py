@@ -218,6 +218,41 @@ class CouponApiTests(OwnerTestBase):
         # intestata alla sua cliente passa
         self.assertEqual(validate_coupon(self.salon, "SOLOANNA", client=owner).code, "SOLOANNA")
 
+    def test_a_named_coupon_is_not_tied_to_the_sale_of_another_client(self):
+        """Bug sospetti del 24/09, voce 11: il riscatto manuale guarda la cliente della vendita.
+
+        La cassa rifiuta il buono intestato a un'altra (`validate_coupon`), il
+        riscatto manuale con `sale_id` no: il buono di Maria risultava usato
+        nella vendita di Anna, e lo storico del buono e quello della vendita
+        non tornavano più.
+        """
+        from apps.sales.models import Sale
+
+        maria = _make_client(self.salon, first_name="Maria", phone="+393330002222")
+        anna = _make_client(self.salon, first_name="Anna", phone="+393330001111")
+        coupon = Coupon.objects.create(
+            salon=self.salon, client=maria, code="SOLOMARIA", kind=Coupon.Kind.AMOUNT, value=Decimal("10")
+        )
+        url = f"/api/marketing/coupons/{coupon.id}/redeem"
+
+        def redeem(sale):
+            return self.client.post(
+                url, data=json.dumps({"sale_id": sale.id}), content_type="application/json", **self.auth
+            )
+
+        of_anna = Sale.objects.create(salon=self.salon, kind="pos", client=anna, total=Decimal("45"))
+        res = redeem(of_anna)
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(res.json()["detail"], "Coupon riservato a un altro cliente: intestalo alla vendita")
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.status, coupon.sale_id), (Coupon.Status.ACTIVE, None))
+        # la vendita della sua cliente va bene
+        of_maria = Sale.objects.create(salon=self.salon, kind="pos", client=maria, total=Decimal("45"))
+        res = redeem(of_maria)
+        self.assertEqual(res.status_code, 200, res.content)
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.status, coupon.sale_id), (Coupon.Status.REDEEMED, of_maria.id))
+
 
 class CouponUpdateRaceTests(GiftCardTestBase):
     """07-11 + 18-07: la modifica non resuscita un coupon consumato nel frattempo."""

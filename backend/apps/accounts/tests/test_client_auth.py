@@ -249,6 +249,21 @@ class ClientOTPSecurityTests(TestCase):
         self.assertEqual(self._request_otp("+393331234567").status_code, 200)
         self.assertEqual(ClientOTP.objects.filter(client=self.client_obj, used=False).count(), 0)
 
+    def test_a_code_withheld_by_the_client_cap_shows_up_in_the_logs(self):
+        """Bug sospetti del 24/09, voce 17: la riga INFO «codice non inviato» esce nei log.
+
+        La configurazione (LOGGING) stampa gli INFO solo sotto «youty». Il
+        logger dell'API account si chiamava «apps.accounts.api»: passava dalla
+        radice, che è a WARNING, e della cliente fermata dal suo tetto non
+        restava nessuna traccia.
+        """
+        for _ in range(5):
+            self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+            ClientOTP.objects.filter(client=self.client_obj).update(used=True)
+        with self.assertLogs("youty", level="INFO") as logs:
+            self.assertEqual(self._request_otp("+393331234567").status_code, 200)
+        self.assertTrue(any("codice non inviato" in line for line in logs.output), logs.output)
+
     def test_a_request_for_an_unknown_number_is_indistinguishable(self):
         """S4: la rubrica clienti non si ricava dalle risposte dell'endpoint."""
         conosciuto = self._request_otp("+393331234567")
@@ -365,7 +380,7 @@ class OtpSalonCapTests(TestCase):
     def test_many_requests_are_still_reported(self):
         from ..api.client import OTP_ALERT_PER_SALON
 
-        with self.assertLogs("apps.accounts.api", level="WARNING") as logs:
+        with self.assertLogs("youty.accounts", level="WARNING") as logs:
             for i in range(OTP_ALERT_PER_SALON + 1):
                 self._otp(f"+39333{i:07d}", f"203.0.113.{i % 5 + 1}")
         self.assertTrue(any("molte richieste" in line for line in logs.output), logs.output)

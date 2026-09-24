@@ -12,7 +12,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from common.conditions import evaluate
-from common.testing import bearer
+from common.testing import bearer, post_json
 
 from .. import views
 from ..models import ActivityLog, Salon, SalonSettings
@@ -204,6 +204,44 @@ class ActivityFeedApiTests(TestCase):
         log_activity(self.salon, "settings.updated", "Impostazioni")
         data = self.client.get(f"/api/core/activity/feed?after={start}", **auth).json()
         self.assertEqual([e["type"] for e in data["events"]], ["sale.created", "settings.updated"])
+
+    def test_loyalty_program_changes_reach_marketing(self):
+        """Bug sospetti del 24/09, voce 9: le modifiche ai programmi fedeltà arrivano dal vivo.
+
+        Gli eventi si chiamano `loyalty_program.*`, che non comincia con
+        `loyalty.`: un programma creato o eliminato su una postazione restava
+        com'era sulle altre (il Wallet della scheda cliente) fino al
+        ricaricamento della pagina.
+        """
+        from apps.accounts.models import Membership, Role, User
+        from apps.core.views import event_generator
+
+        user = User.objects.create_user(email="promo@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Promozioni", scopes=["marketing"])
+        Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=False)
+        marketing = bearer(user, self.salon)
+        # Con il cursore a zero lo stream partirebbe da adesso, senza storico.
+        log_activity(self.salon, "appointment.created", "Punto di partenza")
+        start = self.client.get("/api/core/activity/feed", **marketing).json()["cursor"]
+        created = post_json(self.client, "/api/marketing/loyalty-programs", {
+            "name": "Fedeltà", "threshold": 10, "reward_type": "coupon_amount", "reward_value": "10",
+        }, **marketing)
+        self.assertEqual(created.status_code, 200, created.content)
+        deleted = self.client.delete(f"/api/marketing/loyalty-programs/{created.json()['id']}", **marketing)
+        self.assertEqual(deleted.status_code, 200, deleted.content)
+
+        expected = ["loyalty_program.created", "loyalty_program.deleted"]
+        polled = self.client.get(f"/api/core/activity/feed?after={start}", **marketing).json()
+        self.assertEqual([e["type"] for e in polled["events"]], expected)
+        frames = list(
+            event_generator(self.salon.id, start, scopes={"marketing"}, max_seconds=0.05, poll=0)
+        )
+        streamed = [f for f in frames if "event: events" in f]
+        self.assertTrue(streamed, frames)
+        body = json.loads(streamed[0].split("data: ", 1)[1])
+        self.assertEqual([e["type"] for e in body["events"]], expected)
+        # Lo stesso permesso di `loyalty.`: chi ha solo l'agenda non li riceve.
+        self.assertEqual(self._feed(after=start)["events"], [])
 
 
 class ActivityStreamTests(TestCase):

@@ -24,7 +24,7 @@ import logging
 from django.utils import timezone
 from ninja.errors import HttpError
 
-from .models import ActivityLog, OutboxEvent, Salon, SalonSettings
+from .models import ActivityLog, Location, OutboxEvent, Salon, SalonSettings
 
 logger = logging.getLogger("youty.events")
 
@@ -249,3 +249,17 @@ def default_location(salon):
     pigro, e il branding pubblico ne aveva una copia.
     """
     return salon.locations.filter(is_default=True).first() or salon.locations.first()
+
+
+def make_only_default_location(salon, location) -> None:
+    """La sede predefinita è UNA: le altre vanno azzerate nella stessa transazione.
+
+    Chi legge fa `filter(is_default=True).first()` (`default_location`), che
+    senza ordinamento esplicito restituisce la più vecchia: marcandone una
+    seconda, la scelta del titolare veniva ignorata e dall'interfaccia non c'era
+    modo di correggerla. La chiamano l'API delle sedi e l'admin: stava in
+    core/api.py, e il salvataggio da /admin/ ne restava senza.
+    """
+    Location.objects.filter(salon=salon, is_default=True).exclude(pk=location.pk).update(
+        is_default=False
+    )

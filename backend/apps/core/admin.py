@@ -1,9 +1,10 @@
 from django import forms
 from django.contrib import admin
+from django.db import transaction
 from unfold.admin import ModelAdmin
 
 from .models import ActivityLog, DepositRule, Location, OutboxEvent, Salon, SalonSettings
-from .services import normalize_opening_hours_week, opening_hours_text
+from .services import make_only_default_location, normalize_opening_hours_week, opening_hours_text
 
 
 @admin.register(Salon)
@@ -18,6 +19,15 @@ class SalonAdmin(ModelAdmin):
 class LocationAdmin(ModelAdmin):
     list_display = ("name", "salon", "is_default")
     list_filter = ("salon",)
+
+    def save_model(self, request, obj, form, change):
+        # La sede predefinita è una sola anche da qui, come dall'API: segnando
+        # «predefinita» una seconda sede ne restavano due, e l'app clienti
+        # continuava a lavorare sulla più vecchia (vedi `default_location`).
+        with transaction.atomic():
+            super().save_model(request, obj, form, change)
+            if obj.is_default:
+                make_only_default_location(obj.salon, obj)
 
 
 class SalonSettingsAdminForm(forms.ModelForm):

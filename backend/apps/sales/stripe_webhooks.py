@@ -10,6 +10,8 @@ arrivato in più stanno in deposits.py. Stava tutto dentro api.py.
 
 import logging
 
+from django.db import transaction
+
 from apps.agenda.models import Appointment
 from apps.clients.models import Client
 from apps.core.models import ActivityLog, Salon
@@ -224,37 +226,49 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
             intent_id, metadata.get("appointment_id"), account,
         )
         return
-    if ActivityLog.objects.filter(
-        salon=salon, type="deposit.orphan_payment", payload__payment_intent_id=intent_id
-    ).exists():
-        return  # stesso pagamento già trattato (Stripe manda intent e sessione)
-    refund = stripe_service.refund_payment_intent(
-        salon,
-        intent_id,
-        idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
-        account=account or "",
-    )
-    status = (refund or {}).get("status") or ""
-    if refund is None:
-        outcome = "da rimborsare a mano su Stripe"
-    elif status in ("pending", "requires_action"):
-        outcome = "rimborso in corso"
-    else:
-        outcome = "rimborsata"
-    cents = deposits.amount_received(obj) or 0
-    log_activity(
-        salon,
-        "deposit.orphan_payment",
-        f"Caparra pagata per un appuntamento che non esiste più: {outcome}",
-        payload={
-            "appointment_id": metadata.get("appointment_id"),
-            "payment_intent_id": intent_id,
-            "amount_cents": int(cents),
-            "refund_id": (refund or {}).get("id", ""),
-            "refund_status": status,
-            "account": account or "",
-        },
-    )
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    # Controllo, rimborso e riga sotto il lock del salone. Stripe manda
+    # `payment_intent.succeeded` e `checkout.session.completed` quasi insieme:
+    # senza lock passavano tutte e due il controllo e le righe erano due, e la
+    # seconda poteva dire «da rimborsare a mano» se Stripe le rifiutava la
+    # chiave ancora in uso dalla prima. Ora la seconda aspetta, trova la riga
+    # ed esce senza chiamare Stripe. Il rimborso sta dentro il lock perché la
+    # riga deve dire com'è andato: l'agenda del salone aspetta una chiamata a
+    # Stripe, ma solo per un pagamento orfano, che è raro.
+    with transaction.atomic():
+        lock_salon(salon)
+        if ActivityLog.objects.filter(
+            salon=salon, type="deposit.orphan_payment", payload__payment_intent_id=intent_id
+        ).exists():
+            return  # stesso pagamento già trattato (Stripe manda intent e sessione)
+        refund = stripe_service.refund_payment_intent(
+            salon,
+            intent_id,
+            idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
+            account=account or "",
+        )
+        status = (refund or {}).get("status") or ""
+        if refund is None:
+            outcome = "da rimborsare a mano su Stripe"
+        elif status in ("pending", "requires_action"):
+            outcome = "rimborso in corso"
+        else:
+            outcome = "rimborsata"
+        cents = deposits.amount_received(obj) or 0
+        log_activity(
+            salon,
+            "deposit.orphan_payment",
+            f"Caparra pagata per un appuntamento che non esiste più: {outcome}",
+            payload={
+                "appointment_id": metadata.get("appointment_id"),
+                "payment_intent_id": intent_id,
+                "amount_cents": int(cents),
+                "refund_id": (refund or {}).get("id", ""),
+                "refund_status": status,
+                "account": account or "",
+            },
+        )
 
 
 # ---- Rimborsi ------------------------------------------------------------------
@@ -329,7 +343,12 @@ def on_setup_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
         if salon_id:
             clients = clients.filter(salon_id=salon_id)
         client = clients.filter(pk=client_id).first()
-        if client and stripe_service.salon_account_id(client.salon) != account:
+        # L'account si riconosce come per i pagamenti: quello di oggi del
+        # salone o quello firmato nei metadata alla creazione. Col solo
+        # confronto con quello di oggi, la carta salvata mentre il titolare
+        # collegava Stripe veniva scartata: la cliente credeva di averla
+        # salvata e il salone non poteva addebitarle un no-show.
+        if client and not _salon_account_recognised(client.salon, account, metadata):
             logger.warning(
                 "setup_intent.succeeded ignorato: account %r non è quello del salone %s",
                 account, client.salon_id,
