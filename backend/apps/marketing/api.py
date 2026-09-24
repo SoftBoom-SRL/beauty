@@ -25,6 +25,7 @@ from .communications import (
     send_communication,
     settle_due_communications,
 )
+from .consent import record_marketing_consent
 from .coupons import validate_coupon_value
 from .gift_cards import (
     CLIENT_GIFT_CARD_MAX,
@@ -56,7 +57,6 @@ from .schemas import (
     MarkPaidIn,
     WalletOut,
 )
-from .services import marketing_consent_changed
 
 router = Router(tags=["marketing"])
 
@@ -657,30 +657,5 @@ def client_set_marketing_consent(request, data: MarketingConsentIn):
     `send_communication` risolve i destinatari su `consents.marketing=True`
     l'invio successivo la salta senza altre modifiche.
     """
-    client = request.auth.client
-    now = timezone.now().isoformat()
-    consents = dict(client.consents or {})
-    was_accepted = bool(consents.get("marketing"))
-    consents["marketing"] = bool(data.accepted)
-    # Si tiene traccia di QUANDO: il consenso va dimostrato, e la revoca pure.
-    if data.accepted:
-        consents["marketing_at"] = now
-        consents.pop("marketing_revoked_at", None)
-    else:
-        consents["marketing_revoked_at"] = now
-        consents["marketing_at"] = ""
-    client.consents = consents
-    client.save(update_fields=["consents"])
-    # La revoca vale anche per le campagne già programmate o in coda (07-03):
-    # si ripete a ogni revoca, perché la cliente può essere finita in un invio
-    # anche quando il consenso era stato tolto da un'altra parte.
-    if not data.accepted or not was_accepted:
-        marketing_consent_changed(client, bool(data.accepted))
-    log_activity(
-        request.auth.salon,
-        "client.consent_updated",
-        f"{client.full_name}: consenso marketing "
-        + ("concesso" if data.accepted else "revocato"),
-        payload={"client_id": client.id, "marketing": bool(data.accepted)},
-    )
+    record_marketing_consent(request.auth.salon, request.auth.client, data.accepted)
     return OkOut()
