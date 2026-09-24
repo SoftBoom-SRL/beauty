@@ -3,11 +3,12 @@
 // scarico → POST /products/{id}/unload (qty, kind ∈ internal_use/adjustment/transfer, reason)
 // 422 "Giacenza insufficiente" → toast.
 import React, { useState } from 'react';
-import { api, Icon, Avatar } from '@youty/shared';
+import { Icon, Avatar, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { errMsg, fmtQty, num } from './lib.js';
+import { fmtQty, num } from './lib.js';
 import { NumBox } from './bits.jsx';
+import { productsApi } from '../../api/inventory.js';
 
 const CARICO_REASONS = [
   { it: 'Carico merce', en: 'Restock' },
@@ -47,17 +48,17 @@ export default function AdjModal({ prod, type, onClose, onDone }) {
     setBusy(true);
     try {
       if (isScarico) {
-        await api.post(`/api/inventory/products/${prod.id}/unload`, { qty, kind: reason.kind, reason: reason[lang], operator_id: opId });
+        await productsApi.unload(prod.id, { qty, kind: reason.kind, reason: reason[lang], operator_id: opId });
       } else {
         const form = { qty, reason: reason[lang] };
         if (file) form.invoice = file;
-        await api.postForm(`/api/inventory/products/${prod.id}/load`, form);
+        await productsApi.load(prod.id, form);
       }
       fireToast({ msg: t('Movimento registrato', 'Movement recorded'), icon: 'check' });
       onDone();
       onClose();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' }); // 422 → "Giacenza insufficiente"
+      toastApiError(err, fireToast, t); // 422 → "Giacenza insufficiente"
     } finally {
       setBusy(false);
     }

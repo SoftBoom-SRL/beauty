@@ -1,13 +1,11 @@
 // PkgEditModal.jsx — create / edit a package (POST/PUT /api/catalog/packages).
 // items = [{service_id, qty}] picked from the service catalog; savings preview.
 import React, { useState } from 'react';
-import { Icon, Toggle, fmtEur, EmptyState } from '@youty/shared';
+import { Icon, Toggle, fmtEur, EmptyState, nameIn } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { FRow, PriceBox } from './parts.jsx';
 
-function svcName(s, lang) {
-  return lang === 'en' && s.name_en ? s.name_en : s.name_it;
-}
+const svcName = nameIn;
 
 export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose, t, lang }) {
   const isNew = !pkg?.id;

@@ -3,7 +3,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { relMeta, MONTHS_IT, MONTHS_EN, parseBirthday, birthdayEdit, daysInMonth as daysIn } from './helpers.js';
-import GenderPickerUi from '../../ui/GenderPicker.jsx';
 
 /* Reliability ring (ported RelRing). */
 export function RelRing({ score, color, size = 46 }) {
@@ -99,8 +98,8 @@ export function Field({ label, hint, children }) {
   );
 }
 
-/* Genere: pillole a scelta singola (componente condiviso in ui/). */
-export function GenderPicker(props) { return <GenderPickerUi {...props} />; }
+/* Genere: pillole a scelta singola (il componente vive in ui/). */
+export { default as GenderPicker } from '../../ui/GenderPicker.jsx';
 
 /* Compleanno: giorno + mese obbligatori insieme, anno facoltativo.
  * value: 'YYYY-MM-DD' | '--MM-DD' | ''  →  onChange(stringa API).

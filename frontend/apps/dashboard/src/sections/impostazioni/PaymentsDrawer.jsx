@@ -4,11 +4,15 @@
 // caparra non è arrivata, e quando parte il sollecito. Le regole di CHI paga
 // la caparra restano in Prenotazioni & ottimizzazione → Regole deposito.
 import { useEffect, useState } from 'react';
-import { api, ApiError, Icon, NumInput } from '@youty/shared';
+import { Icon, NumInput, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { toastErr, LockNote } from './lib.jsx';
+import { LockNote } from './lib.jsx';
+import { settingsApi } from '../../api/core.js';
+import { stripeConnectApi } from '../../api/sales.js';
+import { STRIPE_MSG, openStripePopup, usePopupMessage } from '../../oauth/popup.js';
 
 const HOLD_PRESETS = [0, 15, 20, 30, 60, 120];
 
@@ -24,34 +28,29 @@ export default function PaymentsDrawer({ onClose }) {
   // pagate dal link finivano sull'account della piattaforma. Ora si chiede.
   const [confirmOff, setConfirmOff] = useState(false);
 
-  const loadStripe = () => api.get('/api/sales/stripe/connect/status').then(setStripe).catch(() => setStripe(null));
+  const loadStripe = () => stripeConnectApi.status().then(setStripe).catch(() => setStripe(null));
   useEffect(() => { loadStripe(); }, []);
 
   // il popup /stripe-connect/done avvisa con postMessage quando ha scambiato il code
-  useEffect(() => {
-    const onMsg = (e) => {
-      if (e.origin !== window.location.origin || e.data?.type !== 'stripe-connect') return;
-      if (e.data.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
-      else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (e.data.error ? ': ' + e.data.error : ''), icon: 'alert' });
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  usePopupMessage(STRIPE_MSG, (m) => {
+    if (m.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
+    else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (m.error ? ': ' + m.error : ''), icon: 'alert' });
+  }, []);
 
   const connect = () => {
-    const popup = window.open('/stripe-connect/start', 'stripe-connect', 'width=620,height=760');
+    const popup = openStripePopup();
     if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
   };
   const disconnect = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.del('/api/sales/stripe/connect');
+      const res = await stripeConnectApi.disconnect();
       setStripe(res);
       setConfirmOff(false);
       reload.salon().catch(() => {});
       fireToast({ msg: t('Account Stripe scollegato', 'Stripe account disconnected'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setBusy(false); }
   };
 
@@ -60,12 +59,12 @@ export default function PaymentsDrawer({ onClose }) {
     if (hold > 0 && reminder >= hold) { fireToast({ msg: t('Il sollecito deve precedere la scadenza', 'The reminder must come before the deadline'), icon: 'alert' }); return; }
     setSaving(true);
     try {
-      await api.put('/api/core/settings', { deposit_hold_minutes: hold, deposit_reminder_minutes: hold > 0 ? reminder : 0 });
+      await settingsApi.update({ deposit_hold_minutes: hold, deposit_reminder_minutes: hold > 0 ? reminder : 0 });
       await reload.salon();
       fireToast({ msg: t('Impostazioni salvate', 'Settings saved'), icon: 'check' });
       onClose();
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' }); else toastErr(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 
@@ -74,13 +73,8 @@ export default function PaymentsDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div className="dk-modalhead">
-        <div style={{ flex: 1 }}>
-          <div className="t-title" style={{ fontSize: 20 }}>{t('Pagamenti & caparre', 'Payments & deposits')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('Account Stripe del salone e scadenza della caparra', 'The salon Stripe account and the deposit deadline')}</div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose} aria-label={t('Chiudi', 'Close')} style={{ width: 36, height: 36 }}><Icon name="x" size={17} /></button>
-      </div>
+      <DrawerHead variant="modal" onClose={onClose} closeLabel={t('Chiudi', 'Close')} title={t('Pagamenti & caparre', 'Payments & deposits')}
+        sub={t('Account Stripe del salone e scadenza della caparra', 'The salon Stripe account and the deposit deadline')} />
       <div className="dk-modalbody" style={{ padding: '0 22px 22px' }}>
         {!isOwner && <div style={{ marginBottom: 14 }}><LockNote t={t} msg={t('Solo il titolare può collegare Stripe e cambiare la scadenza della caparra.', 'Only the owner can connect Stripe and change the deposit deadline.')} /></div>}
 

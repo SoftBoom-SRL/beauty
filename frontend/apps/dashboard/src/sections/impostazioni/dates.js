@@ -1,11 +1,7 @@
 // dates.js — date e ore delle Impostazioni, sempre sull'orologio del SALONE
 // (logica pura, provata con node --test).
-import { addDays, fmtTime, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, addDays, fmtTime, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 
-const MONTHS = {
-  it: ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'],
-  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-};
 const pad2 = (n) => String(n).padStart(2, '0');
 
 /** "YYYY-MM-DD" del salone, `n` giorni prima di `today` (aritmetica di calendario). */
@@ -26,6 +22,6 @@ export function logDateLabel(iso, lang, today = todayStr()) {
   const hm = fmtTime(iso);
   if (day === today) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (day === salonDaysAgo(1, today)) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
-  const months = MONTHS[lang === 'en' ? 'en' : 'it'];
+  const months = lang === 'en' ? MONTHS_SHORT_EN : MONTHS_SHORT_IT;
   return p.day + ' ' + months[p.month - 1] + ' ' + p.year + ' · ' + hm;
 }

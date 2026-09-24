@@ -2,13 +2,17 @@
 // filterable, paginated client list (left) and full client profile (right).
 // Ported from desktop-clienti.jsx (DkClienti) onto the real API.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, Avatar, EmptyState, Icon } from '@youty/shared';
+import { Avatar, EmptyState, Icon, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
 import { initialsOf, relRange, daysToBirthday, reactivationRequests } from './helpers.js';
 import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
+import { clientsApi } from '../../api/clients.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
+import { useOnModalClosed } from '../../hooks/useOnModalClosed.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const PAGE = 50;
 
@@ -28,11 +32,7 @@ export default function ClientiSection() {
   useLive(/^client\.(created|updated|deleted|imported)$|^client_category\./, bump);
 
   /* debounce the shared topbar search before hitting the API */
-  const [q, setQ] = useState(search);
-  useEffect(() => {
-    const tm = setTimeout(() => setQ(search), 250);
-    return () => clearTimeout(tm);
-  }, [search]);
+  const q = useDebounced(search, 250);
 
   const listParams = useMemo(() => ({
     q: q.trim() || undefined,
@@ -52,17 +52,17 @@ export default function ClientiSection() {
   const requests = useMemo(() => reactivationRequests(live?.events, dismissed), [live?.events, dismissed]);
 
   /* ---- client list (server-side filters, {items,count} pagination) ----
-   * `reqSeq` è il biglietto della richiesta in corso: ogni fetch (prima pagina
-   * o «Carica altre») lo incrementa e scarta la propria risposta se nel
-   * frattempo ne è partita un'altra. Senza, premendo «Carica altre» e
+   * `req` è il biglietto della richiesta in corso (useLatestRequest): ogni
+   * fetch (prima pagina o «Carica altre») ne prende uno e scarta la propria
+   * risposta se nel frattempo ne è partita un'altra. Senza, premendo «Carica altre» e
    * cambiando subito filtro le 50 clienti del filtro precedente finivano in
    * coda alla lista nuova, con il conteggio in testata che non tornava. */
-  const reqSeq = useRef(0);
+  const req = useLatestRequest();
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const shownParams = useRef(null);
   useEffect(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     // Filtro o ricerca cambiati: da capo. Un aggiornamento (evento dal vivo,
     // salvataggio in scheda) ricarica in silenzio le righe già scorse: prima
     // la lista si svuotava e tornava ai primi 50, in cima, e chi scorreva
@@ -72,26 +72,26 @@ export default function ClientiSection() {
     shownParams.current = listParams;
     const loaded = fresh ? 0 : (itemsRef.current?.length || 0);
     if (fresh) setItems(null);
-    api.get('/api/clients/', { params: { ...listParams, limit: Math.max(PAGE, loaded), offset: 0 } })
-      .then((res) => { if (seq === reqSeq.current) { setItems(res.items); setCount(res.count); } })
+    clientsApi.list({ ...listParams, limit: Math.max(PAGE, loaded), offset: 0 })
+      .then((res) => { if (req.isLatest(seq)) { setItems(res.items); setCount(res.count); } })
       .catch((err) => {
-        if (seq !== reqSeq.current || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
+        if (!req.isLatest(seq) || !fresh) return;   // un aggiornamento fallito lascia la lista com'è
         setItems([]); setCount(0);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       });
   }, [listParams, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoadingMore(true);
     try {
-      const res = await api.get('/api/clients/', { params: { ...listParams, limit: PAGE, offset: items.length } });
-      if (seq !== reqSeq.current) return;
+      const res = await clientsApi.list({ ...listParams, limit: PAGE, offset: items.length });
+      if (!req.isLatest(seq)) return;
       setItems((l) => [...l, ...res.items]);
       setCount(res.count);
     } catch (err) {
-      if (seq !== reqSeq.current) return;
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      if (!req.isLatest(seq)) return;
+      toastApiError(err, fireToast, t);
     } finally { setLoadingMore(false); }
   };
 
@@ -103,19 +103,14 @@ export default function ClientiSection() {
   useEffect(() => {
     let dead = false;
     const cards = [{ key: '__active', params: {} }, ...clientCategories.map((c) => ({ key: c.id, params: { category_id: c.id } }))];
-    Promise.all(cards.map((c) => api.get('/api/clients/', { params: { ...c.params, is_active: true, limit: 1 } }).then((r) => [c.key, r.count]).catch(() => [c.key, null])))
+    Promise.all(cards.map((c) => clientsApi.list({ ...c.params, is_active: true, limit: 1 }).then((r) => [c.key, r.count]).catch(() => [c.key, null])))
       .then((pairs) => { if (!dead) setCatCounts(Object.fromEntries(pairs)); });
     return () => { dead = true; };
   }, [clientCategories, refreshKey]);
 
   /* ---- refetch after globally-hosted clienti modals close (topbar "Nuova",
    * bulk import) — mutations happen inside the modal components. ---- */
-  const prevModal = useRef(null);
-  useEffect(() => {
-    const prev = prevModal.current;
-    prevModal.current = modal;
-    if (prev && !modal && ['newclient', 'bulkimport'].includes(prev.name)) bump();
-  }, [modal, bump]);
+  useOnModalClosed(modal, ['newclient', 'bulkimport'], bump);
 
   const segOpts = [
     ['all', t('Tutti', 'All')],

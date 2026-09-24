@@ -3,11 +3,12 @@
 // the others are created when a supplier is set). Shows the per-row results/errors
 // returned by the API.
 import React, { useMemo, useState } from 'react';
-import { api, EmptyState, Icon } from '@youty/shared';
+import { EmptyState, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { DkModal } from '../../ui/index.js';
-import { errMsg, fmtQty, matchRestockKey, num, parseRestockCsv, restockRowsBody } from './lib.js';
+import { fmtQty, matchRestockKey, num, parseRestockCsv, restockRowsBody } from './lib.js';
 import { NumBox, inputCss } from './bits.jsx';
+import { productsApi } from '../../api/inventory.js';
 
 let keySeq = 0;
 const nextKey = () => 'k' + (keySeq++) + '_' + Date.now();
@@ -68,7 +69,7 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
         rows: restockRowsBody(validLines),
         supplier_id: supplierId ? Number(supplierId) : null,
       };
-      const res = await api.post('/api/inventory/load-csv', body);
+      const res = await productsApi.loadCsv(body);
       setResults(res);
       const itMsg = `Carico registrato · ${res.loaded} righe` +
         (res.created ? ` · ${res.created} ${res.created === 1 ? 'nuovo prodotto' : 'nuovi prodotti'}` : '') +
@@ -79,7 +80,7 @@ export default function RestockModal({ allProds, suppliers, onClose, onDone }) {
       fireToast({ msg: t(itMsg, enMsg), icon: res.errors ? 'alert' : 'check' });
       onDone();
     } catch (err) {
-      fireToast({ msg: errMsg(err, t), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setBusy(false);
     }

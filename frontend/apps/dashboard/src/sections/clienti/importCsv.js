@@ -9,7 +9,6 @@ import { todayStr } from '@youty/shared';
  * passo 1, che caricando un file si salta: nomi e note entravano rovinati
  * senza una parola (14-08). Ora «automatica» prova UTF-8 in modo rigoroso e,
  * se il file non lo è, lo rilegge come Windows-1252. */
-export const ENCODINGS = ['auto', 'utf-8', 'windows-1252', 'iso-8859-1'];
 
 /** byte del file → { text, encoding } (encoding = quella usata davvero). */
 export function decodeCsvBytes(bytes, enc = 'auto') {
@@ -61,11 +60,6 @@ export function parseCsvLines(text, delim) {
   }
   if (cell !== '' || row.length) push();
   return out.filter((r) => r.cells.some((c) => c));
-}
-
-/** Come parseCsvLines, solo le celle. → string[][] */
-export function parseCsv(text, delim) {
-  return parseCsvLines(text, delim).map((r) => r.cells);
 }
 
 /* ---------- campi e riconoscimento ---------- */

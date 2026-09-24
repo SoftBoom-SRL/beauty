@@ -3,11 +3,14 @@
 // `type` filter is a startswith prefix server-side → chips are type prefixes.
 // The prototype's per-author filter has no API param → dropped (q searches the summary).
 // Scope 'activity_log' (owner bypasses).
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, Icon, todayStr } from '@youty/shared';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Icon, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 import { logDateLabel, salonDaysAgo } from './dates.js';
+import { activityApi } from '../../api/core.js';
+import { useDebounced } from '../../hooks/useDebounced.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const PAGE = 50;
 
@@ -54,7 +57,6 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const canLog = hasScope('activity_log');
 
   const [q, setQ] = useState('');
-  const [qDeb, setQDeb] = useState('');
   const [filt, setFilt] = useState('');            // type prefix, '' = all
   const [period, setPeriod] = useState(initialPeriod || 'all');
   // periodi contati dal giorno del salone, come il filtro «Oggi» sul server
@@ -65,7 +67,7 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
   const [loadingMore, setLoadingMore] = useState(false);
 
   // debounce search
-  useEffect(() => { const h = setTimeout(() => setQDeb(q), 300); return () => clearTimeout(h); }, [q]);
+  const qDeb = useDebounced(q, 300);
 
   const dateRange = useCallback(() => {
     const today = todayStr();
@@ -77,22 +79,22 @@ export default function ActivityLogPage({ onBack, initialPeriod }) {
     return {};
   }, [period, from, to]);
 
-  const seq = useRef(0);
+  const req = useLatestRequest();
   const load = useCallback(async (offset = 0) => {
-    const mySeq = ++seq.current;
+    const mySeq = req.begin();
     if (offset === 0) setItems(null); else setLoadingMore(true);
     try {
       const params = { limit: PAGE, offset, ...(filt ? { type: filt } : {}), ...(qDeb ? { q: qDeb } : {}), ...dateRange() };
-      const res = await api.get('/api/core/activity', { params });
-      if (mySeq !== seq.current) return;
+      const res = await activityApi.list(params);
+      if (!req.isLatest(mySeq)) return;
       setCount(res.count);
       setItems((prev) => (offset === 0 ? res.items : [...(prev || []), ...res.items]));
     } catch (err) {
-      if (mySeq === seq.current) { toastErr(err, fireToast, t); setItems((prev) => prev || []); }
+      if (req.isLatest(mySeq)) { toastApiError(err, fireToast, t); setItems((prev) => prev || []); }
     } finally {
-      if (mySeq === seq.current) setLoadingMore(false);
+      if (req.isLatest(mySeq)) setLoadingMore(false);
     }
-  }, [filt, qDeb, dateRange, fireToast, t]);
+  }, [filt, qDeb, dateRange, fireToast, t, req]);
 
   useEffect(() => { if (canLog) load(0); }, [canLog, load]);
   useEffect(() => {

@@ -1,5 +1,5 @@
-// registry.js — tab id → lazily loaded section. OWNED BY THE SHELL.
-// Section agents implement their own `sections/<name>/index.jsx`; they never edit this file.
+// registry.js — id della scheda → sezione caricata a richiesta
+// (`sections/<nome>/index.jsx`), per ctx.setTab(id).
 import { lazy } from 'react';
 
 export const SECTIONS = {

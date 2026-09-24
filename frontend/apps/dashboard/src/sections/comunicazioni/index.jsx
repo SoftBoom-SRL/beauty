@@ -3,13 +3,15 @@
 // Ported from prototype desktop-comunicazioni.jsx. The prototype's TYPE taxonomy
 // (launch/seasonal/story/announce) has no API field and was dropped; status filter,
 // search, cards, composer and WhatsApp preview are kept.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, mediaUrl, Icon, EmptyState } from '@youty/shared';
+import React, { useCallback, useEffect, useState } from 'react';
+import { mediaUrl, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ComEditModal from './ComEditModal.jsx';
 import SendConfirmModal from './SendConfirmModal.jsx';
 import { COM_STATUS_KEYS, audienceSummary, comStatusMeta, comWhenLabel } from './helpers.js';
+import { communicationsApi } from '../../api/marketing.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const PAGE = 24;
 
@@ -31,26 +33,24 @@ export default function ComunicazioniSection() {
 
   /* Biglietto della richiesta in corso: cambiando lo stato del filtro mentre
    * «Carica altre» è in volo, la risposta vecchia veniva appesa alla lista
-   * nuova. Ogni fetch incrementa il biglietto e scarta la propria risposta se
-   * nel frattempo ne è partita un'altra. */
-  const reqSeq = useRef(0);
+   * nuova. Ogni fetch prende un biglietto (useLatestRequest) e scarta la propria
+   * risposta se nel frattempo ne è partita un'altra. */
+  const req = useLatestRequest();
   const fetchList = useCallback(async ({ append = false, offset = 0 } = {}) => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     append ? setLoadingMore(true) : setLoading(true);
     try {
-      const res = await api.get('/api/marketing/communications', {
-        params: { status: statusF === 'all' ? '' : statusF, limit: PAGE, offset },
-      });
-      if (seq !== reqSeq.current) return;
+      const res = await communicationsApi.list({ status: statusF === 'all' ? '' : statusF, limit: PAGE, offset });
+      if (!req.isLatest(seq)) return;
       setCount(res.count || 0);
       setItems((prev) => (append ? [...prev, ...(res.items || [])] : (res.items || [])));
     } catch (err) {
-      if (seq !== reqSeq.current) return;
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      if (!req.isLatest(seq)) return;
+      toastApiError(err, fireToast, t);
     } finally {
       append ? setLoadingMore(false) : setLoading(false);
     }
-  }, [statusF, fireToast, t]);
+  }, [statusF, fireToast, t, req]);
 
   useEffect(() => { fetchList(); }, [fetchList]);
   useLive(/^communication\./, () => fetchList());

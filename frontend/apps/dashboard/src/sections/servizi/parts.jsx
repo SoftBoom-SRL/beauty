@@ -1,5 +1,5 @@
 // parts.jsx — small building blocks shared across Servizi/Pacchetti cards & modals.
-import { Icon, Avatar, NumInput } from '@youty/shared';
+import { Avatar, NumInput } from '@youty/shared';
 
 export function CategoryDot({ color, size = 10 }) {
   return (
@@ -70,29 +70,6 @@ export function OperatorAvatarStack({ ops, max = 4, size = 28 }) {
         <div style={{ marginLeft: -ov, width: size, height: size, borderRadius: '50%', background: 'var(--paper-2)', border: '1px solid var(--hair)', display: 'grid', placeItems: 'center', fontSize: Math.max(10, size * 0.38), fontWeight: 700, color: 'var(--ink-2)' }}>
           +{extra}
         </div>
-      )}
-    </div>
-  );
-}
-
-/** search field + optional filter slot + "new" button */
-export function SearchToolbar({ q, setQ, placeholder, onAdd, addLabel, canAdd = true, extra }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-      <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
-        <Icon name="search" size={18} color="var(--muted-2)" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} />
-        {q && (
-          <button className="press" onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
-            <Icon name="x" size={15} color="var(--muted-2)" />
-          </button>
-        )}
-      </div>
-      {extra}
-      {canAdd && (
-        <button className="dk-btn dk-btn--clay" onClick={onAdd} style={{ flexShrink: 0 }}>
-          <Icon name="plus" size={17} color="#fff" />{addLabel}
-        </button>
       )}
     </div>
   );

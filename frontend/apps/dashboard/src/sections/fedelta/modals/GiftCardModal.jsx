@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, todayStr, fmtEur, NumInput } from '@youty/shared';
+import { Icon, todayStr, fmtEur, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
 import { expiryInMonthsIso } from '../dates.js';
+import { giftCardsApi } from '../../../api/marketing.js';
 
 const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
 
@@ -18,7 +19,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [service, setService] = useState(null); // servizio scelto dal catalogo (gift card a trattamento)
   const [svcQ, setSvcQ] = useState('');
   const [svcOpen, setSvcOpen] = useState(false);
-  const svcName = (s) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+  const svcName = (s) => nameIn(s, lang);
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcResults = svcQ.trim()
     ? activeServices.filter((s) => svcName(s).toLowerCase().includes(svcQ.trim().toLowerCase()))
@@ -54,10 +55,10 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
         expires_at: expiryMonths ? expiryInMonthsIso(expiryMonths) : null,
       };
-      await api.post('/api/marketing/gift-cards', payload);
+      await giftCardsApi.create(payload);
       onSaved();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };

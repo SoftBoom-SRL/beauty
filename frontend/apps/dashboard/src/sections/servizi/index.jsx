@@ -2,12 +2,15 @@
 // Owns its own fetch/refetch of /api/catalog/services and /api/catalog/packages
 // so edits show immediately; syncs the ctx base catalogs via reload.* after writes.
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from '@youty/shared';
+import { toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import ServiziSub from './ServiziSub.jsx';
 import PacchettiSub from './PacchettiSub.jsx';
 import SvcEditModal from './SvcEditModal.jsx';
 import PkgEditModal from './PkgEditModal.jsx';
+import SubTabs from '../../ui/SubTabs.jsx';
+import { packagesApi, serviceCategoriesApi, servicesApi } from '../../api/catalog.js';
+import { staffApi } from '../../api/staff.js';
 
 export default function ServiziSection() {
   const {
@@ -25,17 +28,14 @@ export default function ServiziSection() {
   const [loadingSvc, setLoadingSvc] = useState(true);
   const [loadingPkg, setLoadingPkg] = useState(true);
 
-  const toastErr = useCallback((err) => {
-    if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-    else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-  }, [fireToast, t]);
+  const toastErr = useCallback((err) => toastApiError(err, fireToast, t), [fireToast, t]);
 
   const fetchServices = useCallback(async () => {
-    const data = await api.get('/api/catalog/services');
+    const data = await servicesApi.list();
     setServices(data);
   }, []);
   const fetchPackages = useCallback(async () => {
-    const data = await api.get('/api/catalog/packages');
+    const data = await packagesApi.list();
     setPackages(data);
   }, []);
 
@@ -59,7 +59,7 @@ export default function ServiziSection() {
    *  da GET /api/staff/ riscriveva anche colore e costo orario dalla sua copia,
    *  annullando ciò che la scheda operatrice o l'agenda avevano appena salvato. */
   const syncOperators = useCallback(async (serviceId, wantedOpIds) => {
-    const fresh = await api.get('/api/staff/');
+    const fresh = await staffApi.list();
     const changed = fresh.filter((o) => {
       const has = (o.service_ids || []).includes(serviceId);
       const want = wantedOpIds.includes(o.id);
@@ -71,7 +71,7 @@ export default function ServiziSection() {
       const ids = want
         ? [...(o.service_ids || []), serviceId]
         : (o.service_ids || []).filter((id) => id !== serviceId);
-      return api.put(`/api/staff/${o.id}`, { service_ids: ids });
+      return staffApi.update(o.id, { service_ids: ids });
     }));
     return true;
   }, []);
@@ -80,9 +80,9 @@ export default function ServiziSection() {
     try {
       let saved;
       if (editSvc?.id) {
-        saved = await api.put(`/api/catalog/services/${editSvc.id}`, payload);
+        saved = await servicesApi.update(editSvc.id, payload);
       } else {
-        saved = await api.post('/api/catalog/services', payload);
+        saved = await servicesApi.create(payload);
       }
       let opsChanged = false;
       if (canTeam) {
@@ -107,12 +107,12 @@ export default function ServiziSection() {
     setServices((l) => l.map((x) => (x.id === s.id ? { ...x, active } : x))); // optimistic
     try {
       if (!active) {
-        await api.del(`/api/catalog/services/${s.id}`);
+        await servicesApi.remove(s.id);
       } else {
         // PUT = sostituzione completa (ServiceIn ha i default): i campi omessi
         // venivano azzerati, quindi riattivare un servizio ne cancellava
         // descrizione e tempo di posa.
-        await api.put(`/api/catalog/services/${s.id}`, {
+        await servicesApi.update(s.id, {
           category_id: s.category_id,
           name_it: s.name_it,
           name_en: s.name_en,
@@ -141,8 +141,8 @@ export default function ServiziSection() {
   /* ---- package mutations ---- */
   const savePackage = useCallback(async (payload) => {
     try {
-      if (editPkg?.id) await api.put(`/api/catalog/packages/${editPkg.id}`, payload);
-      else await api.post('/api/catalog/packages', payload);
+      if (editPkg?.id) await packagesApi.update(editPkg.id, payload);
+      else await packagesApi.create(payload);
       setEditPkg(null);
       await fetchPackages().catch(() => {});
       fireToast({ msg: t('Pacchetto salvato', 'Package saved'), icon: 'check' });
@@ -154,7 +154,7 @@ export default function ServiziSection() {
   const deactivatePackage = useCallback(async () => {
     if (!editPkg?.id) return;
     try {
-      await api.del(`/api/catalog/packages/${editPkg.id}`);
+      await packagesApi.remove(editPkg.id);
       setEditPkg(null);
       await fetchPackages().catch(() => {});
       fireToast({ msg: t('Pacchetto disattivato', 'Package deactivated'), icon: 'check' });
@@ -163,7 +163,7 @@ export default function ServiziSection() {
     }
   }, [editPkg, fetchPackages, fireToast, t, toastErr]);
 
-  /* ---- categories manager (owned by Impostazioni) ---- */
+  /* ---- gestione categorie: il modale globale di Impostazioni ---- */
   const openCats = useCallback(() => openModal('catsmgr', { kind: 'servizi' }), [openModal]);
 
   /* #2 — colore categoria configurabile dalla scheda servizio (resta un attributo della categoria) */
@@ -171,7 +171,7 @@ export default function ServiziSection() {
     const cat = (serviceCategories || []).find((c) => c.id === catId);
     if (!cat) return;
     try {
-      await api.put(`/api/catalog/categories/${catId}`, { name_it: cat.name_it, name_en: cat.name_en, color, order: cat.order });
+      await serviceCategoriesApi.update(catId, { name_it: cat.name_it, name_en: cat.name_en, color, order: cat.order });
       reload?.serviceCategories?.().catch(() => {});
       fireToast({ msg: t('Colore categoria aggiornato', 'Category colour updated'), icon: 'check' });
     } catch (err) { toastErr(err); }
@@ -182,16 +182,7 @@ export default function ServiziSection() {
   return (
     <div className="dk-page" style={{ maxWidth: 1120 }}>
       {/* sub-tabs: Servizi / Pacchetti */}
-      <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 22 }}>
-        {tabs.map(([k, l]) => (
-          <button
-            key={k} onClick={() => setSubTab(k)}
-            style={{ padding: '11px 4px', marginRight: 22, fontSize: 15.5, fontWeight: 600, cursor: 'pointer', background: 'transparent', border: 'none', color: sub === k ? 'var(--ink)' : 'var(--muted)', borderBottom: '2px solid ' + (sub === k ? 'var(--clay)' : 'transparent'), marginBottom: -1 }}
-          >
-            {l}
-          </button>
-        ))}
-      </div>
+      <SubTabs tabs={tabs} value={sub} onChange={setSubTab} />
 
       {sub === 'servizi' ? (
         <ServiziSub

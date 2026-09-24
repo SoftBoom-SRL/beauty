@@ -9,13 +9,14 @@
 // - AI suggestion cards (INSIGHTS mock) replaced by one static "fase 2" card.
 // - Analyst drawer wired to POST /api/insights/ask which 501s until fase 2.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, ApiError, EmptyState, Icon, fmtDateIt, fmtEur } from '@youty/shared';
+import { EmptyState, Icon, fmtDateIt, fmtEurOrZero, apiErrorText } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { buildAllKpis, loadFavs, saveFavs, comparisonRanges, DEFAULT_FAVS } from './kpiDefs.js';
 import KpiBand from './KpiBand.jsx';
 import { BarTrend, CategoryBars, OccupancyByWeekday, NewVsReturning, ClientsByCategory } from './Charts.jsx';
 import AskYoutyPanel from './AskYoutyPanel.jsx';
 import AnalystDrawer from './AnalystDrawer.jsx';
+import { insightsApi } from '../../api/insights.js';
 
 const GRANULARITY = { month: 'day', quarter: 'week', year: 'month' };
 
@@ -95,12 +96,12 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
     // tratto del periodo precedente, non contro il precedente intero (08-07).
     const cmp = isCustom ? null : comparisonRanges(period);
     Promise.all([
-      api.get('/api/insights/kpis', { params: base }),
-      cmp ? api.get('/api/insights/kpis', { params: cmp.current }).catch(() => null) : null,
-      cmp ? api.get('/api/insights/kpis', { params: cmp.previous }).catch(() => null) : null,
-      api.get('/api/insights/revenue-series', { params: { ...base, granularity } }),
-      api.get('/api/insights/revenue-by-category', { params: base }),
-      api.get('/api/insights/occupancy-by-weekday', { params: base }),
+      insightsApi.kpis(base),
+      cmp ? insightsApi.kpis(cmp.current).catch(() => null) : null,
+      cmp ? insightsApi.kpis(cmp.previous).catch(() => null) : null,
+      insightsApi.revenueSeries({ ...base, granularity }),
+      insightsApi.revenueByCategory(base),
+      insightsApi.occupancyByWeekday(base),
     ]).then(([k, ck, pk, rs, rc, ow]) => {
       if (!alive) return;
       // senza uno dei due tratti le frecce non si mostrano: meglio nessuna
@@ -115,7 +116,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
        * «intervallo scelto» (15-15): si svuota tutto e si dice perché. */
       setKpis(null); setCurCmpKpis(null); setPrevKpis(null); setCmpRange(null);
       setSeries([]); setByCategory([]); setWeekday([]);
-      const msg = err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
+      const msg = apiErrorText(err, t);
       setLoadError(msg);
       fireToast({ msg, icon: 'alert' });
     }).finally(() => { if (alive) setLoading(false); });
@@ -126,10 +127,7 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
   // Niente arrotondamento all'euro prima di formattare: con i centesimi a
   // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
   // cifra precisa e sbagliata.
-  const eur = useCallback((n) => {
-    const v = Number(n) || 0;
-    return v === 0 ? '€0' : fmtEur(v, lang);
-  }, [lang]);
+  const eur = useCallback((n) => fmtEurOrZero(n, lang), [lang]);
   const allKpis = useMemo(() => buildAllKpis(kpis, prevKpis, t, lang, eur, curCmpKpis), [kpis, prevKpis, curCmpKpis, t, lang, eur]);
   const cmpTitle = cmpRange
     ? t('Confronto con lo stesso tratto del periodo precedente: ', 'Compared with the same stretch of the previous period: ')

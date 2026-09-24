@@ -1,5 +1,6 @@
 // history.js — le righe dello storico vendite (HistoryTab). Regole pure,
 // provate da `npm test` (apps/dashboard/test/pos-history.test.js).
+import { nameIn } from '@youty/shared';
 import { toCents } from './money.js';
 
 /** Importo della riga PRIMA del buono sconto, come su uno scontrino: righe,
@@ -17,7 +18,7 @@ export function saleLineLabel(l, sale, { services = [], lang = 'it', t }) {
   if (l.line_type === 'gift_card') return 'Gift card' + (l.gift_card_code ? ' · ' + l.gift_card_code : '');
   if (l.line_type === 'product') return l.product_name || t('Prodotto', 'Product') + ' #' + (l.product_id ?? '');
   const svc = l.service_id != null ? services.find((s) => s.id === l.service_id) : null;
-  if (svc) return lang === 'en' && svc.name_en ? svc.name_en : svc.name_it;
+  if (svc) return nameIn(svc, lang);
   if (l.service_name) return l.service_name;
   if (l.service_id == null && sale?.kind === 'pos') {
     // la caparra si aggancia su `deposit_appointment_id`, il no-show su `appointment_id`

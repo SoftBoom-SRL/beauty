@@ -3,11 +3,13 @@
 // "oggi"), app cliente (testo generato dal server) e impostazioni.
 // Solo il titolare scrive; gli altri vedono in sola lettura.
 import { useState } from 'react';
-import { api, Icon, Toggle } from '@youty/shared';
+import { Icon, Toggle, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
 import { dayLabel } from './hours.js';
+import { settingsApi } from '../../api/core.js';
 
 export { dayLabel, todayRanges } from './hours.js';
 
@@ -44,23 +46,19 @@ export default function HoursDrawer({ onClose }) {
     if (problems.length) { setErr(problems[0]); return; }
     setSaving(true); setErr('');
     try {
-      await api.put('/api/core/settings', { opening_hours_week: Object.fromEntries(Object.entries(week).map(([d, r]) => [String(d), r])) });
+      await settingsApi.update({ opening_hours_week: Object.fromEntries(Object.entries(week).map(([d, r]) => [String(d), r])) });
       await reload.salon();
       fireToast({ msg: t('Orari di apertura salvati', 'Opening hours saved'), icon: 'check' });
       onClose();
-    } catch (e) { toastErr(e, fireToast, t); } finally { setSaving(false); }
+    } catch (e) { toastApiError(e, fireToast, t); } finally { setSaving(false); }
   };
 
   const timeCss = { ...inputCss, width: 96, padding: '7px 8px', fontSize: 13.5, fontVariantNumeric: 'tabular-nums' };
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 16px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.15 }}>{t('Orari di apertura', 'Opening hours')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{t('Quando il centro è aperto al pubblico. I turni delle singole operatrici si impostano in Staff.', 'When the salon is open to the public. Individual staff shifts are set under Staff.')}</div>
-        </div>
-        <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose} aria-label={t('Chiudi', 'Close')}><Icon name="x" size={18} /></button>
-      </div>
+      <DrawerHead padBottom={16} onClose={onClose} closeLabel={t('Chiudi', 'Close')}
+        title={t('Orari di apertura', 'Opening hours')}
+        sub={t('Quando il centro è aperto al pubblico. I turni delle singole operatrici si impostano in Staff.', 'When the salon is open to the public. Individual staff shifts are set under Staff.')} />
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px 22px' }}>
         {!isOwner && <LockNote t={t} msg={t('Solo il titolare può modificare gli orari.', 'Only the owner can edit the hours.')} />}
         {isNew && isOwner && (

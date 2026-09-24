@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { staffAuth, useT, Icon, ApiError } from '@youty/shared';
+import { YOURANG_MSG, openYourangPopup, usePopupMessage } from './oauth/popup.js';
 
 // Il salone dimostrativo di `seed_demo` esiste solo in sviluppo: in produzione la
 // pagina di accesso regalava a chiunque l'email dell'account demo, e la guida
@@ -37,24 +38,19 @@ export default function LoginPage() {
   const stopWatch = () => { clearInterval(watchTimer.current); watchTimer.current = null; };
   useEffect(() => stopWatch, []);
 
-  useEffect(() => {
-    const onMsg = (e) => {
-      if (e.origin !== window.location.origin || e.data?.type !== 'yourang-oauth') return;
-      stopWatch();
-      setYourangBusy(false);
-      if (e.data.ok && e.data.mode === 'login' && e.data.session) {
-        staffAuth.applySession(e.data.session);
-      } else if (!e.data.ok) {
-        setError(t('Login con Yourang non riuscito', 'Yourang login failed'));
-      }
-    };
-    window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
+  usePopupMessage(YOURANG_MSG, (m) => {
+    stopWatch();
+    setYourangBusy(false);
+    if (m.ok && m.mode === 'login' && m.session) {
+      staffAuth.applySession(m.session);
+    } else if (!m.ok) {
+      setError(t('Login con Yourang non riuscito', 'Yourang login failed'));
+    }
   }, [t]);
 
   const loginWithYourang = () => {
     setError(null);
-    const popup = window.open('/oauth-popup/start?mode=login', 'yourang-oauth', 'width=520,height=680');
+    const popup = openYourangPopup('login');
     if (!popup) { setError(t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry')); return; }
     setYourangBusy(true);
     // Chiudendo la finestra OAuth non arriva nessun postMessage: senza questa

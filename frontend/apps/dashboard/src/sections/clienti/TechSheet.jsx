@@ -3,9 +3,10 @@
 // and the registry TechSheetModal. Prototype TECH_FIELDS mapped onto the
 // API's flat TechnicalSheet columns (see helpers.js).
 import React, { useEffect, useRef, useState } from 'react';
-import { api, ApiError, Avatar, Icon, mediaUrl } from '@youty/shared';
+import { ApiError, Avatar, Icon, mediaUrl, nameIn, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { TECH_FIELDS, dateTimeLabel, initialsOf, inputCss, sheetVal } from './helpers.js';
+import { techSheetsApi } from '../../api/clients.js';
 
 export function TechSheetCard({ sheet: initial, defaultOpen }) {
   const { t, lang, hasScope, fireToast } = useDash();
@@ -17,10 +18,10 @@ export function TechSheetCard({ sheet: initial, defaultOpen }) {
   const uploadPhoto = async (file) => {
     if (!file) return;
     try {
-      const updated = await api.postForm(`/api/clients/${sheet.client_id}/sheets/${sheet.id}/photo`, { photo: file });
+      const updated = await techSheetsApi.uploadPhoto(sheet.client_id, sheet.id, file);
       setSheet(updated);
       fireToast({ msg: t('Foto salvata nella scheda', 'Photo saved to the sheet'), icon: 'check' });
-    } catch (err) { fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
   return (
     <div className="dk-card" style={{ padding: 0, boxShadow: 'none', border: '1px solid var(--hair)', overflow: 'hidden' }}>
@@ -75,7 +76,7 @@ export function TechSheetCard({ sheet: initial, defaultOpen }) {
 export function TechSheetForm({ clientId, appointmentId = null, defaultCategory, onSaved, onCancel }) {
   const { t, lang, serviceCategories, fireToast } = useDash();
   const fields = TECH_FIELDS(t);
-  const catOptions = serviceCategories.map((sc) => (lang === 'en' && sc.name_en) ? sc.name_en : sc.name_it);
+  const catOptions = serviceCategories.map((sc) => nameIn(sc, lang));
   const [category, setCategory] = useState(defaultCategory || catOptions[0] || t('Generale', 'General'));
   const [values, setValues] = useState({});
   const [saving, setSaving] = useState(false);
@@ -111,14 +112,14 @@ export function TechSheetForm({ clientId, appointmentId = null, defaultCategory,
         protocol: values.protocol || '',
         next_step: values.next_step || '',
       };
-      let sheet = await api.post(`/api/clients/${clientId}/sheets`, body);
+      let sheet = await techSheetsApi.create(clientId, body);
       if (photo) {
-        try { sheet = await api.postForm(`/api/clients/${clientId}/sheets/${sheet.id}/photo`, { photo }); }
+        try { sheet = await techSheetsApi.uploadPhoto(clientId, sheet.id, photo); }
         catch (err) { fireToast({ msg: t('Scheda salvata, ma la foto non è stata caricata: ', 'Sheet saved, but the photo failed to upload: ') + (err instanceof ApiError ? err.message : ''), icon: 'alert' }); }
       }
       onSaved && onSaved(sheet);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally { setSaving(false); }
   };
 

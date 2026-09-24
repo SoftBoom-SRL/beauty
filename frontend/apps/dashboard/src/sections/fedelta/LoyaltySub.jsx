@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { api, ApiError, Icon, EmptyState } from '@youty/shared';
+import { Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import LoyaltyEditModal from './modals/LoyaltyEditModal.jsx';
 import LoyaltyMembersDrawer from './LoyaltyMembersDrawer.jsx';
 import { LOYALTY_TYPES, composeReward } from './meta.js';
+import { loyaltyApi } from '../../api/marketing.js';
 
 export default function LoyaltySub() {
   const { t, lang, hasScope, fireToast, services, setDrawer } = useDash();
@@ -15,11 +16,11 @@ export default function LoyaltySub() {
 
   const reload = () => {
     setLoading(true);
-    api.get('/api/marketing/loyalty-programs')
+    loyaltyApi.list()
       .then((res) => setItems(res || []))
       .catch((err) => {
         setItems([]);
-        fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+        toastApiError(err, fireToast, t);
       })
       .finally(() => setLoading(false));
   };
@@ -56,7 +57,7 @@ export default function LoyaltySub() {
 
   const serviceName = (id) => {
     const s = services.find((x) => x.id === id);
-    return s ? (lang === 'en' ? (s.name_en || s.name_it) : s.name_it) : null;
+    return s ? nameIn(s, lang) : null;
   };
 
   return (

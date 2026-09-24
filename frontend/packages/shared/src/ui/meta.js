@@ -39,14 +39,3 @@ export function depositMeta(dep, t) {
     default:          return null; // 'none'
   }
 }
-
-/** Client segment chip metadata (UI-side concept, not an API enum). */
-export function segMeta(seg, t) {
-  switch (seg) {
-    case 'vip':       return { label: 'VIP', color: 'var(--op-lina)' };
-    case 'fedele':    return { label: t('Fedele', 'Loyal'), color: 'var(--ok)' };
-    case 'nuovo':     return { label: t('Nuovo', 'New'), color: 'var(--info)' };
-    case 'dormiente': return { label: t('Dormiente', 'Dormant'), color: 'var(--muted-2)' };
-    default:          return { label: seg, color: 'var(--muted)' };
-  }
-}

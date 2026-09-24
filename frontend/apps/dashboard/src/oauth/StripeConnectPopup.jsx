@@ -4,7 +4,9 @@
 // Stessa origine dell'opener: `api` porta il Bearer dello staff e il
 // postMessage punta a window.location.origin (come OAuthPopup per Yourang).
 import { useEffect, useState } from 'react';
-import { api, useT } from '@youty/shared';
+import { useT } from '@youty/shared';
+import { stripeConnectApi } from '../api/sales.js';
+import { STRIPE_MSG, notifyOpener } from './popup.js';
 
 export default function StripeConnectPopup({ path }) {
   const { t } = useT();
@@ -12,11 +14,10 @@ export default function StripeConnectPopup({ path }) {
 
   useEffect(() => {
     let cancelled = false;
-    const notify = (msg) => { if (window.opener) window.opener.postMessage(msg, window.location.origin); };
     (async () => {
       try {
         if (path === '/stripe-connect/start') {
-          const res = await api.post('/api/sales/stripe/connect/start', {});
+          const res = await stripeConnectApi.start();
           window.location.replace(res.url);
           return;
         }
@@ -26,14 +27,14 @@ export default function StripeConnectPopup({ path }) {
         const code = params.get('code');
         const state = params.get('state');
         if (!code || !state) throw new Error('missing code/state');
-        await api.post('/api/sales/stripe/connect/callback', { code, state });
-        notify({ type: 'stripe-connect', ok: true });
+        await stripeConnectApi.callback({ code, state });
+        notifyOpener({ type: STRIPE_MSG, ok: true });
         window.close();
       } catch (e) {
         if (cancelled) return;
         const message = String(e?.message || e);
         setError(message);
-        notify({ type: 'stripe-connect', ok: false, error: message });
+        notifyOpener({ type: STRIPE_MSG, ok: false, error: message });
       }
     })();
     return () => { cancelled = true; };

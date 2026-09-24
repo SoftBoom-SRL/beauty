@@ -1,66 +1,21 @@
 // lib.jsx — local shared helpers for the impostazioni section.
-// NOTE: DkDrop / DkCondRow are LOCAL COPIES of the automazioni prototype builder
-// (desktop-automazioni.jsx). The automazioni section keeps its own copy: flag for
-// a future shared extraction.
-import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, Icon, NumInput } from '@youty/shared';
+// DkCondRow qui è la riga di condizione delle regole caparra: stessa grafica
+// di quella delle automazioni (automazioni/DkCondRow.jsx) ma un altro modello
+// di campi (depositFields, con i tipi bool/enum/num/money), quindi resta sua.
+// Il menu a tendina è quello comune, ui/DkDrop.jsx.
+import React from 'react';
+import { Icon, NumInput } from '@youty/shared';
 import DkSeg from '../../ui/DkSeg.jsx';
-import { dropCurrent } from './rules.js';
+import DkDrop from '../../ui/DkDrop.jsx';
 
 // logica pura delle regole caparra: vive in rules.js (provata con node --test)
 export { depositFields, ruleSentence, amountForType } from './rules.js';
-
-/* ---------------- Google-Docs-like palette (GD_PALETTE port) ---------------- */
-export function gdHexFromHSL(h, s, l) {
-  s /= 100; l /= 100;
-  const k = (n) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => {
-    const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return Math.round(255 * c).toString(16).padStart(2, '0');
-  };
-  return ('#' + f(0) + f(8) + f(4)).toUpperCase();
-}
-const GD_HUES = [0, 22, 45, 90, 140, 175, 205, 230, 265, 300];
-export const GD_PALETTE = (() => {
-  const rows = [];
-  rows.push(['#000000', '#434343', '#666666', '#999999', '#B7B7B7', '#CCCCCC', '#D9D9D9', '#EFEFEF', '#F3F3F3', '#FFFFFF']);
-  rows.push(GD_HUES.map((h) => gdHexFromHSL(h, 78, 50)));
-  [92, 84, 74].forEach((l) => rows.push(GD_HUES.map((h) => gdHexFromHSL(h, 70, l))));
-  [40, 30, 20].forEach((l) => rows.push(GD_HUES.map((h) => gdHexFromHSL(h, 65, l))));
-  return rows;
-})();
-
-export function PaletteGrid({ value, onChange, style }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, maxWidth: 280, ...style }}>
-      {GD_PALETTE.map((row, ri) => (
-        <div key={ri} style={{ display: 'flex', gap: 3 }}>
-          {row.map((c) => {
-            const on = (value || '').toLowerCase() === c.toLowerCase();
-            return (
-              <button key={c} onClick={() => onChange(c)} title={c}
-                style={{ width: 22, height: 22, borderRadius: 5, background: c, cursor: 'pointer', border: '1px solid ' + (c.toUpperCase() === '#FFFFFF' ? 'var(--hair)' : 'transparent'), outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: 1, flexShrink: 0, display: 'grid', placeItems: 'center' }}>
-                {on && <Icon name="check" size={12} color={ri === 0 && row.indexOf(c) > 6 ? 'var(--ink)' : '#fff'} stroke={2.6} />}
-              </button>
-            );
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 /* ---------------- common bits ---------------- */
 export const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 14,
   padding: '10px 12px', fontFamily: 'var(--sans)', background: 'var(--surface)', color: 'var(--ink)',
 };
-
-export function toastErr(err, fireToast, t) {
-  if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-  else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-}
 
 export function LockNote({ t, msg }) {
   return (
@@ -88,47 +43,10 @@ export function CopyField({ value, t, fireToast }) {
   );
 }
 
-/* ---------------- condition builder (local copy — see note at top) ----------------
+/* ---------------- condition builder (vedi la nota in cima) ----------------
    Works directly on the API rule shape: { field, cmp, value }
    cmp ∈ eq,neq,lt,lte,gt,gte,contains */
 const CMP_NUM = [['gt', '>'], ['gte', '≥'], ['lt', '<'], ['lte', '≤'], ['eq', '=']];
-
-export function DkDrop({ value, onChange, options, narrow, missingLabel, loose }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    // Esc con il menu aperto chiude il menu e basta (preventDefault: vedi ui/layers.js)
-    const k = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); setOpen(false); } };
-    document.addEventListener('mousedown', h);
-    document.addEventListener('keydown', k);
-    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('keydown', k); };
-  }, [open]);
-  // Un valore salvato che non è fra le opzioni si vede com'è, in evidenza: non
-  // la prima opzione della lista (15-07).
-  const cur = dropCurrent(options, value, { missingLabel, loose });
-  return (
-    <div ref={ref} style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} title={cur.missing ? cur.label : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 36, padding: narrow ? '0 10px' : '0 12px', border: '1px solid ' + (cur.missing ? 'var(--warn)' : 'var(--hair)'), borderRadius: 9, background: cur.missing ? 'var(--warn-tint)' : 'var(--surface)', cursor: 'pointer', fontSize: narrow ? 16 : 13.5, fontWeight: 700, color: cur.missing ? 'var(--warn)' : 'var(--ink)' }}>
-        {cur.missing && <Icon name="alert" size={13} color="var(--warn)" />}{cur.label}<Icon name="chevD" size={13} color="var(--muted)" />
-      </button>
-      {open && (
-        <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 5px)', left: 0, minWidth: narrow ? 64 : 200, padding: 5, zIndex: 30, boxShadow: 'var(--sh-pop)' }}>
-          {options.map((o) => {
-            const on = cur.option === o;
-            return (
-              <button key={String(o.value)} className="dk-row" onClick={() => { onChange(o.value); setOpen(false); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 9px', borderRadius: 8, textAlign: 'left', cursor: 'pointer' }}>
-                <span style={{ flex: 1, fontWeight: on ? 700 : 600, fontSize: narrow ? 15 : 13.5, color: on ? 'var(--ink)' : 'var(--ink-2)' }}>{o.label}</span>
-                {on && <Icon name="check" size={14} color="var(--clay-ink)" stroke={2.4} />}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function DkCondRow({ rule, onChange, onRemove, t, lang, fields }) {
   const f = fields.find((x) => x.id === rule.field) || fields[0];

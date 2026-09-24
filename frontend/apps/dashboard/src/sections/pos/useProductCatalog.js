@@ -4,7 +4,7 @@
 // così oltre i primi POS_PAGE prodotti si vende comunque tutto. Prima il
 // catalogo veniva letto una sola volta con limit 100 e il resto non era vendibile.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api } from '@youty/shared';
+import { productsApi } from '../../api/inventory.js';
 
 export const POS_PAGE = 200;
 const sellable = (items) => (items || []).filter((p) => Number(p.sale_price) > 0);
@@ -28,7 +28,7 @@ export default function useProductCatalog(q, { onError } = {}) {
 
   useEffect(() => {
     let dead = false;
-    api.get('/api/inventory/products', { params: { limit: POS_PAGE } })
+    productsApi.list({ limit: POS_PAGE })
       .then((r) => {
         if (dead) return;
         const items = r.items || [];
@@ -47,7 +47,7 @@ export default function useProductCatalog(q, { onError } = {}) {
     if (!partial || !needle) { setRemote(null); return undefined; }
     let dead = false;
     const timer = setTimeout(() => {
-      api.get('/api/inventory/products', { params: { q: needle, limit: POS_PAGE } })
+      productsApi.list({ q: needle, limit: POS_PAGE })
         .then((r) => { if (!dead) setRemote(sellable(r.items)); })
         .catch(() => { if (!dead) setRemote([]); });
     }, 250);

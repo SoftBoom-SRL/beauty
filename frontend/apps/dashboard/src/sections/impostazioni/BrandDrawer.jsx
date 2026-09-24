@@ -3,11 +3,14 @@
 // polite lock state for non-owners. No logo-delete endpoint: "remove" only
 // clears the locally selected file before saving.
 import { useRef, useState } from 'react';
-import { api, mediaUrl, Icon } from '@youty/shared';
+import { mediaUrl, Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import { useDash } from '../../ctx.jsx';
-import { PaletteGrid, inputCss, toastErr, LockNote } from './lib.jsx';
+import PaletteGrid from '../../ui/PaletteGrid.jsx';
+import { inputCss, LockNote } from './lib.jsx';
+import { settingsApi } from '../../api/core.js';
 
 export default function BrandDrawer({ onClose }) {
   const { t, session, salon, settings, reload, fireToast } = useDash();
@@ -35,12 +38,12 @@ export default function BrandDrawer({ onClose }) {
     if (saving) return;
     setSaving(true);
     try {
-      if (file) await api.postForm('/api/core/settings/logo', { logo: file });
-      await api.put('/api/core/settings', { brand_color: color, privacy_policy_url: privacyUrl.trim() });
+      if (file) await settingsApi.uploadLogo(file);
+      await settingsApi.update({ brand_color: color, privacy_policy_url: privacyUrl.trim() });
       await reload.salon();
       fireToast({ msg: t('Brand salvato', 'Brand saved'), icon: 'check' });
       onClose();
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSaving(false); }
   };
 
@@ -50,13 +53,8 @@ export default function BrandDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 22, fontWeight: 500, lineHeight: 1.15 }}>{t('Brand & app cliente', 'Brand & client app')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4 }}>{salon?.name}{salon?.locations?.length ? ' · ' + (salon.locations.find((l) => l.is_default)?.name || salon.locations[0].name) : ''}</div>
-        </div>
-        <button className="dk-iconbtn" style={{ flexShrink: 0, marginLeft: 12 }} onClick={onClose}><Icon name="x" size={18} /></button>
-      </div>
+      <DrawerHead onClose={onClose} title={t('Brand & app cliente', 'Brand & client app')}
+        sub={<>{salon?.name}{salon?.locations?.length ? ' · ' + (salon.locations.find((l) => l.is_default)?.name || salon.locations[0].name) : ''}</>} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 30px' }}>
         {!isOwner && (

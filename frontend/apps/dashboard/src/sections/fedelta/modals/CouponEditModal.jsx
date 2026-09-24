@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { api, ApiError, fmtEur, Icon, NumInput } from '@youty/shared';
+import { fmtEur, Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, numCss, segBtn } from '../formStyles.js';
 import { COUPON_ORIGIN_META, COUPON_STATUS_META } from '../meta.js';
 import { endOfSalonDayIso } from '../dates.js';
+import { couponsApi } from '../../../api/marketing.js';
 
 /** Create/edit a manual coupon. `client_id` optional (client search), `kind` percent|amount,
  * `value`, `expires_at` optional. The prototype's `gift` kind and services-restriction have no
@@ -35,13 +36,13 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
     setSaving(true);
     try {
       if (isNew) {
-        await api.post('/api/marketing/coupons', buildPayload());
+        await couponsApi.create(buildPayload());
       } else {
-        await api.put(`/api/marketing/coupons/${draft.id}`, buildPayload());
+        await couponsApi.update(draft.id, buildPayload());
       }
       onSaved(isNew ? t('Coupon creato', 'Coupon created') : t('Coupon aggiornato', 'Coupon updated'));
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -51,10 +52,10 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
     if (saving) return;
     setSaving(true);
     try {
-      await api.del(`/api/marketing/coupons/${draft.id}`);
+      await couponsApi.remove(draft.id);
       onDeleted();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };
@@ -63,12 +64,12 @@ export default function CouponEditModal({ draft, setDraft, onClose, onSaved, onD
     if (saving) return;
     setSaving(true);
     try {
-      const updated = await api.post(`/api/marketing/coupons/${draft.id}/redeem`, {});
+      const updated = await couponsApi.redeem(draft.id);
       setDraft((d) => ({ ...d, status: updated.status, redeemed_at: updated.redeemed_at }));
       fireToast({ msg: t('Coupon segnato come utilizzato', 'Coupon marked as redeemed'), icon: 'check' });
       if (onRedeemed) onRedeemed(); // refresh the list behind the modal
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

@@ -1,0 +1,119 @@
+/* theme.css — il tema indigo sopra tutto quello che viene prima (shell e
+   controlli): ridefinisce i token dentro .dk-root e ritocca barra laterale,
+   barra in alto e bottoni. Deve restare dopo shell.css e controls.css. */
+
+/* ============================================================
+   VISUAL RESTYLE — modern indigo SaaS (desktop only, scoped to .dk-root)
+   Token remap: every component reads these vars, so the whole
+   desktop restyles at once. Mobile app (shared styles.css) untouched.
+   ============================================================ */
+.dk-root {
+  /* type → SF Pro via Apple system stack (proprietary, not loaded from CDN) */
+  --sans: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --serif: -apple-system, "SF Pro Display", "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+
+  /* neutrals */
+  --ink: #1A1A2E;
+  --ink-2: #374151;
+  --muted: #6B7280;
+  --muted-2: #9CA3AF;
+  --faint: #C7CAD1;
+  --paper: #F7F8FA;
+  --paper-2: #EEF0F4;
+  --surface: #FFFFFF;
+  --surface-2: #F7F8FA;
+  --hair: #ECECF1;
+  --hair-2: #F2F3F6;
+  --line-strong: #DCDDE4;
+  --dk-bg: #F7F8FA;
+
+  /* accent → indigo */
+  --clay: #6366F1;
+  --clay-ink: #4F46E5;
+  --clay-tint: #EEF0FE;
+  --clay-tint2: #E0E3FB;
+
+  /* status → modern, brighter */
+  --ok: #16A34A;        --ok-tint: #DCFCE7;
+  --warn: #D97706;      --warn-tint: #FEF3C7;
+  --danger: #DC2626;    --danger-tint: #FEE2E2;
+  --info: #2563EB;      --info-tint: #DBEAFE;
+
+  /* operator colour-coding → purple family, coordinated with indigo accent */
+  --op-sole: #6366F1;
+  --op-mara: #8B5CF6;
+  --op-lina: #7C3AED;
+  --op-giulia: #818CF8;
+  --op-asia: #A78BFA;
+  --op-noor: #C4B5FD;
+  --op-vera: #6D5BD0;
+  --op-ines: #9D7BEA;
+  --op-dafne: #B89CF5;
+
+  /* radii → softer SaaS cards */
+  --r-xs: 8px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 16px;
+  --r-xl: 18px;
+
+  /* shadows → very soft */
+  --sh-sm: 0 1px 2px rgba(17,24,39,0.04);
+  --sh-card: 0 1px 2px rgba(17,24,39,0.04);
+  --sh-pop: 0 4px 12px rgba(17,24,39,0.08), 0 12px 32px rgba(17,24,39,0.10);
+  --sh-sheet: 0 -8px 30px rgba(17,24,39,0.10);
+}
+
+/* card border so white-on-near-white reads cleanly */
+.dk-root .dk-card { border: 1px solid var(--hair); }
+
+/* SF Pro must win everywhere — inherit on all descendants */
+.dk-root, .dk-root *, .dk-root *::before, .dk-root *::after { font-family: var(--sans); }
+
+/* sidebar → white */
+.dk-root .dk-side { background: #FFFFFF; border-right: 1px solid var(--hair); }
+.dk-root .dk-logo b { color: var(--ink); }
+.dk-root .dk-navsection { color: var(--muted-2); }
+.dk-root .dk-navitem { color: var(--muted); font-weight: 500; }
+.dk-root .dk-navitem:hover { background: #F3F4F6; color: var(--ink); }
+.dk-root .dk-navitem--active { background: var(--clay-tint); color: var(--clay-ink); font-weight: 600; }
+.dk-root .dk-navitem--active::before { display: none; }
+.dk-root .dk-salon { background: #F3F4F6; }
+.dk-root .dk-salon:hover { background: #ECEDF1; }
+
+/* topbar → solid white */
+.dk-root .dk-top { background: rgba(255,255,255,0.86); }
+.dk-root .dk-iconbtn:hover { background: #F3F4F6; }
+
+/* ── Collapsible left sidebar (manual toggle) ── */
+.dk-root.dk-side-collapsed { --side-w: 78px; }
+.dk-side-collapsed .dk-navitem span.lbl,
+.dk-side-collapsed .dk-logo b,
+.dk-side-collapsed .dk-navsection,
+.dk-side-collapsed .dk-navitem .badge,
+.dk-side-collapsed .dk-salon .meta,
+.dk-side-collapsed .dk-salon .dk-salon-chev { display: none !important; }
+.dk-side-collapsed .dk-navitem { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-logo { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-logo > span { display: none; }
+.dk-side-collapsed .dk-salon { justify-content: center; padding-left: 0; padding-right: 0; }
+.dk-side-collapsed .dk-subtabs { display: none !important; }
+/* collapse toggle — discoverable pill */
+.dk-collapse-btn { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; cursor: pointer; background: var(--clay-tint); color: var(--clay-ink); flex-shrink: 0; transition: background 140ms var(--ease); }
+.dk-collapse-btn:hover { background: var(--clay); color: #fff; }
+.dk-collapse-btn:hover svg { stroke: #fff; }
+/* rail collapse / expand toggle */
+.dk-rail-toggle { display: inline-grid; place-items: center; cursor: pointer; background: var(--clay-tint); color: var(--clay-ink); border-radius: 9px; transition: background 140ms var(--ease); }
+.dk-rail-toggle:hover { background: var(--clay); }
+.dk-rail-toggle:hover svg { stroke: #fff; }
+
+/* primary buttons keep ink; clay buttons now indigo via token. Soft hover. */
+.dk-root .dk-btn--soft:hover { background: var(--clay-tint); color: var(--clay-ink); }
+
+/* table header caps */
+.dk-root .t-meta { letter-spacing: 0.06em; }
+

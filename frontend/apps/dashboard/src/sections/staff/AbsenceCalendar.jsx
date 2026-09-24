@@ -4,9 +4,10 @@
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
 import { useMemo, useState } from 'react';
-import { api, ApiError, Icon, todayStr } from '@youty/shared';
+import { Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
+import { absencesApi } from '../../api/staff.js';
 
 const fmtDM = (iso) => iso.split('-').slice(1).reverse().join('/'); // "2026-07-04" → "04/07"
 
@@ -20,7 +21,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
   const [saving, setSaving] = useState(false);
 
   const months = lang === 'en' ? MONTHS_EN : MONTHS_IT;
-  const dows = lang === 'en' ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] : ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+  const dows = lang === 'en' ? WEEKDAYS_SHORT_EN : WEEKDAYS_SHORT_IT;
   const y = cursor.getFullYear(), m = cursor.getMonth();
   const first = new Date(y, m, 1);
   const startDow = (first.getDay() + 6) % 7; // Monday-first
@@ -69,10 +70,10 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
     setSaving(true);
     try {
       const body = { date_from: edit.date_from, date_to: edit.date_to, type: edit.type, note: edit.note || '' };
-      if (edit.id) await api.put(`/api/staff/${operatorId}/absences/${edit.id}`, body);
-      else await api.post(`/api/staff/${operatorId}/absences`, body);
+      if (edit.id) await absencesApi.update(operatorId, edit.id, body);
+      else await absencesApi.create(operatorId, body);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
       return;
     }
@@ -93,9 +94,9 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
     if (saving || !edit?.id) return;
     setSaving(true);
     try {
-      await api.del(`/api/staff/${operatorId}/absences/${edit.id}`);
+      await absencesApi.remove(operatorId, edit.id);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
       return;
     }

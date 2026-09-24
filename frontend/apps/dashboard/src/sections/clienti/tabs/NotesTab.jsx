@@ -2,10 +2,11 @@
 // foto/documenti + elenco. Le note di trattamento vivono nello Storico, sotto la
 // visita a cui appartengono, ma compaiono anche qui (con il riferimento).
 import { useEffect, useState } from 'react';
-import { api, ApiError, EmptyState, Icon } from '@youty/shared';
+import { EmptyState, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel } from '../helpers.js';
+import { clientNotesApi } from '../../../api/clients.js';
 
 export { VisibilityToggle } from '../NoteBits.jsx';
 
@@ -18,9 +19,9 @@ export default function NotesTab({ clientId }) {
   useEffect(() => {
     let dead = false;
     setNotes(null);
-    api.get(`/api/clients/${clientId}/notes`)
+    clientNotesApi.list(clientId)
       .then((rows) => { if (!dead) setNotes(rows); })
-      .catch((err) => { if (!dead) { setNotes([]); fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }); } });
+      .catch((err) => { if (!dead) { setNotes([]); toastApiError(err, fireToast, t); } });
     return () => { dead = true; };
   }, [clientId]); // eslint-disable-line react-hooks/exhaustive-deps
 

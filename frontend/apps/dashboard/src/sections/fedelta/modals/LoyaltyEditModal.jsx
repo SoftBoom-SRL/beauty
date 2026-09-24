@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { api, ApiError, Icon, Toggle, NumInput } from '@youty/shared';
+import { Icon, Toggle, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
 import { LOYALTY_TYPES, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward, earnFields, earnMetricsFor } from '../meta.js';
+import { loyaltyApi } from '../../../api/marketing.js';
 
 /** Create/edit a loyalty program mapped to the REAL LoyaltyProgramIn fields:
  * name, type, earn_metric, earn_ratio, reward_type, reward_value, reward_service_id,
@@ -18,7 +19,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
   const isStamps = draft.type === 'stamps';
   // Metrica e rapporto che partono davvero: per i timbri mai «per euro» (C18).
   const earn = earnFields(draft.type, draft.earn_metric, draft.earn_ratio);
-  const svcName = (s) => (lang === 'en' ? (s.name_en || s.name_it) : s.name_it);
+  const svcName = (s) => nameIn(s, lang);
   const rewardServiceName = () => {
     const s = services.find((x) => x.id === draft.reward_service_id);
     return s ? svcName(s) : null;
@@ -50,13 +51,13 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
     setSaving(true);
     try {
       if (isNew) {
-        await api.post('/api/marketing/loyalty-programs', buildPayload());
+        await loyaltyApi.create(buildPayload());
       } else {
-        await api.put(`/api/marketing/loyalty-programs/${draft.id}`, buildPayload());
+        await loyaltyApi.update(draft.id, buildPayload());
       }
       onSaved(isNew ? t('Programma creato', 'Program created') : t('Programma aggiornato', 'Program updated'));
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -66,10 +67,10 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
     if (saving) return;
     setSaving(true);
     try {
-      await api.del(`/api/marketing/loyalty-programs/${draft.id}`);
+      await loyaltyApi.remove(draft.id);
       onDeactivated();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setSaving(false);
     }
   };

@@ -4,11 +4,13 @@
 // so the invite token is displayed with a copy button only.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, Avatar, salonTzOpts } from '@youty/shared';
+import { Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote, CopyField } from './lib.jsx';
+import { inputCss, LockNote, CopyField } from './lib.jsx';
+import { invitationsApi, membersApi, rolesApi } from '../../api/team.js';
 
 const initialsOf = (name, email) => {
   const src = (name || '').trim() || (email || '');
@@ -43,22 +45,22 @@ export default function TeamDrawer({ onClose, onRoles }) {
   const load = useCallback(async () => {
     try {
       const [m, r, i] = await Promise.all([
-        api.get('/api/auth/members'),
-        api.get('/api/auth/roles'),
-        api.get('/api/auth/invitations'),
+        membersApi.list(),
+        rolesApi.list(),
+        invitationsApi.list(),
       ]);
       setMembers(m); setRoles(r); setInvitations(i);
       setInv((f) => ({ ...f, role_id: f.role_id ?? (r[0]?.id ?? null) }));
-    } catch (err) { toastErr(err, fireToast, t); setMembers([]); setInvitations([]); }
+    } catch (err) { toastApiError(err, fireToast, t); setMembers([]); setInvitations([]); }
   }, [fireToast, t]);
   useEffect(() => { if (canTeam) load(); }, [canTeam, load]);
 
   const setRole = async (memberId, roleId) => {
     try {
-      const upd = await api.post(`/api/auth/members/${memberId}/role`, { role_id: roleId });
+      const upd = await membersApi.setRole(memberId, { role_id: roleId });
       setMembers((l) => l.map((m) => (m.id === memberId ? upd : m)));
       fireToast({ msg: t('Ruolo aggiornato', 'Role updated'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   // Rimuovere una persona dal team le toglie l'accesso al gestionale: si chiede
@@ -70,11 +72,11 @@ export default function TeamDrawer({ onClose, onRoles }) {
     if (!m || removing) return;
     setRemoving(true);
     try {
-      await api.del(`/api/auth/members/${m.id}`);
+      await membersApi.remove(m.id);
       setMembers((l) => l.filter((x) => x.id !== m.id));
       fireToast({ msg: t('Membro rimosso', 'Member removed'), icon: 'x' });
       setConfirmRemove(null);
-    } catch (err) { toastErr(err, fireToast, t); } // 400 if owner
+    } catch (err) { toastApiError(err, fireToast, t); } // 400 if owner
     finally { setRemoving(false); }
   };
 
@@ -83,12 +85,12 @@ export default function TeamDrawer({ onClose, onRoles }) {
     if (!email || !inv.role_id || sending) return;
     setSending(true);
     try {
-      const created = await api.post('/api/auth/invitations', { email, role_id: inv.role_id });
+      const created = await invitationsApi.create({ email, role_id: inv.role_id });
       setInvitations((l) => [created, ...(l || [])]);
       setInviting(false);
       setInv({ email: '', role_id: roles[0]?.id ?? null });
       fireToast({ msg: t('Invito creato per ', 'Invite created for ') + email, icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSending(false); }
   };
 
@@ -96,15 +98,8 @@ export default function TeamDrawer({ onClose, onRoles }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 500 }}>{t('Membri del team', 'Team members')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
-            {members ? members.length + ' ' + t('membri · ruolo e accesso', 'members · role and access') : t('Ruolo e accesso', 'Role and access')}
-          </div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose}><Icon name="x" size={19} /></button>
-      </div>
+      <DrawerHead variant="team" onClose={onClose} title={t('Membri del team', 'Team members')}
+        sub={members ? members.length + ' ' + t('membri · ruolo e accesso', 'members · role and access') : t('Ruolo e accesso', 'Role and access')} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px' }}>
         {!canTeam ? (

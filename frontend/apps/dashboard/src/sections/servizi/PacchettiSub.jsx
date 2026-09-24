@@ -1,12 +1,10 @@
 // PacchettiSub.jsx — package cards: included services (qty), savings vs single prices.
 import React, { useState } from 'react';
-import { Icon, fmtEur, EmptyState } from '@youty/shared';
+import { Icon, fmtEur, EmptyState, nameIn } from '@youty/shared';
 import { FilterMenu } from '../../ui/index.js';
-import { SearchToolbar } from './parts.jsx';
+import SearchToolbar from '../../ui/SearchToolbar.jsx';
 
-function svcName(s, lang) {
-  return lang === 'en' && s.name_en ? s.name_en : s.name_it;
-}
+const svcName = nameIn;
 
 /** sum of the included services at their individual prices (qty-weighted) */
 export function packageOriginalValue(pkg, servicesById) {

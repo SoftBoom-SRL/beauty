@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
+import React, { useCallback, useEffect, useState } from 'react';
+import { fmtEur, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import Pager from './Pager.jsx';
 import CouponEditModal from './modals/CouponEditModal.jsx';
 import { COUPON_ORIGIN_META, COUPON_STATUS_META, effectiveStatus } from './meta.js';
 import { salonDay, shortDate } from './dates.js';
+import { couponsApi } from '../../api/marketing.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const LIMIT = 24;
 
@@ -44,30 +46,28 @@ export default function CouponSub() {
    * con l'azzeramento in un effetto separato partivano due richieste — una con
    * l'offset vecchio — e vinceva l'ultima che rispondeva, così si vedeva la
    * pagina 3 mentre il pager in fondo diceva «1–24 di N».
-   * `reqSeq` scarta comunque le risposte in ritardo. */
-  const reqSeq = useRef(0);
+   * `req` (useLatestRequest) scarta comunque le risposte in ritardo. */
+  const req = useLatestRequest();
   const setFilter = (setter) => (v) => { setter(v); setOffset(0); };
 
   const reload = useCallback(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoading(true);
-    api.get('/api/marketing/coupons', {
-      params: {
-        origin: originF === 'all' ? undefined : originF,
-        status: statusF === 'all' ? undefined : statusF,
-        q: query || undefined,
-        limit: LIMIT, offset,
-      },
+    couponsApi.list({
+      origin: originF === 'all' ? undefined : originF,
+      status: statusF === 'all' ? undefined : statusF,
+      q: query || undefined,
+      limit: LIMIT, offset,
     }).then((res) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems(res.items || []);
       setCount(res.count || 0);
     }).catch((err) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems([]); setCount(0);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
-  }, [originF, statusF, query, offset, fireToast, t]);
+      toastApiError(err, fireToast, t);
+    }).finally(() => { if (req.isLatest(seq)) setLoading(false); });
+  }, [originF, statusF, query, offset, fireToast, t, req]);
 
   useEffect(() => { reload(); }, [reload]);
 

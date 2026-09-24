@@ -277,13 +277,6 @@ export function formatNational(iso2, national) {
   return groups.join(' ');
 }
 
-/** Valore qualsiasi → "+39 333 123 4567" per la sola visualizzazione. */
-export function formatPhone(value) {
-  const { iso2, dial, national } = splitPhone(value);
-  if (!dial && !national) return '';
-  return '+' + dial + (national ? ' ' + formatNational(iso2, national) : '');
-}
-
 /** Valore qualsiasi (anche legacy) → E.164 pronto per l'API: per ogni numero
  *  che il backend accetta, la stessa scrittura di `normalize_phone` (R1–R3). */
 export function normalizePhone(value) {

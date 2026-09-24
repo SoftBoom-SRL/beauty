@@ -1,5 +1,5 @@
 // lib.js — Magazzino: API-enum metadata + pure helpers shared by the sub-tabs.
-import { ApiError, fmtTime, salonTzOpts } from '@youty/shared';
+import { fmtTime, salonTzOpts } from '@youty/shared';
 
 /* ---- stock_state (server-computed: low / warning / ok) ---- */
 export const STOCK_META = {
@@ -73,10 +73,6 @@ export function fmtWhen(iso, lang) {
   const day = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts({ day: 'numeric', month: 'short' }));
   return `${day} · ${fmtTime(iso)}`;
 }
-
-/** ApiError → toast message */
-export const errMsg = (err, t) =>
-  err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');
 
 /* ---- CSV paste parsing (restock import) ----
  * One row per product: "name-or-sku, qty" (delimiter , ; or tab).

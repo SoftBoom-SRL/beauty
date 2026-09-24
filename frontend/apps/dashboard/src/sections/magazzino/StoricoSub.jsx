@@ -1,10 +1,12 @@
 // StoricoSub.jsx — global movement history: GET /api/inventory/movements
 // (paginated, server-side kind/date filters). MOVE_META styling per kind.
-import React, { useEffect, useMemo, useState } from 'react';
-import { api, EmptyState, Icon, mediaUrl } from '@youty/shared';
+import React, { useMemo, useState } from 'react';
+import { EmptyState, Icon, mediaUrl, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { MOVE_META, errMsg, fmtQty, fmtWhen, num } from './lib.js';
+import { MOVE_META, fmtQty, fmtWhen, num } from './lib.js';
 import { Pager, SkelRows } from './bits.jsx';
+import { movementsApi } from '../../api/inventory.js';
+import { useResource } from '../../hooks/useResource.js';
 
 const PAGE = 30;
 
@@ -14,8 +16,6 @@ export default function StoricoSub({ allProds, liveTick }) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState(null); // {items, count}
-  const [loading, setLoading] = useState(true);
 
   const prodById = useMemo(() => {
     const m = new Map();
@@ -23,22 +23,15 @@ export default function StoricoSub({ allProds, liveTick }) {
     return m;
   }, [allProds]);
 
-  useEffect(() => {
-    let dead = false;
-    setLoading(true);
-    api.get('/api/inventory/movements', {
-      params: {
-        kind: kindF !== 'all' ? kindF : undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        limit: PAGE, offset,
-      },
-    })
-      .then((r) => { if (!dead) setData(r); })
-      .catch((err) => { if (!dead) { setData({ items: [], count: 0 }); fireToast({ msg: errMsg(err, t), icon: 'alert' }); } })
-      .finally(() => { if (!dead) setLoading(false); });
-    return () => { dead = true; };
-  }, [kindF, dateFrom, dateTo, offset, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data, loading } = useResource(() => movementsApi.list({
+    kind: kindF !== 'all' ? kindF : undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    limit: PAGE, offset,
+  }), [kindF, dateFrom, dateTo, offset, liveTick], {
+    fallback: { items: [], count: 0 },
+    onError: (err) => toastApiError(err, fireToast, t),
+  }); // data: {items, count}
 
   const tabs = [
     ['all', t('Tutti', 'All')],

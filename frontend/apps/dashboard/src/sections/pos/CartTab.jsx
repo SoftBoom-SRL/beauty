@@ -1,22 +1,25 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-import { useEffect, useState } from 'react';
-import { api, ApiError, Avatar, Icon, NumInput } from '@youty/shared';
+import { useState } from 'react';
+import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
-import DkModal from '../../ui/DkModal.jsx';
+import CouponField from './CouponField.jsx';
+import ConfirmPaymentModal from './ConfirmPaymentModal.jsx';
+import SaleDone from './cart/SaleDone.jsx';
+import ProductGrid from './cart/ProductGrid.jsx';
+import GiftCardBuilder from './cart/GiftCardBuilder.jsx';
+import CartLine from './cart/CartLine.jsx';
+import SaleDiscount from './cart/SaleDiscount.jsx';
+import { useCoupon, useCouponRoom } from './useCoupon.js';
+import { counterDiscountPct, counterGiftLine, counterProductLine, toApiLine } from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
+import { salesApi } from '../../api/sales.js';
 import {
-  centsToApi, centsToEur, emptyPayments, findCoupon, inputCss, lineCents, methodLabel, money, opName,
+  centsToEur, emptyPayments, lineCents, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
-
-const stockMeta = (state, t) => {
-  if (state === 'low') return { label: t('Scorta bassa', 'Low stock'), color: 'var(--danger)', tint: 'var(--danger-tint)' };
-  if (state === 'warning') return { label: t('In esaurimento', 'Running low'), color: 'var(--warn)', tint: 'var(--warn-tint)' };
-  return { label: t('Disponibile', 'In stock'), color: 'var(--muted)', tint: 'var(--paper-2)' };
-};
 
 export default function CartTab({ onGoHistory }) {
   const { t, lang, operators, opColors, fireToast, hasScope } = useDash();
@@ -25,7 +28,7 @@ export default function CartTab({ onGoHistory }) {
   /* ---- products: prima pagina + ricerca lato server oltre la pagina ---- */
   const [q, setQ] = useState('');
   const { products, list: prodList, searching, refresh: refreshProducts } = useProductCatalog(q, {
-    onError: (err) => fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' }),
+    onError: (err) => toastApiError(err, fireToast, t),
   });
 
   /* ---- cart ---- */
@@ -40,12 +43,10 @@ export default function CartTab({ onGoHistory }) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null); // SaleDetailOut after a successful sale
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
-  /* Buono sconto al banco: stesso campo del check-out (vedi pos/lib.js). Il
+  /* Buono sconto al banco: stesso campo del check-out (useCoupon). Il
    * server lo rivalida e lo consuma; qui serve a mostrare il dovuto giusto. */
-  const [couponCode, setCouponCode] = useState('');
-  const [coupon, setCoupon] = useState(null);
-  const [couponErr, setCouponErr] = useState(null);
-  const [couponBusy, setCouponBusy] = useState(false);
+  const cp = useCoupon(t);
+  const { coupon, setCoupon, setCouponCode, setCouponErr } = cp;
 
   const addProduct = (p) => {
     setCart((c) => {
@@ -62,19 +63,13 @@ export default function CartTab({ onGoHistory }) {
         fireToast({ msg: t('Giacenza insufficiente', 'Not enough stock'), icon: 'alert' });
         return c;
       }
-      return [...c, {
-        key: 'p' + p.id + '_' + Date.now(), line_type: 'product', product_id: p.id,
-        name: p.name, unit_price: Number(p.sale_price), qty: 1, is_gift: false, disc: 0, stock,
-      }];
+      return [...c, counterProductLine('p' + p.id + '_' + Date.now(), p, stock)];
     });
   };
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftAmt));
     if (!(v > 0)) return;
-    setCart((c) => [...c, {
-      key: 'g' + Date.now(), line_type: 'gift_card', name: 'Gift card · €' + v,
-      value: v, recipient_name: giftName.trim(), qty: 1, is_gift: false, disc: 0,
-    }]);
+    setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName)]);
     setGiftName('');
   };
   const patchLine = (key, patch) => setCart((c) => c.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -92,11 +87,9 @@ export default function CartTab({ onGoHistory }) {
   /* ---- totals (global discount maps to per-line discount_pct for lines without their own) ----
    * In centesimi con gli arrotondamenti del server (money.js): è quello che il
    * server ricalcola, e il pagamento deve coincidere al centesimo. */
-  const effDisc = (l) => (l.line_type !== 'product' || l.is_gift ? 0 : (l.disc > 0 ? l.disc : globalDisc || 0));
-  // Si spedisce esattamente il prezzo da cui si è calcolato il conto.
-  const asApiLine = (l) => (l.line_type === 'gift_card'
-    ? { line_type: 'gift_card', value: centsToApi(toCents(l.value)), ...(l.recipient_name ? { recipient_name: l.recipient_name } : {}) }
-    : { line_type: 'product', product_id: l.product_id, qty: l.qty, unit_price: centsToApi(toCents(l.unit_price)), discount_pct: effDisc(l), is_gift: !!l.is_gift });
+  const effDisc = (l) => counterDiscountPct(l, globalDisc);
+  // Si spedisce esattamente il prezzo da cui si è calcolato il conto (lines.js).
+  const asApiLine = (l) => toApiLine(l, effDisc(l));
   const lineVal = (l) => centsToEur(lineCents({ ...l, discount_pct: effDisc(l) }));
   // Le gift card vendute restano fuori dal buono: scontarne una da 100
   // incassandone 80 significa regalare la differenza (regola del server).
@@ -111,16 +104,9 @@ export default function CartTab({ onGoHistory }) {
   const payErr = paymentsError(pay, totalCents, t);
   const seller = operators.find((o) => o.id === Number(sellerId)) || null;
 
-  /* Il buono applicato va rivisto quando il conto cambia sotto di lui: prima
-   * restava «Buono applicato» a video e la vendita veniva respinta solo al
-   * Conferma (422), dopo aver tolto i prodotti o cambiato cliente (14-12).
-   * Il codice resta nel campo, per riapplicarlo con un clic. */
-  useEffect(() => {
-    if (coupon && !(couponBaseCents > 0)) {
-      setCoupon(null);
-      setCouponErr(t('Buono tolto: nel conto non resta niente da scontare (le gift card non si scontano)', 'Voucher removed: nothing left to discount (gift cards cannot be discounted)'));
-    }
-  }, [coupon, couponBaseCents]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* Il buono applicato va rivisto quando il conto cambia sotto di lui (14-12,
+   * vedi useCouponRoom) o quando cambia la cliente (qui sotto). */
+  useCouponRoom(cp, couponBaseCents, t);
   const changeClient = (c) => {
     setClientSel(c);
     // Un buono intestato vale solo per la sua cliente (come in findCoupon).
@@ -132,22 +118,7 @@ export default function CartTab({ onGoHistory }) {
     }
   };
 
-  const applyCoupon = async () => {
-    if (couponBusy) return;
-    setCouponBusy(true);
-    setCouponErr(null);
-    try {
-      if (!(couponBaseCents > 0)) {
-        setCouponErr(t('Coupon non applicabile alla vendita di una gift card', 'Voucher cannot be applied to a gift card sale'));
-        return;
-      }
-      const { coupon: found, error } = await findCoupon(couponCode, { clientId: clientSel?.id ?? null, t });
-      if (error) { setCoupon(null); setCouponErr(error); return; }
-      setCoupon(found);
-      setCouponCode(found.code);
-    } finally { setCouponBusy(false); }
-  };
-  const clearCoupon = () => { setCoupon(null); setCouponCode(''); setCouponErr(null); };
+  const applyCoupon = () => cp.applyCoupon({ baseCents: couponBaseCents, clientId: clientSel?.id ?? null });
 
   /* ---- submit ---- */
   const complete = async () => {
@@ -155,7 +126,7 @@ export default function CartTab({ onGoHistory }) {
     if (payErr) { fireToast({ msg: payErr, icon: 'alert' }); return; }
     setSaving(true);
     try {
-      const sale = await api.post('/api/sales/pos', {
+      const sale = await salesApi.pos({
         client_id: clientSel ? clientSel.id : null,
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
         payments: resolvePayments(pay, totalCents),
@@ -166,7 +137,7 @@ export default function CartTab({ onGoHistory }) {
       fireToast({ msg: t(`Vendita registrata · ${money(sale.total, lang)}`, `Sale recorded · ${money(sale.total, lang)}`), icon: 'check' });
     } catch (err) {
       setConfirmOpen(false);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -180,35 +151,7 @@ export default function CartTab({ onGoHistory }) {
 
   /* ---- completion screen ---- */
   if (done) {
-    const hasGift = done.lines.some((l) => l.line_type === 'gift_card');
-    const methodsUsed = done.payments.map((p) => methodLabel(p.method, t)).join(' + ');
-    return (
-      <div className="dk-card pop-in" style={{ padding: '44px 36px', textAlign: 'center', maxWidth: 540, margin: '0 auto' }}>
-        <div style={{ width: 68, height: 68, borderRadius: 99, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 18px' }}>
-          <Icon name="check" size={34} color="var(--ok)" stroke={2.4} />
-        </div>
-        <div style={{ fontFamily: 'var(--serif)', fontSize: 26, fontWeight: 500 }}>{t('Vendita completata', 'Sale complete')}</div>
-        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6 }}>
-          {done.lines.reduce((s, l) => s + (l.qty || 1), 0)} {t('articoli', 'items')} · {money(done.total, lang)} · {methodsUsed}
-        </div>
-        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>
-          {seller ? t('Accreditata a', 'Credited to') + ' ' + opName(seller) : ''}
-          {done.client_name ? (seller ? ' · ' : '') + done.client_name : (seller ? ' · ' : '') + t('Da banco', 'Walk-in')}
-        </div>
-        {hasGift && (
-          <div className="t-sm" style={{ color: 'var(--ok)', marginTop: 10, fontWeight: 600 }}>
-            <Icon name="gift" size={15} color="var(--ok)" style={{ verticalAlign: '-2px', marginRight: 5 }} />
-            {t('Gift card emessa', 'Gift card issued')}{done.lines.filter((l) => l.line_type === 'gift_card').map((l) => l.gift_card_code).filter(Boolean).map((c) => ' · ' + c).join('')}
-          </div>
-        )}
-        <button className="dk-btn dk-btn--clay" style={{ marginTop: 24, width: '100%', height: 48 }} onClick={reset}>
-          <Icon name="plus" size={18} color="#fff" />{t('Nuova vendita', 'New sale')}
-        </button>
-        <button className="dk-btn dk-btn--ghost" style={{ marginTop: 10, width: '100%', height: 44 }} onClick={onGoHistory}>
-          <Icon name="clock" size={16} />{t('Vedi storico vendite', 'View sales history')}
-        </button>
-      </div>
-    );
+    return <SaleDone done={done} seller={seller} onNew={reset} onGoHistory={onGoHistory} t={t} lang={lang} />;
   }
 
   return (
@@ -224,56 +167,10 @@ export default function CartTab({ onGoHistory }) {
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
 
-        {products === null ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            {[...Array(6)].map((_, i) => <div key={i} className="skel" style={{ height: 128, borderRadius: 16 }} />)}
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-            {prodList.map((p) => {
-              const inCart = cart.find((l) => l.line_type === 'product' && l.product_id === p.id);
-              const sm = stockMeta(p.stock_state, t);
-              return (
-                <button key={p.id} onClick={() => addProduct(p)} className="dk-card"
-                  style={{ padding: 16, textAlign: 'left', cursor: 'pointer', border: '1px solid ' + (inCart ? 'var(--clay)' : 'var(--hair)'), position: 'relative', transition: 'border-color 140ms' }}>
-                  {inCart && <span style={{ position: 'absolute', top: 10, right: 10, minWidth: 22, height: 22, padding: '0 6px', borderRadius: 99, background: 'var(--clay)', color: '#fff', fontSize: 12, fontWeight: 700, display: 'grid', placeItems: 'center' }}>{inCart.qty}</span>}
-                  <div style={{ width: 40, height: 40, borderRadius: 11, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', marginBottom: 12 }}>
-                    <Icon name="box" size={20} color="var(--clay-ink)" />
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.25 }}>{p.name}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 7 }}>
-                    <span className="t-num" style={{ fontSize: 16, fontWeight: 700 }}>{money(p.sale_price, lang)}</span>
-                    <span title={sm.label} style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.tint, padding: '2px 8px', borderRadius: 99, marginLeft: 'auto' }}>
-                      {Number(p.stock_qty)} {t('pz', 'pcs')}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-            {!prodList.length && <div className="t-sm" style={{ color: 'var(--muted-2)', gridColumn: '1 / -1', textAlign: 'center', padding: 32 }}>{searching ? t('Ricerca nel catalogo…', 'Searching the catalogue…') : t('Nessun prodotto trovato', 'No products found')}</div>}
-          </div>
-        )}
+        <ProductGrid products={products} list={prodList} cart={cart} searching={searching} onAdd={addProduct} t={t} lang={lang} />
 
         {/* gift-card line builder */}
-        <div className="dk-card" style={{ marginTop: 16, padding: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 11, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-            <Icon name="gift" size={20} color="var(--ok)" />
-          </div>
-          <div style={{ flex: 1, minWidth: 130 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{t('Gift card', 'Gift card')}</div>
-            <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Emetti una carta prepagata', 'Issue a prepaid card')}</div>
-          </div>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 10, padding: '8px 10px', background: 'var(--surface)', width: 86, boxSizing: 'border-box' }}>
-            <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-            <NumInput min={1} value={giftAmt} onChange={setGiftAmt}
-              style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 14, width: '100%' }} />
-          </div>
-          <input value={giftName} onChange={(e) => setGiftName(e.target.value)} placeholder={t('Destinatario (facolt.)', 'Recipient (optional)')}
-            style={{ border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13, fontWeight: 600, padding: '9px 12px', fontFamily: 'var(--sans)', background: 'var(--surface)', width: 160 }} />
-          <button className="dk-btn dk-btn--ghost" style={{ height: 38 }} disabled={!(toCents(giftAmt) > 0)} onClick={addGiftCard}>
-            <Icon name="plus" size={15} />{t('Aggiungi', 'Add')}
-          </button>
-        </div>
+        <GiftCardBuilder amt={giftAmt} setAmt={setGiftAmt} name={giftName} setName={setGiftName} onAdd={addGiftCard} t={t} />
       </div>
 
       {/* RIGHT — cart / checkout */}
@@ -312,53 +209,9 @@ export default function CartTab({ onGoHistory }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {cart.map((l) => {
-                const val = lineVal(l);
-                const d = effDisc(l);
-                return (
-                  <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: l.is_gift ? '1px solid var(--ok)' : '1px solid transparent' }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                      <Icon name={l.line_type === 'gift_card' ? 'gift' : 'box'} size={16} color={l.is_gift ? 'var(--ok)' : 'var(--clay-ink)'} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {l.name}{l.line_type === 'gift_card' && l.recipient_name ? ' · ' + l.recipient_name : ''}
-                      </div>
-                      <div className="t-sm" style={{ color: l.is_gift ? 'var(--ok)' : 'var(--muted)', fontWeight: l.is_gift ? 700 : 400 }}>
-                        {l.is_gift ? t('Omaggio', 'Free gift') : money(val, lang)}
-                        {!l.is_gift && d > 0 ? ` · −${d}%` : ''}
-                        {!l.is_gift && l.qty > 1 ? ' × ' + l.qty : ''}
-                      </div>
-                    </div>
-                    {l.line_type === 'product' && !l.is_gift && (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid ' + (l.disc > 0 ? 'var(--clay)' : 'var(--hair)'), borderRadius: 7, padding: '2px 5px', background: 'var(--surface)', flexShrink: 0 }} title={t('Sconto riga', 'Line discount')}>
-                        <NumInput integer min={0} max={100} value={l.disc}
-                          onChange={(disc) => patchLine(l.key, { disc })}
-                          style={{ width: 24, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
-                        <span style={{ color: 'var(--muted-2)', fontWeight: 700, fontSize: 11 }}>%</span>
-                      </div>
-                    )}
-                    {l.line_type === 'product' && (
-                      <button onClick={() => patchLine(l.key, { is_gift: !l.is_gift })} title={t('Ometti pagamento', 'Comp this item')} className="dk-iconbtn"
-                        style={{ width: 26, height: 26, flexShrink: 0, background: l.is_gift ? 'var(--ok-tint)' : 'transparent', borderRadius: 7 }}>
-                        <Icon name="gift" size={14} color={l.is_gift ? 'var(--ok)' : 'var(--muted-2)'} />
-                      </button>
-                    )}
-                    {l.line_type === 'product' ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                        <button className="dk-iconbtn" style={{ width: 26, height: 26, fontSize: 16, fontWeight: 700, lineHeight: 1, color: 'var(--ink-2)' }}
-                          onClick={() => (l.qty === 1 ? removeLine(l.key) : stepQty(l, -1))}>
-                          {l.qty === 1 ? <Icon name="x" size={13} /> : '−'}
-                        </button>
-                        <span className="t-num" style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: 13.5 }}>{l.qty}</span>
-                        <button className="dk-iconbtn" style={{ width: 26, height: 26 }} onClick={() => stepQty(l, 1)}><Icon name="plus" size={13} /></button>
-                      </div>
-                    ) : (
-                      <button className="dk-iconbtn" style={{ width: 26, height: 26, flexShrink: 0 }} onClick={() => removeLine(l.key)}><Icon name="x" size={13} /></button>
-                    )}
-                  </div>
-                );
-              })}
+              {cart.map((l) => (
+                <CartLine key={l.key} l={l} val={lineVal(l)} d={effDisc(l)} onPatch={patchLine} onStep={stepQty} onRemove={removeLine} t={t} lang={lang} />
+              ))}
             </div>
           )}
 
@@ -376,54 +229,12 @@ export default function CartTab({ onGoHistory }) {
           )}
 
           {/* sale-level discount */}
-          <div className="t-meta" style={{ margin: '18px 0 8px' }}>{t('Sconto sulla vendita', 'Sale discount')}</div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {[0, 10, 15, 20].map((p) => {
-              const on = globalDisc === p;
-              return (
-                <button key={p} onClick={() => setGlobalDisc(p)} style={{ flex: 1, padding: '9px 0', borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)' }}>
-                  {p === 0 ? t('No', 'No') : p + '%'}
-                </button>
-              );
-            })}
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid ' + (globalDisc && ![10, 15, 20].includes(globalDisc) ? 'var(--clay)' : 'var(--hair)'), borderRadius: 9, padding: '0 9px', height: 36, background: 'var(--surface)' }}>
-              <NumInput integer min={0} max={100} value={globalDisc}
-                onChange={setGlobalDisc}
-                style={{ width: 34, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 13.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
-              <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>%</span>
-            </div>
-          </div>
+          <SaleDiscount value={globalDisc} onChange={setGlobalDisc} t={t} />
 
           {/* buono sconto — prima del pagamento, così il dovuto è già quello giusto */}
-          <div style={{ margin: '18px 0 0' }}>
-            <div className="t-meta" style={{ marginBottom: 7 }}>{t('Buono sconto (facoltativo)', 'Voucher (optional)')}</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input value={couponCode} disabled={!!coupon}
-                onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponErr(null); }}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !coupon) applyCoupon(); }}
-                placeholder={t('Codice del buono', 'Voucher code')}
-                style={{ ...inputCss, flex: 1, minWidth: 0, letterSpacing: '0.06em', opacity: coupon ? 0.75 : 1 }} />
-              {coupon ? (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} onClick={clearCoupon}>
-                  <Icon name="x" size={13} />{t('Togli', 'Remove')}
-                </button>
-              ) : (
-                <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={couponBusy || !couponCode.trim()} onClick={applyCoupon}>
-                  <Icon name="coupon" size={13} />{couponBusy ? t('Verifica…', 'Checking…') : t('Applica', 'Apply')}
-                </button>
-              )}
-            </div>
-            {couponErr && (
-              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="alert" size={13} color="var(--danger)" />{couponErr}
-              </div>
-            )}
-            {coupon && (
-              <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 600, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Buono applicato', 'Voucher applied')} · −{money(couponAmt, lang)}
-              </div>
-            )}
-          </div>
+          <CouponField cp={cp} onApply={applyCoupon} discount={couponAmt}
+            label={t('Buono sconto (facoltativo)', 'Voucher (optional)')} placeholder={t('Codice del buono', 'Voucher code')}
+            style={{ margin: '18px 0 0' }} labelStyle={{ marginBottom: 7 }} t={t} lang={lang} />
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
@@ -445,23 +256,9 @@ export default function CartTab({ onGoHistory }) {
       </div>
 
       {/* conferma prima di finalizzare la vendita */}
-      <DkModal open={confirmOpen} onClose={() => { if (!saving) setConfirmOpen(false); }}
-        title={t('Conferma pagamento', 'Confirm payment')} width={440}
-        foot={(
-          <>
-            <button className="dk-btn dk-btn--ghost" onClick={() => setConfirmOpen(false)} disabled={saving}>{t('Torna indietro', 'Go back')}</button>
-            <button className="dk-btn dk-btn--clay" onClick={complete} disabled={saving}>
-              <Icon name="check" size={16} color="#fff" />{saving ? t('Registrazione…', 'Recording…') : t('Conferma', 'Confirm')}
-            </button>
-          </>
-        )}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
-          {t('Sei sicura di voler completare il pagamento?', 'Are you sure you want to complete the payment?')}
-        </div>
-        <div className="t-sm" style={{ color: 'var(--muted)' }}>
-          {itemCount} {t('articoli', 'items')} · {money(total, lang)}{seller ? ' · ' + opName(seller) : ''}
-        </div>
-      </DkModal>
+      <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={complete}
+        summary={<>{itemCount} {t('articoli', 'items')} · {money(total, lang)}{seller ? ' · ' + opName(seller) : ''}</>}
+        t={t} />
     </div>
   );
 }

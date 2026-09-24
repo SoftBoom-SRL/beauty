@@ -6,9 +6,10 @@
 // larga prenota subito — un clic, non un menu da aprire — e la freccetta tiene le
 // creazioni meno frequenti. In agenda il giorno proposto è quello che si sta
 // guardando (ctx.agendaDate), non oggi.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Avatar, EmptyState, Icon, fmtDateIt, salonTzOpts } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
+import { useClickAway } from '../hooks/useClickAway.js';
 
 const TITLES = {
   agenda: ['Agenda', 'Agenda'],
@@ -25,21 +26,12 @@ const TITLES = {
   profile: ['Profilo titolare', 'Owner profile'],
 };
 
-/* Chiude un popover al click fuori o con Esc. Non usa un fondo `position: fixed`:
+/* I popover si chiudono al click fuori o con Esc. Niente fondo `position: fixed`:
  * dentro `.dk-top` il backdrop-filter lo confinerebbe alla sola barra e i click
  * sul resto della pagina non lo raggiungerebbero (il pannello restava aperto).
  * Esc qui chiude il popover e basta: `preventDefault()` dice alla pila dei
  * livelli (ui/layers.js) di non chiudere anche la finestra sotto. */
-function useClickAway(ref, open, onClose) {
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('pointerdown', onDown, true); document.removeEventListener('keydown', onKey); };
-  }, [ref, open, onClose]);
-}
+const POPOVER_AWAY = { event: 'pointerdown', capture: true, escape: true };
 
 export default function Topbar() {
   const { t, lang, tab, setTab, search, setSearch, openModal, session, live, agendaDate } = useDash();
@@ -50,8 +42,8 @@ export default function Topbar() {
   const [newMenu, setNewMenu] = useState(false);
   const notifRef = useRef(null);
   const newRef = useRef(null);
-  useClickAway(notifRef, notifOpen, () => setNotifOpen(false));
-  useClickAway(newRef, newMenu, () => setNewMenu(false));
+  useClickAway(notifRef, notifOpen, () => setNotifOpen(false), POPOVER_AWAY);
+  useClickAway(newRef, newMenu, () => setNewMenu(false), POPOVER_AWAY);
 
   const title = t(...(TITLES[tab] || TITLES.agenda));
   const initials = (session?.user?.name || '?')

@@ -2,7 +2,7 @@
 // Local to this section (no shared statusMeta equivalent exists for the marketing
 // `Communication.status` enum, which is draft|scheduled|sent — unrelated to
 // appointment/deposit statuses in @youty/shared).
-import { dateTimeLocalToIso, fmtTime, salonDateParts, toDateTimeLocal } from '@youty/shared';
+import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, dateTimeLocalToIso, fmtTime, salonDateParts, toDateTimeLocal } from '@youty/shared';
 
 export const COM_STATUS_KEYS = ['draft', 'scheduled', 'sent'];
 
@@ -16,14 +16,11 @@ export function comStatusMeta(status, t) {
   }
 }
 
-const MONTHS_IT = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
-const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /** ISO datetime -> "1 lug 2026 · 10:00" (local time, bilingual months). */
 export function comWhenLabel(iso, lang) {
   if (!iso) return '';
   const p = salonDateParts(iso);
-  const mon = lang === 'en' ? MONTHS_EN : MONTHS_IT;
+  const mon = lang === 'en' ? MONTHS_SHORT_EN : MONTHS_SHORT_IT;
   return `${p.day} ${mon[p.month - 1]} ${p.year} · ${fmtTime(iso)}`;
 }
 

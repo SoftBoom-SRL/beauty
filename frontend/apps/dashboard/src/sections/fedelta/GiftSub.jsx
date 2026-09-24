@@ -1,9 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, fmtEur, Icon, EmptyState } from '@youty/shared';
-
-/** fmtEur(0) scrive «Gratis» (convenzione dei listini servizi): un KPI o un
- *  saldo a zero è «€0», non un omaggio. */
-const eur0 = (n, lang) => (Number(n) === 0 ? '€0' : fmtEur(Number(n), lang));
+import React, { useCallback, useEffect, useState } from 'react';
+import { fmtEurNoFree, Icon, EmptyState, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
@@ -11,6 +7,8 @@ import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
+import { giftCardsApi } from '../../api/marketing.js';
+import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 // L'elenco è paginato lato server. Prima si chiedevano le prime 200 carte e
 // basta: un salone che ne ha vendute di più ne vedeva una parte senza che
@@ -57,44 +55,42 @@ export default function GiftSub() {
   }, [q]);
 
   /* Come in CouponSub: un solo effetto con filtri e offset fra le dipendenze,
-   * l'offset azzerato dallo stesso gestore che cambia il filtro, e `reqSeq` a
-   * scartare le risposte in ritardo (altrimenti si vede una pagina mentre il
+   * l'offset azzerato dallo stesso gestore che cambia il filtro, e `req`
+   * (useLatestRequest) a scartare le risposte in ritardo (altrimenti si vede una pagina mentre il
    * pager ne annuncia un'altra). */
-  const reqSeq = useRef(0);
+  const req = useLatestRequest();
   const setFilter = (setter) => (v) => { setter(v); setOffset(0); };
 
   const reload = useCallback(() => {
-    const seq = ++reqSeq.current;
+    const seq = req.begin();
     setLoading(true);
-    api.get('/api/marketing/gift-cards', {
-      params: {
-        status: statusF === 'all' ? undefined : statusF,
-        payment_status: payF === 'all' ? undefined : payF,
-        q: query || undefined,
-        limit: LIMIT, offset,
-      },
+    giftCardsApi.list({
+      status: statusF === 'all' ? undefined : statusF,
+      payment_status: payF === 'all' ? undefined : payF,
+      q: query || undefined,
+      limit: LIMIT, offset,
     }).then((res) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems(res.items || []);
       setTotal(res.total || 0);
       setKpi(res.kpi || null);
     }).catch((err) => {
-      if (seq !== reqSeq.current) return;
+      if (!req.isLatest(seq)) return;
       setItems([]); setTotal(0); setKpi(null);
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
-    }).finally(() => { if (seq === reqSeq.current) setLoading(false); });
-  }, [statusF, payF, query, offset, fireToast, t]);
+      toastApiError(err, fireToast, t);
+    }).finally(() => { if (req.isLatest(seq)) setLoading(false); });
+  }, [statusF, payF, query, offset, fireToast, t, req]);
 
   useEffect(() => { reload(); }, [reload]);
 
   const markPaid = async (card, method) => {
     setMarkingId(null);
     try {
-      await api.post(`/api/marketing/gift-cards/${card.id}/mark-paid`, { method });
+      await giftCardsApi.markPaid(card.id, { method });
       fireToast({ msg: t('Gift card segnata come pagata', 'Gift card marked as paid'), icon: 'check' });
       reload();
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     }
   };
 
@@ -124,9 +120,9 @@ export default function GiftSub() {
       ) : (
         <div className="dk-card" style={{ display: 'flex', alignItems: 'stretch', gap: 0, padding: '16px 6px', marginBottom: 18, boxShadow: 'none', border: '1px solid var(--hair)' }}>
           {[
-            [t('Valore venduto', 'Sold value'), eur0(kpi?.sold_total || 0, lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
-            [t('Già riscattato', 'Already redeemed'), eur0(kpi?.redeemed_total || 0, lang), 'var(--muted)', t('valore consumato', 'value consumed')],
-            [t('Da riscattare', 'Outstanding'), eur0(kpi?.outstanding || 0, lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
+            [t('Valore venduto', 'Sold value'), fmtEurNoFree(kpi?.sold_total || 0, lang), 'var(--ink)', t('totale card emesse', 'total cards issued')],
+            [t('Già riscattato', 'Already redeemed'), fmtEurNoFree(kpi?.redeemed_total || 0, lang), 'var(--muted)', t('valore consumato', 'value consumed')],
+            [t('Da riscattare', 'Outstanding'), fmtEurNoFree(kpi?.outstanding || 0, lang), 'var(--clay-ink)', t('saldo da onorare', 'balance to honour')],
           ].map(([l, v, c, sub], i) => (
             <div key={i} style={{ flex: 1, padding: '2px 18px', borderLeft: i ? '1px solid var(--hair)' : 'none' }}>
               <div className="t-meta" style={{ marginBottom: 5 }}>{l}</div>
@@ -191,8 +187,8 @@ export default function GiftSub() {
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{eur0(value, lang)}</span>
-                      {used > 0 && status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{eur0(balance, lang)}</strong></span>}
+                      <span className="t-num" style={{ fontSize: 24, color: 'var(--clay-ink)' }}>{fmtEurNoFree(value, lang)}</span>
+                      {used > 0 && status === 'active' && <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t('residuo', 'left')} <strong style={{ color: 'var(--ink)' }}>{fmtEurNoFree(balance, lang)}</strong></span>}
                     </div>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
                     {g.gift_service_name && (

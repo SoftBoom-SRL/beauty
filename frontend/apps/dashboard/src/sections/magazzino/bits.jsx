@@ -1,16 +1,5 @@
 // bits.jsx — small UI pieces shared by the Magazzino sub-tabs (ported from the prototype).
-import { useEffect, useState } from 'react';
 import { Icon, NumInput } from '@youty/shared';
-
-/** debounce a changing value (used for the server-side q filter) */
-export function useDebounced(value, ms = 300) {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return v;
-}
 
 export function MiniMetric({ label, value, wide, onClick, active }) {
   return (
@@ -18,20 +7,6 @@ export function MiniMetric({ label, value, wide, onClick, active }) {
       <div className="t-meta" style={{ marginBottom: 4, color: active ? 'var(--clay-ink)' : undefined }}>{label}</div>
       <div className="t-num" style={{ fontSize: 22, color: active ? 'var(--clay-ink)' : undefined }}>{value}</div>
     </button>
-  );
-}
-
-export function SearchToolbar({ q, setQ, placeholder, onAdd, addLabel, extra }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-      <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
-        <Icon name="search" size={18} color="var(--muted-2)" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} />
-        {q && <button className="press" onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
-      </div>
-      {extra}
-      {onAdd && <button className="dk-btn dk-btn--clay" onClick={onAdd} style={{ flexShrink: 0 }}><Icon name="plus" size={17} color="#fff" />{addLabel}</button>}
-    </div>
   );
 }
 

@@ -2,17 +2,13 @@
 // Una riga per servizio (nome, durata, prezzo, operatrici, stato): densità alta,
 // scansione rapida, modifica al clic. Sostituisce le card grandi 3-per-riga.
 import React, { useState } from 'react';
-import { Icon, Toggle, fmtEur, fmtDur, EmptyState } from '@youty/shared';
+import { Icon, Toggle, fmtEur, fmtDur, EmptyState, nameIn } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
-import { CategoryDot, OperatorAvatarStack, SearchToolbar } from './parts.jsx';
+import SearchToolbar from '../../ui/SearchToolbar.jsx';
+import { CategoryDot, OperatorAvatarStack } from './parts.jsx';
 
-function catName(cat, lang) {
-  if (!cat) return '';
-  return lang === 'en' && cat.name_en ? cat.name_en : cat.name_it;
-}
-function svcName(s, lang) {
-  return lang === 'en' && s.name_en ? s.name_en : s.name_it;
-}
+const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
+const svcName = nameIn;
 // the "other" language label, shown small next to the primary name
 function svcNameAlt(s, lang) {
   return lang === 'en' ? s.name_it : s.name_en || '';

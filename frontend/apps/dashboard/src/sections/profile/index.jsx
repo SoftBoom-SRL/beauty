@@ -7,31 +7,21 @@
 // consolidated report (DK_LOC_REPORT) and cross-location staff leaderboard
 // (DK_OWNER_STAFF) were dropped — the API has no per-location report endpoint;
 // KPIs shown are salon-wide, locations render as a plain list.
-import React, { useEffect, useState } from 'react';
-import { api, ApiError, staffAuth, Icon, Avatar, fmtEur } from '@youty/shared';
+import React from 'react';
+import { staffAuth, Icon, Avatar, fmtEurOrZero, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
+import { insightsApi } from '../../api/insights.js';
+import { useResource } from '../../hooks/useResource.js';
 
 export default function ProfileSection() {
   const { t, lang, session, salon, locations, fireToast } = useDash();
   const isOwner = !!session?.is_owner;
 
-  const [kpis, setKpis] = useState(null);
-  const [kpisLoading, setKpisLoading] = useState(isOwner);
-
-  useEffect(() => {
-    if (!isOwner) return undefined;
-    let alive = true;
-    setKpisLoading(true);
-    api.get('/api/insights/kpis', { params: { period: 'month' } })
-      .then((k) => { if (alive) setKpis(k); })
-      .catch((err) => {
-        if (!alive) return;
-        if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-        else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
-      })
-      .finally(() => { if (alive) setKpisLoading(false); });
-    return () => { alive = false; };
-  }, [isOwner, fireToast, t]);
+  // riparte anche quando cambiano fireToast o t (la lingua), come prima
+  const { data: kpis, loading: kpisLoading } = useResource(() => insightsApi.kpis({ period: 'month' }), [fireToast, t], {
+    enabled: isOwner,
+    onError: (err) => toastApiError(err, fireToast, t),
+  });
 
   const name = session?.user?.name || '';
   const initials = name.split(/\s+/).map((w) => w.charAt(0)).slice(0, 2).join('').toUpperCase() || '?';
@@ -39,10 +29,7 @@ export default function ProfileSection() {
   // Niente arrotondamento all'euro prima di formattare: con i centesimi a
   // video uno scontrino medio di 47,50 € sarebbe diventato «€48,00», cioè una
   // cifra precisa e sbagliata.
-  const eur = (n) => {
-    const v = Number(n) || 0;
-    return v === 0 ? '€0' : fmtEur(v, lang);
-  };
+  const eur = (n) => fmtEurOrZero(n, lang);
 
   const kpiCards = kpis ? [
     [t('Incasso del mese', 'Month revenue'), eur(kpis.revenue), 'wallet'],

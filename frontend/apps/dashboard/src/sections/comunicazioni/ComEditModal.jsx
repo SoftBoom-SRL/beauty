@@ -3,10 +3,12 @@
 // index.jsx as a plain <DkModal>. Owns its own save/delete API calls; the parent just
 // refetches the list on success.
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, ApiError, Icon } from '@youty/shared';
+import { ApiError, Icon, toastApiError } from '@youty/shared';
 import { DkModal, DkSeg } from '../../ui/index.js';
 import { useDash } from '../../ctx.jsx';
 import { comStatusMeta, comWhenLabel, dtLocalToIso, isPastSchedule, isoToDtLocal, nowDtLocal } from './helpers.js';
+import { clientsApi } from '../../api/clients.js';
+import { communicationsApi } from '../../api/marketing.js';
 
 const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 9, outline: 'none', fontSize: 14,
@@ -48,7 +50,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     const ids = comm?.audience || [];
     if (!ids.length) return;
     let cancelled = false;
-    Promise.all(ids.map((id) => api.get(`/api/clients/${id}`).catch(() => null))).then((rows) => {
+    Promise.all(ids.map((id) => clientsApi.get(id).catch(() => null))).then((rows) => {
       if (cancelled) return;
       setKnownClients((m) => {
         const next = { ...m };
@@ -68,7 +70,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     const h = setTimeout(() => {
       // solo schede attive: l'invio salta comunque le archiviate, e scegliere
       // il doppione archiviato lasciava fuori la cliente vera (14-22)
-      api.get('/api/clients/', { params: { q: cq, is_active: true, limit: 12 } })
+      clientsApi.list({ q: cq, is_active: true, limit: 12 })
         .then((res) => { if (!cancelled) setClientResults(res.items || []); })
         .catch(() => { if (!cancelled) setClientResults([]); })
         .finally(() => { if (!cancelled) setClientBusy(false); });
@@ -113,8 +115,8 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
       scheduled_at: dtLocalToIso(scheduledAt),
     };
     return isNew
-      ? api.post('/api/marketing/communications', payload)
-      : api.put(`/api/marketing/communications/${comm.id}`, payload);
+      ? communicationsApi.create(payload)
+      : communicationsApi.update(comm.id, payload);
   };
 
   const save = async () => {
@@ -135,7 +137,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
         return;
       }
       try {
-        const rescheduled = await api.post(`/api/marketing/communications/${saved.id}/send`, { scheduled_at: when });
+        const rescheduled = await communicationsApi.send(saved.id, { scheduled_at: when });
         fireToast({ msg: t(`Comunicazione salvata · invio programmato per ${comWhenLabel(when, 'it')}`, `Communication saved · send scheduled for ${comWhenLabel(when, 'en')}`), icon: 'check' });
         onSaved(rescheduled);
       } catch (err) {
@@ -144,7 +146,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
         onSaved(saved);
       }
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -158,7 +160,7 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
       const saved = await persist();
       onSend(saved);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }
@@ -168,11 +170,11 @@ export default function ComEditModal({ comm, onClose, onSaved, onDeleted, onSend
     if (isNew || deleting) return;
     setDeleting(true);
     try {
-      await api.del(`/api/marketing/communications/${comm.id}`);
+      await communicationsApi.remove(comm.id);
       fireToast({ msg: t('Comunicazione eliminata', 'Communication deleted'), icon: 'x' });
       onDeleted(comm.id);
     } catch (err) {
-      fireToast({ msg: err instanceof ApiError ? err.message : t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
       setDeleting(false);
     }
   };

@@ -2,11 +2,13 @@
 // Scope checkboxes come from the known API scope list; system roles read-only.
 // Keeps the prototype's local "revenue summary visible" UI toggle (ctx showRevenue).
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon } from '@youty/shared';
+import { Icon, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
+import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, toastErr, LockNote } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
+import { invitationsApi, membersApi, rolesApi } from '../../api/team.js';
 
 // known scopes (common/permissions.py) with bilingual labels
 export const SCOPES = [
@@ -42,10 +44,10 @@ export default function RolesDrawer({ onClose }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/api/auth/roles');
+      const r = await rolesApi.list();
       setRoles(r);
       setDrafts(Object.fromEntries(r.map((x) => [x.id, { name: x.name, scopes: [...x.scopes] }])));
-    } catch (err) { toastErr(err, fireToast, t); setRoles([]); }
+    } catch (err) { toastApiError(err, fireToast, t); setRoles([]); }
   }, [fireToast, t]);
   useEffect(() => { if (canTeam) load(); }, [canTeam, load]);
 
@@ -55,23 +57,23 @@ export default function RolesDrawer({ onClose }) {
       // sempre da «agenda» faceva fallire la creazione con un 403 a chi non ce
       // l'aveva, senza che si capisse perché.
       const seed = canGrant('agenda') ? ['agenda'] : myScopes.slice(0, 1);
-      const created = await api.post('/api/auth/roles', { name: t('Nuovo ruolo', 'New role'), scopes: seed });
+      const created = await rolesApi.create({ name: t('Nuovo ruolo', 'New role'), scopes: seed });
       setRoles((l) => [...l, created]);
       setDrafts((d) => ({ ...d, [created.id]: { name: created.name, scopes: [...created.scopes] } }));
       setOpenId(created.id);
       fireToast({ msg: t('Ruolo creato · imposta i permessi', 'Role created · set permissions'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   const saveRole = async (role) => {
     const d = drafts[role.id];
     if (!d || !d.name.trim()) return;
     try {
-      const upd = await api.put(`/api/auth/roles/${role.id}`, { name: d.name.trim(), scopes: d.scopes });
+      const upd = await rolesApi.update(role.id, { name: d.name.trim(), scopes: d.scopes });
       setRoles((l) => l.map((r) => (r.id === role.id ? upd : r)));
       setDrafts((ds) => ({ ...ds, [role.id]: { name: upd.name, scopes: [...upd.scopes] } }));
       fireToast({ msg: t('Permessi salvati per ', 'Permissions saved for ') + upd.name, icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); }
+    } catch (err) { toastApiError(err, fireToast, t); }
   };
 
   /* Eliminare un ruolo partiva al primo clic: chi lo aveva restava senza
@@ -84,7 +86,7 @@ export default function RolesDrawer({ onClose }) {
   const askDelete = async (role) => {
     setConfirmDel({ role, members: null, invites: null });
     try {
-      const [m, i] = await Promise.all([api.get('/api/auth/members'), api.get('/api/auth/invitations')]);
+      const [m, i] = await Promise.all([membersApi.list(), invitationsApi.list()]);
       const members = (m || []).filter((x) => x.role?.id === role.id);
       const invites = (i || []).filter((x) => x.status === 'pending' && x.role?.id === role.id).length;
       setConfirmDel((c) => (c && c.role.id === role.id ? { ...c, members, invites } : c));
@@ -97,12 +99,12 @@ export default function RolesDrawer({ onClose }) {
     if (!role || deleting) return;
     setDeleting(true);
     try {
-      await api.del(`/api/auth/roles/${role.id}`);
+      await rolesApi.remove(role.id);
       setRoles((l) => l.filter((r) => r.id !== role.id));
       if (openId === role.id) setOpenId(null);
       setConfirmDel(null);
       fireToast({ msg: t('Ruolo eliminato', 'Role deleted'), icon: 'x' });
-    } catch (err) { toastErr(err, fireToast, t); } // 400 if system
+    } catch (err) { toastApiError(err, fireToast, t); } // 400 if system
     finally { setDeleting(false); }
   };
   const delDetail = () => {
@@ -137,13 +139,8 @@ export default function RolesDrawer({ onClose }) {
 
   return (
     <DkDrawer open onClose={onClose}>
-      <div style={{ padding: '22px 22px 18px', borderBottom: '1px solid var(--hair)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 21, fontWeight: 500 }}>{t('Ruoli e permessi', 'Roles & permissions')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{t('Cosa può vedere e fare ogni ruolo', 'What each role can see and do')}</div>
-        </div>
-        <button className="dk-iconbtn" onClick={onClose}><Icon name="x" size={19} /></button>
-      </div>
+      <DrawerHead variant="team" onClose={onClose} title={t('Ruoli e permessi', 'Roles & permissions')}
+        sub={t('Cosa può vedere e fare ogni ruolo', 'What each role can see and do')} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 22px' }}>
         {!canTeam ? (

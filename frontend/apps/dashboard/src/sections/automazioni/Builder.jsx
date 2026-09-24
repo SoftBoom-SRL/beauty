@@ -5,12 +5,13 @@
 // Execution (channel + message) lives on Yourang — shown read-only, with a live
 // client-side WhatsApp preview (token substitution) as a nicety.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError, API_URL, Icon, Toggle } from '@youty/shared';
+import { API_URL, Icon, Toggle, toastApiError } from '@youty/shared';
 import { DkSeg } from '../../ui/index.js';
 import { mergeRuleDraft } from './draft.js';
 import { useDash } from '../../ctx.jsx';
 import DkCondRow, { defaultRule } from './DkCondRow.jsx';
 import { DkStepper, DkCopyField, DkTrigStep, MiniMetric, DkEventMenu } from './controls.jsx';
+import { automationsApi } from '../../api/automations.js';
 import {
   eventIcon, eventHint, OFFSET_UNITS, offsetPhrase,
   dkRender, EVENT_SAMPLE_MESSAGE, catLabel,
@@ -108,14 +109,13 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
     setSaving(true);
     try {
       const saved = rule
-        ? await api.put(`/api/automations/${rule.id}`, payload)
-        : await api.post('/api/automations/', payload);
+        ? await automationsApi.update(rule.id, payload)
+        : await automationsApi.create(payload);
       fireToast({ msg: t('Automazione salvata', 'Automation saved'), icon: 'check' });
       setStale(false);
       onSaved(saved);
     } catch (err) {
-      if (err instanceof ApiError) fireToast({ msg: err.message, icon: 'alert' });
-      else fireToast({ msg: t('Errore di rete', 'Network error'), icon: 'alert' });
+      toastApiError(err, fireToast, t);
     } finally {
       setSaving(false);
     }

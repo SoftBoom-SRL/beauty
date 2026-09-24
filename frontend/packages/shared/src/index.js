@@ -33,7 +33,7 @@ export {
 // Telefoni: elenco prefissi + conversioni da/verso E.164 (logica pura).
 export {
   COUNTRIES, DEFAULT_ISO2, countryOf,
-  splitPhone, joinPhone, formatNational, formatPhone, normalizePhone, isPlausiblePhone,
+  splitPhone, joinPhone, formatNational, normalizePhone, isPlausiblePhone,
 } from './phone.js';
 
 export * from './ui/index.js';

@@ -12,12 +12,14 @@
 // sends it back with code and state (see flow.js): a code that was not asked for
 // by this window is never exchanged.
 import { useEffect, useState } from 'react';
-import { api, staffAuth, useT } from '@youty/shared';
+import { staffAuth, useT } from '@youty/shared';
 import { claimRestart, clearRestart, saveFlow, takeFlow } from './flow.js';
+import { YOURANG_MSG, notifyOpener } from './popup.js';
+import { yourangApi } from '../api/integrations.js';
 
 const START = {
-  login: '/api/integrations/yourang/oauth/login/start',
-  connect: '/api/integrations/yourang/oauth/start',
+  login: yourangApi.loginStart,
+  connect: yourangApi.oauthStart,
 };
 
 export default function OAuthPopup({ path }) {
@@ -26,9 +28,6 @@ export default function OAuthPopup({ path }) {
 
   useEffect(() => {
     let cancelled = false;
-    const notify = (msg) => {
-      if (window.opener) window.opener.postMessage(msg, window.location.origin);
-    };
 
     // sessionStorage può lanciare già all'accesso (cookie bloccati).
     const storage = (() => { try { return window.sessionStorage; } catch { return null; } })();
@@ -39,7 +38,7 @@ export default function OAuthPopup({ path }) {
         if (path === '/oauth-popup/start') {
           const mode = new URLSearchParams(window.location.search).get('mode') === 'login'
             ? 'login' : 'connect';
-          const res = await api.get(START[mode]);
+          const res = await START[mode]();
           // Senza il nonce salvato il ritorno verrebbe rifiutato: meglio dirlo
           // subito che mandare la persona fino al consenso per niente.
           if (!saveFlow(storage, mode, res.nonce)) {
@@ -70,7 +69,7 @@ export default function OAuthPopup({ path }) {
             'Yourang connection not started from this window: start again'));
         }
         clearRestart(storage);
-        const res = await api.post('/api/integrations/yourang/oauth/exchange', { code, state, nonce: flow.nonce });
+        const res = await yourangApi.exchange({ code, state, nonce: flow.nonce });
 
         // Senza opener NON siamo una finestra di servizio: ci si è arrivati con
         // una navigazione di primo livello, che è come entra il pill di lancio
@@ -85,13 +84,13 @@ export default function OAuthPopup({ path }) {
           return;
         }
 
-        notify({ type: 'yourang-oauth', ok: true, mode: res.mode, session: res.session });
+        notifyOpener({ type: YOURANG_MSG, ok: true, mode: res.mode, session: res.session });
         window.close();
       } catch (e) {
         if (cancelled) return;
         const message = String(e?.message || e);
         setError(message);
-        notify({ type: 'yourang-oauth', ok: false, error: message });
+        notifyOpener({ type: YOURANG_MSG, ok: false, error: message });
       }
     })();
 

@@ -8,24 +8,28 @@
 // «category.reordered» nel registro attività. Clienti e magazzino non ce
 // l'hanno e restano con una PUT per categoria.
 import React, { useCallback, useEffect, useState } from 'react';
-import { api, Icon, EmptyState } from '@youty/shared';
+import { Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
-import DkModal from '../../../ui/DkModal.jsx';
 import DkConfirm from '../../../ui/DkConfirm.jsx';
-import HexInput from '../../../ui/HexInput.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { GD_PALETTE, PaletteGrid, inputCss, toastErr, LockNote } from '../lib.jsx';
+import { GD_PALETTE } from '../../../ui/palette.js';
+import { LockNote } from '../lib.jsx';
+import { serviceCategoriesApi } from '../../../api/catalog.js';
+import { clientCategoriesApi, clientsApi } from '../../../api/clients.js';
+import { productCategoriesApi, productsApi } from '../../../api/inventory.js';
+import CatEditModal from './CatEditModal.jsx';
 
 const KINDS = {
-  clienti: { base: '/api/clients/categories', scope: 'clients', hasColor: true, bilingual: false },
-  servizi: { base: '/api/catalog/categories', scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
-  magazzino: { base: '/api/inventory/categories', scope: 'inventory', hasColor: false, bilingual: false },
+  clienti: { endpoints: clientCategoriesApi, scope: 'clients', hasColor: true, bilingual: false },
+  servizi: { endpoints: serviceCategoriesApi, scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
+  magazzino: { endpoints: productCategoriesApi, scope: 'inventory', hasColor: false, bilingual: false },
 };
 const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3F3F3', '#EFEFEF'].includes(c));
 const randColor = () => flatPalette[Math.floor(Math.random() * flatPalette.length)];
-const catName = (c, kind, lang) => (KINDS[kind].bilingual ? ((lang === 'en' && c.name_en) ? c.name_en : c.name_it) : c.name);
+const catName = (c, kind, lang) => (KINDS[kind].bilingual ? nameIn(c, lang) : c.name);
 
-// Accepts both `kind` (servizi agent) and `scope` (clienti agent) for the initial tab.
+// La scheda iniziale arriva come `kind` (Impostazioni, Servizi) o come `scope`
+// (la scheda cliente): valgono entrambe.
 export default function CategoriesManagerModal({ onClose, kind: kindProp, scope: scopeProp }) {
   const { t, lang, hasScope, reload, fireToast, services } = useDash();
   const initialKind = kindProp ?? scopeProp;
@@ -40,8 +44,8 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
   const setList = (k, v) => setLists((s) => ({ ...s, [k]: v }));
 
   const load = useCallback(async (k) => {
-    try { const res = await api.get(KINDS[k].base); setLists((s) => ({ ...s, [k]: res })); }
-    catch (err) { toastErr(err, fireToast, t); setLists((s) => ({ ...s, [k]: [] })); }
+    try { const res = await KINDS[k].endpoints.list(); setLists((s) => ({ ...s, [k]: res })); }
+    catch (err) { toastApiError(err, fireToast, t); setLists((s) => ({ ...s, [k]: [] })); }
   }, [fireToast, t]);
   useEffect(() => { if (lists[kind] === null) load(kind); }, [kind, lists, load]);
 
@@ -64,11 +68,11 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     try {
       let renamed = false;
       if (d._new) {
-        const created = await api.post(cfg.base, { ...payloadOf(d), order: (list || []).length });
+        const created = await cfg.endpoints.create({ ...payloadOf(d), order: (list || []).length });
         setList(kind, [...(list || []), created]);
       } else {
         const before = (list || []).find((c) => c.id === d.id);
-        const upd = await api.put(`${cfg.base}/${d.id}`, { ...payloadOf(d), order: d.order ?? 0 });
+        const upd = await cfg.endpoints.update(d.id, { ...payloadOf(d), order: d.order ?? 0 });
         setList(kind, list.map((c) => (c.id === d.id ? upd : c)));
         renamed = kind === 'clienti' && !!before && before.name !== upd.name;
       }
@@ -83,7 +87,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
           : t('Categoria salvata', 'Category saved'),
         icon: 'check',
       });
-    } catch (err) { toastErr(err, fireToast, t); } // 400: nome già usato (anche con maiuscole diverse)
+    } catch (err) { toastApiError(err, fireToast, t); } // 400: nome già usato (anche con maiuscole diverse)
     finally { setSaving(false); }
   };
 
@@ -97,8 +101,8 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     setConfirmDel({ cat, kind: k, count: null });
     let count;
     try {
-      if (k === 'clienti') count = (await api.get('/api/clients/', { params: { category_id: cat.id, limit: 1 } }))?.count;
-      else if (k === 'magazzino') count = (await api.get('/api/inventory/products', { params: { category_id: cat.id, include_inactive: true, limit: 1 } }))?.count;
+      if (k === 'clienti') count = (await clientsApi.list({ category_id: cat.id, limit: 1 }))?.count;
+      else if (k === 'magazzino') count = (await productsApi.list({ category_id: cat.id, include_inactive: true, limit: 1 }))?.count;
       else count = (services || []).filter((sv) => sv.category_id === cat.id).length;
     } catch { count = undefined; }
     setConfirmDel((c) => (c && c.cat.id === cat.id ? { ...c, count: Number.isFinite(count) ? count : -1 } : c));
@@ -108,7 +112,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     if (!c || deleting) return;
     setDeleting(true);
     try {
-      await api.del(`${KINDS[c.kind].base}/${c.cat.id}`);
+      await KINDS[c.kind].endpoints.remove(c.cat.id);
       setList(c.kind, (lists[c.kind] || []).filter((x) => x.id !== c.cat.id));
       syncCtx(c.kind);
       setEdit(null);
@@ -116,7 +120,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
     } catch (err) {
       // 400 con il motivo: servizi collegati, o etichetta citata da una regola
       // caparra o da un'automazione (il messaggio le nomina)
-      toastErr(err, fireToast, t);
+      toastApiError(err, fireToast, t);
     } finally {
       setDeleting(false);
       setConfirmDel(null);
@@ -152,15 +156,15 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
       if (cfg.reorder) {
         // una sola chiamata: con una PUT per categoria il riordino non era
         // atomico e, se una falliva a metà, l'ordine tornava indietro da solo
-        await api.post(`${cfg.base}/reorder`, { ids: next.map((c) => c.id) });
+        await cfg.endpoints.reorder(next.map((c) => c.id));
       } else {
         const body = (c) => (kind === 'clienti' ? { name: c.name, color: c.color } : { name: c.name });
-        await Promise.all(next.map((c, i) => api.put(`${cfg.base}/${c.id}`, { ...body(c), order: i })));
+        await Promise.all(next.map((c, i) => cfg.endpoints.update(c.id, { ...body(c), order: i })));
       }
       await load(kind);
       syncCtx(kind);
       fireToast({ msg: t('Ordine aggiornato', 'Order updated'), icon: 'check' });
-    } catch (err) { toastErr(err, fireToast, t); load(kind); }
+    } catch (err) { toastApiError(err, fireToast, t); load(kind); }
   };
 
   const blank = () => (kind === 'servizi'
@@ -246,44 +250,3 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
   );
 }
 
-function CatEditModal({ draft, setDraft, cfg, onSave, saving, onDelete, onClose, t }) {
-  const canSave = !saving && (cfg.bilingual ? (draft.name_it || '').trim() : (draft.name || '').trim());
-  return (
-    <DkModal open onClose={onClose} title={draft._new ? t('Nuova categoria', 'New category') : t('Modifica categoria', 'Edit category')} width={440}
-      foot={<React.Fragment>
-        {!draft._new && <button className="dk-btn dk-btn--ghost" style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, var(--hair))', marginRight: 'auto' }} onClick={onDelete}><Icon name="x" size={16} color="var(--danger)" />{t('Elimina', 'Delete')}</button>}
-        <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
-        <button className="dk-btn dk-btn--clay" disabled={!canSave} onClick={() => canSave && onSave(draft)}><Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}</button>
-      </React.Fragment>}>
-      {cfg.bilingual ? (
-        <React.Fragment>
-          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Nome (italiano)', 'Name (Italian)')}</div>
-          <input value={draft.name_it || ''} onChange={(e) => setDraft((d) => ({ ...d, name_it: e.target.value }))} placeholder={t('Nome categoria', 'Category name')} autoFocus style={{ ...inputCss, width: '100%', boxSizing: 'border-box', fontSize: 15, padding: '11px 13px', marginBottom: 14 }} />
-          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Nome (inglese)', 'Name (English)')}</div>
-          <input value={draft.name_en || ''} onChange={(e) => setDraft((d) => ({ ...d, name_en: e.target.value }))} placeholder={t('Facoltativo', 'Optional')} style={{ ...inputCss, width: '100%', boxSizing: 'border-box', fontSize: 15, padding: '11px 13px', marginBottom: 18 }} />
-        </React.Fragment>
-      ) : (
-        <React.Fragment>
-          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Nome categoria', 'Category name')}</div>
-          <input value={draft.name || ''} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder={t('Nome categoria', 'Category name')} autoFocus style={{ ...inputCss, width: '100%', boxSizing: 'border-box', fontSize: 15, padding: '11px 13px', marginBottom: 18 }} />
-        </React.Fragment>
-      )}
-
-      {cfg.hasColor && (
-        <React.Fragment>
-          <div className="t-meta" style={{ marginBottom: 10 }}>{t('Colore', 'Colour')}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 48, height: 48, borderRadius: 12, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: draft.color || '#888' }}>
-              <input type="color" value={draft.color || '#888888'} onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value.toUpperCase() }))} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-            </label>
-            <div style={{ flex: 1 }}>
-              <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 4 }}>{t('Codice esadecimale', 'Hex code')}</div>
-              <HexInput value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />
-            </div>
-          </div>
-          <PaletteGrid value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />
-        </React.Fragment>
-      )}
-    </DkModal>
-  );
-}

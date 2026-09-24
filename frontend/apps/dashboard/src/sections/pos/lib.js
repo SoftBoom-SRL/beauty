@@ -1,6 +1,7 @@
 // lib.js — POS helpers shared by CartTab, HistoryTab and SellModal.
-import { api, fmtEur, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
+import { MONTHS_SHORT_EN, MONTHS_SHORT_IT, fmtTime, parseISO, salonDateParts, toDateStr, todayStr } from '@youty/shared';
 import { centsToEur, lineCents } from './money.js';
+import { couponsApi } from '../../api/marketing.js';
 
 // Il denaro si conta in centesimi interi con gli arrotondamenti del server:
 // le regole stanno in money.js (senza dipendenze, quindi provate da npm test).
@@ -18,8 +19,9 @@ export function sanitizeAmtInput(raw) {
   return s;
 }
 
-/** money display — decimal strings/numbers; zero shows as "€0" (not "Gratis"). */
-export const money = (x, lang) => (Number(x) === 0 ? '€0' : fmtEur(Number(x), lang));
+/** importi a video — stringhe decimali o numeri; lo zero è «€0», non «Gratis»
+ *  (la regola di fmtEurNoFree, con il nome che usa la cassa). */
+export { fmtEurNoFree as money } from '@youty/shared';
 
 /** payment methods (API enum order: cash | card | other | gift_card) */
 export const payMethods = (t) => [
@@ -35,7 +37,7 @@ export const methodLabel = (m, t) => {
 
 export const opName = (o) => (o ? [o.first_name, o.last_name].filter(Boolean).join(' ') : '');
 
-export const svcLabel = (s, lang) => (lang === 'en' && s.name_en ? s.name_en : s.name_it);
+export { nameIn as svcLabel } from '@youty/shared';
 
 /** cart/checkout line value in euro, for display: the API rule computed in
  *  cents (see money.js lineCents). */
@@ -60,7 +62,7 @@ export async function findCoupon(code, { clientId = null, t }) {
   if (!wanted) return { error: t('Inserisci un codice', 'Enter a code') };
   let rows;
   try {
-    const res = await api.get('/api/marketing/coupons', { params: { q: wanted, limit: 20 } });
+    const res = await couponsApi.list({ q: wanted, limit: 20 });
     rows = res?.items || res || [];
   } catch {
     return { error: t('Non riesco a verificare il buono: riprova', 'Cannot verify the voucher: try again') };
@@ -95,9 +97,7 @@ export function saleDateLabel(iso, lang) {
   if (diff === 0) return (lang === 'en' ? 'Today' : 'Oggi') + ' · ' + hm;
   if (diff === 1) return (lang === 'en' ? 'Yesterday' : 'Ieri') + ' · ' + hm;
   const p = salonDateParts(iso);
-  const months = lang === 'en'
-    ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    : ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+  const months = lang === 'en' ? MONTHS_SHORT_EN : MONTHS_SHORT_IT;
   return p.day + ' ' + months[p.month - 1] + ' ' + p.year + ' · ' + hm;
 }
 
