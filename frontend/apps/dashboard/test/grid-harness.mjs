@@ -86,7 +86,9 @@ export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.
 export const Avatar = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
+export const Toggle = () => null;
 export const statusMeta = (s) => ({ label: String(s || ''), color: '#999' });
+export { depositMeta } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'ui', 'meta.js'))};
 // ApiError, apiErrorText e toastApiError sono quelli veri di apiErrors.js, con
 // la stessa classe per il componente, per gli aiuti e per il test
 // (globalThis.__ApiError). Ogni loadComponent è un bundle con la sua copia del
@@ -99,7 +101,11 @@ export const { ApiError, apiErrorText, toastApiError } = E;
 const call = (m) => (...a) => globalThis.__api[m](...a);
 export const api = { get: call('get'), post: call('post'), put: call('put'), patch: call('patch'), del: call('del') };
 `;
-const CTX = 'export const useDash = () => globalThis.__dash;';
+/* ctx.jsx: il contesto è globalThis.__dash; useLive tiene l'ultima callback in
+ * globalThis.__useLive, e il test la chiama con gli eventi (il debounce di 250
+ * ms del vero useLive qui non c'è). */
+const CTX = `export const useDash = () => globalThis.__dash;
+export const useLive = (match, fn) => { globalThis.__useLive = fn; };`;
 
 /** Compila `entry` (percorso dal frontend/) e ne restituisce i moduli esportati.
  *  `stubs`: nomi di file (es. 'RightRail.jsx') da sostituire con componenti muti
@@ -216,7 +222,7 @@ export function installDom({ pills = [] } = {}) {
     removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((f) => f !== fn); },
   };
   globalThis.document = {
-    body: { classList: { add() {}, remove() {} } },
+    body: { classList: { add() {}, remove() {} }, style: { setProperty() {}, removeProperty() {} } },
     querySelectorAll: (sel) => (sel === '[data-daydrop]'
       ? pills.map((p) => ({ getAttribute: () => p.iso, getBoundingClientRect: () => p.rect }))
       : []),
