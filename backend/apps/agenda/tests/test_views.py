@@ -86,7 +86,7 @@ class RangeAndGiftTests(AgendaTestBase):
         self.assertEqual(res.status_code, 400)
 
     def test_gift_card_for_a_service_shows_on_the_appointment(self):
-        from apps.marketing.services import create_gift_card
+        from apps.marketing.gift_cards import create_gift_card
 
         auth = self._staff()
         card = create_gift_card(self.salon, Decimal("50.00"), gift_service=self.svc60, paid=True, paid_method="cash")
@@ -323,7 +323,7 @@ class GiftFromNameTests(RealShiftsTestBase):
     """Una carta comprata per sé mostrava alla cliente «In regalo da» sé stessa."""
 
     def test_only_a_card_bought_by_someone_else_is_a_gift(self):
-        from apps.marketing.services import create_gift_card
+        from apps.marketing.gift_cards import create_gift_card
 
         from ..presenters import _appointment_out
 

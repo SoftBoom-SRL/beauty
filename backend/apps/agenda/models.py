@@ -162,14 +162,14 @@ class Appointment(TimeStampedModel):
         """Quota di caparra ancora in cassa, quindi detraibile al checkout.
 
         È `deposit_amount` meno i rimborsi già riusciti E quelli ancora in
-        corso (`sales.services.deposit_retained`). Prima si detraeva sempre
+        corso (`sales.deposits.deposit_retained`). Prima si detraeva sempre
         l'intero importo: dopo un rimborso parziale di dieci euro su trenta, la
         cliente si vedeva scontare trenta euro che il salone non aveva più. E
         con un rimborso parziale ancora «pending» la caparra risultava «rimborso
         in corso» e la quota detraibile era zero: la cassa faceva pagare tutto e
         la parte ancora trattenuta tornava sulla carta solo dopo (02-21).
         """
-        from apps.sales.services import deposit_retained  # lazy: sales dipende da agenda
+        from apps.sales.deposits import deposit_retained  # lazy: sales dipende da agenda
 
         return deposit_retained(self)
 

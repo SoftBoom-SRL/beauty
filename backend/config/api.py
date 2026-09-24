@@ -1,6 +1,7 @@
 """Unica NinjaAPI: serve sia la dashboard gestionale sia la web app cliente.
 
-Ogni app di dominio espone `router` in apps/<nome>/api.py.
+Ogni app di dominio espone `router` in apps/<nome>/api.py (o nel package
+apps/<nome>/api/, per accounts e agenda).
 """
 
 import os

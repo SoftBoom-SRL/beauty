@@ -1,7 +1,7 @@
 """Storico della cliente: le sue visite e la timeline unificata della scheda.
 
 Visite, vendite, note e schede tecniche in una lista sola. Le visite escono con
-la serializzazione dell'agenda (`apps.agenda.api._appointment_out`) e le
+la serializzazione dell'agenda (`apps.agenda.presenters._appointment_out`) e le
 vendite con quella della cassa (`apps.sales.serializers.sale_out`), importate
 pigramente: clients non importa le altre app di dominio a livello di modulo.
 """
@@ -26,7 +26,7 @@ def client_appointments_qs(salon, client):
 
 def client_appointments(ctx, client) -> list[dict]:
     """Visite della cliente (passate e future) in ordine cronologico, come le serializza l'agenda."""
-    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione esistente
+    from apps.agenda.presenters import _appointment_out, gift_index  # lazy: riuso serializzazione esistente
 
     appointments = client_appointments_qs(ctx.salon, client).order_by("start")
     # Indice delle gift card calcolato una volta sola: senza, _appointment_out
@@ -44,7 +44,7 @@ def build_history(ctx, client) -> dict:
     `ctx` decide cosa si vede: senza il permesso «vendite» niente incassi
     (`sales_hidden`), e i codici delle gift card mascherati come in agenda.
     """
-    from apps.agenda.api import _appointment_out, gift_index  # lazy: riuso serializzazione
+    from apps.agenda.presenters import _appointment_out, gift_index  # lazy: riuso serializzazione
     from apps.sales.serializers import sale_out  # lazy
     from apps.sales.models import Sale  # lazy
 

@@ -439,7 +439,7 @@ def _link_not_created(appointment, exc, *, suspend_hold: bool) -> None:
     attivo, errore di rete: 05-11). La scadenza si toglie solo se NON c'è un
     link ancora valido; lo staff può rimandarlo o incassare al banco.
     """
-    from apps.agenda.services import clear_deposit_hold  # lazy
+    from apps.agenda.services.deposit_holds import clear_deposit_hold  # lazy
     from apps.core.services import log_activity  # lazy
 
     suspended = suspend_hold and appointment.deposit_due_at is not None
@@ -550,7 +550,7 @@ def ensure_deposit_link(appointment, *, resend: bool = False, actor=None, reason
     # in ritentativo non viene scavalcato (vedi flush_outbox). Non si fonde
     # con loro (le fusioni guardano solo i tipi `appointment.*`) e non aspetta
     # quelli solo trattenuti: il termine per pagare corre già.
-    from apps.agenda.services import appointment_event_key  # lazy
+    from apps.agenda.services.messages import appointment_event_key  # lazy
 
     emit_event(
         appointment.salon,

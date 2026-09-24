@@ -448,7 +448,7 @@ class DepositAndNoShowAreNotVisitsTests(_Base):
     def test_the_first_visit_deposit_rule_still_asks_until_she_has_come(self):
         """La regola rapida «Prima visita» (visite < 1): dopo la prima caparra
         pagata smetteva di chiederla, anche se la cliente non era mai venuta."""
-        from apps.agenda.services import compute_deposit
+        from apps.agenda.services.deposits import compute_deposit
         from apps.core.models import DepositRule
 
         DepositRule.objects.create(

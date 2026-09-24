@@ -48,10 +48,11 @@ export function moveHereTarget(appt, slot) {
 }
 
 /* ---- Spiegazione della disponibilità di uno slot (lato client) --------------
- * Replica le regole di apps/agenda/services.py sui dati già in pagina (righe di
- * GET /api/agenda/day): finestre di turno, appuntamenti (fase attiva + posa) e
- * pause dell'operatrice. Serve a dire PRIMA di provare — e non dopo un 409 —
- * perché in quel punto non si può inserire o spostare un appuntamento.
+ * Replica le regole di apps/agenda/services/ (occupancy.py, availability.py)
+ * sui dati già in pagina (righe di GET /api/agenda/day): finestre di turno,
+ * appuntamenti (fase attiva + posa) e pause dell'operatrice. Serve a dire PRIMA
+ * di provare — e non dopo un 409 — perché in quel punto non si può inserire o
+ * spostare un appuntamento.
  *
  * row      : { operator, windows, appointments, pauses }   (una riga del giorno)
  * startMin : inizio richiesto (minuti da mezzanotte), durMin: durata totale

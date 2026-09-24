@@ -31,7 +31,7 @@ def checkout_appointment(salon, appointment_id: int, payload: dict, *, actor=Non
     pagamenti e buono sconto, come li vuole `finalize_sale`. 404 se
     l'appuntamento non c'è più; 400 se è annullato, no-show o già incassato.
     """
-    from apps.agenda.services import lock_salon  # lazy
+    from apps.agenda.services.locking import lock_salon  # lazy
 
     with transaction.atomic():
         # Prima il salone, poi la riga: lo stesso ordine delle mutazioni
@@ -139,7 +139,7 @@ def _emit_visit_completed(salon, appointment, sale) -> None:
         for line in sale.lines.select_related("service")
         if line.service_id
     ]
-    from apps.agenda.services import appointment_event_key  # lazy
+    from apps.agenda.services.messages import appointment_event_key  # lazy
 
     # Con la chiave dell'appuntamento: la richiesta di recensione non parte
     # prima di un suo messaggio ancora trattenuto (ordinati, non fusi).

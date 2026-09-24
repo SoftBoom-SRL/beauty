@@ -20,7 +20,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.agenda import services
+from apps.agenda.services import appointments as services
 from apps.agenda.models import Appointment, AppointmentService
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client

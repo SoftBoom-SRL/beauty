@@ -102,7 +102,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(self.salon.settings.stripe_account_id, "acct_123")
 
     def test_cancelling_refunds_the_deposit(self):
-        from apps.agenda.services import cancel_appointment
+        from apps.agenda.services.transitions import cancel_appointment
 
         Appointment.objects.filter(pk=self.appointment.pk).update(
             deposit_status="paid", deposit_payment_intent_id="pi_1",

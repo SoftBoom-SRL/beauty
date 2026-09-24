@@ -27,9 +27,10 @@ MAX_MONEY = Decimal("99999999.99")
 def to_cents(amount) -> int:
     """Euro → centesimi interi: `Decimal("12.34")` → 1234.
 
-    Stessa formula di `agenda.services._to_cents`: il valore passa da `str`
-    (Decimal, int, float o stringa), None, "" e 0 valgono 0, e una frazione di
-    centesimo si arrotonda come il contesto decimale (0.125 → 12, 0.135 → 14).
+    È la formula della `_to_cents` dell'agenda, che ora usa questa: il valore
+    passa da `str` (Decimal, int, float o stringa), None, "" e 0 valgono 0, e
+    una frazione di centesimo si arrotonda come il contesto decimale (0.125 →
+    12, 0.135 → 14).
 
     Ha preso il posto anche della copia di `stripe_service`, che era uguale ma
     senza `or 0` (con None o "" sollevava `decimal.InvalidOperation`): i suoi

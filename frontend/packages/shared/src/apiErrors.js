@@ -26,10 +26,10 @@ export function apiErrorText(err, t) {
 
 /** Il toast d'errore di una chiamata all'API:
  *  fireToast({ msg: apiErrorText(err, t), icon: 'alert' }).
- *  Argomenti (err, fireToast, t): l'ordine dei due aiuti già usati da più file,
- *  `toastErr` delle Impostazioni e `errToast` dell'app clienti, che così ne
- *  diventano sinonimi senza toccare le chiamate. Attenzione al `toastErr`
- *  dell'agenda: è (err, t, fireToast), con gli ultimi due scambiati. */
+ *  Argomenti (err, fireToast, t): l'ordine dei due aiuti che ha sostituito,
+ *  `toastErr` delle Impostazioni e `errToast` dell'app clienti, così le
+ *  chiamate sono rimaste com'erano (quello dell'agenda aveva t e fireToast
+ *  scambiati). */
 export function toastApiError(err, fireToast, t) {
   fireToast({ msg: apiErrorText(err, t), icon: 'alert' });
 }

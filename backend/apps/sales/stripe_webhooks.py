@@ -155,7 +155,8 @@ def on_payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") ->
     if outcome == "duplicate":
         deposits.refund_duplicate_deposit(appointment, intent_id, obj, account)
     elif outcome == "refund_due":
-        from apps.agenda.services import appointment_event_key, settle_deposit_refund  # lazy
+        from apps.agenda.services.messages import appointment_event_key  # lazy
+        from apps.agenda.services.refunds import settle_deposit_refund  # lazy
 
         emit_event(
             appointment.salon,
@@ -172,7 +173,7 @@ def on_payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") ->
         )
         settle_deposit_refund(appointment)
     elif outcome == "paid":
-        from apps.agenda.services import appointment_event_key  # lazy
+        from apps.agenda.services.messages import appointment_event_key  # lazy
 
         emit_event(
             appointment.salon,
@@ -307,7 +308,7 @@ def on_refund_event(obj: dict, event_type: str = "charge.refunded") -> None:
     )
     if appointment is None or appointment.deposit_status not in deposits.DEPOSIT_RECEIVED_STATUSES:
         return
-    from apps.agenda.services import record_deposit_refund  # lazy
+    from apps.agenda.services.refunds import record_deposit_refund  # lazy
 
     record_deposit_refund(
         appointment,

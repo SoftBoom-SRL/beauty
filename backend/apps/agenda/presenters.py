@@ -57,13 +57,13 @@ def gift_index(salon, client_ids) -> dict[int, list]:
 # sono quelle del marketing (`codes_hidden`, `mask_code`).
 def _codes_hidden(viewer) -> bool:
     """Vero se chi guarda è staff senza marketing né cassa (la cliente vede i suoi)."""
-    from apps.marketing.schemas import codes_hidden  # lazy: regola del marketing
+    from apps.marketing.codes import codes_hidden  # lazy: regola del marketing
 
     return bool(codes_hidden(viewer))
 
 
 def _mask_code(code: str) -> str:
-    from apps.marketing.schemas import mask_code  # lazy: stessa maschera del marketing
+    from apps.marketing.codes import mask_code  # lazy: stessa maschera del marketing
 
     return mask_code(code)
 

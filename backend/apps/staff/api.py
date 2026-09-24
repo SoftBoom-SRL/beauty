@@ -347,7 +347,7 @@ def public_operators(request, salon: str):
     """Operatrici prenotabili dall'app, per la scelta dello stilista.
 
     Solo quelle della sede su cui l'app cerca e prenota (la predefinita) e
-    quelle senza sede, lo stesso filtro di `agenda.services._operators_qs`.
+    quelle senza sede, lo stesso filtro di `agenda.services.occupancy._operators_qs`.
     Elencandole tutte, la cliente sceglieva una stilista di un'altra sede, la
     ricerca le mostrava orari di una collega e la conferma rispondeva 400
     «Operatrice non idonea»: con lei dall'app non si prenotava mai (09-03,

@@ -398,7 +398,7 @@ class BugHuntRegressionTests(TestCase):
     def test_a_fixed_deposit_never_exceeds_the_price(self):
         """Una regola da 50 € su un servizio da 30 € rendeva il conto impossibile
         da chiudere: la cassa avrebbe dovuto incassare −20 €."""
-        from apps.agenda.services import compute_deposit
+        from apps.agenda.services.deposits import compute_deposit
 
         self.DepositRule.objects.create(
             salon=self.salon, name="Sempre 50", amount_type="fixed",
@@ -409,7 +409,7 @@ class BugHuntRegressionTests(TestCase):
         )
 
     def test_a_malformed_deposit_rule_does_not_block_every_booking(self):
-        from apps.agenda.services import compute_deposit
+        from apps.agenda.services.deposits import compute_deposit
 
         self.DepositRule.objects.create(
             salon=self.salon, name="Rotta", amount_type="fixed", amount=Decimal("10.00"),

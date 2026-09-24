@@ -6,11 +6,6 @@ from ninja import Schema
 
 from .codes import code_for, effective_status
 
-# compat refactoring: rimuovere dopo l'integrazione — l'agenda (agenda/api.py,
-# `_codes_hidden` e `_mask_code`) importa ancora da qui la regola dei codici,
-# che ora sta in codes.py.
-from .codes import codes_hidden, mask_code  # noqa: F401
-
 
 # ---- Coupon ------------------------------------------------------------------
 

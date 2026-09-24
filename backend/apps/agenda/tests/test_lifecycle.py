@@ -206,8 +206,25 @@ class StaffRecordsClientCancellationTests(RealShiftsTestBase):
     salone; la reception, annullando sempre «come salone», non poteva applicare
     la penale: caparra rimborsata e nessuna disdetta tardiva nella scheda."""
 
-    def _paid(self, hours_ahead):
-        start = timezone.now() + dt.timedelta(hours=hours_ahead)
+    @staticmethod
+    def _late_start(now=None):
+        """Fra 1 e 19 ore da adesso, quindi sotto le 24 ore dell'app (tardi), e
+        dentro il turno 9–19 di Giulia: alle 10 o alle 16, ora del salone.
+
+        Con «adesso + 3 ore» il test dipendeva dall'ora in cui girava: dalle
+        15:30 alle 6 la visita cadeva fuori turno, e «Indietro», che rivaluta
+        l'orario, rispondeva 409.
+        """
+        now = timezone.localtime(now)
+        day = now.date()
+        while True:
+            for hour in (10, 16):
+                start = timezone.make_aware(dt.datetime.combine(day, dt.time(hour)))
+                if start >= now + dt.timedelta(hours=1):
+                    return start
+            day += dt.timedelta(days=1)
+
+    def _paid(self, start):
         appointment = self.book(self.anna, self.giulia, start, [(self.cut30, 30, 0)])
         Appointment.objects.filter(pk=appointment.pk).update(
             deposit_status=Appointment.DepositStatus.PAID, deposit_amount=Decimal("20.00"),
@@ -226,7 +243,7 @@ class StaffRecordsClientCancellationTests(RealShiftsTestBase):
 
         from ..models import UndoEntry
 
-        appointment = self._paid(hours_ahead=3)
+        appointment = self._paid(self._late_start())
         res = self._cancel(appointment, by_client=True)
         self.assertEqual(res.status_code, 200, res.content)
         body = res.json()
@@ -241,17 +258,17 @@ class StaffRecordsClientCancellationTests(RealShiftsTestBase):
         self.assertTrue(UndoEntry.objects.filter(salon=self.salon, kind=UndoEntry.Kind.CANCEL).exists())
 
     def test_in_time_the_client_gets_the_deposit_back(self):
-        appointment = self._paid(hours_ahead=72)
+        appointment = self._paid(timezone.now() + dt.timedelta(hours=72))
         body = self._cancel(appointment, by_client=True).json()
         self.assertEqual((body["deposit_status"], body["cancelled_late"]), ("refund_due", False))
 
     def test_the_salon_cancelling_late_still_refunds(self):
-        appointment = self._paid(hours_ahead=3)
+        appointment = self._paid(self._late_start())
         body = self._cancel(appointment).json()
         self.assertEqual((body["deposit_status"], body["cancelled_late"]), ("refund_due", False))
 
     def test_undo_puts_back_the_deposit_and_clears_the_late_mark(self):
-        appointment = self._paid(hours_ahead=3)
+        appointment = self._paid(self._late_start())
         self.assertEqual(self._cancel(appointment, by_client=True).status_code, 200)
         res = self.post("/api/agenda/undo", {}, self.staff_auth())
         self.assertEqual(res.status_code, 200, res.content)

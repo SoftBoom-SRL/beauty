@@ -44,12 +44,6 @@ from .services import finalize_sale, record_no_show_charge
 
 router = Router(tags=["sales"])
 
-# compat refactoring: rimuovere dopo l'integrazione — il test dell'ordine dei
-# lock (sales/tests/test_locking.py, LockOrderTests, che riscrive il pacchetto
-# agenda) importa ancora `_payment_intent_succeeded` da qui.
-_payment_intent_succeeded = stripe_webhooks.on_payment_intent_succeeded
-
-
 # ---- Checkout e POS ----------------------------------------------------------
 
 

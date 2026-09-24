@@ -11,6 +11,7 @@
 | [`prototipo/`](prototipo/) | Il prototipo originale, congelato |
 | [`superpowers/`](superpowers/) | Documenti di progetto di alcune funzioni (no-show e cancellazioni, web app cliente) |
 | [`storia/`](storia/) | Diari di lavoro chiusi (integrazione del frontend, luglio–settembre 2026) |
+| [`refactoring-2026-09-24/`](refactoring-2026-09-24/README.md) | Il refactoring del 24/09: cosa è cambiato e come è stato verificato, i [bug sospetti](refactoring-2026-09-24/BUG-SOSPETTI.md) trovati e non corretti, la [mappa dei vecchi file di test](refactoring-2026-09-24/MAPPA-TEST.md) |
 | [`../tools/smoke/`](../tools/smoke/README.md) | Test di fumo nel browser: confronta due versioni schermata per schermata |
 
 ## Audit e cacce ai bug

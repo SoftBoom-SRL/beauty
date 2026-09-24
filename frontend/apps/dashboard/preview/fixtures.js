@@ -164,7 +164,7 @@ export const DAY_ROWS = (day) => OPERATORS.map((o) => ({
 }));
 
 /* La settimana ha un payload PIÙ POVERO del giorno (vedi agenda_week in
- * apps/agenda/api.py): niente oggetto cliente, niente prezzi per riga. Qui si
+ * apps/agenda/api/agenda_views.py): niente oggetto cliente, niente prezzi per riga. Qui si
  * riproduce esattamente quello, altrimenti l'anteprima è più generosa del
  * server e un campo che manca davvero si scopre solo in salone — è già successo
  * col colore dei servizi, che senza `service_id` ripiegava sull'operatrice. */

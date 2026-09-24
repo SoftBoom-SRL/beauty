@@ -234,7 +234,7 @@ export async function copyText(text, env = globalThis) {
 export const usableCode = (code) => (code && !String(code).includes('•') ? String(code) : '');
 
 /** Gift card «a trattamento» che coprono un servizio di QUESTA cliente, con la
- *  stessa regola di gift_index sul server (agenda/api.py) — quella che poi usa
+ *  stessa regola di gift_index sul server (agenda/presenters.py) — quella che poi usa
  *  la cassa: pagata, attiva, non scaduta, saldo > 0, legata a un servizio; e
  *  destinataria la cliente, oppure comprata da lei senza destinataria (né
  *  scheda collegata né nome scritto a mano). Il drawer contava anche le carte

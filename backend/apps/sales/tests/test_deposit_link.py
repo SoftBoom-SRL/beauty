@@ -216,7 +216,7 @@ class DepositAccountTests(StripeTestBase):
         self.assertEqual(self.appointment.deposit_status, "paid")
 
     def _cancel(self):
-        from apps.agenda.services import cancel_appointment
+        from apps.agenda.services.transitions import cancel_appointment
 
         appointment = Appointment.objects.select_related("salon", "salon__settings", "client").get(
             pk=self.appointment.pk
@@ -341,7 +341,7 @@ class LinkLifetimeTests(StripeTestBase):
         self.assertIsNotNone(self.appointment.deposit_link_expires_at)
 
     def test_the_reminder_carries_a_link_that_still_works(self):
-        from apps.agenda.services import process_deposit_holds
+        from apps.agenda.services.deposit_holds import process_deposit_holds
 
         SalonSettings.objects.update_or_create(
             salon=self.salon, defaults={"deposit_hold_minutes": 60, "deposit_reminder_minutes": 10}
@@ -402,7 +402,7 @@ class HoldWithoutLinkTests(StripeTestBase):
         return Appointment.objects.get(pk=res.json()["id"])
 
     def test_a_link_that_cannot_be_created_leaves_no_deadline(self):
-        from apps.agenda.services import process_deposit_holds
+        from apps.agenda.services.deposit_holds import process_deposit_holds
 
         self.fake([("POST", "/v1/checkout/sessions", ({
             "error": {"message": "Your account cannot currently make live charges.", "type": "invalid_request_error"},
@@ -463,7 +463,7 @@ class AmountChangeTests(StripeTestBase):
         return appointment, extra
 
     def test_reducing_a_required_deposit_replaces_the_link(self):
-        from apps.agenda.services import edit_appointment
+        from apps.agenda.services.appointments import edit_appointment
 
         appointment, extra = self._two_services(
             deposit_amount=Decimal("70.00"),
@@ -498,7 +498,7 @@ class AmountChangeTests(StripeTestBase):
         """Revisione finale: «Indietro» rimetteva la caparra a 70 € con il link da 20."""
         from apps.agenda import undo
         from apps.agenda.models import UndoEntry
-        from apps.agenda.services import edit_appointment
+        from apps.agenda.services.appointments import edit_appointment
 
         appointment, extra = self._two_services(
             deposit_amount=Decimal("70.00"),

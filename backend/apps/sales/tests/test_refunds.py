@@ -150,7 +150,9 @@ class RefundLeavesTheTillTests(TestCase):
         return appointment
 
     def test_a_deposit_given_back_in_cash_leaves_the_till(self):
-        from apps.agenda.services import cancel_appointment, mark_deposit_cashed, mark_deposit_refunded
+        from apps.agenda.services.deposit_holds import mark_deposit_cashed
+        from apps.agenda.services.refunds import mark_deposit_refunded
+        from apps.agenda.services.transitions import cancel_appointment
 
         appointment = self._appointment()
         mark_deposit_cashed(appointment, method="cash")      # 20 € in contanti al banco
@@ -171,7 +173,7 @@ class RefundLeavesTheTillTests(TestCase):
 
     @override_settings(STRIPE_SECRET_KEY="sk_test")
     def test_a_deposit_refunded_on_stripe_leaves_the_till(self):
-        from apps.agenda.services import cancel_appointment
+        from apps.agenda.services.transitions import cancel_appointment
 
         from ..stripe_webhooks import on_payment_intent_succeeded
 
@@ -215,7 +217,7 @@ class RefundLeavesTheTillTests(TestCase):
         self.assertEqual(summary["cash_in"], Decimal("20.00"))
 
     def test_a_refund_counts_on_the_day_it_happens(self):
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
 
         appointment = self._appointment(status="paid")
         record_deposit_cashed(self.salon, appointment, method="card")
@@ -229,7 +231,7 @@ class RefundLeavesTheTillTests(TestCase):
         self.assertEqual(summary["cash_in"], Decimal("-20.00"))
 
     def test_a_refund_that_fails_later_puts_the_money_back(self):
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
 
         appointment = self._appointment(status="paid")
         record_deposit_cashed(self.salon, appointment, method="card")
@@ -241,7 +243,7 @@ class RefundLeavesTheTillTests(TestCase):
 
     def test_a_deposit_that_never_entered_the_till_leaves_nothing(self):
         # pagata a visita già annullata: niente vendita-caparra, niente da stornare
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
 
         appointment = self._appointment(status="refund_due")
         record_deposit_refund(appointment, refund_id="re_1", cents=2000, status="succeeded")
@@ -250,7 +252,7 @@ class RefundLeavesTheTillTests(TestCase):
         self.assertEqual(summary["cash_in"], Decimal("0.00"))
 
     def test_the_today_summary_endpoint_carries_deposit_refunded(self):
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
 
         appointment = self._appointment(status="paid")
         record_deposit_cashed(self.salon, appointment, method="card")
@@ -261,7 +263,7 @@ class RefundLeavesTheTillTests(TestCase):
         self.assertEqual(Decimal(res.json()["cash_in"]), Decimal("15.00"))
 
     def test_insights_count_deposits_net_of_refunds(self):
-        from apps.agenda.services import record_deposit_refund
+        from apps.agenda.services.refunds import record_deposit_refund
         from apps.insights.services import kpis
 
         appointment = self._appointment(deposit="30.00", status="paid")

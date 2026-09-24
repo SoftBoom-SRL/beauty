@@ -10,7 +10,7 @@ import { ApiError, apiErrorText, toastApiError } from '../src/apiErrors.js';
 
 const makeT = (lang) => (it, en) => (lang === 'en' ? en : it);
 
-/* ---- le copie di oggi ---- */
+/* ---- le copie che questi aiuti hanno sostituito (refactoring del 24/09) ---- */
 // magazzino/lib.js (errMsg)
 const errMsg = (err, t) =>
   err instanceof ApiError ? err.message : t('Errore di rete', 'Network error');

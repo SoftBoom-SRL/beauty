@@ -29,31 +29,3 @@ I moduli, dai più semplici a quelli che li usano (nessun ciclo):
 Si importa dai sottomoduli, mai da qui: un `mock.patch("apps.agenda.services.X")`
 non patcherebbe il nome che il codice usa davvero, che è quello del sottomodulo.
 """
-
-# compat refactoring: rimuovere dopo l'integrazione. Nomi che il codice e i test
-# di altre app (sales, integrations, staff, clients, marketing) cercano ancora
-# qui: ciascuno va importato dal sottomodulo accanto.
-from apps.core.services import default_location  # noqa: F401
-from common.money import to_cents as _to_cents  # noqa: F401 — era refund_ledger._to_cents, identica
-
-from ..models import Appointment
-from .appointments import create_appointment, edit_appointment, move_appointment  # noqa: F401
-from .deposit_holds import clear_deposit_hold, mark_deposit_cashed, process_deposit_holds  # noqa: F401
-from .deposits import compute_deposit  # noqa: F401
-from .freed_slots import free_slot_event  # noqa: F401
-from .locking import lock_salon  # noqa: F401
-from .messages import appointment_event_key  # noqa: F401
-from .refund_ledger import (  # noqa: F401
-    REFUND_DONE,
-    REFUND_FLOOR_KEY,
-    REFUND_GONE,
-    REFUND_IN_FLIGHT,
-    _refund_sums,
-    _refunds_committed_cents,
-    _refunds_done_cents,
-)
-from .refunds import mark_deposit_refunded, record_deposit_refund, settle_deposit_refund  # noqa: F401
-from .transitions import cancel_appointment  # noqa: F401
-
-# compat refactoring: rimuovere dopo l'integrazione (ora è `Appointment.OPEN_STATUSES`).
-OPEN_STATUSES = Appointment.OPEN_STATUSES

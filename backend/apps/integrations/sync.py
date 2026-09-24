@@ -18,12 +18,10 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.agenda.models import Appointment, AppointmentService
-from apps.agenda.services import (
-    appointment_event_key,
-    free_slot_event,
-    lock_salon,
-    settle_deposit_refund,
-)
+from apps.agenda.services.freed_slots import free_slot_event
+from apps.agenda.services.locking import lock_salon
+from apps.agenda.services.messages import appointment_event_key
+from apps.agenda.services.refunds import settle_deposit_refund
 from apps.catalog.models import Package, Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.services import held_events, log_activity, supersede_events
@@ -618,7 +616,7 @@ def _cancel_from_remote(appt: Appointment, event_id: str) -> bool:
       e slot annunciato alla lista d'attesa se è nel futuro;
     - caparra pagata → «da rimborsare», come un annullamento del salone in
       tempo: non sappiamo chi ha annullato, quindi niente penale.
-    Non è `agenda.services.cancel_appointment`, di proposito: quello rimanda a
+    Non è `agenda.services.transitions.cancel_appointment`, di proposito: quello rimanda a
     Yourang `appointment.cancelled` (la cliente riceverebbe un secondo avviso
     di una disdetta fatta proprio lì — l'import, allo stesso modo, non rimanda
     la conferma) e mette l'annullamento nello storico «torna indietro» della

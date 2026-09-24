@@ -1,5 +1,4 @@
 // ClientSubHead.jsx — l'intestazione degli schermi interni: indietro e titolo.
-// Da non confondere con SubHeader di @youty/shared, che ha un altro aspetto.
 import { Icon } from '@youty/shared';
 import { headFont, headWeight } from '../theme.js';
 
