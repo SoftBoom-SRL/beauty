@@ -13,9 +13,18 @@ from django.conf import settings
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from apps.core.services import default_location
 from common.intervals import merge_intervals
 
-from .occupancy import _bookable_service, _busy_map, _chain_deadline, _opening_bands, _operators_qs
+from ..models import Appointment
+from .occupancy import (
+    _bookable_service,
+    _busy_map,
+    _chain_deadline,
+    _opening_bands,
+    _operators_qs,
+    bookable_operator_ids,
+)
 from .timegrid import _is_free, _slot_datetime, day_and_minute
 
 
@@ -354,3 +363,86 @@ def smart_slots(salon, slots: list[dict]) -> list[dict]:
         return slots
     recommended = [s for s in slots if s.get("recommended", True)]
     return recommended or slots
+
+
+def _visit_plan(appointment) -> tuple[list[dict], list[int]]:
+    """Le righe della visita come piano di ricerca, e i servizi da ammettere comunque.
+
+    Lo spostamento parte dalla visita com'è: operatrici, durate e pose sono
+    quelle scritte sull'appuntamento, non quelle del listino di oggi. Con le
+    durate del listino si proponevano orari che la conferma rifiutava — la
+    visita dura ancora quello che durava quando è stata prenotata — e con altre
+    operatrici succedeva lo stesso. I servizi già sulla visita restano validi
+    anche se nel frattempo sono usciti dal listino.
+    """
+    parsed = [
+        {
+            "service_id": item.service_id,
+            "operator_id": item.operator_id,
+            "duration_min": item.duration_min,
+            "soak_min": item.soak_min,
+        }
+        for item in appointment.items.all().order_by("order", "id")
+    ]
+    return parsed, [item["service_id"] for item in parsed]
+
+
+def _client_move_location(salon, appointment):
+    """Sede su cui si cerca e si conferma lo spostamento dall'app: quella della visita."""
+    return appointment.location or default_location(salon)
+
+
+def _unbookable_operator_ids(salon, parsed: list[dict], location) -> list[int]:
+    """Operatrici delle righe che su quella sede non si prenotano più, in ordine di catena."""
+    bookable = bookable_operator_ids(salon, location)
+    missing: list[int] = []
+    for item in parsed:
+        op_id = item["operator_id"]
+        if op_id not in bookable and op_id not in missing:
+            missing.append(op_id)
+    return missing
+
+
+# La ricerca riassegna le righe di un'operatrice non più prenotabile a una
+# collega, e la conferma sa riassegnare UNA colonna per spostamento: con due
+# operatrici uscite nella stessa visita l'app non può spostarla da sola.
+CLIENT_MOVE_NEEDS_SALON_MESSAGE = "Per spostare questa visita contatta il salone"
+
+
+def _client_move_reassignment(salon, appointment, start):
+    """(operatrice, colonna di partenza) da passare allo spostamento dall'app.
+
+    Se tutte le operatrici della visita si prenotano ancora, nessuna: lo
+    spostamento le tiene. Se una non si prenota più (disattivata, o di un'altra
+    sede), la ricerca ha proposto per quell'orario una collega al suo posto, e
+    la conferma deve applicare esattamente quella: prima teneva l'operatrice
+    uscita e validava sui SUOI turni — 409 «orario appena preso» a ripetizione
+    sugli orari della collega, o la visita spostata ma ancora a chi non lavora
+    più lì, senza nessuno che l'avesse in colonna.
+    """
+    if appointment.status not in Appointment.OPEN_STATUSES or start < timezone.now():
+        # visita chiusa o annullata, orario passato: li rifiuta lo spostamento
+        # stesso, con il suo 400
+        return None, None
+    parsed, keep_service_ids = _visit_plan(appointment)
+    location = _client_move_location(salon, appointment)
+    missing = _unbookable_operator_ids(salon, parsed, location)
+    if not missing:
+        return None, None
+    if len(missing) > 1:
+        raise HttpError(400, CLIENT_MOVE_NEEDS_SALON_MESSAGE)
+    assignment = slot_assignment(
+        salon, start, parsed, location,
+        exclude_appointment_id=appointment.id, keep_service_ids=keep_service_ids,
+    )
+    if assignment is None:
+        raise HttpError(409, "Orario non più disponibile")
+    replacement_id = next(
+        chosen["operator_id"]
+        for item, chosen in zip(parsed, assignment)
+        if item["operator_id"] == missing[0]
+    )
+    from apps.staff.models import Operator  # lazy
+
+    by_id = Operator.objects.in_bulk([replacement_id, missing[0]])
+    return by_id[replacement_id], by_id[missing[0]]
