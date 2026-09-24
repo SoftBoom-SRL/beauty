@@ -62,6 +62,10 @@ LIVE_FEED_SCOPES = {
     "coupon.": ("marketing",),
     "giftcard.": ("marketing", "sales"),
     "loyalty.": ("marketing",),
+    # I programmi fedeltà hanno eventi loro, `loyalty_program.*`, che non
+    # cominciano con `loyalty.`: senza questo prefisso un programma creato,
+    # rinominato o eliminato restava com'era sulle altre postazioni.
+    "loyalty_program.": ("marketing",),
     "communication.": ("marketing",),
     "automation.": ("marketing",),
     # Regole caparra: le legge e le scrive solo il titolare. Senza prefisso le
