@@ -7,7 +7,7 @@ apps.sales.finalize_sale (import lazy lato sales): le firme NON vanno cambiate.
 
 import math
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from django.apps import apps as django_apps
 from django.db import transaction
@@ -16,9 +16,11 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import emit_event, log_activity, supersede_events
-from common.money import CENT
 
 from .codes import COUPON_CODE_LENGTH, GIFT_CARD_CODE_LENGTH, unique_code
+# compat refactoring: rimuovere dopo l'integrazione — i nomi dei coupon restano
+# importabili da qui finché i chiamanti non puntano a coupons.py.
+from .coupons import coupon_discount, mark_coupon_redeemed, validate_coupon  # noqa: F401
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 
 # Sentinella per distinguere «non ho passato scheduled_at» da «l'ho passato a
@@ -425,60 +427,6 @@ def accrue_loyalty(sale):
             LoyaltyAccount.objects.filter(pk=account.pk).update(
                 points=F("points") + (points - account.points)
             )
-
-
-# ---- Coupon ------------------------------------------------------------------
-
-
-def validate_coupon(salon, code, client=None):
-    """Ritorna il coupon se attivo, non scaduto e (se client-bound) del cliente."""
-    coupon = Coupon.objects.filter(salon=salon, code=code).first()
-    if coupon is None:
-        raise HttpError(404, "Coupon non trovato")
-    if coupon.status == Coupon.Status.ACTIVE and coupon.expires_at and coupon.expires_at < timezone.now():
-        coupon.status = Coupon.Status.EXPIRED
-        coupon.save(update_fields=["status"])
-        raise HttpError(422, "Coupon scaduto")
-    if coupon.status != Coupon.Status.ACTIVE:
-        raise HttpError(422, "Coupon non più valido")
-    # Un coupon intestato vale SOLO per la sua cliente. Prima `client is None`
-    # faceva passare il controllo: su una vendita anonima (il caso più comune al
-    # banco) chiunque presentasse il codice di qualcun altro otteneva lo sconto.
-    if coupon.client_id and (client is None or coupon.client_id != client.id):
-        raise HttpError(422, "Coupon riservato a un altro cliente: intestalo alla vendita")
-    return coupon
-
-
-def coupon_discount(coupon, base) -> Decimal:
-    """Sconto in euro che il coupon vale su un imponibile di `base`.
-
-    Mai più dell'imponibile: un buono da 50 € su un conto da 30 sconta 30, non
-    trasforma la cassa in un bancomat. Tutto in Decimal, come il resto del
-    denaro: con i float un 33% su 89,90 arrivava a cifre che non si scrivono su
-    uno scontrino.
-    """
-    base = Decimal(str(base or 0))
-    if base <= 0:
-        return Decimal("0.00")
-    value = Decimal(str(coupon.value))
-    if coupon.kind == Coupon.Kind.PERCENT:
-        value = base * value / Decimal(100)
-    return min(value, base).quantize(CENT, rounding=ROUND_HALF_UP)
-
-
-def mark_coupon_redeemed(coupon, sale) -> bool:
-    """Consuma il coupon legandolo alla vendita; False se qualcuno l'ha già usato.
-
-    Una sola UPDATE filtrata su status='active': è il database a decidere chi
-    arriva primo, come nell'endpoint di riscatto. Con il leggi-poi-scrivi, due
-    banchi che battono lo stesso codice nello stesso istante lo troverebbero
-    attivo entrambi e lo scalerebbero due volte.
-    """
-    return bool(
-        Coupon.objects.filter(pk=coupon.pk, status=Coupon.Status.ACTIVE).update(
-            status=Coupon.Status.REDEEMED, redeemed_at=timezone.now(), sale=sale
-        )
-    )
 
 
 # ---- Comunicazioni -----------------------------------------------------------

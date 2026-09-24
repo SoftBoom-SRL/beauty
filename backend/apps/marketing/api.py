@@ -20,6 +20,7 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from .codes import COUPON_CODE_LENGTH, codes_hidden, status_q, unique_code
+from .coupons import validate_coupon_value
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
     ClientGiftCardIn,
@@ -56,23 +57,6 @@ _ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_pla
 def _get_client(ctx, client_id):
     Client = django_apps.get_model("clients", "Client")  # lazy: evita cicli
     return salon_get(Client, ctx, client_id)
-
-
-def _validate_coupon_value(kind: str, value: Decimal) -> Decimal:
-    """Un buono deve scontare qualcosa, e non più del conto.
-
-    Senza questi controlli passavano un «-20 €» (che aumentava il totale), uno
-    «sconto del 500%» mostrato tale e quale nel portafoglio della cliente, e
-    valori fuori scala che facevano fallire la scrittura.
-    """
-    value = Decimal(str(value))
-    if value <= 0:
-        raise HttpError(422, "Il valore del coupon dev'essere maggiore di zero")
-    if kind == Coupon.Kind.PERCENT and value > 100:
-        raise HttpError(422, "Uno sconto percentuale non può superare il 100%")
-    if value > MAX_MONEY:
-        raise HttpError(422, "Valore del coupon fuori scala")
-    return value
 
 
 # ---- Coupon ------------------------------------------------------------------
@@ -112,7 +96,7 @@ def create_coupon(request, data: CouponIn):
     require_scope(ctx, "marketing")
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
-    value = _validate_coupon_value(data.kind, data.value)
+    value = validate_coupon_value(data.kind, data.value)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     coupon = Coupon.objects.create(
         salon=ctx.salon,
@@ -142,7 +126,7 @@ def update_coupon(request, coupon_id: int, data: CouponIn):
         raise HttpError(422, "Solo i coupon attivi sono modificabili")
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
-    value = _validate_coupon_value(data.kind, data.value)
+    value = validate_coupon_value(data.kind, data.value)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     # UPDATE condizionato a status='active', solo sui campi della maschera. Il
     # save() completo della copia letta a inizio richiesta riscriveva anche

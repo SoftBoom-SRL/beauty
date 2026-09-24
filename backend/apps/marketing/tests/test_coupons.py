@@ -16,7 +16,8 @@ from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
 from ..models import Coupon
-from ..services import create_gift_card, mark_coupon_redeemed, validate_coupon
+from ..coupons import mark_coupon_redeemed, validate_coupon
+from ..services import create_gift_card
 from .base import GiftCardTestBase, OwnerTestBase, _make_client
 
 

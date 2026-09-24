@@ -155,7 +155,7 @@ def _coupon_for_sale(salon, code: str, client, prepared: list[dict], total: Deci
     code = (code or "").strip().upper()  # i codici sono tutti maiuscoli (human_code)
     if not code:
         return None, Decimal("0.00")
-    from apps.marketing.services import coupon_discount, validate_coupon  # lazy
+    from apps.marketing.coupons import coupon_discount, validate_coupon  # lazy
 
     coupon = validate_coupon(salon, code, client=client)
     gift_cards = sum(
@@ -275,7 +275,7 @@ def finalize_sale(
             created_by=actor,
         )
         if coupon is not None:
-            from apps.marketing.services import mark_coupon_redeemed  # lazy
+            from apps.marketing.coupons import mark_coupon_redeemed  # lazy
 
             # Il buono si consuma DENTRO la transazione della vendita: se qui
             # fallisce (un altro banco l'ha battuto un istante prima) non resta
