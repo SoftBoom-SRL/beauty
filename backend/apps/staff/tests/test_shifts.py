@@ -1,16 +1,22 @@
-"""Test essenziali: shift_windows (turno normale, con pausa, con assenza, cycle_weeks=2)
-e l'endpoint pubblico /public/operators (scelta stilista in prenotazione)."""
+"""Turni: `shift_windows` (turno normale, con pausa, con assenza, ciclo di
+più settimane), gli orari di apertura del salone che li limitano, la
+sostituzione dei turni dall'API.
+
+Caccia del 22/09:
+- 18-14: i turni si sostituiscono sotto lock, sull'operatrice riletta.
+"""
 
 import datetime as dt
-from decimal import Decimal
+import json
+from unittest import mock
 
 from django.test import TestCase
-from django.utils import timezone
 
 from apps.core.models import Salon
 
 from ..models import Absence, Operator, WeeklyShift
 from ..services import shift_windows
+from .base import StaffApiTestCase, _StaffSetup
 
 
 class ShiftWindowsTests(TestCase):
@@ -75,46 +81,6 @@ class ShiftWindowsTests(TestCase):
         self.assertEqual(shift_windows(self.operator, day_b), [(540, 1020)])
 
 
-class PublicOperatorsApiTests(TestCase):
-    """GET /api/staff/public/operators: elenco operatrici attive, senza auth."""
-
-    def setUp(self):
-        from apps.catalog.models import Service, ServiceCategory
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
-        self.service = Service.objects.create(
-            salon=self.salon,
-            category=category,
-            name_it="Manicure",
-            duration_min=30,
-            price=Decimal("20.00"),
-        )
-        self.op_active = Operator.objects.create(
-            salon=self.salon, first_name="Giulia", last_name="Rossi", color="#AACCEE"
-        )
-        self.op_active.services.add(self.service)
-        self.op_inactive = Operator.objects.create(
-            salon=self.salon, first_name="Marta", last_name="Verdi", active=False
-        )
-
-    def test_public_operators_no_auth(self):
-        resp = self.client.get(f"/api/staff/public/operators?salon={self.salon.slug}")
-        self.assertEqual(resp.status_code, 200, resp.content)
-        data = resp.json()
-        ids = [o["id"] for o in data]
-        self.assertIn(self.op_active.id, ids)
-        self.assertNotIn(self.op_inactive.id, ids)
-        active = next(o for o in data if o["id"] == self.op_active.id)
-        self.assertEqual(active["service_ids"], [self.service.id])
-        self.assertEqual(active["initials"], "GR")
-        self.assertEqual(active["color"], "#AACCEE")
-
-    def test_public_operators_unknown_salon_404(self):
-        resp = self.client.get("/api/staff/public/operators?salon=inesistente")
-        self.assertEqual(resp.status_code, 404, resp.content)
-
-
 class OpeningHoursIntersectionTests(TestCase):
     """Gli orari di apertura del salone (Impostazioni) limitano i turni: fuori
     orario o nei giorni di chiusura non si prenota, qualunque sia il turno."""
@@ -145,29 +111,6 @@ class OpeningHoursIntersectionTests(TestCase):
     def test_closed_day_gives_no_windows(self):
         self.SalonSettings.objects.create(salon=self.salon, opening_hours_week={"2": []})
         self.assertEqual(shift_windows(self._operator(), self.day), [])
-
-
-class OperatorColorApiTests(TestCase):
-    """Il colore dell'operatrice in agenda è condiviso fra le postazioni."""
-
-    def test_patch_color_is_persisted_and_logged(self):
-        from apps.accounts.models import Membership, Role, User
-        from apps.core.models import ActivityLog
-        from common.auth import create_staff_tokens
-
-        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        operator = Operator.objects.create(salon=salon, first_name="Giulia", last_name="Rossi", color="#AAAAAA")
-        user = User.objects.create_user(email="front@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=salon, name="Front desk", scopes=["agenda"])
-        Membership.objects.create(user=user, salon=salon, role=role)
-        auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
-        res = self.client.patch(f"/api/staff/{operator.id}/color", data='{"color": "#c9b8f2"}', content_type="application/json", **auth)
-        self.assertEqual(res.status_code, 200, res.content)
-        operator.refresh_from_db()
-        self.assertEqual(operator.color, "#C9B8F2")
-        self.assertTrue(ActivityLog.objects.filter(salon=salon, type="operator.updated").exists())
-        res = self.client.patch(f"/api/staff/{operator.id}/color", data='{"color": "rosso"}', content_type="application/json", **auth)
-        self.assertEqual(res.status_code, 400)
 
 
 class ShiftCycleAndContiguityTests(TestCase):
@@ -288,110 +231,6 @@ class ShiftCycleAndContiguityTests(TestCase):
         )
 
 
-class StaffApiTestCase(TestCase):
-    """Base con token staff reale: questi test passano dall'HTTP vero."""
-
-    scopes = ["team"]
-
-    def setUp(self):
-        from apps.accounts.models import Membership, Role, User
-        from common.auth import create_staff_tokens
-
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.user = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Team", scopes=self.scopes)
-        Membership.objects.create(user=self.user, salon=self.salon, role=role)
-        self.auth = {
-            "HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(self.user, self.salon)['access']}"
-        }
-
-    def operator_payload(self, **overrides):
-        payload = {
-            "first_name": "Giulia",
-            "last_name": "Rossi",
-            "color": "#A5B4FC",
-            "cycle_weeks": 1,
-            "order": 0,
-        }
-        payload.update(overrides)
-        return payload
-
-    def put_operator(self, operator, **overrides):
-        return self.client.put(
-            f"/api/staff/{operator.id}",
-            data=self.operator_payload(**overrides),
-            content_type="application/json",
-            **self.auth,
-        )
-
-
-class OperatorValidationTests(StaffApiTestCase):
-    """Colore, ciclo e ordine fuori range sono 400, non errori del database."""
-
-    def test_invalid_color_is_refused(self):
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(color="viola"),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 400, res.content)
-        self.assertFalse(Operator.objects.exists())
-
-    def test_zero_cycle_weeks_is_refused(self):
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(cycle_weeks=0),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 400, res.content)
-
-    def test_absurd_cycle_weeks_is_refused(self):
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(cycle_weeks=100000),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 400, res.content)
-
-    def test_negative_order_is_refused(self):
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(order=-3),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 400, res.content)
-
-    def test_valid_payload_creates_the_operator(self):
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(cycle_weeks=2),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(Operator.objects.get().cycle_weeks, 2)
-
-    def test_a_user_cannot_be_linked_to_two_operators(self):
-        first = Operator.objects.create(
-            salon=self.salon, first_name="Anna", last_name="Bianchi", user=self.user
-        )
-        res = self.client.post(
-            "/api/staff/",
-            data=self.operator_payload(user_id=self.user.id),
-            content_type="application/json",
-            **self.auth,
-        )
-        self.assertEqual(res.status_code, 400, res.content)
-        self.assertIn("Anna", res.json()["detail"])
-        self.assertEqual(Operator.objects.count(), 1)
-        first.refresh_from_db()
-        self.assertEqual(first.user_id, self.user.id)
-
-
 class CycleWeeksReductionTests(StaffApiTestCase):
     """Abbassare il ciclo non deve lasciare turni che nessuna data seleziona più."""
 
@@ -481,70 +320,32 @@ class ReplaceShiftsValidationTests(StaffApiTestCase):
         self.assertEqual(res.status_code, 400, res.content)
 
 
-class PerformanceSeriesTests(TestCase):
-    """La serie di rendimento non deve poter essere allungata a piacere."""
+class ReplaceShiftsTests(_StaffSetup):
+    """18-14: i turni si sostituiscono sotto lock, sull'operatrice riletta."""
 
-    def setUp(self):
-        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.operator = Operator.objects.create(
-            salon=self.salon, first_name="Giulia", last_name="Rossi"
-        )
+    def test_rows_are_validated_against_the_cycle_read_under_the_lock(self):
+        from .. import api as staff_api
 
-    def test_months_are_capped(self):
-        from ..services import MAX_PERFORMANCE_MONTHS, performance_series
+        auth = self._member("titolare@parlour.it", owner=True)
+        self.bea.cycle_weeks = 2
+        self.bea.save(update_fields=["cycle_weeks"])
+        real_salon_get = staff_api.salon_get
 
-        series = performance_series(self.operator, months=5_000_000)
-        self.assertEqual(len(series), MAX_PERFORMANCE_MONTHS)
+        def read_then_cycle_shrinks(model, ctx, pk, **kwargs):
+            obj = real_salon_get(model, ctx, pk, **kwargs)
+            if model is Operator:
+                # Un'altra postazione riduce il ciclo a una settimana subito dopo.
+                Operator.objects.filter(pk=obj.pk).update(cycle_weeks=1)
+            return obj
 
-    def test_months_below_one_fall_back_to_one(self):
-        from ..services import performance_series
-
-        self.assertEqual(len(performance_series(self.operator, months=0)), 1)
-
-    def test_series_is_built_with_a_bounded_number_of_queries(self):
-        from ..services import performance_series
-
-        with self.assertNumQueries(1):
-            series = performance_series(self.operator, months=24)
-        self.assertEqual(len(series), 24)
-        self.assertEqual(series[-1]["month"], timezone.localdate().strftime("%Y-%m"))
-
-
-class OperatorListQueryCountTests(StaffApiTestCase):
-    """La lista operatrici è la pagina che il salone tiene aperta tutto il
-    giorno: il numero di query non deve crescere con le operatrici."""
-
-    scopes = ["team", "agenda"]
-
-    def _make_operators(self, how_many):
-        for index in range(how_many):
-            operator = Operator.objects.create(
-                salon=self.salon, first_name=f"Op{index}", last_name="Rossi"
+        body = {"shifts": [
+            {"week_index": 0, "weekday": 0, "start_min": 540, "end_min": 1080},
+            {"week_index": 1, "weekday": 0, "start_min": 540, "end_min": 1080},
+        ]}
+        with mock.patch.object(staff_api, "salon_get", side_effect=read_then_cycle_shrinks):
+            res = self.client.put(
+                f"/api/staff/{self.bea.id}/shifts", data=json.dumps(body),
+                content_type="application/json", **auth,
             )
-            WeeklyShift.objects.create(
-                operator=operator, week_index=0, weekday=1, start_min=540, end_min=1080
-            )
-
-    def _count_queries(self, expected_rows):
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
-
-        with CaptureQueriesContext(connection) as captured:
-            res = self.client.get("/api/staff/", **self.auth)
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(len(res.json()), expected_rows)
-        return len(captured)
-
-    def test_query_count_does_not_grow_with_the_team(self):
-        self._make_operators(2)
-        with_two = self._count_queries(2)
-        self._make_operators(6)
-        with_eight = self._count_queries(8)
-        self.assertEqual(with_two, with_eight)
-
-    def test_list_works_without_salon_settings(self):
-        self._make_operators(1)
-        res = self.client.get("/api/staff/", **self.auth)
-        self.assertEqual(res.status_code, 200, res.content)
-        self.assertEqual(len(res.json()), 1)
-        self.assertIn("on_shift", res.json()[0])
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertFalse(WeeklyShift.objects.filter(operator=self.bea).exists())
