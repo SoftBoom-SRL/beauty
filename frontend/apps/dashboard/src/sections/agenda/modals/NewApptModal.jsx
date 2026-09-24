@@ -10,11 +10,13 @@ import { toastApiError, Avatar, Icon, Toggle, fmtEur, fmtDur, nowMinutes, timeLa
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { fmtMoney, explainSlot, firstName, isoAtMin, hmToMin, slotStep, AFTERNOON_MIN } from '../lib.js';
+import { fmtMoney, firstName, isoAtMin, hmToMin, slotStep, AFTERNOON_MIN } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
-import { copyText, nextSelection, usableCode, usableGiftCards } from './rules.js';
+import { copyText, relativeDateLabel, requestStatus, usableCode } from './rules.js';
 import { withForceRetry } from '../lib/retry.js';
 import * as agendaApi from '../agendaApi.js';
+import { useGiftCards } from '../hooks/useGiftCards.js';
+import { useBookingSlots } from '../hooks/useBookingSlots.js';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -39,20 +41,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   ));
   const reqOp = req?.operatorId ? operators.find((o) => o.id === req.operatorId) : null;
 
-  /* ---- regali: gift card «a trattamento» attive e pagate della cliente ----
-   * Compaiono accanto ai servizi coperti, così chi prenota vede subito che il
-   * trattamento è già pagato da qualcuno (e il checkout lo userà): per questo
-   * la regola è quella del server (usableGiftCards = gift_index). */
-  const [gifts, setGifts] = useState([]);
-  useEffect(() => {
-    if (!client?.id) { setGifts([]); return undefined; }
-    let alive = true;
-    agendaApi.getClientGiftCards(client.id)
-      .then((r) => { if (alive) setGifts(usableGiftCards(r.items, client.id)); })
-      .catch(() => { if (alive) setGifts([]); });
-    return () => { alive = false; };
-  }, [client?.id]);
-  const giftFor = (serviceId) => gifts.find((g) => g.gift_service_id === serviceId) || null;
+  /* ---- regali: gift card «a trattamento» attive e pagate della cliente (useGiftCards) ---- */
+  const giftFor = useGiftCards(client?.id);
 
   /* ---- orario manuale: lo staff può andare oltre le regole ----
    * Se l'orario digitato non è fra gli slot liberi (fuori turno, centro chiuso,
@@ -126,50 +116,10 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     return () => { alive = false; };
   }, [date, locationId, liveTick]);
 
-  /* ---- disponibilità ---- */
-  const [slots, setSlots] = useState([]);         // null = caricamento
-  const [selStart, setSelStart] = useState(null); // ISO dello slot scelto
-  const [showAll, setShowAll] = useState(!(pf.start));
-  /* Orario scelto e da dove viene (vedi nextSelection): 'req' cliccato in
-   * agenda, 'slot' fra i liberi, 'manual' scritto a mano, 'dropped' tolto
-   * perché non era più libero. */
-  const selRef = useRef({ start: null, src: null, force: false });
-  const choose = (start, src, force) => {
-    selRef.current = { start, src, force: !!force };
-    setSelStart(start);
-    setForceCreate(!!force);
-  };
-  const itemsKey = JSON.stringify(items.map((i) => [i.service_id, i.operator_id]));
-  const availKey = JSON.stringify([date, itemsKey, locationId]);
-  const lastAvailKey = useRef(null);
-  const quietDrop = useRef(false);   // il ricarico dopo un 409 lo ha già spiegato l'avviso
-  useEffect(() => {
-    if (!items.length || !date) { lastAvailKey.current = null; setSlots([]); choose(null, null, false); return undefined; }
-    let alive = true;
-    // Stesso elenco ricaricato (evento live, 409): niente scheletro, gli orari
-    // restano a video finché arrivano quelli nuovi.
-    const refreshed = lastAvailKey.current === availKey;
-    if (!refreshed) setSlots(null);
-    lastAvailKey.current = availKey;
-    agendaApi.getAvailability({ date, location_id: locationId, items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })) })
-      .then((res) => {
-        if (!alive) return;
-        setSlots(res);
-        // L'orario cliccato in agenda si prende anche fuori turno o sopra
-        // un'altra cliente (forzato); quello scelto fra le alternative o scritto
-        // a mano resta com'è — prima tornava all'orario cliccato (13-18).
-        const cur = selRef.current;
-        const next = nextSelection({ prev: cur.start, src: cur.src, prevForced: cur.force, slots: res, reqStartMin: req?.startMin, date, refreshed });
-        choose(next.start, next.src, next.force);
-        if (next.dropped && !quietDrop.current) {
-          const hh = timeLabel(minutesOfDay(next.dropped));
-          fireToast({ msg: t(`Le ${hh} non sono più libere per questa prenotazione: scegli un altro orario`, `${hh} is no longer free for this booking: pick another time`), icon: 'alert' });
-        }
-        quietDrop.current = false;
-      })
-      .catch((err) => { if (alive) { setSlots([]); toastApiError(err, fireToast, t); } });
-    return () => { alive = false; };
-  }, [availKey, req?.startMin, liveTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ---- disponibilità e orario scelto (useBookingSlots) ---- */
+  const { slots, selStart, showAll, setShowAll, choose, quietDrop } = useBookingSlots({
+    items, date, locationId, req, liveTick, initialShowAll: !(pf.start), setForceCreate, t, fireToast,
+  });
 
   const isToday = date === todayStr();
   const nowMin = nowMinutes();
@@ -180,33 +130,11 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
     return o ? o.first_name : null;
   };
 
-  /* stato dell'orario richiesto: disponibile / non disponibile + motivo + alternative */
-  const reqStatus = useMemo(() => {
-    if (!req || req.startMin == null || !items.length) return null;
-    if (slots === null) return { loading: true };
-    const exact = (slots || []).find((s) => minutesOfDay(s.start) === req.startMin);
-    if (exact) return { ok: true, slot: exact };
-    let label, detail = '';
-    const notEligible = reqOp ? items.filter((it) => !isEligible(it.service_id, reqOp.id)) : [];
-    if (reqOp && notEligible.length) {
-      label = t(`${reqOp.first_name} non esegue ${svcName(svcOf(notEligible[0].service_id), lang)}`, `${reqOp.first_name} doesn't perform ${svcName(svcOf(notEligible[0].service_id), lang)}`);
-      detail = t('Abilita il servizio in Staff oppure scegli un’altra operatrice', 'Enable the service in Staff or pick another stylist');
-    } else if (reqOp && dayRows) {
-      const row = dayRows.find((r) => r.operator.id === reqOp.id);
-      const v = row ? explainSlot(row, req.startMin, totalDur || step, { nowMin: isToday ? nowMin : null, sameClientId: client?.id ?? null, t, rows: dayRows }) : null;
-      if (v && !v.ok) { label = `${reqOp.first_name}: ${v.label}`; detail = v.detail; }
-      else label = t(`${reqOp.first_name} non è libera per tutta la durata (${fmtDur(totalDur, lang)})`, `${reqOp.first_name} isn't free for the whole duration (${fmtDur(totalDur, lang)})`);
-    } else if (!reqOp) {
-      label = t(`Nessuna operatrice libera alle ${timeLabel(req.startMin)}`, `No stylist free at ${timeLabel(req.startMin)}`);
-    } else {
-      label = t(`${reqOp.first_name} non è disponibile alle ${timeLabel(req.startMin)}`, `${reqOp.first_name} isn't available at ${timeLabel(req.startMin)}`);
-    }
-    const alternatives = [...(slots || [])]
-      .sort((a, b) => Math.abs(minutesOfDay(a.start) - req.startMin) - Math.abs(minutesOfDay(b.start) - req.startMin))
-      .slice(0, 4)
-      .sort((a, b) => minutesOfDay(a.start) - minutesOfDay(b.start));
-    return { ok: false, label, detail, alternatives };
-  }, [req, reqOp, items, slots, dayRows, totalDur, isToday, nowMin, lang, step, client]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* stato dell'orario richiesto: disponibile / non disponibile + motivo + alternative (requestStatus) */
+  const reqStatus = useMemo(() => requestStatus({
+    req, reqOp, items, slots, dayRows, totalDur, step, nowMin: isToday ? nowMin : null, clientId: client?.id ?? null,
+    t, lang, serviceName: (serviceId) => svcName(svcOf(serviceId), lang), isEligible,
+  }), [req, reqOp, items, slots, dayRows, totalDur, isToday, nowMin, lang, step, client]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- nota / flessibile / invio ---- */
   const [note, setNote] = useState('');
@@ -221,15 +149,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   ].filter(Boolean);
   const ready = canWrite && !missing.length && !saving;
 
-  const dateLabel = (() => {
-    const d = new Date(date + 'T00:00');
-    const today = new Date(todayStr() + 'T00:00');
-    const diff = Math.round((d - today) / 86400000);
-    const base = d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
-    if (diff === 0) return t('Oggi', 'Today') + ' · ' + base;
-    if (diff === 1) return t('Domani', 'Tomorrow') + ' · ' + base;
-    return base;
-  })();
+  const dateLabel = relativeDateLabel(date, lang, t);
   const shiftDate = (n) => { const d = parseISO(date); d.setDate(d.getDate() + n); const iso = toDateStr(d); if (iso >= todayStr()) { setDate(iso); choose(null, null, false); } };
 
   /* «Copia link caparra» dall'avviso: si conferma solo a copia riuscita, e
