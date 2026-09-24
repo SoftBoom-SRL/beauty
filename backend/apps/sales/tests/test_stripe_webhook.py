@@ -3,19 +3,23 @@
 Caccia del 22/09: 05-02 (l'endpoint della piattaforma e quello Connect firmano
 con segreti diversi), 02-07/03-02/05-08/18-01 (pagamento di un appuntamento
 che non c'è più). Bug sospetti del 24/09: voce 8 (account della carta salvata),
-voce 10 (pagamento orfano: controllo e riga sotto il lock del salone).
+voce 10 (pagamento orfano: la riga si prende sotto il lock del salone, il
+rimborso parte fuori dalla transazione).
 """
 
+import json
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+import stripe
+from django.db import connection
+from django.test import TestCase, TransactionTestCase, override_settings
 
 from apps.clients.models import Client
 from apps.core.models import ActivityLog, Salon
 
 from ..models import Sale
-from .base import StripeTestBase, _refund, event_payload
+from .base import WEBHOOK_URL, FakeStripeHTTP, StripeTestBase, _refund, event_payload, sign
 
 
 class StripeWebhookTests(TestCase):
@@ -189,9 +193,8 @@ class DuplicateDepositPaymentTests(TestCase):
         )
 
 
-@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
-class OrphanPaymentTests(StripeTestBase):
-    """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
+class GhostDepositEvents:
+    """Eventi Stripe della caparra di un appuntamento che non c'è più (`self.salon`)."""
 
     def _ghost_event(self, event_type="payment_intent.succeeded", *, account="", event_id="evt_1"):
         metadata = {"appointment_id": "999999", "salon_id": str(self.salon.id), "kind": "deposit"}
@@ -202,6 +205,11 @@ class OrphanPaymentTests(StripeTestBase):
             obj = {"id": "cs_ghost", "object": "checkout.session", "payment_status": "paid",
                    "payment_intent": "pi_ghost", "amount_total": 2000, "metadata": metadata}
         return event_payload(event_type, obj, account=account, event_id=event_id)
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class OrphanPaymentTests(GhostDepositEvents, StripeTestBase):
+    """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
 
     def test_the_payment_is_refunded_and_written_down(self):
         http = self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
@@ -225,48 +233,79 @@ class OrphanPaymentTests(StripeTestBase):
         self.assertEqual(http.calls_to("/v1/refunds"), [])
         self.assertFalse(ActivityLog.objects.filter(type="deposit.orphan_payment").exists())
 
-    def test_a_session_arriving_during_the_refund_waits_for_the_intent(self):
-        """Bug sospetti del 24/09, voce 10: intent e sessione insieme, un rimborso e una riga.
 
-        Controllo e riga stavano fuori da ogni lock: la sessione, arrivata
-        mentre l'intent rimborsava, passava anche lei il controllo e le righe
-        erano due (la seconda poteva dire «da rimborsare a mano» se Stripe le
-        rifiutava la chiave ancora in uso). Su SQLite il lock del salone non
-        ferma nessuno: qui, se l'intent lo tiene, la sessione aspetta che
-        l'intent abbia finito, come su PostgreSQL.
-        """
-        import json
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTestCase):
+    """Bug sospetti del 24/09, voce 10: una riga sola, e Stripe fuori dalla transazione.
 
-        from apps.agenda.services import locking
+    Intent e sessione arrivano quasi insieme. La riga del registro si prende
+    subito, sotto il lock del salone, con l'esito «in corso»; il rimborso parte
+    dopo, fuori da ogni transazione, e la riga prende l'esito vero. Tenere il
+    lock durante la chiamata a Stripe fermava l'agenda del salone per tutto il
+    tempo della risposta. `TransactionTestCase` perché in un `TestCase` si è
+    sempre dentro un blocco atomico.
+    """
 
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.addCleanup(setattr, stripe, "default_http_client", stripe.default_http_client)
+
+    def _fake(self, routes):
+        stripe.default_http_client = FakeStripeHTTP(routes)
+        return stripe.default_http_client
+
+    def _post_event(self, payload):
+        return self.client.post(
+            WEBHOOK_URL, data=payload, content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=sign(payload, "whsec_platform"),
+        )
+
+    def test_the_second_delivery_finds_the_row_while_stripe_answers(self):
         from .. import stripe_service, stripe_webhooks
 
         session = json.loads(self._ghost_event("checkout.session.completed", event_id="evt_2"))
         real_refund = stripe_service.refund_payment_intent
-        arrived, waiting = [], []
+        seen = {}
 
         def refund_while_the_session_arrives(*args, **kwargs):
-            if not arrived:
-                arrived.append(session)
-                if lock.called:
-                    waiting.append(session)  # aspetta il commit dell'intent
-                else:
-                    stripe_webhooks.handle_event(session)
+            if not seen:
+                seen["in_atomic_block"] = connection.in_atomic_block
+                seen["rows"] = list(
+                    ActivityLog.objects.filter(type="deposit.orphan_payment").values_list("summary", "payload")
+                )
+                stripe_webhooks.handle_event(session)  # la sessione arriva mentre Stripe risponde
             return real_refund(*args, **kwargs)
 
-        self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
-        with patch("apps.agenda.services.locking.lock_salon", wraps=locking.lock_salon) as lock, \
-                patch("apps.sales.stripe_service.refund_payment_intent",
-                      side_effect=refund_while_the_session_arrives) as refunds:
-            self.assertEqual(self.post_event(self._ghost_event()).status_code, 200)
-            for event in waiting:
-                stripe_webhooks.handle_event(event)
-        self.assertEqual(arrived, [session])
-        self.assertEqual(ActivityLog.objects.filter(type="deposit.orphan_payment").count(), 1)
-        self.assertEqual(refunds.call_count, 1)
-        lock.assert_called()
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        with patch("apps.sales.stripe_service.refund_payment_intent",
+                   side_effect=refund_while_the_session_arrives) as refunds:
+            self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+        self.assertIs(seen["in_atomic_block"], False)
+        # Durante la chiamata la riga c'era già, «in corso», e la sessione l'ha trovata.
+        [(summary, payload)] = seen["rows"]
+        self.assertEqual(summary, "Caparra pagata per un appuntamento che non esiste più: rimborso in corso")
+        self.assertEqual((payload["refund_status"], payload["refund_id"]), ("in_progress", ""))
+        refunds.assert_called_once()
+        self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
+        # Poi la stessa riga, con l'esito vero e i campi di sempre.
         log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
-        self.assertEqual((log.payload["refund_id"], log.payload["refund_status"]), ("re_ghost", "succeeded"))
+        self.assertEqual(log.summary, "Caparra pagata per un appuntamento che non esiste più: rimborsata")
+        self.assertEqual(log.payload, {
+            "appointment_id": "999999", "payment_intent_id": "pi_ghost", "amount_cents": 2000,
+            "refund_id": "re_ghost", "refund_status": "succeeded", "account": "",
+        })
+
+    def test_the_row_does_not_stay_in_progress_if_the_call_blows_up(self):
+        # Il worker fermato a metà chiamata (timeout di gunicorn) arriva qui
+        # come un'eccezione: la riga dice di controllare a mano, e la consegna
+        # ripetuta da Stripe la trova ed esce.
+        with patch("apps.sales.stripe_service.refund_payment_intent", side_effect=SystemExit(1)) as refunds:
+            with self.assertRaises(SystemExit):
+                self._post_event(self._ghost_event())
+        refunds.assert_called_once()
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
+        self.assertEqual(log.summary, "Caparra pagata per un appuntamento che non esiste più: da rimborsare a mano su Stripe")
+        self.assertEqual((log.payload["refund_id"], log.payload["refund_status"]), ("", ""))
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_x")
