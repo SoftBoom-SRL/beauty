@@ -12,7 +12,8 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.db import transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 
 from common.testing import bearer, post_json, put_json
 
@@ -555,6 +556,113 @@ class DepositRuleAmountTests(TestCase):
         self.assertEqual(logs[2].payload["rule_id"], rule_id)
         feed = self.client.get("/api/core/activity/feed", {"after": logs[0].id - 1}, **self.auth).json()
         self.assertEqual([e["type"] for e in feed["events"]][-2:], ["deposit_rule.updated", "deposit_rule.deleted"])
+
+
+class DepositRuleLabelLockTests(TransactionTestCase):
+    """Bug sospetti del 24/09, voce 26: la regola caparra si salva sotto il lock del salone.
+
+    L'eliminazione di un'etichetta controlla che nessuna regola la citi e poi
+    la cancella, sotto il lock del salone (`delete_label` in clients). Una
+    regola che si salvava senza quel lock poteva essere a metà proprio allora:
+    il controllo non la vedeva, e l'etichetta spariva lo stesso, lasciando una
+    regola che non scatta per nessuna. Su SQLite il lock non ferma nessuno:
+    qui, se il salvataggio lo tiene, l'altra postazione aspetta la fine della
+    sua transazione, come su PostgreSQL. `TransactionTestCase` perché la fine
+    della transazione deve arrivare davvero.
+    """
+
+    def setUp(self):
+        from apps.clients.models import ClientCategory
+
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.auth = _owner(self.salon)
+        self.label = ClientCategory.objects.create(salon=self.salon, name="A rischio")
+
+    def _rule(self):
+        return {
+            "name": "Caparra a rischio", "amount_type": "pct", "amount": "30",
+            "conditions": {"op": "and", "rules": [{"field": "categories", "cmp": "contains", "value": "A rischio"}]},
+        }
+
+    def _while_the_label_is_deleted(self, save_the_rule):
+        """Salva la regola mentre un'altra postazione elimina l'etichetta, nel momento della scrittura.
+
+        Ritorna (risposta del salvataggio, risposta dell'eliminazione, il lock sostituito).
+        """
+        from apps.agenda.services import locking
+
+        real_lock, real_save = locking.lock_salon, DepositRule.save
+        state = {"held": False, "arrived": False}
+        waiting, deleted = [], []
+
+        def lock_salon(salon):
+            state["held"] = True
+            # Su PostgreSQL il lock resta fino alla fine della transazione.
+            transaction.on_commit(lambda: state.update(held=False))
+            return real_lock(salon)
+
+        def delete_the_label():
+            deleted.append(self.client.delete(f"/api/clients/categories/{self.label.id}", **self.auth))
+
+        def save_while_the_label_is_deleted(rule, *args, **kwargs):
+            if not state["arrived"]:
+                state["arrived"] = True
+                if state["held"]:
+                    waiting.append(delete_the_label)  # aspetta il commit del salvataggio
+                else:
+                    delete_the_label()
+            return real_save(rule, *args, **kwargs)
+
+        with patch("apps.agenda.services.locking.lock_salon", side_effect=lock_salon) as lock, \
+                patch.object(DepositRule, "save", autospec=True, side_effect=save_while_the_label_is_deleted):
+            saved = save_the_rule()
+            for station in waiting:
+                station()
+        self.assertTrue(state["arrived"])
+        return saved, deleted[0], lock
+
+    def assertLabelStays(self, saved, deleted, lock):
+        from apps.clients.models import ClientCategory
+
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(deleted.status_code, 400, deleted.content)
+        self.assertIn("Caparra a rischio", deleted.json()["detail"])
+        self.assertTrue(ClientCategory.objects.filter(pk=self.label.pk).exists())
+        lock.assert_any_call(self.salon)
+
+    def test_a_rule_being_created_is_seen_by_the_label_deletion(self):
+        self.assertLabelStays(*self._while_the_label_is_deleted(
+            lambda: post_json(self.client, "/api/core/deposit-rules", self._rule(), **self.auth)
+        ))
+
+    def test_a_rule_being_changed_to_cite_the_label_is_seen_too(self):
+        rule = DepositRule.objects.create(
+            salon=self.salon, name="Caparra", amount_type="pct", amount=Decimal("30")
+        )
+        self.assertLabelStays(*self._while_the_label_is_deleted(
+            lambda: put_json(self.client, f"/api/core/deposit-rules/{rule.id}", self._rule(), **self.auth)
+        ))
+
+    def test_a_rule_deleted_meanwhile_does_not_come_back(self):
+        # Salone, poi riga: la regola si rilegge dopo il lock. Salvata tutta
+        # com'era a inizio richiesta, quella eliminata nel frattempo da
+        # un'altra postazione tornava in vita.
+        from .. import api as core_api
+
+        rule = DepositRule.objects.create(
+            salon=self.salon, name="Caparra", amount_type="pct", amount=Decimal("30")
+        )
+        stale = DepositRule.objects.get(pk=rule.pk)  # letta a inizio richiesta
+        rule.delete()  # poi un'altra postazione la elimina
+
+        def stale_get(model, ctx, pk, **extra):
+            return stale if model is DepositRule else model.objects.get(pk=pk)
+
+        with patch.object(core_api, "salon_get", side_effect=stale_get) as get:
+            res = put_json(self.client, f"/api/core/deposit-rules/{stale.pk}", self._rule(), **self.auth)
+        get.assert_called()
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertFalse(DepositRule.objects.filter(pk=stale.pk).exists())
 
 
 class AdminOpeningHoursTests(TestCase):

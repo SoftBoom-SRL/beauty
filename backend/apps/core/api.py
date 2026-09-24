@@ -217,8 +217,18 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **deposit_rule_fields(data))
-    log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    fields = deposit_rule_fields(data)
+    # Sotto il lock del salone, come l'eliminazione di un'etichetta
+    # (`delete_label` in clients), che sotto lo stesso lock controlla che
+    # nessuna regola la citi: senza, una regola a metà salvataggio sfuggiva al
+    # controllo e l'etichetta spariva lo stesso (voce 26 dei bug sospetti del
+    # 24/09).
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        rule = DepositRule.objects.create(salon=ctx.salon, **fields)
+        log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
 
@@ -227,15 +237,26 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in deposit_rule_fields(data).items():
-        setattr(rule, name, value)
-    rule.save()
-    # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
-    # le altre postazioni del titolare.
-    log_activity(
-        ctx.salon, "deposit_rule.updated", f"Regola deposito modificata: {rule.name}",
-        actor=ctx.user, payload={"rule_id": rule.id},
-    )
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    fields = deposit_rule_fields(data)
+    # Il lock del salone, come nella creazione, poi la riga, riletta: salvata
+    # tutta com'era a inizio richiesta, una regola eliminata nel frattempo da
+    # un'altra postazione tornava in vita.
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        rule = DepositRule.objects.select_for_update().filter(pk=rule.pk).first()
+        if rule is None:
+            raise HttpError(404, "Regola caparra non trovata")
+        for name, value in fields.items():
+            setattr(rule, name, value)
+        rule.save()
+        # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
+        # le altre postazioni del titolare.
+        log_activity(
+            ctx.salon, "deposit_rule.updated", f"Regola deposito modificata: {rule.name}",
+            actor=ctx.user, payload={"rule_id": rule.id},
+        )
     return rule
 
 
