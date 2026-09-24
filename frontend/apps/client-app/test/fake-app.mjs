@@ -37,6 +37,12 @@ export function Icon() { return null; }
 Icon.stub = true;
 export function PhoneInput() { return null; }
 PhoneInput.stub = true;
+export function Toggle() { return null; }
+Toggle.stub = true;
+export function NumInput() { return null; }
+NumInput.stub = true;
+export function ProgressBar() { return null; }
+ProgressBar.stub = true;
 export const SALON_SLUG = 'the-parlour';
 const N = globalThis.__net;
 N.ApiError = E.ApiError;
@@ -46,6 +52,7 @@ export const clientAuth = {
   requestOtp: (...args) => N.call('requestOtp', null, args),
   register: (...args) => N.call('register', null, args),
   verifyOtp: (...args) => N.call('verifyOtp', null, args),
+  logout: () => { N.log.push({ method: 'logout', path: null, args: [] }); },
 };
 `;
 const CTX = `
@@ -71,13 +78,22 @@ export function fakeCtx(extra = {}) {
   net.log.length = 0;
   const toasts = [];
   const views = [];
-  globalThis.__ctx = {
+  const langs = [];
+  const ctx = {
     t: (it) => it, lang: 'it', brand: BRAND, session: null, viewParams: {},
     setView: (v, params) => views.push([v, params]),
+    setLang: (l) => langs.push(l),
     fireToast: (o) => toasts.push(o),
     ...extra,
   };
-  return { toasts, views };
+  // come logout() di ctx.jsx: prima la home, poi la sessione chiusa, poi il toast
+  ctx.logout = () => {
+    ctx.setView('home');
+    net.log.push({ method: 'logout', path: null, args: [] });
+    ctx.fireToast({ msg: ctx.t('Sei uscita dal profilo', 'Logged out'), icon: 'check' });
+  };
+  globalThis.__ctx = ctx;
+  return { toasts, views, langs };
 }
 
 /** Le chiamate registrate finora, senza le Promise: [metodo, percorso, ...argomenti]. */
