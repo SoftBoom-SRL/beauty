@@ -16,7 +16,6 @@ Yourang, unicità dell'org, disconnessione.
     python manage.py test apps.integrations.tests_caccia22_collegamento
 """
 
-import json
 from datetime import timedelta
 from unittest import mock
 from unittest.mock import Mock, patch
@@ -33,7 +32,7 @@ from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.integrations import crypto
 from apps.integrations.models import YourangConnection, YourangOAuthState
-from common.auth import create_staff_tokens
+from common.testing import bearer, post_json
 
 from .base import TEST_KEY
 
@@ -80,10 +79,6 @@ def _member(salon, email, *, owner=False, scopes=None):
     return user
 
 
-def _bearer(user, salon):
-    return {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, salon)['access']}"}
-
-
 @override_settings(**OAUTH_SETTINGS)
 class _FlowCase(TestCase):
     def start(self, mode, headers=None):
@@ -102,9 +97,7 @@ class _FlowCase(TestCase):
         return state, body["nonce"]
 
     def exchange(self, payload, headers=None):
-        return self.client.post(
-            EXCHANGE, data=json.dumps(payload), content_type="application/json", **(headers or {})
-        )
+        return post_json(self.client, EXCHANGE, payload, **(headers or {}))
 
     @staticmethod
     def redeem(token_resp=None):
@@ -116,7 +109,7 @@ class ConnectStateTests(_FlowCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.owner = _member(self.salon, "owner@p.it", owner=True)
-        self.auth = _bearer(self.owner, self.salon)
+        self.auth = bearer(self.owner, self.salon)
 
     def test_a_return_link_without_the_nonce_is_refused_before_redeeming(self):
         """/oauth-popup/done?code=…&state=… aperto in un'altra finestra: lo state
@@ -197,7 +190,7 @@ class OrgChangeTests(_FlowCase):
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         self.owner = _member(self.salon, "owner@p.it", owner=True)
-        self.auth = _bearer(self.owner, self.salon)
+        self.auth = bearer(self.owner, self.salon)
         self.linked = Client.objects.create(
             salon=self.salon, first_name="Sofia", phone="+393331234567", yourang_contact_id="c-old"
         )
@@ -473,7 +466,7 @@ class StatusLastErrorTests(TestCase):
 
     def setUp(self):
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        self.auth = _bearer(_member(self.salon, "owner@p.it", owner=True), self.salon)
+        self.auth = bearer(_member(self.salon, "owner@p.it", owner=True), self.salon)
 
     def _status(self):
         r = self.client.get("/api/integrations/yourang/status", **self.auth)

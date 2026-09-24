@@ -1,11 +1,13 @@
 """Aiuti condivisi dai moduli di test dell'integrazione Yourang.
 
-Solo ciò che serve a più di un modulo: la chiave di cifratura dei test, le
-impostazioni del flusso diretto verso l'external API e il client httpx finto con
-i suoi aiuti. Niente classi con test: un modulo che le importasse le farebbe
-girare due volte.
+Solo ciò che serve a più di un modulo: la chiave di cifratura dei test, la firma
+dei webhook, le impostazioni del flusso diretto verso l'external API e il client
+httpx finto con i suoi aiuti. Niente classi con test: un modulo che le
+importasse le farebbe girare due volte.
 """
 
+import hashlib
+import hmac
 from datetime import timedelta
 from unittest import mock
 
@@ -23,6 +25,15 @@ API = "/api/external/v1"
 # Da non confondere con OAUTH_SETTINGS di test_oauth (client OAuth, ricevitore
 # del webhook, origin del frontend).
 API_SETTINGS = dict(YOURANG_ISSUER_URL="https://yourang.invalid", ENCRYPTION_KEY=TEST_KEY)
+
+
+def sign_webhook(body: bytes, ts: str, secret: str) -> str:
+    """La firma che Yourang mette in x-yourang-signature: HMAC-SHA256 di «<ts>.<corpo>».
+
+    È la ricetta che crypto.verify_signature controlla, scritta una volta sola
+    per tutti i test che firmano un webhook.
+    """
+    return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
 
 
 def _connection(salon, org, **extra):

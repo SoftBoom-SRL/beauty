@@ -8,8 +8,6 @@ segreto del webhook per salone.
     python manage.py test apps.integrations.tests_caccia22_webhook
 """
 
-import hashlib
-import hmac
 import json
 import time
 from unittest import mock
@@ -22,18 +20,12 @@ from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.integrations import crypto
 
-from .base import API_SETTINGS, TEST_KEY, FakeHttp, _all_calls, _connection
+from .base import API_SETTINGS, TEST_KEY, FakeHttp, _all_calls, _connection, sign_webhook
 
 # Due classi, due connessioni, due segreti: ciascuna firma con quello della sua
 # connessione (WEBHOOK_SECRET per WebhookRouteTests, SECRET per ContactWebhookTests).
 WEBHOOK_SECRET = "s3cret"
 SECRET = "s3cret-22"
-
-
-def _sign_webhook(body: bytes, ts: str, secret: str = WEBHOOK_SECRET) -> str:
-    return "sha256=" + hmac.new(
-        secret.encode(), f"{ts}.".encode() + body, hashlib.sha256
-    ).hexdigest()
 
 
 # La chiave vale per i test che cifrano token e segreti: senza, giravano solo
@@ -69,7 +61,7 @@ class WebhookRouteTests(TestCase):
             data=body,
             content_type="application/json",
             headers={
-                "x-yourang-signature": signature or _sign_webhook(body, ts),
+                "x-yourang-signature": signature or sign_webhook(body, ts, WEBHOOK_SECRET),
                 "x-yourang-timestamp": ts,
             },
         )
@@ -179,8 +171,7 @@ class ContactWebhookTests(TestCase):
             payload["resource_id"] = resource_id
         body = json.dumps(payload).encode()
         ts = str(int(time.time()))
-        sig = "sha256=" + hmac.new(SECRET.encode(), f"{ts}.".encode() + body,
-                                   hashlib.sha256).hexdigest()
+        sig = sign_webhook(body, ts, SECRET)
         with mock.patch("apps.integrations.client.httpx.Client", FakeHttp), \
                 mock.patch("apps.integrations.client.httpx.request") as one_shot:
             r = self.client.post("/api/integrations/yourang/webhook", data=body,
