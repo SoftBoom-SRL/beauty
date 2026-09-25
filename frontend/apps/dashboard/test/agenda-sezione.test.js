@@ -43,8 +43,10 @@ const rowsFor = (appts = []) => OPS.map((o) => ({
   appointments: appts.filter((a) => a.operator_id === o.id), pauses: [],
 }));
 
-function setup({ modal = null, undo = [], rows = null, storage = {} } = {}) {
+function setup({ modal = null, undo = [], rows = null, storage = {}, dash = {}, narrow = false } = {}) {
   const win = installDom({ storage });
+  // `narrow`: una finestra sotto i 1180 px (il pannello di destra sta sopra l'agenda)
+  if (narrow) globalThis.window.matchMedia = (q) => ({ matches: q === '(max-width: 1180px)' });
   globalThis.setInterval = () => 0;      // l'orologio dell'agenda (ogni 30 s) non serve qui
   globalThis.clearInterval = () => {};
   const ApiError = globalThis.__ApiError;
@@ -78,6 +80,7 @@ function setup({ modal = null, undo = [], rows = null, storage = {} } = {}) {
     setTab: spy(), setDeepLink: spy(), showRevenue: false, setAgendaPick: spy(), setAgendaDate: spy(),
     settings: { slot_interval_min: 15 }, session: { is_owner: true }, locationId: null, toastProps: { onDone: spy() },
     live: { subscribe: (fn) => { liveFn = fn; return () => {}; } },
+    ...dash,
   };
   const m = mount(AgendaSection, {});
   const g = {
@@ -473,4 +476,65 @@ test('«Solo chi lavora oggi» non nasconde niente quando nessuno ha turni quel 
   const g = setup({ rows });
   await ready(g);
   assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 2, 3, 4]);
+});
+
+test('a metà gesto (anche un ridimensionamento) tacciono zoom, frecce e ⌘Z', async () => {
+  const g = setup({ undo: [{ id: 7, kind: 'move', label: 'Gesto di prima' }] });
+  await ready(g);
+  const key = (k, extra = {}) => g.win.fire('keydown', { key: k, target: { tagName: 'BODY' }, preventDefault() {}, ...extra });
+  document.body.classList.add('dk-gesture');         // useGridDrag: pressione su un blocco o sulla maniglia
+  key('+');
+  key('ArrowRight');
+  key('z', { metaKey: true });
+  g.render();
+  await flush();
+  assert.equal(g.dg().props.zoom, 1, 'lo zoom non stacca il blocco dal puntatore');
+  assert.equal(g.dg().props.date, TODAY);
+  assert.equal(g.calls.post.filter((p) => p.url === '/api/agenda/undo').length, 0, 'niente annullamento a metà gesto');
+  document.body.classList.remove('dk-gesture');
+  key('+');
+  g.render();
+  assert.ok(g.dg().props.zoom > 1, 'finito il gesto lo zoom torna a rispondere');
+});
+
+test('il filtro elenca e conta le operatrici della sede; «Nessuna» e «Solo» non toccano le altre sedi', async () => {
+  const storage = {};
+  const ops = OPS.map((o) => ({ ...o, location_id: o.id === 4 ? 2 : 1 }));   // Bea lavora nell'altra sede
+  const rows = rowsFor([sara]).filter((r) => r.operator.id !== 4);            // la giornata della sede 1
+  const g = setup({ storage, rows, dash: { operators: ops, locationId: 1 } });
+  await ready(g);
+  const team = () => find(g.m.tree, (el) => el.type?.name === 'TeamFilter');
+  assert.deepEqual(team().props.operators.map((o) => o.id), [1, 2, 3], 'Bea non è nell\'elenco');
+  assert.equal(team().props.total, 3);
+  team().props.setAll(false);
+  g.render();
+  assert.deepEqual(JSON.parse(storage['dk-agenda-hidden-ops']).sort(), [1, 2, 3], 'Bea, nell\'altra sede, resta accesa');
+  team().props.only(2);
+  g.render();
+  assert.deepEqual(JSON.parse(storage['dk-agenda-hidden-ops']).sort(), [1, 3]);
+});
+
+test('un id spento di un\'operatrice di un\'altra sede non nasconde la sua riga nella giornata di questa', async () => {
+  // Bea (sede 2) spenta quando si guardava l'altra sede; qui ha un servizio
+  // dentro una visita, e il server manda la sua riga: deve restare
+  const ops = OPS.map((o) => ({ ...o, location_id: o.id === 4 ? 2 : 1 }));
+  const g = setup({ storage: { 'dk-agenda-hidden-ops': '[4]' }, dash: { operators: ops, locationId: 1 } });
+  await ready(g);
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 2, 3, 4]);
+});
+
+test('sotto i 1180 px il pannello di destra si apre per il momento: non si ricorda e si chiude con Esc', async () => {
+  const storage = {};
+  const g = setup({ storage, narrow: true });
+  await ready(g);
+  const rail = () => find(g.m.tree, (el) => el.type === 'aside' && el.props.className === 'dk-rail');
+  assert.equal(rail(), null, 'chiuso di partenza');
+  find(g.m.tree, (el) => el.type === 'button' && el.props.title === 'Espandi pannello').props.onClick();
+  g.render();
+  assert.ok(rail(), 'aperto sopra l\'agenda');
+  assert.equal(storage['dk-agenda-rail'], undefined, 'l\'apertura non si salva');
+  g.win.fire('keydown', { key: 'Escape', defaultPrevented: false, preventDefault() {} });
+  await new Promise((r) => setTimeout(r, 5));         // la pila dei livelli decide dopo gli altri (setTimeout 0)
+  g.render();
+  assert.equal(rail(), null, 'Esc lo chiude');
 });

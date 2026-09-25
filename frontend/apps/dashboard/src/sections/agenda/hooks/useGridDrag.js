@@ -11,7 +11,7 @@ import { useLatest } from './useLatest.js';
  *  ascoltano anche su window, così il trascinamento non resta mai «appeso»
  *  quando la cattura del puntatore non è supportata o il rilascio avviene
  *  fuori dall'area (la passano giorno e settimana).
- *  Ritorna { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped }. */
+ *  Ritorna { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture }. */
 export function useGridDrag({ onStop, windowUpRef = null } = {}) {
   /* Il gesto in corso è un oggetto MUTABILE (drag.current), aggiornato a ogni
    * movimento del puntatore, e `force` ridisegna: tenerlo nello stato
@@ -33,7 +33,7 @@ export function useGridDrag({ onStop, windowUpRef = null } = {}) {
    * guardava da fuori, o la striscia dei giorni restava accesa come bersaglio
    * di un trascinamento che non c'era più. */
   useEffect(() => () => {
-    document.body.classList.remove('dk-dragging');
+    document.body.classList.remove('dk-dragging', 'dk-gesture');
     if (drag.current) { drag.current = null; onStopRef.current?.(false); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /* Esc annulla il drag in corso. `preventDefault` è il contratto di
@@ -45,7 +45,7 @@ export function useGridDrag({ onStop, windowUpRef = null } = {}) {
   useEffect(() => {
     const cancel = () => {
       drag.current = null;
-      document.body.classList.remove('dk-dragging');
+      document.body.classList.remove('dk-dragging', 'dk-gesture');
       onStopRef.current?.(false);   // la striscia dei giorni torna normale
       force((x) => x + 1);
     };
@@ -71,7 +71,7 @@ export function useGridDrag({ onStop, windowUpRef = null } = {}) {
   function endDrag() {
     const d = drag.current;
     drag.current = null;
-    document.body.classList.remove('dk-dragging');
+    document.body.classList.remove('dk-dragging', 'dk-gesture');
     onStop && onStop(false);
     force((x) => x + 1);
     return d;
@@ -82,5 +82,10 @@ export function useGridDrag({ onStop, windowUpRef = null } = {}) {
     justDragged.current = true;
     setTimeout(() => { justDragged.current = false; }, 0);
   }
-  return { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped };
+  /** Un gesto comincia (anche un ridimensionamento, o un trascinamento non
+   *  ancora oltre la soglia): `dk-gesture` sul body dice ai tasti dell'agenda
+   *  di tacere finché non finisce. `dk-dragging` arriva solo quando il blocco
+   *  si muove davvero, e il ridimensionamento non lo accende mai. */
+  function startGesture() { document.body.classList.add('dk-gesture'); }
+  return { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture };
 }

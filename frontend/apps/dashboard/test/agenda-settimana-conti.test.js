@@ -140,7 +140,20 @@ test('filtro «Team» in settimana: la visita di una spenta resta nella colonna 
   assert.equal(weekDays(payload([visita]), null, OPS, 1, '', [1, 2])[3].list.some((a) => a.id === 44), false);
 });
 
-test('trascinata nella colonna in cui è disegnata, una visita con la principale spenta non cambia operatrice', () => {
-  const d = { ns: 11 * 60, nop: 2, origOp: 2 };   // origOp = weekColOf: la colonna di partenza
-  assert.deepEqual(weekMoveBody({ date: W1[3] }, d, false), { start: isoAtMin(W1[3], 11 * 60) });
+test('filtro «Team» in settimana: la colonna di disegno esiste sempre, e una collega della sede viene prima', () => {
+  const visita = (items) => ({ ...sara, id: 45, start: '2026-10-01T10:00:00+02:00', operator_id: 1, duration_min: 90,
+    items: items.map((op) => ({ service_id: 1, operator_id: op, duration_min: 30, soak_min: 0 })) });
+  // Anna spenta; prima un'operatrice non più in team (99), poi Giulia accesa: si disegna da Giulia
+  let d = weekDays(payload([visita([1, 99, 2])]), null, OPS, 1, 'Non più in team', [1])[3];
+  let v = d.list.find((a) => a.id === 45);
+  assert.equal(weekColOf(v), 2, 'nella colonna di Giulia, che c\'è già');
+  assert.ok(d.dayOps.some((o) => o.id === weekColOf(v)));
+  // solo Bea dell'altra sede oltre ad Anna: Bea riceve la sua colonna in coda
+  d = weekDays(payload([visita([1, 3])]), null, OPS, 1, 'Non più in team', [1])[3];
+  v = d.list.find((a) => a.id === 45);
+  assert.equal(weekColOf(v), 3);
+  assert.ok(d.dayOps.some((o) => o.id === 3), 'la colonna di Bea c\'è: la visita si vede, non solo si conta');
+  // solo un'operatrice non più in team: la colonna «non più in team» in coda
+  d = weekDays(payload([visita([1, 99])]), null, OPS, 1, 'Non più in team', [1])[3];
+  assert.ok(d.dayOps.some((o) => o.id === 99 && o.first_name === 'Non più in team'));
 });

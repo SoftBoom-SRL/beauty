@@ -8,7 +8,7 @@
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toastApiError, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
@@ -49,6 +49,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // Anteprima al passaggio del mouse, come nella vista giorno: in settimana i
   // blocchi sono stretti e il solo `title` del browser arriva tardi e dice poco.
   const [hover, setHover] = useState(null);
+  /* Cambiando settimana i blocchi spariscono senza mouseleave: la scheda
+   * dell'appuntamento di prima restava incollata sulla settimana nuova. */
+  useEffect(() => { setHover(null); }, [weekStart]);
   const scrollRef = useRef(null);
   const headRef = useRef(null);             // intestazione fissa dei giorni
   const onUpRef = useRef(null);             // ultimo onUp (chiusura fresca) per il fallback su window
@@ -80,7 +83,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   /* Il trascinamento: Esc lo annulla e, qui, anche pointerup e pointercancel su
    * window: se la cattura non è supportata o il rilascio avviene fuori
    * dall'area, il drag non resta mai "appeso" (onUpRef = l'ultimo onUp). */
-  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ windowUpRef: onUpRef });
+  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture } = useGridDrag({ windowUpRef: onUpRef });
 
   /* Cambiando settimana la griglia passa dallo scheletro e tornava in cima:
    * l'ombra dell'appuntamento aperto finiva fuori schermo. Il minuto in cima si
@@ -135,6 +138,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     // un secondo dito sul tablet non ruba il trascinamento in corso
     if (e.isPrimary === false) return;
     e.preventDefault();                                     // niente selezione testo (il pointerup arriva comunque)
+    startGesture();
     drag.current = {
       id: appt.id, obj: appt, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
@@ -143,7 +147,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       // principale spenta nel filtro, trascinarlo nella stessa colonna non
       // deve passare i servizi della principale a un'altra
       orig: appt.startMin, origOp: weekColOf(appt), origDayIdx: dayIdx,
-      ns: appt.startMin, nop: appt.operator_id, dayIdx, hoverOp: null, moved: false,
+      ns: appt.startMin, nop: weekColOf(appt), dayIdx, hoverOp: null, moved: false,
     };
     // il contenitore riceve TUTTI gli eventi fino al rilascio, anche fuori dall'area o sopra altri blocchi
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }

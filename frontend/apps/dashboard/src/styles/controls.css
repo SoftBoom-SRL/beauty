@@ -71,5 +71,8 @@
    griglia: aperto le si mette sopra, a destra, con il suo «Comprimi». Prima
    spariva e basta; col pannello chiuso di partenza la striscia prometteva un
    pannello che non si apriva, e il clic la faceva sparire per sempre. */
-@media (max-width: 1180px) { .dk-rail { position: fixed; right: 0; top: var(--top-h); bottom: 0; max-width: 90vw; z-index: 60; box-shadow: var(--sh-pop); } }
+/* z-index 35: sopra la griglia (i suoi livelli arrivano a 20), sotto la barra
+   in alto (40: i suoi menu restano sopra) e i bottoni fissi dell'assistente e
+   del ritorno a Yourang. Esc e un clic fuori lo chiudono (index.jsx). */
+@media (max-width: 1180px) { .dk-rail { position: fixed; right: 0; top: var(--top-h); bottom: 0; max-width: 90vw; z-index: 35; box-shadow: var(--sh-pop); } }
 @media (max-width: 920px) { :root { --side-w: 76px; } .dk-navitem span.lbl, .dk-logo b, .dk-navsection, .dk-salon .meta { display: none; } .dk-navitem { justify-content: center; } .dk-search { width: 200px; } }

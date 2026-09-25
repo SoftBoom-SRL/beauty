@@ -65,7 +65,10 @@ test('la fascia della settimana e i segni orari coprono tutta la fascia', () => 
 });
 
 /* ---- vista giorno ---- */
-function day(rows, extra = {}, settings = {}) {
+/* `bodyTop`: dove comincia il corpo nel contenuto. Nel DOM vero è la testata
+ * più 8 px di stacco (DayGrid); a filo della testata il controllo dell'ombra
+ * dava lo stesso risultato con la formula vecchia e con quella giusta. */
+function day(rows, extra = {}, settings = {}, bodyTop = 60) {
   installDom();
   globalThis.__dash = {
     t: (it) => it, lang: 'it', settings: { slot_interval_min: 15, ...settings }, modal: null, services: [],
@@ -77,7 +80,7 @@ function day(rows, extra = {}, settings = {}) {
     querySelector: (sel) => (sel === '.dk-tl-cols' ? colsEl : null),
     querySelectorAll: () => [], setPointerCapture() {}, addEventListener() {}, removeEventListener() {},
   };
-  const colsEl = { getBoundingClientRect: () => rect(64, 160 - scrollEl.scrollTop, 936, 16 * 60 * PXM), parentElement: { offsetTop: 60 } };
+  const colsEl = { getBoundingClientRect: () => rect(64, 160 - scrollEl.scrollTop, 936, 16 * 60 * PXM), parentElement: { offsetTop: bodyTop } };
   const headEl = { offsetHeight: 60, getBoundingClientRect: () => rect(0, 100, 1000, 60) };
   const cb = {};
   for (const k of ['onOpenAppt', 'onSlotMenu', 'onInvalidDrop', 'onDropOnDate', 'onDragChange', 'onSplitItem', 'onMoveAppt',
@@ -164,9 +167,10 @@ test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
   ];
   // appuntamento aperto nel pannello: martedì alle 17:30 con Anna; a video sabato, griglia in cima
   const ghost = one(7, 1, '17:30', 60, '2026-09-29');
-  const { scrollEl } = day(rows, { ghost });
-  const top = (17 * 60 + 30 - 9 * 60) * PXM;
-  assert.ok(scrollEl.scrollTop <= top && top < scrollEl.scrollTop + 600 - 60, `l'ombra (y ${top}) è nell'area visibile (scrollTop ${scrollEl.scrollTop})`);
+  const { scrollEl } = day(rows, { ghost }, {}, 68);
+  const top = 68 + (17 * 60 + 30 - 9 * 60) * PXM;             // nel contenuto: corpo 8 px sotto la testata (60)
+  assert.equal(scrollEl.scrollTop, top - 60 - 40, 'l\'ombra 40 px sotto la testata, contando lo stacco');
+  assert.ok(top >= scrollEl.scrollTop + 60 && top + 24 <= scrollEl.scrollTop + 600, `l'ombra (y ${top}) è nell'area visibile (scrollTop ${scrollEl.scrollTop})`);
 });
 
 /* ---- vista settimana ---- */

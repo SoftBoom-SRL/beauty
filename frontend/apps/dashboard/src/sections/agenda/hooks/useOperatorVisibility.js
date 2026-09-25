@@ -27,8 +27,11 @@ export function useOperatorVisibility(operators) {
     try { localStorage.setItem(KEY, JSON.stringify(hidden)); } catch { /* ignore */ }
   }, [vis]);
   const toggleVis = (id) => setVis((m) => ({ ...m, [id]: m[id] === false }));
-  const setAll = (on) => setVis(() => { const m = {}; operators.forEach((o) => { m[o.id] = on; }); return m; });
+  /* «Tutte», «Nessuna» e «Solo» toccano le operatrici che il filtro elenca
+   * (`list`: quelle della sede attiva), non le altre: da una sede si
+   * spegnevano, senza vederlo, le colonne di un'altra. */
+  const setAll = (on, list = operators) => setVis((m) => ({ ...m, ...Object.fromEntries(list.map((o) => [o.id, on])) }));
   /* «Solo»: la giornata di una persona sola, con un clic. */
-  const only = (id) => setVis(() => { const m = {}; operators.forEach((o) => { m[o.id] = o.id === id; }); return m; });
+  const only = (id, list = operators) => setVis((m) => ({ ...m, ...Object.fromEntries(list.map((o) => [o.id, o.id === id])) }));
   return { vis, toggleVis, setAll, only };
 }

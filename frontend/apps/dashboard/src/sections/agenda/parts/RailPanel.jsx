@@ -4,10 +4,12 @@
 // lista d'attesa): chiusa non deve voler dire dimenticata.
 import { Icon } from '@youty/shared';
 
-export default function RailPanel({ open, setOpen, t, badges = {}, children }) {
+/** `panelRef`: il pannello aperto, per chiuderlo con un clic fuori quando
+ *  sta sopra l'agenda (sotto i 1180 px, vedi index.jsx). */
+export default function RailPanel({ open, setOpen, t, badges = {}, panelRef, children }) {
   if (open) {
     return (
-      <aside className="dk-rail" style={{ width: 'var(--rail-w)', flexShrink: 0, borderLeft: '1px solid var(--hair)', background: 'var(--paper)', overflowY: 'auto', padding: '10px 22px 22px' }}>
+      <aside ref={panelRef} className="dk-rail" style={{ width: 'var(--rail-w)', flexShrink: 0, borderLeft: '1px solid var(--hair)', background: 'var(--paper)', overflowY: 'auto', padding: '10px 22px 22px' }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
           <button className="dk-rail-toggle" onClick={() => setOpen(false)} title={t('Comprimi pannello', 'Collapse panel')} style={{ width: 28, height: 28, border: 'none' }}><Icon name="chevR" size={15} /></button>
         </div>

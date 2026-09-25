@@ -104,7 +104,7 @@ export default function DayGrid({
    * l'ultimo onUp): dove la cattura del puntatore non è supportata o si
    * perde, il rilascio fuori dalla griglia non arrivava a nessuno e il blocco
    * restava attaccato al puntatore (bug sospetti del 24/09, n. 51). */
-  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef });
+  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef });
 
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
@@ -166,6 +166,7 @@ export default function DayGrid({
    * suoi soli eventi; `startScroll` serve a seguire la rotella (vedi track). */
   function beginDrag(e, d) {
     if (e.isPrimary === false) return false;
+    startGesture();
     drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, startScroll: scrollRef.current?.scrollTop || 0 };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
     return true;

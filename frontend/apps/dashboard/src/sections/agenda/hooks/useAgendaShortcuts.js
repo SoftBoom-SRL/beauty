@@ -10,6 +10,12 @@ import { hasOpenLayer } from '../../../ui/layers.js';
 
 const VIEW_KEYS = { g: 'day', d: 'day', s: 'week', w: 'week', m: 'month' };
 
+/** Un gesto della griglia è in corso (useGridDrag: `dk-gesture`, `dk-dragging`). */
+const gestureOn = () => {
+  const cl = document.body?.classList;
+  return !!(cl?.contains?.('dk-gesture') || cl?.contains?.('dk-dragging'));
+};
+
 export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoom, undoLast, goToday, navPrev, navNext, setCalView }) {
   /* groupOpen sta fra le dipendenze: senza, l'handler registrato restava
    * quello di prima e vedeva il drawer di gruppo ancora chiuso — il tasto N ci
@@ -19,6 +25,10 @@ export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoo
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      // a metà gesto (trascinamento o ridimensionamento) il blocco è in mano:
+      // lo zoom lo staccherebbe dal puntatore, un altro giorno o un'altra
+      // vista lo farebbero cadere nel vuoto
+      if (gestureOn()) return;
       // Zoom da tastiera senza modificatori: ⌘+ e ⌘− sono del browser e
       // ingrandirebbero tutta la pagina, che qui non è quello che serve.
       if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((z) => zoomStep(z, 1)); return; }
@@ -27,9 +37,6 @@ export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoo
       // il drawer di gruppo non è un modale del registry; hasOpenLayer: ogni
       // altro pannello o drawer aperto (l'assistente, un drawer di sezione)
       if (modal || groupOpen || hasOpenLayer()) return;
-      // a metà trascinamento il blocco è ancora in mano: cambiare giorno o
-      // vista lo farebbe cadere nel vuoto
-      if (document.body?.classList?.contains?.('dk-dragging')) return;
       // dopo un clic su «Oggi» o su una freccia il fuoco resta sul bottone: le
       // frecce devono funzionare anche lì (i campi sono già esclusi sopra)
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey) {
@@ -57,7 +64,8 @@ export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoo
       if ((e.key || '').toLowerCase() !== 'z') return;
       const tag = (e.target?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
-      if (modal || groupOpen) return;
+      // a metà gesto l'annullamento rileggerebbe la visita che si ha in mano
+      if (modal || groupOpen || gestureOn()) return;
       e.preventDefault();
       undoLast();
     };

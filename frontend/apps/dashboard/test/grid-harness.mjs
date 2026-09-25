@@ -246,7 +246,8 @@ export function installDom({ pills = [], storage = {} } = {}) {
   const classes = new Set();
   globalThis.document = {
     body: {
-      classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      // come quello vero: add e remove accettano più classi in una chiamata
+      classList: { add: (...cs) => cs.forEach((c) => classes.add(c)), remove: (...cs) => cs.forEach((c) => classes.delete(c)), contains: (c) => classes.has(c) },
       style: { setProperty() {}, removeProperty() {} },
     },
     querySelectorAll: (sel) => (sel === '[data-daydrop]'

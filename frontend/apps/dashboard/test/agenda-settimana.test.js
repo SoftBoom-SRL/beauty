@@ -256,3 +256,39 @@ test('in settimana il clic per prenotare apre la fascia sotto il puntatore, come
     [1, isoAtMin(W1[3], 10 * 60 + 30)],
   ], 'le 10:30, la fascia cliccata (arrotondando si apriva alle 11:00)');
 });
+
+test('filtro «Team»: la visita di una principale spenta si disegna dalla collega e si sposta senza cambiare operatrice', async () => {
+  const g = setup({ hiddenOps: [1] });               // Anna spenta
+  // la visita delle 15:00: manicure con Anna (principale), poi piega con Giulia
+  const visita = (date) => ({
+    ...sara(date), duration_min: 60,
+    items: [{ service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' },
+      { service_id: 2, operator_id: 2, duration_min: 30, soak_min: 0, service_name: 'Piega' }],
+  });
+  g.api.weekGets().at(-1).resolve(W1.map((date, i) => ({ date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [visita(date)] : [] })));
+  await tick();
+  g.m.render();
+  const giulia = findAll(g.root(), (el) => el.props?.['data-subcol'] === '' && el.props['data-day'] === 3 && el.props['data-op'] === 2)[0];
+  assert.ok(giulia, 'la sotto-colonna di Giulia c\'è, quella di Anna no');
+  assert.ok(find(giulia, (el) => el.props?.a?.id === 42), 'la visita è disegnata nella colonna di Giulia');
+  // trascinata un'ora più giù nella stessa colonna (x 430: Giulia è l'unica sotto-colonna)
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));
+  g.m.render();
+  g.root().props.onPointerUp(ptr(430, 481));
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].body.start, isoAtMin(W1[3], 16 * 60));
+  assert.equal(g.api.posts[0].body.operator_id, undefined, 'i servizi di Anna non passano a Giulia');
+});
+
+test('cambiando settimana la scheda di anteprima del blocco di prima sparisce', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onHover(g.block().props.a, { getBoundingClientRect: () => rect(430, 400, 40, 40) });
+  g.m.render();
+  const card = () => find(g.root(), (el) => el.type?.name === 'ApptHoverCard');
+  assert.ok(card(), 'la scheda è aperta');
+  g.m.render({ ...g.m.props, weekStart: W2[0] });   // → (tastiera o frecce)
+  await loadWeek(g, W2);                             // la settimana nuova arriva
+  assert.equal(card(), null, 'il blocco è sparito senza mouseleave: la scheda non resta incollata');
+});

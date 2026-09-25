@@ -11,6 +11,8 @@ import {
   MONTHS_IT, MONTHS_EN, hoverPlacement, isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek,
   visibleDayRows, restingIds, hiddenIdsOf, locationOperators, itemBlocks, HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
 } from './lib.js';
+import { useEscLayer } from '../../ui/layers.js';
+import { useClickAway } from '../../hooks/useClickAway.js';
 import { useAgendaNav } from './hooks/useAgendaNav.js';
 import { useStoredFlag } from './hooks/useStoredFlag.js';
 import { useAgendaZoom } from './hooks/useAgendaZoom.js';
@@ -65,6 +67,17 @@ export default function AgendaSection() {
    * di un portatile, un terzo dell'agenda; chiuso mostra comunque i numeri
    * che chiedono un'azione (vedi RailPanel). */
   const [railOpen, setRailOpen] = useStoredFlag('dk-agenda-rail', typeof window !== 'undefined' && window.innerWidth >= 1600);
+  /* Sotto i 1180 px il pannello aperto sta SOPRA l'agenda (controls.css): lì
+   * è un'apertura del momento, non una preferenza. Salvata, su un tablet
+   * bastava aprirlo una volta per la lista d'attesa e a ogni apertura
+   * dell'agenda copriva vista, zoom e ultime colonne; ora non si ricorda, e
+   * si chiude con Esc o con un clic fuori. */
+  const railOverlay = typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 1180px)').matches;
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const railRef = useRef(null);
+  const closeOverlay = useCallback(() => setOverlayOpen(false), []);
+  useEscLayer(railOverlay && overlayOpen, closeOverlay);
+  useClickAway(railRef, railOverlay && overlayOpen, closeOverlay, { event: 'pointerdown' });
 
   /* ---- zoom delle viste giorno/settimana: preferenza della postazione ---- */
   const { zoom, setZoom, fitZoom } = useAgendaZoom();
@@ -277,13 +290,13 @@ export default function AgendaSection() {
             {/* In giorno e in settimana (nel mese c'è il suo filtro). «Solo chi
                 lavora oggi» è del giorno: la settimana non conosce i turni. */}
             {calView === 'day' && (
-              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={(on) => setAll(on, locOps)} only={(id) => only(id, locOps)} colorOf={colorOf}
                 onlyWorking={onlyWorking} setOnlyWorking={setOnlyWorking} resting={resting}
                 // mentre la giornata carica non ci sono righe: niente «0/5» di passaggio
                 shown={dayData ? visibleRows.length : null} total={dayData ? allRows.length : locOps.length} t={t} />
             )}
             {calView === 'week' && (
-              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={(on) => setAll(on, locOps)} only={(id) => only(id, locOps)} colorOf={colorOf}
                 shown={locOps.length - hiddenOps.length} total={locOps.length} t={t} />
             )}
             {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
@@ -353,7 +366,7 @@ export default function AgendaSection() {
       </div>
 
       {/* right rail — collapsible */}
-      <RailPanel open={railOpen} setOpen={setRailOpen} t={t}
+      <RailPanel open={railOverlay ? overlayOpen : railOpen} setOpen={railOverlay ? setOverlayOpen : setRailOpen} t={t} panelRef={railRef}
         badges={{ released: (released || []).length, waitlist: (waitlist || []).filter((w) => w.status === 'active' || w.status === 'contacted').length }}>
         <RightRail
           summary={summary}

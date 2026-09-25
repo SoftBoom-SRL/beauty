@@ -33,10 +33,12 @@ export function weekDayOps(operators, locationId, appointments, orphanName) {
  *  Scartandola solo per la principale, spegnere Anna faceva sparire anche la
  *  piega di Giulia dentro la visita di Anna (la vista giorno lo evita apposta:
  *  il filtro decide le colonne, non i dati). */
-export function weekColumnFor(a, off) {
+export function weekColumnFor(a, off, known = null) {
   if (!off.has(a.operator_id)) return a.operator_id;
-  const other = (a.items || []).map((it) => it.operator_id).find((id) => id != null && !off.has(id));
-  return other ?? null;
+  const others = (a.items || []).map((it) => it.operator_id).filter((id) => id != null && !off.has(id));
+  // prima una collega della sede, che la sua colonna ce l'ha già; poi le
+  // altre (di un'altra sede, non più in team), che ne ricevono una in coda
+  return (known && others.find((id) => known.has(id))) ?? others[0] ?? null;
 }
 
 /** La sotto-colonna in cui una visita è disegnata (vedi weekColumnFor). */
@@ -54,12 +56,14 @@ export const weekColOf = (a) => a.colOp ?? a.operator_id;
  *  filtro con cinque operatrici la domenica usciva dallo schermo. */
 export function weekDays(days, pending, operators, locationId, orphanName, hidden = []) {
   const off = new Set(hidden);
+  // le operatrici della sede attiva: le sotto-colonne che ci sono comunque (weekDayOps)
+  const known = new Set((operators || []).filter((o) => !locationId || o.location_id == null || o.location_id === locationId).map((o) => o.id));
   const pendingSrc = pending ? days.flatMap((d) => d.appointments).find((a) => a.id === pending.id) : null;
   return days.map((d, i) => {
     const src = pending ? d.appointments.filter((a) => a.id !== pending.id) : d.appointments;
     const list = [];
     for (const a of src) {
-      const col = weekColumnFor(a, off);
+      const col = weekColumnFor(a, off, known);
       if (col == null) continue;                      // nessuna delle sue operatrici è accesa
       const s = minutesOfDay(a.start);
       list.push({ ...a, ...(col !== a.operator_id ? { colOp: col } : {}), startMin: s, endMin: s + (a.duration_min || 0) });
@@ -75,8 +79,13 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
     // In coda restano le operatrici non più in elenco (disattivate) che hanno
     // ancora appuntamenti: altrimenti il giorno li CONTA ma non li mostra da
     // nessuna parte, e la cliente si presenta a un orario che in agenda non
-    // esiste. Vedi weekDayOps. Tranne le spente nel filtro «Team».
-    const dayOps = weekDayOps(operators, locationId, list, orphanName).filter((o) => !off.has(o.id));
+    // esiste. Vedi weekDayOps. Tranne le spente nel filtro «Team». Le colonne
+    // in coda si contano sulla colonna di DISEGNO (weekColOf), non sulla
+    // principale: una visita spostata dal filtro su una collega di un'altra
+    // sede o non più in team finiva in una colonna che non c'era, contata
+    // nella testata e invisibile.
+    const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName)
+      .filter((o) => !off.has(o.id));
     if (!off.size) return { ...d, list, dayOps };
     // con il filtro la testata del giorno conta quello che si vede
     const by_status = {};

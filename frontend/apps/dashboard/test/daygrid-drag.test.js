@@ -277,3 +277,24 @@ test('le testate non contano il no-show nell\'incasso', () => {
   assert.match(txt, /40,00/, 'la visita di Maria');
   assert.doesNotMatch(txt, /70,00/, 'il no-show non è incasso');
 });
+
+test('smontata a metà trascinamento la griglia spegne la striscia dei giorni e i segni del gesto', () => {
+  const g = setup();
+  g.block(421).props.onDown(ptr(300, 500));
+  moveAll(g, 300, 560);                              // oltre la soglia: il blocco si muove
+  assert.ok(document.body.classList.contains('dk-dragging'));
+  assert.deepEqual(g.cb.onDragChange.calls.at(-1), [true]);
+  g.m.unmount();                                     // un altro giorno da tastiera, un rimontaggio
+  assert.deepEqual(g.cb.onDragChange.calls.at(-1), [false], 'la striscia non resta un bersaglio');
+  assert.equal(document.body.classList.contains('dk-dragging'), false);
+  assert.equal(document.body.classList.contains('dk-gesture'), false);
+});
+
+test('anche il ridimensionamento è un gesto in corso: i tasti dell\'agenda lo vedono', () => {
+  const g = setup();
+  g.block(421).props.onResizeDown(ptr(300, 520));
+  assert.ok(document.body.classList.contains('dk-gesture'), 'acceso alla pressione');
+  assert.equal(document.body.classList.contains('dk-dragging'), false, 'il ridimensionamento non muove il blocco');
+  g.root().props.onPointerUp(ptr(300, 540));
+  assert.equal(document.body.classList.contains('dk-gesture'), false, 'spento al rilascio');
+});

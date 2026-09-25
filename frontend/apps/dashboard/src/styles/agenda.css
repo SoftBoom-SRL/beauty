@@ -67,27 +67,30 @@
 .dk-agdays > button.is-today[aria-pressed="true"]::after { background: #fff; }
 .dk-agdays--drop { background: var(--clay-tint); box-shadow: inset 0 0 0 1px var(--clay); }
 /* Colonna stretta, a gradini. Le soglie sono misurate sulla barra vera coi
-   testi più lunghi («Orari del centro: imposta», «Settembre»), facendo
-   variare la larghezza: ogni gradino deve scattare PRIMA che il contenuto
-   smetta di starci (con le soglie stimate, fra 1441 e 1466 px e fra 1061 e
-   1094 la barra andava a capo con lo spazio che il gradino dopo avrebbe
-   liberato):
+   testi più lunghi («Orari del centro: imposta», «Settembre», e gli orari
+   impostati fino a tre fasce, che col loro massimo di 150 px sono il caso
+   largo), facendo variare la larghezza: ogni gradino deve scattare PRIMA che
+   il contenuto smetta di starci (con le soglie stimate la barra andava a capo
+   con lo spazio che il gradino dopo avrebbe liberato):
    - fino a 1480 px di contenuto spariscono le etichette ripetute nei
      suggerimenti (Indietro, Team, Adatta, la percentuale, «Centro»);
-   - fino a 1180 il mese si abbrevia, gli orari impostati restano solo
+   - fino a 1280 il mese si abbrevia, gli orari impostati restano solo
      nell'icona (la griglia li mostra comunque) e i giorni si stringono;
    - fino a 1100 la vista diventa un menu;
    - sotto i 940 circa la barra va a capo: due righe basse, mai le tre di prima. */
 /* orari del centro lunghi (due fasce): puntini, il testo intero è nel
    suggerimento. Prima dei gradini: a parità di selettore vince chi viene
    dopo, e il display dei gradini deve poterlo nascondere. */
-.dk-agbar .dk-hours-txt { display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.dk-agbar .dk-hours-txt { display: inline-block; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+/* solo quando gli orari ci sono: l'invito «Orari del centro non impostati»
+   deve leggersi intero */
+.dk-agbar .dk-hours-txt.dk-ag-t2 { max-width: 150px; }
 .dk-agbar .dk-ag-t2only, .dk-agbar .dk-ag-t3only { display: none; }
 @container (max-width: 1480px) {
   .dk-agbar .dk-ag-lbl { display: none; }
   .dk-agbar .dk-agbtn--icon-narrow { padding: 0 9px; }
 }
-@container (max-width: 1180px) {
+@container (max-width: 1280px) {
   .dk-agbar .dk-ag-t2 { display: none; }
   .dk-agbar .dk-ag-t2only { display: inline-flex; }
   .dk-agbar .dk-agdays > button { width: 34px; min-width: 34px; }
