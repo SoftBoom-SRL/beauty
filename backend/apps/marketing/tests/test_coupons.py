@@ -67,7 +67,7 @@ class ClientIdFilterApiTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["marketing"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         tokens = create_staff_tokens(user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
@@ -217,6 +217,64 @@ class CouponApiTests(OwnerTestBase):
         self.assertEqual(caught.exception.status_code, 422)
         # intestata alla sua cliente passa
         self.assertEqual(validate_coupon(self.salon, "SOLOANNA", client=owner).code, "SOLOANNA")
+
+    def test_a_named_coupon_is_not_tied_to_the_sale_of_another_client(self):
+        """Bug sospetti del 24/09, voce 11: il riscatto manuale guarda la cliente della vendita.
+
+        La cassa rifiuta il buono intestato a un'altra (`validate_coupon`), il
+        riscatto manuale con `sale_id` no: il buono di Maria risultava usato
+        nella vendita di Anna, e lo storico del buono e quello della vendita
+        non tornavano più.
+        """
+        from apps.sales.models import Sale
+
+        maria = _make_client(self.salon, first_name="Maria", phone="+393330002222")
+        anna = _make_client(self.salon, first_name="Anna", phone="+393330001111")
+        coupon = Coupon.objects.create(
+            salon=self.salon, client=maria, code="SOLOMARIA", kind=Coupon.Kind.AMOUNT, value=Decimal("10")
+        )
+        url = f"/api/marketing/coupons/{coupon.id}/redeem"
+
+        def redeem(sale):
+            return self.client.post(
+                url, data=json.dumps({"sale_id": sale.id}), content_type="application/json", **self.auth
+            )
+
+        of_anna = Sale.objects.create(salon=self.salon, kind="pos", client=anna, total=Decimal("45"))
+        res = redeem(of_anna)
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(res.json()["detail"], "Coupon riservato a un altro cliente: intestalo alla vendita")
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.status, coupon.sale_id), (Coupon.Status.ACTIVE, None))
+        # la vendita della sua cliente va bene
+        of_maria = Sale.objects.create(salon=self.salon, kind="pos", client=maria, total=Decimal("45"))
+        res = redeem(of_maria)
+        self.assertEqual(res.status_code, 200, res.content)
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.status, coupon.sale_id), (Coupon.Status.REDEEMED, of_maria.id))
+
+    def test_a_named_coupon_is_not_tied_to_an_anonymous_sale_either(self):
+        """Bug sospetti del 24/09, voce 11: come in cassa, anche la vendita senza cliente.
+
+        La cassa rifiuta il buono intestato su una vendita anonima
+        (`validate_coupon`): il riscatto manuale con `sale_id` lo accettava, e
+        il buono di Maria risultava usato in una vendita che non dice di chi è.
+        """
+        from apps.sales.models import Sale
+
+        maria = _make_client(self.salon, first_name="Maria", phone="+393330002222")
+        coupon = Coupon.objects.create(
+            salon=self.salon, client=maria, code="SOLOMARIA", kind=Coupon.Kind.AMOUNT, value=Decimal("10")
+        )
+        anonymous = Sale.objects.create(salon=self.salon, kind="pos", total=Decimal("45"))
+        res = self.client.post(
+            f"/api/marketing/coupons/{coupon.id}/redeem", data=json.dumps({"sale_id": anonymous.id}),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(res.json()["detail"], "Coupon riservato a un altro cliente: intestalo alla vendita")
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.status, coupon.sale_id), (Coupon.Status.ACTIVE, None))
 
 
 class CouponUpdateRaceTests(GiftCardTestBase):

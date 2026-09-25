@@ -1,6 +1,8 @@
 // Impostazioni: condizioni su etichette sparite, acconto in percentuale, orari
 // e registro attività nel fuso del salone. Caccia ai bug del 22/09/2026: 15-07,
-// 15-16, 15-09 (+ 08-09), 15-22.
+// 15-16, 15-09 (+ 08-09), 15-22. In fondo la pagina, il pannello dei
+// pagamenti e il campo «Copia» veri (test/grid-harness.mjs): l'esito dei
+// collegamenti e della copia.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -8,6 +10,14 @@ import { setSalonTz } from '../../../packages/shared/src/format.js';
 import { amountForType, depositFields, dropCurrent, ruleSentence } from '../src/sections/impostazioni/rules.js';
 import { todayRanges } from '../src/sections/impostazioni/hours.js';
 import { logDateLabel, salonDaysAgo } from '../src/sections/impostazioni/dates.js';
+import { findAll, installDom, loadComponent, mount, spy } from './grid-harness.mjs';
+
+const { default: ImpostazioniSection } = await loadComponent('apps/dashboard/src/sections/impostazioni/index.jsx', {
+  stubs: ['BookingsOptimPage.jsx', 'ActivityLogPage.jsx', 'LocationsPage.jsx', 'BrandDrawer.jsx', 'TeamDrawer.jsx',
+    'RolesDrawer.jsx', 'PasswordDrawer.jsx', 'PaymentsDrawer.jsx', 'ReasonsDrawer.jsx'],
+});
+const { default: PaymentsDrawer } = await loadComponent('apps/dashboard/src/sections/impostazioni/PaymentsDrawer.jsx');
+const { CopyField } = await loadComponent('apps/dashboard/src/sections/impostazioni/lib.jsx');
 
 const t = (it) => it;
 const cats = [{ id: 1, name: 'Nuova' }, { id: 2, name: 'Da seguire' }, { id: 3, name: 'VIP' }];
@@ -71,4 +81,99 @@ test('i periodi del registro partono dal giorno del salone', () => {
   assert.equal(salonDaysAgo(7, '2026-03-02'), '2026-02-23');
   assert.equal(salonDaysAgo(1, '2026-01-01'), '2025-12-31');
   assert.equal(salonDaysAgo(30, '2026-03-29'), '2026-02-27');
+});
+
+/* ---- l'esito dei collegamenti: il messaggio della finestra di servizio ---- */
+
+const tIt = (it) => it;
+const tEn = (it, en) => en;
+const ORIGIN = 'http://localhost:5173';
+/** window con l'origine della dashboard e l'API che risponde subito;
+ *  `message(data)` è il postMessage del popup. */
+function popupWorld() {
+  const dom = installDom();
+  globalThis.window.location = { origin: ORIGIN };
+  globalThis.__api = { get: () => Promise.resolve(null) };
+  return (data) => dom.fire('message', { origin: ORIGIN, data });
+}
+
+test('collegamento Yourang: il toast nella lingua di adesso, anche cambiata in questa pagina (voce 44)', () => {
+  const message = popupWorld();
+  const fireToast = spy();
+  globalThis.__dash = {
+    t: tIt, lang: 'it', setLang: () => {}, session: { is_owner: true }, hasScope: () => true,
+    salon: { name: 'The Parlour', slug: 'the-parlour' }, settings: {}, locations: [], openModal: () => {},
+    fireToast, deepLink: null, setDeepLink: () => {},
+  };
+  const m = mount(ImpostazioniSection);
+  try {
+    // la lingua si cambia proprio qui: da IT a EN, poi «Collega Yourang»
+    globalThis.__dash = { ...globalThis.__dash, t: tEn, lang: 'en' };
+    m.render();
+    message({ type: 'yourang-oauth', ok: true });
+    assert.deepEqual(fireToast.calls[0], [{ msg: 'Yourang connected', icon: 'check' }]);
+    message({ type: 'yourang-oauth', ok: false, error: 'state scaduto' });
+    assert.deepEqual(fireToast.calls[1], [{ msg: 'Yourang connection failed: state scaduto', icon: 'info' }]);
+    globalThis.__dash = { ...globalThis.__dash, t: tIt, lang: 'it' };
+    m.render();
+    message({ type: 'yourang-oauth', ok: true });
+    assert.deepEqual(fireToast.calls[2], [{ msg: 'Yourang collegato', icon: 'check' }]);
+    // un solo ascolto alla volta: un toast per messaggio
+    assert.equal(fireToast.calls.length, 3);
+  } finally { m.unmount(); }
+});
+
+test('collegamento Stripe (PaymentsDrawer): lo stesso, il toast nella lingua di adesso (voce 44)', () => {
+  const message = popupWorld();
+  const fireToast = spy();
+  const reloads = [];
+  globalThis.__dash = {
+    t: tIt, session: { is_owner: true }, settings: {}, fireToast,
+    reload: { salon: () => { reloads.push('salon'); return Promise.resolve(); } },
+  };
+  const m = mount(PaymentsDrawer, { onClose: () => {} });
+  try {
+    globalThis.__dash = { ...globalThis.__dash, t: tEn };
+    m.render();
+    message({ type: 'stripe-connect', ok: true });
+    message({ type: 'stripe-connect', ok: false, error: 'code scaduto' });
+    assert.deepEqual(fireToast.calls, [
+      [{ msg: 'Stripe account connected', icon: 'check' }],
+      [{ msg: 'Stripe connection failed: code scaduto', icon: 'alert' }],
+    ]);
+    assert.deepEqual(reloads, ['salon']);
+  } finally { m.unmount(); }
+});
+
+/* ---- «Copia»: l'esito vero della copia ---- */
+
+/** Gli appunti del browser: `writeText` come lo darebbe navigator.clipboard. */
+function clipboard(writeText) {
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText } }, configurable: true, writable: true });
+}
+
+test('«Copia» (link dell\'app, del modulo, token d\'invito): «Copiato» solo se la copia riesce (voce 47)', async () => {
+  installDom();
+  const written = [];
+  for (const [t, ok, ko] of [
+    [tIt, 'Copiato negli appunti', 'Copia non riuscita: seleziona il testo e copialo a mano'],
+    [tEn, 'Copied to clipboard', 'Copy failed: select the text and copy it by hand'],
+  ]) {
+    const fireToast = spy();
+    const m = mount(CopyField, { value: 'https://app.youty.it/the-parlour', t, fireToast });
+    try {
+      const copy = () => findAll(m.tree, (el) => el.type === 'button')[0].props.onClick();
+      clipboard(async (text) => { written.push(text); });
+      await copy();
+      assert.deepEqual(fireToast.calls, [[{ msg: ok, icon: 'check' }]]);
+      // permesso negato: niente «Copiato», e gli appunti restano quelli di prima
+      clipboard(async () => { throw new Error('NotAllowedError'); });
+      await copy();
+      // pagina non sicura: niente clipboard (e il ripiego qui non c'è)
+      clipboard(undefined);
+      await copy();
+      assert.deepEqual(fireToast.calls.slice(1), [[{ msg: ko, icon: 'alert' }], [{ msg: ko, icon: 'alert' }]]);
+    } finally { m.unmount(); }
+  }
+  assert.deepEqual(written, ['https://app.youty.it/the-parlour', 'https://app.youty.it/the-parlour']);
 });

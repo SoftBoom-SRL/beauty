@@ -5,11 +5,13 @@
 // e un «+ Prenota» nella barra della sezione) e facevano la stessa cosa. La parte
 // larga prenota subito — un clic, non un menu da aprire — e la freccetta tiene le
 // creazioni meno frequenti. In agenda il giorno proposto è quello che si sta
-// guardando (ctx.agendaDate), non oggi.
-import React, { useRef, useState } from 'react';
+// guardando (ctx.agendaDate), non oggi. Il tasto N è la scorciatoia del
+// pulsante, da ogni sezione.
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar, EmptyState, Icon, fmtDateIt, salonTzOpts } from '@youty/shared';
 import { useDash } from '../ctx.jsx';
 import { useClickAway } from '../hooks/useClickAway.js';
+import { hasOpenLayer } from '../ui/layers.js';
 
 const TITLES = {
   agenda: ['Agenda', 'Agenda'],
@@ -34,10 +36,37 @@ const TITLES = {
 const POPOVER_AWAY = { event: 'pointerdown', capture: true, escape: true };
 
 export default function Topbar() {
-  const { t, lang, tab, setTab, search, setSearch, openModal, session, live, agendaDate, setDeepLink, hasScope } = useDash();
+  const { t, lang, tab, setTab, search, setSearch, openModal, modal, session, live, agendaDate, setDeepLink, hasScope } = useDash();
   /* In agenda si prenota sul giorno che si ha davanti; altrove il drawer decide
    * da sé (oggi). */
-  const openBooking = () => openModal('newappt', { prefill: agendaDate ? { date: agendaDate } : {} });
+  const openBooking = useCallback(
+    () => openModal('newappt', { prefill: agendaDate ? { date: agendaDate } : {} }),
+    [openModal, agendaDate],
+  );
+
+  /* Il tasto N fa quello che fa il pulsante «Prenota», che c'è in ogni
+   * sezione: il suggerimento «(N)» lo prometteva su ogni pagina, ma il tasto
+   * lo ascoltava solo l'agenda (voce 42). Le guardie sono quelle dell'agenda
+   * (useAgendaShortcuts): non mentre si scrive in un campo, non con ⌘, Ctrl o
+   * Alt, non con un modale aperto — qui anche i modali e i pannelli locali
+   * delle sezioni, che la pila di ui/layers.js conosce tutti. In agenda il
+   * tasto resta dell'agenda (propone il giorno che si ha davanti e ricarica la
+   * griglia a prenotazione fatta): qui non si gestisce una seconda volta. */
+  useEffect(() => {
+    if (tab === 'agenda') return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'n' && e.key !== 'N') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (modal || hasOpenLayer()) return;
+      e.preventDefault();
+      openBooking();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, modal, openBooking]);
+
   const [notifOpen, setNotifOpen] = useState(false);
   const [newMenu, setNewMenu] = useState(false);
   const notifRef = useRef(null);

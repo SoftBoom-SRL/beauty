@@ -3,20 +3,28 @@ from decimal import Decimal
 from typing import Optional
 
 from ninja import Schema
+from pydantic import Field
+
+from common.money import MAX_MONEY
 
 
 # ---- Operatrici ----------------------------------------------------------------
 
 
 class OperatorIn(Schema):
-    first_name: str
-    last_name: str
+    # Testi lunghi al massimo quanto la colonna del modello: un ruolo di 121
+    # caratteri su PostgreSQL faceva rifiutare la riga, 500 invece di un errore
+    # che dice quale campo correggere (bug sospetti del 24/09, voce 21). Colore,
+    # ciclo, ordine e costo orario negativo li controlla `validate_operator_payload`
+    # (400); il costo orario ha qui il massimo della colonna, numeric(10,2).
+    first_name: str = Field(max_length=80)
+    last_name: str = Field(max_length=80)
     color: str = "#A5B4FC"
-    role_title: str = ""
+    role_title: str = Field("", max_length=120)
     location_id: Optional[int] = None
     user_id: Optional[int] = None
     service_ids: list[int] = []
-    hourly_cost: Decimal = Decimal("0")
+    hourly_cost: Decimal = Field(Decimal("0"), le=MAX_MONEY)
     cycle_weeks: int = 1
     active: bool = True
     order: int = 0
@@ -29,14 +37,14 @@ class OperatorPatchIn(Schema):
     gli altri campi, se presenti, non possono essere null.
     """
 
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    first_name: Optional[str] = Field(None, max_length=80)  # come in OperatorIn
+    last_name: Optional[str] = Field(None, max_length=80)
     color: Optional[str] = None
-    role_title: Optional[str] = None
+    role_title: Optional[str] = Field(None, max_length=120)
     location_id: Optional[int] = None
     user_id: Optional[int] = None
     service_ids: Optional[list[int]] = None
-    hourly_cost: Optional[Decimal] = None
+    hourly_cost: Optional[Decimal] = Field(None, le=MAX_MONEY)
     cycle_weeks: Optional[int] = None
     active: Optional[bool] = None
     order: Optional[int] = None
@@ -128,7 +136,7 @@ class AbsenceIn(Schema):
     date_from: date
     date_to: date
     type: str
-    note: str = ""
+    note: str = Field("", max_length=255)  # come la colonna del modello (voce 21)
 
 
 class AbsenceOut(AbsenceIn):

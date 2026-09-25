@@ -129,7 +129,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftForm?.amt));
     if (!(v > 0)) return;
-    setLines((ls) => [...ls, checkoutGiftLine('gl' + Date.now(), giftForm.opId, v, giftForm.name)]);
+    setLines((ls) => [...ls, checkoutGiftLine('gl' + Date.now(), giftForm.opId, v, giftForm.name, lang)]);
     setGiftForm(null);
   };
 

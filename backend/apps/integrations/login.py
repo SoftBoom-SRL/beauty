@@ -21,8 +21,9 @@ from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
 from apps.accounts.models import Membership, User
+from apps.accounts.provisioning import create_salon_foundation
 from apps.accounts.sessions import session_payload
-from apps.core.models import Location, Salon, SalonSettings
+from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
 from . import client as yc
@@ -65,9 +66,14 @@ def _membership_for(salon: Salon, user: User) -> Membership | None:
 
 @transaction.atomic
 def _provision_salon(user: User, display_name: str) -> Salon:
-    salon = Salon.objects.create(name=display_name, slug=_unique_salon_slug(display_name))
-    SalonSettings.objects.get_or_create(salon=salon)
-    Location.objects.create(salon=salon, name=display_name, is_default=True)
+    # La stessa fondazione di `create_salon` e `seed_demo`: sede predefinita,
+    # impostazioni e ruoli di sistema. Creato qui per conto suo, il salone
+    # nasceva senza i ruoli Manager, Front desk e Operatrice, e per invitare
+    # una collega (l'invito chiede un ruolo) il titolare doveva prima crearne
+    # uno a mano.
+    salon, _location = create_salon_foundation(
+        display_name, _unique_salon_slug(display_name), location_name=display_name
+    )
     Membership.objects.create(user=user, salon=salon, is_owner=True)
     return salon
 

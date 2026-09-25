@@ -2,7 +2,7 @@
 // Vive su /<slug>/hook: nessuna sessione, nessun OTP, solo lascia i tuoi dati.
 // Il branding (logo, colore) è quello del salone, già caricato da ctx.
 import React, { useState } from 'react';
-import { Icon, PhoneInput, isPlausiblePhone } from '@youty/shared';
+import { Icon, PhoneInput, apiErrorText, isPlausiblePhone } from '@youty/shared';
 import { useApp, SALON_SLUG } from '../ctx.jsx';
 import { sendHook } from '../api/client.js';
 import { BrandHero } from '../components/BrandHero.jsx';
@@ -41,7 +41,11 @@ export default function Hook() {
       });
       setDone(true);
     } catch (err) {
-      setError(err?.message || t('Errore di rete', 'Network error'));
+      // Il messaggio del server se una risposta è arrivata, altrimenti «Errore
+      // di rete» (apiErrorText): con `err.message` senza rete compariva il
+      // testo del browser, «Failed to fetch» (voce 31). Una risposta senza
+      // messaggio resta «Errore di rete», come prima.
+      setError(apiErrorText(err, t) || t('Errore di rete', 'Network error'));
     } finally {
       setBusy(false);
     }

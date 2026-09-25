@@ -169,17 +169,17 @@ test('con la sessione: regalo, orari personali, 409 e nuovo orario', async () =>
     s.render();
     assert.deepEqual(toasts, [{ msg: 'Questo orario è appena stato preso: scegline un altro.', icon: 'alert' }]);
     // si torna agli orari, ricaricati, senza più l'orario scelto. Gli orari si
-    // chiedono due volte: dal gestore del 409 e dall'effetto del passo 1; conta
-    // la seconda risposta, la prima si scarta anche se arriva dopo.
+    // chiedono una volta sola, dall'effetto del passo 1: li chiedeva anche il
+    // gestore del 409, e senza sessione la richiesta in più pesava sul tetto
+    // dell'endpoint pubblico (voce 35).
     assert.match(text(s), /Passo 2 di 3/);
     const again = pending('get', AVAIL_CLIENT);
-    assert.equal(again.length, 3);
-    assert.deepEqual(again[1].args, again[2].args);
+    assert.equal(again.length, 2);
+    assert.deepEqual(again[1].args, again[0].args);
     assert.equal(button(s.tree, 'Continua').props.disabled, true);
-    await reply(again[2], [slotAt(today, 690)]);
-    await reply(again[1], [slotAt(today, 720)]);
+    await reply(again[1], [slotAt(today, 690)]);
     s.render();
-    assert.doesNotMatch(text(s), /12:00/);
+    assert.doesNotMatch(text(s), /11:00/);
     await tap(s, '11:30');
     await tap(s, 'Continua');
     button(s.tree, /Conferma prenotazione/).props.onClick();

@@ -6,11 +6,12 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from ninja.errors import HttpError
 
 from apps.core.models import ActivityLog, DepositRule, OutboxEvent, Salon, SalonSettings
 from common.auth import create_staff_tokens
-from common.testing import aware
+from common.testing import aware, bearer, post_json
 
 from ..models import Appointment, AppointmentService
 from ..services.appointments import create_appointment
@@ -153,7 +154,7 @@ class DepositHoldTests(AgendaTestBase):
         appointment = self._book()
         self.assertIsNotNone(appointment.deposit_due_at)
         user = User.objects.create_user(email="cassa@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda", "sales"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda", "sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         res = self.client.post(
@@ -238,7 +239,7 @@ class DepositHoldTests(AgendaTestBase):
         from ..services.deposit_holds import process_deposit_holds
 
         user = User.objects.create_user(email="rail@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         appointment = self._book()
@@ -326,6 +327,191 @@ class DepositFitsTheVisitTests(AgendaTestBase):
         self.assertFalse(
             ActivityLog.objects.filter(salon=self.salon, type="deposit.refund_due").exists()
         )
+
+
+class DepositExcessWrittenWhenItChangesTests(AgendaTestBase):
+    """Bug sospetto 7 (24/09): «caparra superiore alla visita» nel registro solo se l'eccedenza cambia.
+
+    La dashboard manda la lista dei servizi a ogni ritocco di durata in
+    griglia: con la caparra versata più alta della visita, ogni ritocco
+    scriveva di nuovo la stessa riga, che sembrava un'eccedenza diversa.
+    """
+
+    def _excess_amounts(self):
+        return [
+            log.payload["amount"]
+            for log in ActivityLog.objects.filter(salon=self.salon, type="deposit.excess").order_by("id")
+        ]
+
+    def test_retouching_the_duration_does_not_write_it_again(self):
+        from ..services.appointments import edit_appointment
+
+        windows = {self.op1.id: [(8 * 60, 20 * 60)]}
+        with self._windows(windows):
+            appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="dashboard",
+            )
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=Appointment.DepositStatus.PAID, deposit_amount=Decimal("70.00")
+        )
+        appointment.refresh_from_db()
+        colour = appointment.items.get(service=self.svc60)
+        with self._windows(windows):
+            # via il servizio da 30: la visita scende a 50, 20 € tornano alla cliente
+            edit_appointment(
+                appointment,
+                items=[{"id": colour.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            )
+            # tre ritocchi della durata: il conto è lo stesso
+            for minutes in (75, 90, 60):
+                item = appointment.items.get()
+                edit_appointment(appointment, items=[{
+                    "id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id,
+                    "duration_min": minutes,
+                }])
+            self.assertEqual(self._excess_amounts(), ["20.00"])
+            # al posto del colore un servizio da 30: l'eccedenza cambia, e si scrive
+            edit_appointment(appointment, items=[{"service_id": self.svc30.id, "operator_id": self.op1.id}])
+        self.assertEqual(self._excess_amounts(), ["20.00", "40.00"])
+
+
+class DepositDownToZeroTests(AgendaTestBase):
+    """Bug sospetto 5 (24/09): una caparra da pagare scesa a 0 € non c'è più.
+
+    Restava «richiesta» con la sua scadenza: l'incasso al banco rispondeva
+    «Nessuna caparra da incassare», ma allo scadere il posto si liberava lo
+    stesso con «posto liberato, caparra non versata» alla cliente, e il link
+    di prima restava pagabile.
+    """
+
+    def setUp(self):
+        from apps.catalog.models import Service
+
+        SalonSettings.objects.create(salon=self.salon, deposit_hold_minutes=30)
+        DepositRule.objects.create(
+            salon=self.salon, name="Sempre", conditions={}, amount_type="fixed", amount=Decimal("10.00")
+        )
+        self.salon = Salon.objects.get(pk=self.salon.pk)
+        enabled = patch("apps.sales.stripe_service.payments_enabled", return_value=True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
+        # il listino ammette servizi a 0 €
+        self.consult = Service.objects.create(
+            salon=self.salon, category=self.svc60.category, name_it="Consulenza",
+            duration_min=15, price=Decimal("0.00"),
+        )
+        self.op1.services.add(self.consult)
+        self.windows = {self.op1.id: [(9 * 60, 18 * 60)]}
+        with self._windows(self.windows), patch("apps.clients.services.client_facts", return_value={}):
+            self.appointment = create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.consult.id, "operator_id": self.op1.id},
+                ],
+                _aware(self.day, 10), via="app",
+            )
+        self.assertEqual(self.appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertIsNotNone(self.appointment.deposit_due_at)
+        Appointment.objects.filter(pk=self.appointment.pk).update(
+            deposit_checkout_session_id="cs_1", deposit_payment_link="https://pay.test/cs_1",
+        )
+        self.link = OutboxEvent.objects.create(
+            salon=self.salon, event_type="deposit.payment_link",
+            payload={"appointment_id": self.appointment.id},
+        )
+
+    def _without_the_paid_service(self, gesture):
+        closed = []
+        with self._windows(self.windows), patch(
+            "apps.sales.stripe_service.expire_deposit_checkout",
+            side_effect=lambda a: closed.append(a.deposit_checkout_session_id),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                gesture()
+        return closed
+
+    def _assert_no_deposit_left(self, closed):
+        from ..services.deposit_holds import process_deposit_holds
+
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.NONE)
+        self.assertEqual(appointment.deposit_amount, Decimal("0.00"))
+        self.assertIsNone(appointment.deposit_due_at)
+        self.assertIsNone(appointment.deposit_hold_until)
+        # il link non ancora partito non parte, quello inviato si chiude su Stripe
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.status, OutboxEvent.Status.SUPERSEDED)
+        self.assertEqual(closed, ["cs_1"])
+        # e allo scadere del termine il posto resta suo, senza «posto liberato»
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 0)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
+
+    def test_removing_the_paid_service(self):
+        from ..services.appointments import edit_appointment
+
+        consult = self.appointment.items.get(service=self.consult)
+        closed = self._without_the_paid_service(lambda: edit_appointment(
+            self.appointment,
+            items=[{"id": consult.id, "service_id": self.consult.id, "operator_id": self.op1.id}],
+        ))
+        self._assert_no_deposit_left(closed)
+
+    def test_detaching_the_paid_service(self):
+        from ..services.appointments import split_appointment
+
+        paid = self.appointment.items.get(service=self.svc60)
+        closed = self._without_the_paid_service(lambda: split_appointment(
+            self.appointment, paid.id, _aware(self.day + dt.timedelta(days=1), 10),
+        ))
+        self._assert_no_deposit_left(closed)
+
+    def test_a_row_left_required_at_zero_is_not_released(self):
+        """Seguito della voce 5: le righe rimaste «richiesta» a 0 € da prima della correzione."""
+        from ..services.deposit_holds import process_deposit_holds
+
+        Appointment.objects.filter(pk=self.appointment.pk).update(deposit_amount=Decimal("0.00"))
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 0)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+        self.assertFalse(OutboxEvent.objects.filter(event_type="appointment.released_unpaid").exists())
+
+    def test_going_back_asks_for_it_again_with_a_new_deadline(self):
+        """Seguito della voce 5: «Indietro» la rimetteva «richiesta» senza
+        scadenza, e senza sollecito né rilascio automatico."""
+        from apps.accounts.models import Membership, Role, User
+
+        from ..services.appointments import edit_appointment
+        from ..services.deposit_holds import process_deposit_holds
+
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Banco", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        consult = self.appointment.items.get(service=self.consult)
+        with self._windows(self.windows):
+            edit_appointment(
+                self.appointment,
+                items=[{"id": consult.id, "service_id": self.consult.id, "operator_id": self.op1.id}],
+                actor=user,
+            )
+            res = post_json(self.client, "/api/agenda/undo", {}, **bearer(user, self.salon))
+        self.assertEqual(res.status_code, 200, res.content)
+        appointment = Appointment.objects.get(pk=self.appointment.pk)
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.REQUIRED)
+        self.assertEqual(appointment.deposit_amount, Decimal("10.00"))
+        self.assertIsNotNone(appointment.deposit_due_at)
+        # il termine riparte da adesso, e allo scadere il posto si libera
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(minutes=31))
+        self.assertEqual(result["released"], 1)
 
 
 class RefundConcurrencyTests(AgendaTestBase):
@@ -824,6 +1010,54 @@ class DepositHoldFollowsTheVisitTests(AgendaTestBase):
         # e allo scadere delle 24 ore, se non paga, lo slot si libera
         result = process_deposit_holds(self.salon, now=booked_at + dt.timedelta(hours=24, minutes=1))
         self.assertEqual(result["released"], 1)
+
+    def test_the_move_message_carries_the_new_deadline(self):
+        """Bug sospetto 4 (24/09): la scadenza si ricalcola con lo spostamento, non dopo.
+
+        Si riallineava solo alla lettura successiva dell'agenda o al cron, quando
+        `appointment.moved` era già partito con la scadenza di prima (e la
+        risposta allo spostamento la riportava).
+        """
+        from ..services.appointments import move_appointment
+
+        self._settings(hold=24 * 60)
+        self._no_automation_delay()
+        booked_at = timezone.now()
+        appointment = self._book(booked_at + dt.timedelta(hours=2))
+        self.assertEqual(appointment.deposit_due_at, appointment.start)  # tagliata all'inizio
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            moved = move_appointment(appointment, _aware(self.day, 10), force=True)
+        event = OutboxEvent.objects.filter(event_type="appointment.moved").latest("id")
+        due = parse_datetime(event.payload["deposit_due_at"])
+        # 24 ore dalla prenotazione, non l'inizio che la visita non ha più
+        self.assertAlmostEqual((due - booked_at).total_seconds(), 24 * 3600, delta=60)
+        self.assertEqual(moved.deposit_due_at, due)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_due_at, due)
+
+    def test_detaching_the_first_service_moves_the_deadline_with_the_start(self):
+        """Seguito della voce 4: staccando il primo servizio la visita comincia
+        dopo, e la scadenza tagliata sull'inizio lo segue."""
+        from ..services.appointments import split_appointment
+
+        self._settings(hold=48 * 60)
+        tomorrow = timezone.localdate() + dt.timedelta(days=1)
+        with self._windows({self.op1.id: [(0, 24 * 60)]}):
+            with patch("apps.clients.services.client_facts", return_value={}):
+                appointment = create_appointment(
+                    self.salon, self.client_obj,
+                    [
+                        {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                        {"service_id": self.svc30.id, "operator_id": self.op1.id},
+                    ],
+                    _aware(tomorrow, 10), via="dashboard",
+                )
+            self.assertEqual(appointment.deposit_due_at, _aware(tomorrow, 10))
+            first = appointment.items.order_by("order").first()
+            original, _created = split_appointment(appointment, first.id, _aware(self.day, 15))
+        original.refresh_from_db()
+        self.assertEqual(original.start, _aware(tomorrow, 11))
+        self.assertEqual(original.deposit_due_at, _aware(tomorrow, 11))
 
     def test_a_visit_moved_earlier_gets_the_deadline_cut_on_the_new_start(self):
         from ..services.deposit_holds import process_deposit_holds

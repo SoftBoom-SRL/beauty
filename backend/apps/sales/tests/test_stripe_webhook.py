@@ -1,20 +1,26 @@
-"""Webhook Stripe: firma e segreti, `metadata.kind`, importo, pagamenti doppi o senza appuntamento.
+"""Webhook Stripe: firma e segreti, `metadata.kind`, importo, pagamenti doppi o senza appuntamento, carte salvate.
 
 Caccia del 22/09: 05-02 (l'endpoint della piattaforma e quello Connect firmano
 con segreti diversi), 02-07/03-02/05-08/18-01 (pagamento di un appuntamento
-che non c'è più).
+che non c'è più). Bug sospetti del 24/09: voce 8 (account della carta salvata),
+voce 10 (pagamento orfano: la riga si prende sotto il lock del salone, il
+rimborso parte fuori dalla transazione).
 """
 
+import datetime as dt
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+import stripe
+from django.db import connection
+from django.test import TestCase, TransactionTestCase, override_settings
+from django.utils import timezone
 
 from apps.clients.models import Client
 from apps.core.models import ActivityLog, Salon
 
 from ..models import Sale
-from .base import StripeTestBase, _refund, event_payload
+from .base import WEBHOOK_URL, FakeStripeHTTP, StripeTestBase, _refund, event_payload, sign
 
 
 class StripeWebhookTests(TestCase):
@@ -188,9 +194,37 @@ class DuplicateDepositPaymentTests(TestCase):
         )
 
 
-@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
-class OrphanPaymentTests(StripeTestBase):
-    """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
+class DepositPaidEventTests(StripeTestBase):
+    """Bug sospetto 2 (24/09): `deposit.paid` ha la stessa forma online e al banco."""
+
+    def test_the_webhook_and_the_counter_tell_yourang_the_same_things(self):
+        from apps.agenda.services.deposit_holds import mark_deposit_cashed
+        from apps.core.models import OutboxEvent
+
+        from ..stripe_webhooks import on_payment_intent_succeeded
+
+        Client.objects.filter(pk=self.client_obj.pk).update(whatsapp_reminders=False, wa=False)
+        on_payment_intent_succeeded({"id": "pi_1", "amount_received": 3000}, self.metadata())
+        at_the_counter = self.make_appointment()
+        mark_deposit_cashed(at_the_counter, method="cash")
+
+        def payload(appointment):
+            return OutboxEvent.objects.get(
+                event_type="deposit.paid", payload__appointment_id=appointment.id
+            ).payload
+
+        online, cashed = payload(self.appointment), payload(at_the_counter)
+        self.assertEqual(set(online), set(cashed))
+        # le preferenze della cliente arrivano anche col pagamento online
+        self.assertIs(online["whatsapp_reminders"], False)
+        self.assertIs(online["wa"], False)
+        self.assertEqual(online["services"][0]["id"], self.service.id)
+        # e l'importo anche con l'incasso al banco
+        self.assertEqual((online["amount"], cashed["amount"]), ("30.00", "30.00"))
+
+
+class GhostDepositEvents:
+    """Eventi Stripe della caparra di un appuntamento che non c'è più (`self.salon`)."""
 
     def _ghost_event(self, event_type="payment_intent.succeeded", *, account="", event_id="evt_1"):
         metadata = {"appointment_id": "999999", "salon_id": str(self.salon.id), "kind": "deposit"}
@@ -201,6 +235,11 @@ class OrphanPaymentTests(StripeTestBase):
             obj = {"id": "cs_ghost", "object": "checkout.session", "payment_status": "paid",
                    "payment_intent": "pi_ghost", "amount_total": 2000, "metadata": metadata}
         return event_payload(event_type, obj, account=account, event_id=event_id)
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class OrphanPaymentTests(GhostDepositEvents, StripeTestBase):
+    """Pagamento di un appuntamento cancellato («Torna indietro»): rimborso e traccia."""
 
     def test_the_payment_is_refunded_and_written_down(self):
         http = self.fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
@@ -223,6 +262,196 @@ class OrphanPaymentTests(StripeTestBase):
         self.assertEqual(self.post_event(self._ghost_event(account="acct_estraneo")).status_code, 200)
         self.assertEqual(http.calls_to("/v1/refunds"), [])
         self.assertFalse(ActivityLog.objects.filter(type="deposit.orphan_payment").exists())
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class OrphanRefundOutsideTheTransactionTests(GhostDepositEvents, TransactionTestCase):
+    """Bug sospetti del 24/09, voce 10: una riga sola, e Stripe fuori dalla transazione.
+
+    Intent e sessione arrivano quasi insieme. La riga del registro si prende
+    subito, sotto il lock del salone, con l'esito «in corso»; il rimborso parte
+    dopo, fuori da ogni transazione, e la riga prende l'esito vero. Tenere il
+    lock durante la chiamata a Stripe fermava l'agenda del salone per tutto il
+    tempo della risposta. `TransactionTestCase` perché in un `TestCase` si è
+    sempre dentro un blocco atomico.
+
+    Una riga rimasta «in corso» (worker ucciso fra la presa e l'esito) la
+    riprende la consegna che la trova ferma da più di dieci minuti: senza,
+    i ritentativi di Stripe la trovavano ed uscivano, e la cliente restava
+    senza rimborso. L'istante della presa sta nel payload, e i test lo
+    scrivono: niente attese.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.addCleanup(setattr, stripe, "default_http_client", stripe.default_http_client)
+
+    def _fake(self, routes):
+        stripe.default_http_client = FakeStripeHTTP(routes)
+        return stripe.default_http_client
+
+    def _post_event(self, payload):
+        return self.client.post(
+            WEBHOOK_URL, data=payload, content_type="application/json",
+            HTTP_STRIPE_SIGNATURE=sign(payload, "whsec_platform"),
+        )
+
+    RETRY_LATER = "Rimborso della caparra in corso: riprova tra poco"
+
+    def test_the_second_delivery_finds_the_row_while_stripe_answers(self):
+        from .. import stripe_service
+
+        session = self._ghost_event("checkout.session.completed", event_id="evt_2")
+        real_refund = stripe_service.refund_payment_intent
+        seen = {}
+
+        def refund_while_the_session_arrives(*args, **kwargs):
+            if not seen:
+                seen["in_atomic_block"] = connection.in_atomic_block
+                seen["rows"] = list(
+                    ActivityLog.objects.filter(type="deposit.orphan_payment").values_list("summary", "payload")
+                )
+                seen["session"] = self._post_event(session)  # la sessione arriva mentre Stripe risponde
+            return real_refund(*args, **kwargs)
+
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        with patch("apps.sales.stripe_service.refund_payment_intent",
+                   side_effect=refund_while_the_session_arrives) as refunds:
+            self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+            # Ripetuta da Stripe più tardi, la sessione trova l'esito: 200, e niente da fare.
+            again = self._post_event(session)
+        self.assertIs(seen["in_atomic_block"], False)
+        # Durante la chiamata la riga c'era già, «in corso»: la sessione ha ricevuto
+        # 503, così Stripe la ripete invece di darla per consegnata.
+        [(summary, payload)] = seen["rows"]
+        self.assertEqual(summary, "Caparra pagata per un appuntamento che non esiste più: rimborso in corso")
+        self.assertEqual((payload["refund_status"], payload["refund_id"]), ("in_progress", ""))
+        self.assertEqual(seen["session"].status_code, 503, seen["session"].content)
+        self.assertEqual(seen["session"].json()["detail"], self.RETRY_LATER)
+        self.assertEqual(again.status_code, 200, again.content)
+        refunds.assert_called_once()
+        self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
+        # Poi la stessa riga, con l'esito vero e i campi di sempre.
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
+        self.assertEqual(log.summary, "Caparra pagata per un appuntamento che non esiste più: rimborsata")
+        self.assertEqual(log.payload, {
+            "appointment_id": "999999", "payment_intent_id": "pi_ghost", "amount_cents": 2000,
+            "refund_id": "re_ghost", "refund_status": "succeeded", "account": "",
+        })
+
+    def _stuck_claim(self, *, minutes_ago, with_instant=True):
+        """Riga «in corso» di una consegna presa `minutes_ago` minuti fa e mai conclusa.
+
+        Senza `with_instant` il payload non ha `claimed_at`, e conta l'ora di
+        creazione della riga.
+        """
+        claimed_at = timezone.now() - dt.timedelta(minutes=minutes_ago)
+        payload = {
+            "appointment_id": "999999", "payment_intent_id": "pi_ghost", "amount_cents": 2000,
+            "refund_id": "", "refund_status": "in_progress", "account": "",
+        }
+        if with_instant:
+            payload["claimed_at"] = claimed_at.isoformat()
+        log = ActivityLog.objects.create(
+            salon=self.salon, type="deposit.orphan_payment", payload=payload,
+            summary="Caparra pagata per un appuntamento che non esiste più: rimborso in corso",
+        )
+        if not with_instant:
+            ActivityLog.objects.filter(pk=log.pk).update(created_at=claimed_at)
+        return log
+
+    def assertRefunded(self, log):
+        log.refresh_from_db()
+        self.assertEqual(log.summary, "Caparra pagata per un appuntamento che non esiste più: rimborsata")
+        self.assertEqual(log.payload, {
+            "appointment_id": "999999", "payment_intent_id": "pi_ghost", "amount_cents": 2000,
+            "refund_id": "re_ghost", "refund_status": "succeeded", "account": "",
+        })
+        self.assertEqual(ActivityLog.objects.filter(type="deposit.orphan_payment").count(), 1)
+
+    def test_a_claim_stuck_for_more_than_ten_minutes_is_taken_over(self):
+        log = self._stuck_claim(minutes_ago=11)
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+        calls = http.calls_to("/v1/refunds")
+        self.assertEqual(len(calls), 1)
+        # La stessa chiave della prima consegna: se quel rimborso era partito, Stripe lo ridà.
+        self.assertEqual(calls[0]["headers"].get("Idempotency-Key"), f"orphan-deposit-{self.salon.id}-pi_ghost")
+        self.assertRefunded(log)
+
+    def test_a_claim_without_its_instant_counts_from_the_row(self):
+        log = self._stuck_claim(minutes_ago=11, with_instant=False)
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+        self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
+        self.assertRefunded(log)
+
+    def test_a_fresh_claim_is_left_to_its_delivery_and_stripe_is_asked_to_retry(self):
+        # Con un 200 Stripe dava la consegna per buona e non la ripeteva più: se
+        # la presa era di un worker che poi moriva, il rimborso non ripartiva.
+        log = self._stuck_claim(minutes_ago=5)
+        before = (log.summary, log.payload)
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        res = self._post_event(self._ghost_event())
+        self.assertEqual(res.status_code, 503, res.content)
+        self.assertEqual(res.json()["detail"], self.RETRY_LATER)
+        self.assertEqual(http.calls_to("/v1/refunds"), [])
+        log.refresh_from_db()
+        self.assertEqual((log.summary, log.payload), before)
+        self.assertEqual(ActivityLog.objects.count(), 1)
+
+    def test_a_row_with_its_outcome_answers_200_and_does_nothing(self):
+        log = self._stuck_claim(minutes_ago=30)
+        ActivityLog.objects.filter(pk=log.pk).update(
+            summary="Caparra pagata per un appuntamento che non esiste più: rimborsata",
+            payload={**log.payload, "refund_id": "re_ghost", "refund_status": "succeeded"},
+        )
+        log.refresh_from_db()
+        before = (log.summary, log.payload)
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+        self.assertEqual(http.calls_to("/v1/refunds"), [])
+        log.refresh_from_db()
+        self.assertEqual((log.summary, log.payload), before)
+
+    def test_two_deliveries_on_the_same_stuck_claim_call_stripe_once(self):
+        from .. import stripe_service
+
+        log = self._stuck_claim(minutes_ago=11)
+        session = self._ghost_event("checkout.session.completed", event_id="evt_2")
+        real_refund = stripe_service.refund_payment_intent
+        seen = {}
+
+        def refund_while_the_session_arrives(*args, **kwargs):
+            if not seen:
+                seen["in_atomic_block"] = connection.in_atomic_block
+                seen["session"] = self._post_event(session)  # l'altro ritentativo, mentre Stripe risponde
+            return real_refund(*args, **kwargs)
+
+        http = self._fake([("POST", "/v1/refunds", _refund("re_ghost", 2000, "pi_ghost"))])
+        with patch("apps.sales.stripe_service.refund_payment_intent",
+                   side_effect=refund_while_the_session_arrives) as refunds:
+            self.assertEqual(self._post_event(self._ghost_event()).status_code, 200)
+            again = self._post_event(session)
+        # L'altro ritentativo trova la presa appena rinnovata: 503, e dopo l'esito 200.
+        self.assertEqual(seen["session"].status_code, 503, seen["session"].content)
+        self.assertEqual(again.status_code, 200, again.content)
+        refunds.assert_called_once()
+        self.assertIs(seen["in_atomic_block"], False)
+        self.assertEqual(len(http.calls_to("/v1/refunds")), 1)
+        self.assertRefunded(log)
+
+    def test_the_row_does_not_stay_in_progress_if_the_call_blows_up(self):
+        # Il worker fermato a metà chiamata (timeout di gunicorn) arriva qui
+        # come un'eccezione: la riga dice di controllare a mano, e la consegna
+        # ripetuta da Stripe la trova ed esce.
+        with patch("apps.sales.stripe_service.refund_payment_intent", side_effect=SystemExit(1)) as refunds:
+            with self.assertRaises(SystemExit):
+                self._post_event(self._ghost_event())
+        refunds.assert_called_once()
+        log = ActivityLog.objects.get(salon=self.salon, type="deposit.orphan_payment")
+        self.assertEqual(log.summary, "Caparra pagata per un appuntamento che non esiste più: da rimborsare a mano su Stripe")
+        self.assertEqual((log.payload["refund_id"], log.payload["refund_status"]), ("", ""))
 
 
 @override_settings(STRIPE_SECRET_KEY="sk_test_x")
@@ -263,3 +492,64 @@ class WebhookSecretsTests(StripeTestBase):
     @override_settings(STRIPE_WEBHOOK_SECRET="", STRIPE_CONNECT_WEBHOOK_SECRET="", STRIPE_WEBHOOK_SECRETS=[])
     def test_without_any_secret_the_webhook_is_refused(self):
         self.assertEqual(self.post_event(self._paid_event(), secret="whsec_x").status_code, 503)
+
+
+@override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform")
+class SavedCardAccountTests(StripeTestBase):
+    """Bug sospetti del 24/09, voce 8: la carta salvata porta salone e account, come i pagamenti.
+
+    Il SetupIntent aveva nei metadata solo `client_id`: il filtro per salone
+    del webhook non si applicava mai, e una carta salvata mentre il titolare
+    collegava Stripe arrivava dall'account di prima e veniva scartata.
+    """
+
+    def _setup_intent_metadata(self):
+        """I metadata che `create_setup_intent` manda davvero a Stripe."""
+        from .. import stripe_service
+
+        http = self.fake([
+            ("POST", "/v1/customers", {"id": "cus_1", "object": "customer"}),
+            ("POST", "/v1/setup_intents", {
+                "id": "seti_1", "object": "setup_intent", "client_secret": "seti_1_secret_x",
+            }),
+        ])
+        stripe_service.create_setup_intent(self.client_obj)
+        sent = http.calls_to("/v1/setup_intents")[0]["data"]
+        return {
+            key[len("metadata["):-1]: value for key, value in sent.items() if key.startswith("metadata[")
+        }
+
+    def _card_saved(self, metadata, *, account=""):
+        return self.post_event(event_payload("setup_intent.succeeded", {
+            "id": "seti_1", "object": "setup_intent", "customer": "cus_1", "payment_method": "pm_1",
+            "metadata": metadata,
+        }, account=account))
+
+    def test_the_setup_intent_carries_the_salon_and_the_signed_account(self):
+        from .. import stripe_service
+
+        metadata = self._setup_intent_metadata()
+        self.assertEqual(metadata.get("client_id"), str(self.client_obj.id))
+        self.assertEqual(metadata.get("salon_id"), str(self.salon.id))
+        self.assertTrue(stripe_service.account_token_matches(self.salon, metadata.get("acct", ""), ""))
+
+    def test_a_card_saved_while_the_owner_connects_stripe_is_kept(self):
+        from apps.core.models import SalonSettings
+
+        metadata = self._setup_intent_metadata()  # sull'account della piattaforma
+        # Il titolare collega il suo account prima che arrivi l'evento.
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": "acct_nuovo"})
+        self.assertEqual(self._card_saved(metadata).status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.stripe_payment_method_id, "pm_1")
+        # La carta vale sull'account dove è stata salvata, come ogni carta
+        # salvata prima del collegamento.
+        self.assertEqual(self.client_obj.stripe_account_id, "")
+        self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="client.card_saved").exists())
+
+    def test_a_foreign_account_stays_out_even_with_a_copied_signature(self):
+        metadata = self._setup_intent_metadata()
+        self.assertEqual(self._card_saved(metadata, account="acct_estraneo").status_code, 200)
+        self.client_obj.refresh_from_db()
+        self.assertEqual(self.client_obj.stripe_payment_method_id, "")
+        self.assertFalse(ActivityLog.objects.filter(type="client.card_saved").exists())

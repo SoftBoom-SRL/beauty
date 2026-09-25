@@ -36,7 +36,7 @@ from .fields import client_payload
 from .history import build_history, client_appointments
 from .hook import record_lead
 from .importer import import_rows
-from .labels import create_label, delete_label, label_payload, update_label
+from .labels import create_label, delete_label, label_counts, label_payload, update_label
 from .models import (
     Client,
     ClientCategory,
@@ -60,8 +60,9 @@ from .records import (
     validate_attachment,
 )
 from .schemas import (
-    CategoryIn,
-    CategoryOut,
+    ClientCategoryIn,
+    ClientCategoryOut,
+    ClientCountsOut,
     HookLeadIn,
     HookLeadOut,
     ClientDetailOut,
@@ -86,21 +87,21 @@ router = Router(tags=["clients"])
 # ---- Etichette (ClientCategory) ---------------------------------------------
 
 
-@router.get("/categories", auth=staff_auth, response=list[CategoryOut])
+@router.get("/categories", auth=staff_auth, response=list[ClientCategoryOut])
 def list_categories(request):
     return request.auth.salon.client_categories.all()
 
 
-@router.post("/categories", auth=staff_auth, response=CategoryOut)
-def create_category(request, data: CategoryIn):
+@router.post("/categories", auth=staff_auth, response=ClientCategoryOut)
+def create_category(request, data: ClientCategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     payload = label_payload(ctx, data)
     return create_label(ctx, payload)
 
 
-@router.put("/categories/{int:category_id}", auth=staff_auth, response=CategoryOut)
-def update_category(request, category_id: int, data: CategoryIn):
+@router.put("/categories/{int:category_id}", auth=staff_auth, response=ClientCategoryOut)
+def update_category(request, category_id: int, data: ClientCategoryIn):
     ctx = request.auth
     require_scope(ctx, "clients")
     category = salon_get(ClientCategory, ctx, category_id)
@@ -143,6 +144,18 @@ def list_clients(
     if is_active is not None:
         qs = qs.filter(is_active=is_active)
     return qs.distinct()
+
+
+@router.get("/counts", auth=staff_auth, response=ClientCountsOut)
+def client_counts(request):
+    """Schede attive del salone, in tutto e per etichetta, in una risposta sola.
+
+    Sono i numeri delle card in cima alla sezione Clienti della dashboard:
+    `active` è il `count` della lista con `is_active=true`, ogni voce di
+    `categories` quello della lista con `is_active=true&category_id=<id>`.
+    Stesso permesso della lista.
+    """
+    return label_counts(request.auth.salon)
 
 
 @router.post("/", auth=staff_auth, response=ClientOut)

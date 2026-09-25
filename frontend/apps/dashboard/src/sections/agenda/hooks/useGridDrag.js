@@ -10,7 +10,7 @@ import { useLatest } from './useLatest.js';
  *  dell'ultimo onUp della vista; se c'è, pointerup e pointercancel si
  *  ascoltano anche su window, così il trascinamento non resta mai «appeso»
  *  quando la cattura del puntatore non è supportata o il rilascio avviene
- *  fuori dall'area (la settimana; la vista giorno non l'ha mai avuto).
+ *  fuori dall'area (la passano giorno e settimana).
  *  Ritorna { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped }. */
 export function useGridDrag({ onStop, windowUpRef = null } = {}) {
   /* Il gesto in corso è un oggetto MUTABILE (drag.current), aggiornato a ogni

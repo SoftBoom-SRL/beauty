@@ -6,8 +6,9 @@ avvisi riga per riga.
 """
 
 import datetime as dt
+from unittest.mock import patch
 
-from django.db import connection
+from django.db import DataError, connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -16,7 +17,7 @@ from apps.core.models import ActivityLog, Salon
 from common.testing import bearer, post_json
 
 from ..api import import_clients
-from ..models import Client, ClientNote
+from ..models import Client, ClientCategory, ClientNote
 from ..schemas import ImportIn, ImportRowIn
 from ..importer import import_rows
 from .base import ClientsTestCase
@@ -179,6 +180,30 @@ class ImportRobustnessTests(ClientsTestCase):
         result = import_rows(self.salon, rows)
         written = Client.objects.filter(salon=self.salon).count()
         self.assertEqual(result["created"] + result["updated"], written)
+
+    def test_a_label_born_in_a_rejected_row_does_not_reject_the_next_ones(self):
+        """Bug sospetti del 24/09, voce 23: la prima riga crea l'etichetta «VIP»
+        nel suo savepoint, poi il database la rifiuta (PostgreSQL non accetta
+        il carattere nullo nella nota). Il savepoint annullava anche
+        l'etichetta, ma la cache la teneva: le righe dopo ricevevano
+        un'etichetta che non esiste più, e il database rifiutava anche loro."""
+        rows = [
+            {"first_name": "Prima", "phone": "+393330001111", "categories": ["VIP"], "note": "a\x00b"},
+            {"first_name": "Seconda", "phone": "+393330002222", "categories": ["VIP"]},
+            {"first_name": "Terza", "phone": "+393330003333", "categories": ["vip"]},
+        ]
+        with patch("apps.clients.importer.ClientNote") as note_model:
+            # SQLite il carattere nullo lo accetta: qui la nota si rifiuta come
+            # fa PostgreSQL.
+            note_model.objects.filter.return_value.exists.return_value = False
+            note_model.objects.create.side_effect = DataError("PostgreSQL text fields cannot contain NUL (0x00) bytes")
+            result = import_rows(self.salon, rows)
+        note_model.objects.create.assert_called_once()
+        self.assertEqual([e["row"] for e in result["errors"]], [0])
+        self.assertEqual(result["created"], 2)
+        vip = ClientCategory.objects.get(salon=self.salon, name="VIP")
+        for name in ("Seconda", "Terza"):
+            self.assertEqual(list(Client.objects.get(salon=self.salon, first_name=name).categories.all()), [vip])
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +392,26 @@ class ImplausiblePhoneTests(_Base):
         self.assertEqual(result["created"], 2)
         self.assertEqual([w["row"] for w in result["warnings"]], [0])
         self.assertIn("Telefono non riconosciuto", result["warnings"][0]["reason"])
+
+
+class LongLabelNameTests(_Base):
+    """Un nome d'etichetta oltre i 60 caratteri della colonna: l'import lo creava
+    troncato ma lo cercava (e lo teneva in cache) intero. Al secondo import, o
+    con due nomi che cominciano con gli stessi 60 caratteri, non lo ritrovava, e
+    la nuova creazione urtava il vincolo (salone, nome): ogni riga con
+    quell'etichetta finiva fra gli errori con «UNIQUE constraint failed»."""
+
+    LONG = "Clienti arrivate con la promozione di settembre del salone del centro"
+
+    def test_the_truncated_label_is_found_again(self):
+        first = import_rows(self.salon, [{"first_name": "Anna", "phone": "+393330009901", "categories": [self.LONG]}])
+        second = import_rows(self.salon, [
+            {"first_name": "Bea", "phone": "+393330009902", "categories": [self.LONG]},
+            {"first_name": "Carla", "phone": "+393330009903", "categories": [self.LONG[:60] + " (bis)"]},
+        ])
+        self.assertEqual((first["errors"], second["errors"]), ([], []))
+        self.assertEqual(second["created"], 2)
+        label = ClientCategory.objects.get(salon=self.salon)
+        self.assertEqual(label.name, self.LONG[:60])
+        for name in ("Anna", "Bea", "Carla"):
+            self.assertEqual(list(Client.objects.get(salon=self.salon, first_name=name).categories.all()), [label])

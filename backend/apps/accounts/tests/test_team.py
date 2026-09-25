@@ -9,8 +9,10 @@ riscrivibili via API.
 """
 
 import datetime as dt
+from importlib import import_module
 from unittest import mock
 
+from django.apps import apps as django_apps
 from django.test import TestCase
 from django.utils import timezone
 
@@ -35,6 +37,61 @@ class DefaultRolesTests(TestCase):
         )
         self.assertEqual(roles.get(name="Front desk").scopes, ["agenda", "clients", "sales"])
         self.assertEqual(roles.get(name="Operatrice").scopes, ["agenda", "clients"])
+
+
+class SystemRolesMigrationTests(TestCase):
+    """Bug sospetti del 24/09, voce 14: la migrazione 0006 dà i ruoli di sistema ai saloni che non li hanno.
+
+    I saloni nati da «Accedi con Yourang» non ricevevano Manager, Front desk e
+    Operatrice: per invitare una collega il titolare doveva prima crearne uno
+    a mano. La migrazione crea solo quelli che mancano per nome, e non tocca
+    mai un ruolo che c'è già.
+    """
+
+    MODULE = "apps.accounts.migrations.0006_bs24_account_ruoli_di_sistema"
+
+    def _migrate(self):
+        import_module(self.MODULE).forwards(django_apps, None)
+
+    def _system_roles(self):
+        return sorted((name, scopes, True) for name, scopes in import_module(self.MODULE).SYSTEM_ROLES)
+
+    @staticmethod
+    def _roles(salon):
+        return sorted(Role.objects.filter(salon=salon).values_list("name", "scopes", "is_system"))
+
+    def test_a_salon_without_roles_gets_the_system_roles(self):
+        salon = Salon.objects.create(name="Nato da Yourang", slug="nato-da-yourang")
+        self._migrate()
+        self.assertEqual(self._roles(salon), self._system_roles())
+
+    def test_a_role_made_by_hand_with_the_same_name_stays_as_it_is(self):
+        salon = Salon.objects.create(name="Nato da Yourang", slug="nato-da-yourang")
+        manager = Role.objects.create(salon=salon, name="Manager", scopes=["agenda"])
+        self._migrate()
+        manager.refresh_from_db()
+        self.assertEqual((manager.name, manager.scopes, manager.is_system), ("Manager", ["agenda"], False))
+        expected = [r for r in self._system_roles() if r[0] != "Manager"] + [("Manager", ["agenda"], False)]
+        self.assertEqual(self._roles(salon), sorted(expected))
+
+    def test_running_it_twice_creates_no_duplicates(self):
+        bare = Salon.objects.create(name="Nato da Yourang", slug="nato-da-yourang")
+        by_hand = Salon.objects.create(name="Con un ruolo a mano", slug="con-un-ruolo-a-mano")
+        Role.objects.create(salon=by_hand, name="Manager", scopes=["agenda"])
+        self._migrate()
+        first = (self._roles(bare), self._roles(by_hand))
+        self._migrate()
+        self.assertEqual((self._roles(bare), self._roles(by_hand)), first)
+        self.assertEqual(Role.objects.filter(salon=bare).count(), 3)
+        self.assertEqual(Role.objects.filter(salon=by_hand).count(), 3)
+
+    def test_a_salon_with_system_roles_is_left_alone(self):
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        ensure_default_roles(salon)
+        Role.objects.filter(salon=salon, name="Operatrice").delete()  # dall'admin, per esempio
+        before = self._roles(salon)
+        self._migrate()
+        self.assertEqual(self._roles(salon), before)
 
 
 class InvitationPasswordTests(TestCase):

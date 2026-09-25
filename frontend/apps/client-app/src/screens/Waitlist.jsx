@@ -4,6 +4,7 @@ import React from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import { useApp } from '../ctx.jsx';
 import { getWaitlist, leaveWaitlist } from '../api/client.js';
+import { useApiData } from '../hooks/useApiData.js';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { Meta } from '../components/Meta.jsx';
 import { prefLabel } from '../lib/waitlist.js';
@@ -11,19 +12,14 @@ import { fmtDayMed } from '../lib/dates.js';
 
 export default function Waitlist() {
   const { t, lang, brand, setView, fireToast } = useApp();
-  const [list, setList] = React.useState(null);
-  const [error, setError] = React.useState(null);
+  // Con la guardia di useApiData: letta a mano, se la cliente tornava indietro
+  // prima della risposta e la chiamata falliva, il toast «Errore di rete»
+  // compariva sulla schermata dove si trovava intanto (voce 33).
+  const { data: list, error, setData: setList } = useApiData(getWaitlist, [], { onError: (e) => toastApiError(e, fireToast, t) });
   // Insieme di id: con un solo id «in rimozione» il primo tocco bloccava in
   // silenzio TUTTE le altre righe — che restavano attive all'aspetto ma non
   // rispondevano più finché la prima richiesta non tornava.
   const [removing, setRemoving] = React.useState(() => new Set());
-
-  const load = React.useCallback(() => {
-    getWaitlist()
-      .then(setList)
-      .catch((e) => { setError(e); toastApiError(e, fireToast, t); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  React.useEffect(() => { load(); }, [load]);
 
   const mark = (id, on) => setRemoving((s) => {
     const next = new Set(s);

@@ -1,10 +1,15 @@
 # Bug sospetti (24/09/2026)
 
 Sono i possibili difetti trovati durante il refactoring del 24/09/2026 e nelle
-ricognizioni che l'hanno preparato. Non sono stati corretti: il refactoring
-doveva lasciare invariato il comportamento, quindi sono stati solo annotati.
+ricognizioni che l'hanno preparato. Durante il refactoring non sono stati
+corretti, perché doveva lasciare invariato il comportamento: sono stati
+annotati qui.
 
-Ogni voce si corregge in un commit a parte, con un test che la riproduce.
+**Stato**: tutte le voci confermate sono state corrette subito dopo, il
+24/09/2026, un commit per voce, ognuna con il test che la riproduce. Commit e
+note sono in [«Stato delle correzioni»](#stato-delle-correzioni), in fondo.
+Lì ci sono anche le voci 58–62, trovate mentre si correggeva. Le schede qui
+sotto descrivono il difetto com'era prima della correzione.
 
 Posizioni e verifiche si riferiscono al codice dopo il refactoring (commit
 `69bb7fc`). Ogni voce è stata controllata leggendo il codice; dove non bastava,
@@ -894,3 +899,108 @@ voce nuova trovata durante la verifica (57).
   codice li legge, e su una copia falliscono se si toglie il tetto per salone,
   se lo si conta prima del controllo sul numero, o se si toglie la gestione
   dell'`IntegrityError`.
+
+## Trovati durante le correzioni
+
+### 58. Nuova prenotazione: «selezionato» sull'orario non più scelto
+
+- **Dove**: `frontend/apps/dashboard/src/sections/agenda/modals/newappt/TimeStep.jsx`,
+  pannello verde dell'orario chiesto.
+- **Cosa succedeva**: cliccato in agenda un orario libero (10:00) e scelto un altro
+  da «Altri orari» (10:30), il pannello diceva ancora «10:00–10:30 · Disponibile ·
+  selezionato»; la prenotazione partiva comunque alle 10:30.
+- **Priorità**: bassa.
+
+### 59. Import: un'etichetta di oltre 60 caratteri fa rifiutare le righe
+
+- **Dove**: `backend/apps/clients/importer.py`, `category_for`.
+- **Cosa succedeva**: si cercava il nome intero ma si creava quello troncato a 60
+  caratteri; alla riga successiva con la stessa etichetta la creazione ripartiva e
+  il database la rifiutava («UNIQUE constraint failed»).
+- **Priorità**: media.
+
+### 60. Modifica di un'etichetta in gara con la sua cancellazione
+
+- **Dove**: `backend/apps/clients/labels.py`, `update_label`.
+- **Cosa succedeva**: il `save()` completo, arrivato dopo la cancellazione da
+  un'altra postazione, ricreava l'etichetta.
+- **Priorità**: bassa.
+
+### 61. Altri campi senza limite contro colonne strette (stessa classe della 21)
+
+- **Dove**: schemi di catalogo, magazzino, staff ed etichette: nomi di categorie e
+  pacchetti, `reason` di carico e scarico, `order` delle etichette, importi e
+  quantità decimali.
+- **Cosa succedeva**: un valore oltre la colonna arrivava al database, 500 su
+  PostgreSQL invece di 422.
+- **Priorità**: media.
+
+### 62. Messaggi di 422 con il nome inglese del campo
+
+- **Dove**: `frontend/packages/shared/src/apiErrors.js`, `FIELD_LABELS`.
+- **Cosa succedeva**: per i campi limitati nelle voci 21 e 61 (unità, quantità per
+  confezione, sconto, soglia, ordine) il messaggio mostrava il nome inglese.
+- **Priorità**: bassa.
+
+## Stato delle correzioni
+
+Tutte sul branch `claude/exciting-bohr-5ch9g7`, 24/09/2026. Il test di ogni
+commit riproduce il difetto: fallisce sul codice di prima e passa dopo.
+
+| N. | Commit | Note |
+|---|---|---|
+| 1 | `bbcd4d8` | «Indietro» su un no-show con caparra da pagare manda un link nuovo |
+| 2 | `36e81b0` | `deposit.paid` ha gli stessi campi online e al banco; si sono solo aggiunti campi |
+| 3 | `e614c32`, `d766bcc` | fra i match c'è anche chi aspettava il servizio tolto o staccato |
+| 4 | `43f49d6`, `bd968d6` | vale anche per «Indietro» e per lo stacco del primo servizio |
+| 5 | `3cf4b61`, `dcbba65`, `b330d70` | «Indietro» la rimette richiesta con una scadenza nuova; il rilascio salta le righe già a 0 € |
+| 6 | `610aeda` | limite: una pausa lasciata apposta sopra una visita non si rimette con «Indietro» (409) |
+| 7 | `d704b8b` | |
+| 8 | `1d761ed` | i SetupIntent creati prima del deploy non hanno `acct`: si confrontano come prima |
+| 9 | `cc07b51` | |
+| 10 | `9467e35`, `7daf7a3`, `5a72643`, `acd71f4` | rimborso fuori dal lock; una riga «in corso» ferma da più di 10 minuti si riprende; nel frattempo il webhook risponde 503 e Stripe riprova |
+| 11 | `c379327`, `d678667` | anche una vendita senza cliente, come in cassa |
+| 12 | `39b28c5` | «gift_card» resta un metodo ammesso per pagare una gift card: scelta di prodotto |
+| 13 | `92f7323`, `cffa308` | |
+| 14 | `a7aa52d`, `4ac08c4` | migrazione `accounts 0006` per i saloni già esistenti: crea solo i ruoli mancanti, all'indietro non li toglie |
+| 15 | `db4ed73` | una data nel formato sbagliato resta ignorata, come prima |
+| 16 | `0fd0806` | |
+| 17 | `b272c23` | il logger si chiama ora `youty.accounts` |
+| 20 | `f4e9f39` | |
+| 21 | `b62c10b` | vedi anche la 61 |
+| 22 | `4472e89` | |
+| 23 | `a46a9b8` | |
+| 24 | `d6765e1` | cambiano i nomi dei componenti OpenAPI, non le forme |
+| 25 | `cf80722` | |
+| 26 | `eb75052`, `fae3622` | i salvataggi da /admin/ di regole e automazioni non prendono il lock |
+| 27 | `018eae1` | |
+| 29 | `10cde54` | |
+| 31 | `04f1225` | |
+| 32 | `e37b8e6` | |
+| 33 | `cd87988` | |
+| 34 | `3acd758` | |
+| 35 | `28738f0` | |
+| 39 | `ff729d5` | |
+| 41 | `def6851` | |
+| 42 | `3c6044f` | il tasto N prenota da ogni sezione, come il pulsante |
+| 43 | `bd02803` | endpoint nuovo `GET /api/clients/counts` |
+| 44 | `b6b6653` | |
+| 46 | `1c1be72` | |
+| 47 | `c5d57c1` | `copyText` ora sta in `@youty/shared` |
+| 48 | `403b994` | |
+| 49 | `d0fc821` | |
+| 50 | `3ce4cfb` | |
+| 51 | `9821e90` | |
+| 52 | `c13bc0b` | |
+| 54 | `c8a69e3` | lo controlla `common/tests/test_role_names.py` |
+| 55 | `f3f94b8` | |
+| 56 | `a994a9b` | |
+| 57 | `aa75c18` | 30 avvii ogni 15 minuti per IP |
+| 58 | `0d8cb2f` | |
+| 59 | `6dfc9d3` | |
+| 60 | `d54d8de` | |
+| 61 | `142dfb2` | |
+| 62 | `54203d7` | |
+
+Restano fuori, per scelta: la 19 (l'avviso «scheda archiviata» scritto in due
+posti, da unificare) e le altre voci «Non confermati».

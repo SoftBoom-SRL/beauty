@@ -28,7 +28,7 @@ from .schemas import (
     SettingsIn,
     SettingsOut,
 )
-from .services import default_location, get_salon_by_slug, log_activity
+from .services import default_location, get_salon_by_slug, log_activity, make_only_default_location
 from .validation import clean_settings_payload, deposit_rule_fields
 from .views import STREAM_TICKET_TTL, issue_stream_ticket
 
@@ -168,18 +168,6 @@ def list_locations(request):
     return request.auth.salon.locations.all()
 
 
-def _make_only_default(salon, location) -> None:
-    """La sede predefinita è UNA: le altre vanno azzerate nella stessa transazione.
-
-    Chi legge fa `filter(is_default=True).first()`, che senza ordinamento
-    esplicito restituisce la più vecchia: marcandone una seconda, la scelta del
-    titolare veniva ignorata e dall'interfaccia non c'era modo di correggerla.
-    """
-    Location.objects.filter(salon=salon, is_default=True).exclude(pk=location.pk).update(
-        is_default=False
-    )
-
-
 @router.post("/locations", auth=staff_auth, response=LocationOut)
 def create_location(request, data: LocationIn):
     ctx = request.auth
@@ -187,7 +175,7 @@ def create_location(request, data: LocationIn):
     with transaction.atomic():
         location = Location.objects.create(salon=ctx.salon, **data.dict())
         if location.is_default:
-            _make_only_default(ctx.salon, location)
+            make_only_default_location(ctx.salon, location)
     return location
 
 
@@ -201,7 +189,7 @@ def update_location(request, location_id: int, data: LocationIn):
             setattr(loc, name, value)
         loc.save()
         if loc.is_default:
-            _make_only_default(ctx.salon, loc)
+            make_only_default_location(ctx.salon, loc)
     return loc
 
 
@@ -229,8 +217,18 @@ def list_deposit_rules(request):
 def create_deposit_rule(request, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
-    rule = DepositRule.objects.create(salon=ctx.salon, **deposit_rule_fields(data))
-    log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    fields = deposit_rule_fields(data)
+    # Sotto il lock del salone, come l'eliminazione di un'etichetta
+    # (`delete_label` in clients), che sotto lo stesso lock controlla che
+    # nessuna regola la citi: senza, una regola a metà salvataggio sfuggiva al
+    # controllo e l'etichetta spariva lo stesso (voce 26 dei bug sospetti del
+    # 24/09).
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        rule = DepositRule.objects.create(salon=ctx.salon, **fields)
+        log_activity(ctx.salon, "deposit_rule.created", f"Regola deposito: {rule.name}", actor=ctx.user)
     return rule
 
 
@@ -239,15 +237,26 @@ def update_deposit_rule(request, rule_id: int, data: DepositRuleIn):
     ctx = request.auth
     require_owner(ctx)
     rule = salon_get(DepositRule, ctx, rule_id)
-    for name, value in deposit_rule_fields(data).items():
-        setattr(rule, name, value)
-    rule.save()
-    # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
-    # le altre postazioni del titolare.
-    log_activity(
-        ctx.salon, "deposit_rule.updated", f"Regola deposito modificata: {rule.name}",
-        actor=ctx.user, payload={"rule_id": rule.id},
-    )
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    fields = deposit_rule_fields(data)
+    # Il lock del salone, come nella creazione, poi la riga, riletta: salvata
+    # tutta com'era a inizio richiesta, una regola eliminata nel frattempo da
+    # un'altra postazione tornava in vita.
+    with transaction.atomic():
+        lock_salon(ctx.salon)
+        rule = DepositRule.objects.select_for_update().filter(pk=rule.pk).first()
+        if rule is None:
+            raise HttpError(404, "Regola caparra non trovata")
+        for name, value in fields.items():
+            setattr(rule, name, value)
+        rule.save()
+        # Come la creazione: il registro ne tiene traccia e il feed live aggiorna
+        # le altre postazioni del titolare.
+        log_activity(
+            ctx.salon, "deposit_rule.updated", f"Regola deposito modificata: {rule.name}",
+            actor=ctx.user, payload={"rule_id": rule.id},
+        )
     return rule
 
 

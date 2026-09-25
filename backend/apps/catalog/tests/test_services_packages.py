@@ -23,7 +23,7 @@ from ..api import (
     update_service,
 )
 from ..models import Package, PackageItem, Service, ServiceCategory
-from ..schemas import CategoryIn, PackageIn, PackageItemIn, ServiceIn
+from ..schemas import PackageIn, PackageItemIn, ServiceCategoryIn, ServiceIn
 from .base import CatalogTestCase, _CatalogSetup
 
 
@@ -174,7 +174,7 @@ class PackageUpdateAtomicityTests(CatalogTestCase):
     def test_failed_update_keeps_items_and_price(self):
         from django.http import Http404
 
-        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
         service = create_service(
             self.request,
             ServiceIn(category_id=category.id, name_it="Manicure", duration_min=30, price=Decimal("20")),
@@ -207,7 +207,7 @@ class PackageUpdateAtomicityTests(CatalogTestCase):
 
 class ServiceDescriptionTests(CatalogTestCase):
     def test_description_is_stored_and_public(self):
-        category = create_category(self.request, CategoryIn(name_it="Unghie"))
+        category = create_category(self.request, ServiceCategoryIn(name_it="Unghie"))
         create_service(
             self.request,
             ServiceIn(category_id=category.id, name_it="Manicure", description_it="Cura completa di mani e unghie",
@@ -257,6 +257,63 @@ class PackageItemsPreservedTests(CatalogTestCase):
             self.request, created["id"], PackageIn(name="Combo", price=Decimal("45"), items=[])
         )
         self.assertEqual(Package.objects.get(pk=created["id"]).items.count(), 0)
+
+
+class ServiceColumnLimitsTests(_CatalogSetup):
+    """Bug sospetti del 24/09, voce 21: `ServiceIn` non limitava i nomi (colonne
+    da 120 caratteri) né l'ordine (PositiveIntegerField). Un nome più lungo su
+    PostgreSQL e un ordine negativo anche su SQLite erano un 500 invece di un
+    errore che dice quale campo correggere."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_names_and_order_stay_within_their_columns(self):
+        base = {"category_id": self.cat.id, "name_it": "Piega", "duration_min": 30, "price": "25.00"}
+        refused = [("name_it", "x" * 121), ("name_en", "x" * 121), ("order", -1), ("order", 2147483648)]
+        for field, value in refused:
+            body = {**base, field: value}
+            res = self._send("post", "/api/catalog/services", body)
+            self.assertEqual(res.status_code, 422, (field, value))
+            res = self._send("put", f"/api/catalog/services/{self.color.id}", body)
+            self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Service.objects.filter(name_it="Piega").exists())
+        at_the_limit = {**base, "name_it": "x" * 120, "name_en": "x" * 120, "order": 2147483647}
+        res = self._send("post", "/api/catalog/services", at_the_limit)
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_price_and_costs_stay_within_the_column(self):
+        """Stessa classe: prezzo e costi sono numeric(10,2), e oltre i cento
+        milioni PostgreSQL rifiutava la riga."""
+        base = {"category_id": self.cat.id, "name_it": "Piega", "duration_min": 30, "price": "25.00"}
+        for field in ("price", "product_cost", "supplier_cost"):
+            body = {**base, field: "100000000.00"}
+            self.assertEqual(self._send("post", "/api/catalog/services", body).status_code, 422, field)
+            res = self._send("put", f"/api/catalog/services/{self.color.id}", body)
+            self.assertEqual(res.status_code, 422, field)
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.price, Decimal("60"))
+        top = {**base, "price": "99999999.99", "product_cost": "99999999.99", "supplier_cost": "99999999.99"}
+        self.assertEqual(self._send("post", "/api/catalog/services", top).status_code, 200)
+
+    def test_package_name_price_and_quantity_stay_within_their_columns(self):
+        """Stessa classe: il nome del pacchetto (120 caratteri), il prezzo
+        (numeric(10,2)) e la quantità di una riga (PositiveIntegerField)."""
+        base = {"name": "Mani perfette", "price": "40.00", "items": [{"service_id": self.color.id, "qty": 2}]}
+        refused = [
+            {"name": "x" * 121},
+            {"price": "100000000.00"},
+            {"items": [{"service_id": self.color.id, "qty": 2147483648}]},
+        ]
+        for change in refused:
+            res = self._send("post", "/api/catalog/packages", {**base, **change})
+            self.assertEqual(res.status_code, 422, change)
+        self.assertFalse(Package.objects.exists())
+        top = {"name": "x" * 120, "price": "99999999.99", "items": [{"service_id": self.color.id, "qty": 2147483647}]}
+        res = self._send("post", "/api/catalog/packages", top)
+        self.assertEqual(res.status_code, 200, res.content)
 
 
 class YourangLinkSurvivesEditsTests(_CatalogSetup):

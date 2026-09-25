@@ -8,7 +8,13 @@ ignorano. Le scritture sulla caparra sotto lock e i rimborsi di quanto è
 arrivato in più stanno in deposits.py. Stava tutto dentro api.py.
 """
 
+import datetime as dt
 import logging
+
+from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from ninja.errors import HttpError
 
 from apps.agenda.models import Appointment
 from apps.clients.models import Client
@@ -173,20 +179,14 @@ def on_payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") ->
         )
         settle_deposit_refund(appointment)
     elif outcome == "paid":
-        from apps.agenda.services.messages import appointment_event_key  # lazy
+        from apps.agenda.services.messages import appointment_event_key, deposit_paid_payload  # lazy
 
+        # Lo stesso payload dell'incasso al banco: scritto qui a mano non
+        # portava le preferenze WhatsApp della cliente (vedi deposit_paid_payload).
         emit_event(
             appointment.salon,
             "deposit.paid",
-            {
-                "appointment_id": appointment.id,
-                "client_id": appointment.client_id,
-                "client_name": client_name,
-                "phone": appointment.client.phone,
-                "lang": appointment.client.lang,
-                "amount": str(appointment.deposit_amount),
-                "start": appointment.start.isoformat(),
-            },
+            deposit_paid_payload(appointment),
             coalesce_key=appointment_event_key(appointment.id),
         )
         if excess_cents > 0:
@@ -206,6 +206,31 @@ def on_checkout_session_completed(obj: dict, metadata: dict, account: str = "") 
             metadata,
             account,
         )
+
+
+# Una riga «in corso» presa da più di così è di una consegna morta fra la presa
+# e l'esito (worker ucciso): la prima consegna che la trova la riprende. Più
+# fresca, è di una consegna ancora al lavoro, e chiamare Stripe insieme a lei
+# con la stessa chiave farebbe rifiutare una delle due.
+ORPHAN_CLAIM_TIMEOUT = dt.timedelta(minutes=10)
+
+
+def _orphan_claim_is_stuck(log, now) -> bool:
+    """Vero se la riga dice ancora «in corso» e la sua presa ha più di ORPHAN_CLAIM_TIMEOUT.
+
+    L'istante della presa è `claimed_at` nel payload; una riga che non lo ha
+    (o lo ha illeggibile) conta dalla sua creazione.
+    """
+    payload = log.payload or {}
+    if payload.get("refund_status") != "in_progress":
+        return False  # esito già scritto
+    try:
+        claimed_at = parse_datetime(str(payload.get("claimed_at") or ""))
+    except ValueError:
+        claimed_at = None
+    if claimed_at is None or timezone.is_naive(claimed_at):
+        claimed_at = log.created_at
+    return now - claimed_at > ORPHAN_CLAIM_TIMEOUT
 
 
 def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
@@ -230,37 +255,89 @@ def _orphan_deposit_payment(obj: dict, metadata: dict, account: str) -> None:
             intent_id, metadata.get("appointment_id"), account,
         )
         return
-    if ActivityLog.objects.filter(
-        salon=salon, type="deposit.orphan_payment", payload__payment_intent_id=intent_id
-    ).exists():
-        return  # stesso pagamento già trattato (Stripe manda intent e sessione)
-    refund = stripe_service.refund_payment_intent(
-        salon,
-        intent_id,
-        idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
-        account=account or "",
-    )
-    status = (refund or {}).get("status") or ""
-    if refund is None:
-        outcome = "da rimborsare a mano su Stripe"
-    elif status in ("pending", "requires_action"):
-        outcome = "rimborso in corso"
-    else:
-        outcome = "rimborsata"
+    from apps.agenda.services.locking import lock_salon  # lazy
+
+    summary = "Caparra pagata per un appuntamento che non esiste più: {}"
     cents = deposits.amount_received(obj) or 0
-    log_activity(
-        salon,
-        "deposit.orphan_payment",
-        f"Caparra pagata per un appuntamento che non esiste più: {outcome}",
-        payload={
-            "appointment_id": metadata.get("appointment_id"),
-            "payment_intent_id": intent_id,
-            "amount_cents": int(cents),
+    payload = {
+        "appointment_id": metadata.get("appointment_id"),
+        "payment_intent_id": intent_id,
+        "amount_cents": int(cents),
+        "refund_id": "",
+        "refund_status": "in_progress",
+        "account": account or "",
+    }
+    # La riga si prende subito, sotto il lock del salone, con l'esito «in
+    # corso» e l'istante della presa. Stripe manda `payment_intent.succeeded` e
+    # `checkout.session.completed` quasi insieme: senza lock passavano tutte e
+    # due il controllo e le righe erano due, e la seconda poteva dire «da
+    # rimborsare a mano» se Stripe le rifiutava la chiave ancora in uso. Ora la
+    # seconda consegna trova la riga e non chiama Stripe: 200 se l'esito c'è
+    # già, 503 se il rimborso è ancora in corso (e Stripe la ripete).
+    with transaction.atomic():
+        lock_salon(salon)
+        now = timezone.now()
+        log = ActivityLog.objects.filter(
+            salon=salon, type="deposit.orphan_payment", payload__payment_intent_id=intent_id
+        ).first()
+        if log is None:
+            log = log_activity(
+                salon, "deposit.orphan_payment", summary.format("rimborso in corso"),
+                payload={**payload, "claimed_at": now.isoformat()},
+            )
+        elif (log.payload or {}).get("refund_status") != "in_progress":
+            return  # esito già scritto: stesso pagamento già trattato
+        elif _orphan_claim_is_stuck(log, now):
+            # La consegna che l'aveva presa è morta prima dell'esito: i
+            # ritentativi di Stripe trovavano la riga ed uscivano, e la cliente
+            # restava senza rimborso. La si riprende con l'istante di adesso,
+            # così un altro ritentativo che arriva intanto la trova fresca e
+            # riceve 503. Il rimborso riparte con la stessa chiave: se il primo era
+            # arrivato a Stripe, Stripe lo ridà invece di rifarlo (le chiavi
+            # valgono 24 ore; dopo, il secondo rimborso di un pagamento già
+            # rimborsato è rifiutato, e la riga dice di controllare a mano).
+            log.payload = {**(log.payload or {}), "claimed_at": now.isoformat()}
+            log.save(update_fields=["payload"])
+        else:
+            # Un'altra consegna sta rimborsando: non si chiama Stripe insieme a
+            # lei. Con un 200 Stripe dava questa consegna per buona e non la
+            # ripeteva più, e se quel worker moriva prima dell'esito il rimborso
+            # non ripartiva. Con il 503 Stripe riprova: troverà l'esito, oppure
+            # una presa abbastanza vecchia da riprenderla.
+            logger.info(
+                "Caparra %s pagata per un appuntamento che non c'è più: rimborso in corso "
+                "da un'altra consegna, a Stripe si chiede di riprovare", intent_id,
+            )
+            raise HttpError(503, "Rimborso della caparra in corso: riprova tra poco")
+    # Il rimborso fuori dalla transazione: con il lock tenuto durante la
+    # chiamata, una risposta lenta di Stripe fermava l'agenda del salone per
+    # tutto quel tempo. Poi la stessa riga prende l'esito vero, anche se la
+    # chiamata esplode (worker fermato, per esempio): non resta «in corso»
+    # per sempre, e dice di controllare a mano.
+    refund = None
+    try:
+        refund = stripe_service.refund_payment_intent(
+            salon,
+            intent_id,
+            idempotency_key=f"orphan-deposit-{salon.id}-{intent_id}",
+            account=account or "",
+        )
+    finally:
+        status = (refund or {}).get("status") or ""
+        if refund is None:
+            outcome = "da rimborsare a mano su Stripe"
+        elif status in ("pending", "requires_action"):
+            outcome = "rimborso in corso"
+        else:
+            outcome = "rimborsata"
+        log.summary = summary.format(outcome)
+        # I campi di sempre: l'istante della presa serve solo finché è «in corso».
+        log.payload = {
+            **{key: value for key, value in (log.payload or {}).items() if key != "claimed_at"},
             "refund_id": (refund or {}).get("id", ""),
             "refund_status": status,
-            "account": account or "",
-        },
-    )
+        }
+        log.save(update_fields=["summary", "payload"])
 
 
 # ---- Rimborsi ------------------------------------------------------------------
@@ -335,7 +412,12 @@ def on_setup_intent_succeeded(obj: dict, metadata: dict, account: str = "") -> N
         if salon_id:
             clients = clients.filter(salon_id=salon_id)
         client = clients.filter(pk=client_id).first()
-        if client and stripe_service.salon_account_id(client.salon) != account:
+        # L'account si riconosce come per i pagamenti: quello di oggi del
+        # salone o quello firmato nei metadata alla creazione. Col solo
+        # confronto con quello di oggi, la carta salvata mentre il titolare
+        # collegava Stripe veniva scartata: la cliente credeva di averla
+        # salvata e il salone non poteva addebitarle un no-show.
+        if client and not _salon_account_recognised(client.salon, account, metadata):
             logger.warning(
                 "setup_intent.succeeded ignorato: account %r non è quello del salone %s",
                 account, client.salon_id,

@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.core.models import ActivityLog, Salon, SalonSettings
 
-from ..models import Client
+from ..models import Client, ClientCategory
 
 
 class PublicHookTests(TestCase):
@@ -276,3 +276,26 @@ class ArchivedCardTests(_HookBase):
         notices = ActivityLog.objects.filter(type="client.reactivation_requested")
         self.assertEqual(notices.count(), 1)
         self.assertEqual(notices[0].payload, {"client_id": archived.id, "source": "hook"})
+
+
+class HookLabelTests(_HookBase):
+    """Bug sospetti del 24/09, voce 22: l'etichetta «Da form» si cercava
+    distinguendo le maiuscole. Con «da form» già nel salone (creata o
+    rinominata dal titolare) il primo contatto dal modulo ne creava una
+    seconda, «Da form»: due etichette che differiscono solo per le maiuscole,
+    cosa che l'interfaccia vieta, e i contatti nuovi finivano sulla seconda."""
+
+    def test_the_label_written_otherwise_is_reused(self):
+        label = ClientCategory.objects.create(salon=self.salon, name="da FORM", color="#123456")
+        self.post()
+        self.assertEqual(list(ClientCategory.objects.filter(salon=self.salon)), [label])
+        self.assertEqual(list(Client.objects.get(salon=self.salon).categories.all()), [label])
+        label.refresh_from_db()
+        self.assertEqual((label.name, label.color), ("da FORM", "#123456"))
+
+    def test_with_two_copies_already_there_the_contacts_keep_going_to_da_form(self):
+        ClientCategory.objects.create(salon=self.salon, name="da form")
+        hook_label = ClientCategory.objects.create(salon=self.salon, name="Da form")
+        self.post()
+        self.assertEqual(ClientCategory.objects.filter(salon=self.salon).count(), 2)
+        self.assertEqual(list(Client.objects.get(salon=self.salon).categories.all()), [hook_label])

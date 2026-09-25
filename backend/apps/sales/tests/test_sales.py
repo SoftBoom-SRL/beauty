@@ -225,7 +225,7 @@ class ListSalesApiTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["sales"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         tokens = create_staff_tokens(user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
@@ -258,6 +258,14 @@ class ListSalesApiTests(TestCase):
         self.assertEqual(len(body["items"]), 1)
         self.assertEqual(body["items"][0]["id"], self.sale_sofia.id)
         self.assertEqual(body["kpi"]["revenue"], "50.00")
+
+    def test_an_impossible_date_is_a_400(self):
+        """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
+        esiste, e `parse_date` solleva ValueError: lo storico rispondeva 500."""
+        for param in ("date_from", "date_to"):
+            resp = self.client.get(f"/api/sales/?{param}=2026-02-30", **self.auth)
+            self.assertEqual(resp.status_code, 400, param)
+            self.assertEqual(resp.json()["detail"], "Data non valida: usa il formato YYYY-MM-DD")
 
 
 class TenantIsolationTests(TestCase):
@@ -356,7 +364,7 @@ class PosApiValidationTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["sales"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["sales"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         tokens = create_staff_tokens(user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}

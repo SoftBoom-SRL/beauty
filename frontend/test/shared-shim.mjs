@@ -1,6 +1,7 @@
 // Sostituto di '@youty/shared' per i test: riesporta i VERI helper puri del
-// pacchetto — format.js, labels.js, phone.js e la classe ApiError con il testo
-// e il toast d'errore di apiErrors.js — più un `api` finto (in fondo). Serve
+// pacchetto — format.js, labels.js, phone.js, la classe ApiError con il testo
+// e il toast d'errore di apiErrors.js e la copia negli appunti di clipboard.js
+// — più un `api` finto (in fondo). Serve
 // perché l'indice del pacchetto tira dentro i componenti React e api.js (che al
 // caricamento legge import.meta.env), che nei test con `node --test` non
 // servono (e senza DOM non si caricano).
@@ -25,6 +26,8 @@ export {
 // che lo riconosce con `instanceof` vedono la stessa. Solo i nomi che esporta
 // anche l'indice: readableDetail resta interno al pacchetto.
 export { ApiError, apiErrorText, toastApiError } from '../packages/shared/src/apiErrors.js';
+// La copia negli appunti: pura, il browser arriva come argomento (o globalThis).
+export { copyText } from '../packages/shared/src/clipboard.js';
 
 // `api` finto, come quello dello SHARED di grid-harness.mjs: ogni chiamata va a
 // globalThis.__api, che il test imposta (un registratore). Così i moduli di

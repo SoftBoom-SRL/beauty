@@ -6,6 +6,7 @@ sincronizzazione con Yourang che scrive nel frattempo); qui si scrivono le
 righe dei pacchetti e l'ordine delle categorie, e si compone l'uscita pubblica.
 """
 
+from django.db import transaction
 from django.db.models import Prefetch
 
 from common.utils import salon_get
@@ -39,18 +40,28 @@ def sync_package_items(ctx, package: Package, items: list[dict]) -> None:
 
 
 def set_category_order(salon, ids: list[int]) -> None:
-    """Ordine delle categorie = posizione in `ids`; si ignorano gli id di altri saloni."""
-    categories = {
-        c.id: c
-        for c in ServiceCategory.objects.filter(salon=salon, id__in=ids)
-    }
-    for order, cat_id in enumerate(ids):
-        category = categories.get(cat_id)
-        if category is None:
-            continue
-        if category.order != order:
-            category.order = order
-            category.save(update_fields=["order"])
+    """Ordine delle categorie = posizione in `ids`; si ignorano gli id di altri saloni.
+
+    Tutto in una transazione, con le categorie del salone bloccate e rilette.
+    Ogni categoria si salvava per conto suo: due riordini insieme (due
+    postazioni, un doppio invio) si mescolavano, e un errore a metà lasciava
+    l'ordine in parte nuovo e in parte vecchio, anche nel listino dell'app
+    (voce 27 dei bug sospetti del 24/09). Il lock prende tutte le categorie
+    del salone, in ordine di id: due riordini si mettono in fila anche quando
+    non elencano le stesse categorie.
+    """
+    with transaction.atomic():
+        categories = {
+            c.id: c
+            for c in ServiceCategory.objects.select_for_update().filter(salon=salon).order_by("id")
+        }
+        for order, cat_id in enumerate(ids):
+            category = categories.get(cat_id)
+            if category is None:
+                continue
+            if category.order != order:
+                category.order = order
+                category.save(update_fields=["order"])
 
 
 def public_price_list(salon) -> list[dict]:

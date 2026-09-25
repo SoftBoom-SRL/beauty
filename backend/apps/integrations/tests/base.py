@@ -56,10 +56,23 @@ class FakeHttp:
     """httpx.Client finto: registra (metodo, path) e risponde come l'external API."""
 
     # Lo stato sta sulla classe, perché le istanze le crea il codice sotto test:
-    # ogni test che lo usa lo riassegna nel suo setUp (o in testa al test).
+    # ogni test che lo usa chiama `FakeHttp.reset()` nel suo setUp (o in testa
+    # al test), che lo azzera tutto insieme.
     instances: list["FakeHttp"] = []
     contacts: dict = {}
     missing_route = False
+
+    @classmethod
+    def reset(cls, contacts=None):
+        """Stato di partenza: nessuna istanza, i contatti dati, nessuna rotta mancante.
+
+        Lo stato sopravvive da un test all'altro: chi ne riassegnava solo una
+        parte (CatalogueRaceTests azzerava solo `instances`) ereditava il resto
+        dal test precedente, e l'esito poteva dipendere dall'ordine.
+        """
+        cls.instances = []
+        cls.contacts = dict(contacts or {})
+        cls.missing_route = False
 
     def __init__(self, *args, **kwargs):
         self.calls = []

@@ -172,9 +172,20 @@ def notify_archived_client(salon, client: Client) -> None:
 
 def mark_as_hook_lead(salon, client: Client) -> None:
     """Etichetta «Da form», evento SSE e registro: la scheda è un lead nuovo."""
-    label, _ = ClientCategory.objects.get_or_create(
-        salon=salon, name=HOOK_LABEL, defaults={"color": HOOK_LABEL_COLOR}
+    # Senza badare alle maiuscole, come le etichette scritte dal gestionale
+    # (`label_payload`) e dall'import: con «da form» già nel salone, creata o
+    # rinominata dal titolare, `get_or_create` sul nome esatto ne creava una
+    # seconda «Da form» (il vincolo del database distingue le maiuscole) e i
+    # contatti nuovi finivano lì (voce 22 dei bug sospetti del 24/09). Se le due
+    # copie ci sono già, si resta su «Da form», dove sono i contatti di prima.
+    label = (
+        ClientCategory.objects.filter(salon=salon, name=HOOK_LABEL).first()
+        or ClientCategory.objects.filter(salon=salon, name__iexact=HOOK_LABEL).order_by("id").first()
     )
+    if label is None:
+        label, _ = ClientCategory.objects.get_or_create(
+            salon=salon, name=HOOK_LABEL, defaults={"color": HOOK_LABEL_COLOR}
+        )
     client.categories.add(label)
     emit_event(
         salon,

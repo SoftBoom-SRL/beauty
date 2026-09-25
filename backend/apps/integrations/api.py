@@ -18,6 +18,7 @@ from ninja import Router
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
+from common import ratelimit
 from common.auth import staff_auth
 from common.permissions import require_owner
 from common.schemas import OkOut
@@ -71,10 +72,27 @@ def oauth_start(request):
     return start_flow(ctx.salon, ctx.user)
 
 
+# Avvii di «Accedi con Yourang» per IP nella finestra: larghi per chi accede
+# (anche riprovando dopo aver chiuso il popup, anche da una rete condivisa dal
+# salone), stretti per uno script.
+LOGIN_START_MAX_PER_IP = 30
+LOGIN_START_WINDOW_SECONDS = 15 * 60
+
+
 @router.get("/yourang/oauth/login/start", auth=None, response=AuthorizeOut)
 def oauth_login_start(request):
     """Avvia il flusso "login con Yourang" (dalla pagina di login, nessuna sessione)."""
     _require_config()
+    # Tetto per IP, come gli altri endpoint pubblici che scrivono: ogni avvio
+    # salva una riga (lo state), e senza tetto uno script che chiamava
+    # l'endpoint in ciclo riempiva la tabella. Chiave e 429 come quelli di
+    # `ratelimit.enforce_public`, senza il salone, che qui non c'è ancora.
+    ratelimit.enforce(
+        f"public-yourang-login:{ratelimit.client_ip(request)}",
+        LOGIN_START_MAX_PER_IP,
+        LOGIN_START_WINDOW_SECONDS,
+        "Troppe richieste: riprova tra qualche minuto",
+    )
     return start_flow()  # salon/user null
 
 

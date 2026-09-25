@@ -45,3 +45,28 @@ test('gli errori scritti a mano restano com\'erano', () => {
   assert.equal(readableDetail([{ msg: 'Qualcosa' }]), 'Qualcosa');
   assert.equal(readableDetail({ code: 7 }), '{"code":7}');
 });
+
+test('i campi limitati di magazzino, listino ed etichette hanno il nome che si legge nei moduli', () => {
+  // Limiti dalle colonne (bug sospetti del 24/09, voce 21 e seguito): senza il
+  // nome italiano il 422 diceva «Package unit», «Purchase discount pct».
+  const tooLong = (field, max) => ({ type: 'string_too_long', loc: ['body', 'data', field], msg: '…', ctx: { max_length: max } });
+  const tooBig = (field, le) => ({ type: 'less_than_equal', loc: ['body', 'data', field], msg: '…', ctx: { le } });
+  assert.equal(readableDetail([tooLong('brand', 120)]), 'Brand: al massimo 120 caratteri');
+  assert.equal(readableDetail([tooLong('package_unit', 20)]), 'Unità di misura: al massimo 20 caratteri');
+  assert.equal(readableDetail([tooBig('purchase_discount_pct', 100)]), 'Sconto: al massimo 100');
+  assert.equal(readableDetail([tooBig('order', 2147483647)]), 'Ordine: al massimo 2147483647');
+  assert.equal(readableDetail([tooBig('package_qty', '99999999.99')]), 'Quantità per confezione: al massimo 99999999.99');
+  assert.equal(readableDetail([tooBig('min_threshold', '99999999.99')]), 'Soglia minima: al massimo 99999999.99');
+  // gli altri campi limitati avevano già il loro nome
+  for (const [field, label] of [
+    ['vat_number', 'Partita IVA'], ['sdi_pec', 'SDI o PEC'], ['address', 'Indirizzo'], ['sku', 'Codice articolo'],
+    ['vat_rate', 'Aliquota IVA'], ['name_it', 'Nome'], ['name_en', 'Nome (EN)'], ['role_title', 'Ruolo'], ['note', 'Nota'],
+    ['reason', 'Motivo'], ['price', 'Prezzo'], ['product_cost', 'Costo prodotto'], ['supplier_cost', 'Costo fornitore'],
+    ['purchase_price', 'Prezzo d’acquisto'], ['sale_price', 'Prezzo di vendita'], ['reorder_qty', 'Quantità di riordino'],
+    ['hourly_cost', 'Costo orario'], ['qty_ordered', 'Quantità ordinata'], ['qty_received', 'Quantità ricevuta'],
+  ]) {
+    assert.equal(readableDetail([tooBig(field, 1)]), `${label}: al massimo 1`, field);
+  }
+  const packageRow = { type: 'less_than_equal', loc: ['body', 'data', 'items', 0, 'qty'], msg: '…', ctx: { le: 2147483647 } };
+  assert.equal(readableDetail([packageRow]), 'Quantità (n. 1): al massimo 2147483647');
+});

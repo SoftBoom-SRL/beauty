@@ -21,6 +21,7 @@ from unittest import mock
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import jwt
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
@@ -184,6 +185,82 @@ class ConnectStateTests(_FlowCase):
         register.assert_called_once_with(RECEIVER, ["contact.*", "event.*"])
         self.assertEqual(crypto.decrypt(conn.webhook_secret_enc), "whsec-1")
         background.assert_called_once_with(conn.pk)  # la sync non gira nella richiesta
+
+
+class FlowStartTests(_FlowCase):
+    """Bug sospetti del 24/09, voce 16: l'avvio del flusso non lascia righe orfane.
+
+    Lo state si salvava prima di chiedere a Yourang il documento di discovery:
+    con Yourang irraggiungibile l'errore di rete arrivava all'utente come un
+    500, e la riga restava a database. Le righe dei flussi mai conclusi (popup
+    chiuso, errore) si cancellavano solo allo scambio, cioè mai.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.auth = bearer(_member(self.salon, "owner@p.it", owner=True), self.salon)
+
+    def test_yourang_unreachable_is_a_503_and_leaves_no_state(self):
+        def down(url, **kwargs):
+            raise httpx.ConnectError("Yourang giù")
+
+        def bad_gateway(url, **kwargs):
+            return httpx.Response(502, request=httpx.Request("GET", url))
+
+        for failure in (down, bad_gateway):
+            for url, headers in (
+                ("/api/integrations/yourang/oauth/login/start", {}),
+                ("/api/integrations/yourang/oauth/start", self.auth),
+            ):
+                # Il documento di discovery non è in memoria: si chiede a Yourang.
+                with self.subTest(failure=failure.__name__, url=url), \
+                        mock.patch.dict("apps.integrations.client._discovery_cache", clear=True), \
+                        mock.patch("apps.integrations.client.httpx.get", side_effect=failure) as get:
+                    r = self.client.get(url, **headers)
+                    self.assertEqual(r.status_code, 503, r.content)
+                    self.assertEqual(r.json()["detail"], "Yourang non risponde: riprova tra qualche minuto")
+                    get.assert_called_once()
+        self.assertFalse(YourangOAuthState.objects.exists())
+
+    def test_expired_states_go_away_when_a_new_flow_starts(self):
+        from apps.integrations.oauth import STATE_TTL_SECONDS
+
+        now = timezone.now()
+        for state, age in (("scaduto", STATE_TTL_SECONDS + 60), ("in-corso", STATE_TTL_SECONDS - 60)):
+            YourangOAuthState.objects.create(state=state, code_verifier="v")
+            YourangOAuthState.objects.filter(state=state).update(created_at=now - timedelta(seconds=age))
+        new, _ = self.start("login")
+        # Quello in corso resta: chi l'ha avviato può ancora concluderlo.
+        self.assertEqual(set(YourangOAuthState.objects.values_list("state", flat=True)), {"in-corso", new})
+
+
+class LoginStartCapTests(_FlowCase):
+    """Bug sospetti del 24/09, voce 57: l'avvio pubblico del login ha un tetto per IP.
+
+    Ogni chiamata scrive una riga (lo state) e l'endpoint non chiede nessuna
+    sessione. Gli altri endpoint pubblici che scrivono (registrazione,
+    richiesta del codice, modulo contatti) hanno un tetto per IP, questo no:
+    uno script che lo chiamava in ciclo riempiva la tabella.
+    """
+
+    URL = "/api/integrations/yourang/oauth/login/start"
+
+    def test_one_address_cannot_fill_the_table(self):
+        with mock.patch("apps.integrations.client._discovery", return_value=DISCOVERY) as discovery:
+            statuses = [self.client.get(self.URL, REMOTE_ADDR="203.0.113.7").status_code for _ in range(60)]
+            refused = self.client.get(self.URL, REMOTE_ADDR="203.0.113.7")
+            other = self.client.get(self.URL, REMOTE_ADDR="198.51.100.20")
+        discovery.assert_called()
+        self.assertIn(429, statuses)
+        allowed = statuses.index(429)
+        self.assertEqual(statuses, [200] * allowed + [429] * (60 - allowed))
+        self.assertEqual(refused.json()["detail"], "Troppe richieste: riprova tra qualche minuto")
+        # Un altro indirizzo ha il suo tetto, e le richieste rifiutate non scrivono niente.
+        self.assertEqual(other.status_code, 200, other.content)
+        self.assertEqual(YourangOAuthState.objects.count(), allowed + 1)
+        from apps.integrations.api import LOGIN_START_MAX_PER_IP
+
+        self.assertEqual(allowed, LOGIN_START_MAX_PER_IP)
 
 
 class OrgChangeTests(_FlowCase):
@@ -389,6 +466,26 @@ class LoginAdoptionTests(_FlowCase):
         self.assertTrue(session["is_owner"])
         self.assertTrue(conn.access_token_enc)
         background.assert_called_once_with(conn.pk)
+
+    def test_the_new_salon_has_the_system_roles(self):
+        """Bug sospetti del 24/09, voce 14: il salone nato qui è come gli altri.
+
+        Nasceva con sede, impostazioni e titolare ma senza i ruoli Manager,
+        Front desk e Operatrice, che `create_salon_foundation` dà a ogni altro
+        salone: in Impostazioni › Team l'elenco era vuoto, e per invitare una
+        collega il titolare doveva prima crearne uno a mano.
+        """
+        from apps.accounts.services import DEFAULT_ROLES
+
+        session, _ = self._login("org-new", "new@p.it", "Nuovo")
+        salon = Salon.objects.get(pk=session["salon"]["id"])
+        self.assertEqual(
+            sorted(Role.objects.filter(salon=salon).values_list("name", "scopes", "is_system")),
+            sorted((name, scopes, True) for name, scopes in DEFAULT_ROLES),
+        )
+        # Il resto della fondazione, come prima: una sede predefinita e le impostazioni.
+        self.assertEqual(list(salon.locations.values_list("name", "is_default")), [("Nuovo", True)])
+        self.assertTrue(hasattr(salon, "settings"))
 
 
 class ConcurrentFirstLoginTests(_FlowCase):

@@ -15,6 +15,7 @@ from ninja.errors import HttpError
 from apps.core.models import Salon
 from apps.staff.models import Operator
 from common.testing import bearer, staff_context
+from config.api import api
 
 from .. import api as inventory_api
 from ..api import (
@@ -25,7 +26,7 @@ from ..api import (
     update_product,
 )
 from ..models import Product, ProductCategory, StockMovement, Supplier
-from ..schemas import CategoryIn, MovementOut, ProductIn, ProductUnloadIn
+from ..schemas import MovementOut, ProductCategoryIn, ProductIn, ProductUnloadIn
 from ..services import apply_movement
 from .base import _InventorySetup
 
@@ -54,26 +55,26 @@ class InventoryApiTests(TestCase):
     # ---- colore categorie ----------------------------------------------------
 
     def test_create_category_persists_color(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#FF0000"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#FF0000"))
         self.assertEqual(cat.color, "#FF0000")
         self.assertEqual(ProductCategory.objects.get(pk=cat.id).color, "#FF0000")
 
     def test_create_category_defaults_color(self):
-        cat = create_category(self.request, CategoryIn(name="Cura"))
+        cat = create_category(self.request, ProductCategoryIn(name="Cura"))
         self.assertEqual(cat.color, "#E0E7FF")
 
     def test_update_category_without_color_keeps_existing(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#123456"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#123456"))
         # payload senza color (come dal gestore categorie delle impostazioni)
-        update_category(self.request, cat.id, CategoryIn(name="Colori", order=3))
+        update_category(self.request, cat.id, ProductCategoryIn(name="Colori", order=3))
         cat.refresh_from_db()
         self.assertEqual(cat.color, "#123456")  # colore invariato
         self.assertEqual(cat.name, "Colori")
         self.assertEqual(cat.order, 3)
 
     def test_update_category_with_color_updates_it(self):
-        cat = create_category(self.request, CategoryIn(name="Tinte", color="#123456"))
-        update_category(self.request, cat.id, CategoryIn(name="Tinte", color="#00FF00"))
+        cat = create_category(self.request, ProductCategoryIn(name="Tinte", color="#123456"))
+        update_category(self.request, cat.id, ProductCategoryIn(name="Tinte", color="#00FF00"))
         cat.refresh_from_db()
         self.assertEqual(cat.color, "#00FF00")
 
@@ -193,19 +194,36 @@ class CategoryValidationTests(TestCase):
 
     def test_invalid_color_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", color="verde acqua"))
+            create_category(self.request, ProductCategoryIn(name="Tinte", color="verde acqua"))
         self.assertEqual(caught.exception.status_code, 400)
         self.assertFalse(ProductCategory.objects.exists())
 
     def test_negative_order_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", order=-1))
+            create_category(self.request, ProductCategoryIn(name="Tinte", order=-1))
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_order_beyond_the_column_is_a_400(self):
         with self.assertRaises(HttpError) as caught:
-            create_category(self.request, CategoryIn(name="Tinte", order=99999))
+            create_category(self.request, ProductCategoryIn(name="Tinte", order=99999))
         self.assertEqual(caught.exception.status_code, 400)
+
+
+class CategoryOpenApiTests(TestCase):
+    """Bug sospetti del 24/09, voce 24: django-ninja dà ai componenti OpenAPI il
+    nome della classe, e le `ProductCategoryIn`/`ProductCategoryOut` di magazzino, listino ed
+    etichette cliente si sovrascrivevano. Restava quella del magazzino, che
+    quindi era documentata giusta solo perché registrata per ultima."""
+
+    def test_the_categories_are_documented_with_their_own_fields(self):
+        schema = api.get_openapi_schema()
+        components = schema["components"]["schemas"]
+        post = schema["paths"]["/api/inventory/categories"]["post"]
+        body = post["requestBody"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        out = post["responses"][200]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        self.assertEqual(set(components[body]["properties"]), {"name", "order", "color"})
+        self.assertIn({"type": "null"}, components[body]["properties"]["color"]["anyOf"])
+        self.assertEqual(set(components[out]["properties"]), {"id", "name", "order", "color"})
 
 
 class InventoryHttpSmokeTests(TestCase):
@@ -287,6 +305,110 @@ class StableOrderingTests(_InventorySetup):
             res = self.client.get(f"/api/inventory/products?limit=1&offset={offset}", **self.auth)
             seen.extend(item["id"] for item in res.json()["items"])
         self.assertEqual(seen, ids)
+
+
+class ColumnLimitsTests(_InventorySetup):
+    """Bug sospetti del 24/09, voce 21: gli schemi di fornitore e prodotto non
+    limitavano i campi che finiscono in colonne strette. Una partita IVA come
+    «IT01234567890 sede di Milano» (oltre 20 caratteri) su PostgreSQL faceva
+    rifiutare la riga, e uno sconto negativo violava il vincolo ≥ 0 anche su
+    SQLite: 500 invece di un errore che dice quale campo correggere."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_supplier_texts_are_as_long_as_their_columns(self):
+        supplier = Supplier.objects.create(salon=self.salon, name="Alfaparf")
+        limits = {"name": 120, "email": 254, "phone": 40, "address": 255, "vat_number": 20, "sdi_pec": 120}
+        for field, size in limits.items():
+            body = {"name": "Wella", field: "x" * (size + 1)}
+            self.assertEqual(self._send("post", "/api/inventory/suppliers", body).status_code, 422, field)
+            res = self._send("put", f"/api/inventory/suppliers/{supplier.id}", body)
+            self.assertEqual(res.status_code, 422, field)
+        self.assertFalse(Supplier.objects.filter(name="Wella").exists())
+        full = {field: "x" * size for field, size in limits.items()}
+        self.assertEqual(self._send("post", "/api/inventory/suppliers", full).status_code, 200)
+
+    def test_product_fields_stay_within_their_columns(self):
+        base = {"name": "Shampoo", "supplier_id": self.sup_a.id}
+        refused = [
+            ("name", "x" * 161), ("sku", "x" * 61), ("brand", "x" * 121), ("package_unit", "x" * 21),
+            ("purchase_discount_pct", -5), ("purchase_discount_pct", 101),
+            ("vat_rate", -1), ("vat_rate", 101), ("vat_rate", 40000),
+        ]
+        for field, value in refused:
+            res = self._send("post", "/api/inventory/products", {**base, field: value})
+            self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Product.objects.exists())
+        at_the_limit = {
+            **base, "name": "x" * 160, "sku": "x" * 60, "brand": "x" * 120, "package_unit": "x" * 20,
+            "purchase_discount_pct": 100, "vat_rate": 100,
+        }
+        created = self._send("post", "/api/inventory/products", at_the_limit)
+        self.assertEqual(created.status_code, 200, created.content)
+        res = self._send("put", f"/api/inventory/products/{created.json()['id']}", {**base, "vat_rate": 101})
+        self.assertEqual(res.status_code, 422, res.content)
+
+
+class MoreColumnLimitsTests(_InventorySetup):
+    """Stessa classe della voce 21 dei bug sospetti del 24/09, per i campi che la
+    scheda non elencava: nome della categoria (120), causale di carico e
+    scarico (255), importi e quantità del prodotto (numeric(10,2): oltre i
+    cento milioni, anche in negativo, PostgreSQL rifiuta la riga)."""
+
+    def _send(self, method, url, body):
+        return getattr(self.client, method)(
+            url, data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_the_category_name_is_as_long_as_its_column(self):
+        category = ProductCategory.objects.create(salon=self.salon, name="Tinte")
+        self.assertEqual(self._send("post", "/api/inventory/categories", {"name": "x" * 121}).status_code, 422)
+        res = self._send("put", f"/api/inventory/categories/{category.id}", {"name": "x" * 121})
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(self._send("post", "/api/inventory/categories", {"name": "x" * 120}).status_code, 200)
+        category.refresh_from_db()
+        self.assertEqual(category.name, "Tinte")
+
+    def test_the_movement_reason_is_as_long_as_its_column(self):
+        gel = self._product("Gel", stock_qty=Decimal("5"))
+        res = self.client.post(
+            f"/api/inventory/products/{gel.id}/load", data={"qty": "2", "reason": "x" * 256}, **self.auth
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        unload = {"qty": "1", "kind": "adjustment", "reason": "x" * 256}
+        res = self._send("post", f"/api/inventory/products/{gel.id}/unload", unload)
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(StockMovement.objects.exists())
+        res = self._send("post", f"/api/inventory/products/{gel.id}/unload", {**unload, "reason": "x" * 255})
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_product_amounts_and_quantities_stay_within_the_column(self):
+        base = {"name": "Shampoo", "supplier_id": self.sup_a.id}
+        fields = ("package_qty", "purchase_price", "sale_price", "min_threshold", "reorder_qty")
+        for field in fields:
+            for value in ("100000000.00", "-100000000.00"):
+                res = self._send("post", "/api/inventory/products", {**base, field: value})
+                self.assertEqual(res.status_code, 422, (field, value))
+        self.assertFalse(Product.objects.exists())
+        res = self._send("post", "/api/inventory/products", {**base, **{field: "99999999.99" for field in fields}})
+        self.assertEqual(res.status_code, 200, res.content)
+
+
+class MovementDateFilterTests(_InventorySetup):
+    """Bug sospetti del 24/09, voce 15: «2026-02-30» è scritta bene ma non
+    esiste, e `parse_date` solleva ValueError: lo storico dei movimenti
+    rispondeva 500."""
+
+    def test_an_impossible_date_is_a_400(self):
+        product = self._product("Shampoo")
+        for url in ("/api/inventory/movements", f"/api/inventory/products/{product.id}/movements"):
+            for param in ("date_from", "date_to"):
+                res = self.client.get(f"{url}?{param}=2026-02-30", **self.auth)
+                self.assertEqual(res.status_code, 400, (url, param))
+                self.assertEqual(res.json()["detail"], "Data non valida: usa il formato YYYY-MM-DD")
 
 
 class DeactivatedProductsTests(_InventorySetup):

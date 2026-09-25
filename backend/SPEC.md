@@ -34,6 +34,11 @@ in cui vivono le funzioni principali.
 - **i18n**: campi testo bilingui come `name_it` + `name_en` (blank). Lingua cliente: `lang` it/en.
 - **Choices**: `models.TextChoices` con valori inglesi snake_case.
 - **Errori**: `raise HttpError(4xx, "messaggio in italiano")` (user-facing).
+- **Limiti dei campi**: gli schemi di ingresso portano i limiti delle colonne
+  (`max_length`, `ge`/`le`, importi fino a `common.money.MAX_MONEY`): un valore
+  fuori limite è un 422 con il nome del campo, non un 500 di PostgreSQL. Nei
+  filtri una data scritta bene ma inesistente (`2026-02-30`) è un 400 «Data non
+  valida: usa il formato YYYY-MM-DD».
 - **Liste lunghe**: `@paginate(LimitOffsetPagination)` (vedi core/api.py).
 - **Registro attività**: ogni mutazione rilevante chiama
   `core.services.log_activity(salon, type, summary, actor=ctx.user, payload={...})`.
@@ -107,6 +112,10 @@ in cui vivono le funzioni principali.
 - Front desk: [agenda, clients, sales]
 - Operatrice: [agenda, clients]
 
+Li riceve ogni salone nuovo, anche quello nato da «Accedi con Yourang»; per i
+saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
+(solo i mancanti, per nome; non tocca i ruoli esistenti).
+
 **Endpoint staff** (prefisso /api/auth)
 - POST `/staff/login` {email, password} → {access, refresh, user:{id,email,name}, salon:{id,name,slug}, scopes, is_owner}. Usa `common.auth.create_staff_tokens`. Se l'utente ha più membership prende la prima (v1 mono-salone).
 - POST `/staff/refresh` {refresh} → nuovi token (verifica typ staff_refresh).
@@ -158,6 +167,12 @@ Sale del cliente, import lazy di sales), visits (Sale count), noshow_count, late
 
 **Endpoint staff** (/api/clients)
 - GET `/` (paginate) filtri: q (nome/telefono/email), category_id, reliability_min/max, is_active.
+- GET `/counts` (staff_auth) → `{active, categories: [{id, count}]}`: le schede
+  attive e quante per etichetta, in una risposta (la sezione Clienti), con lo
+  stesso filtro per salone della lista.
+- Modifica ed eliminazione di un'etichetta avvengono sotto il lock del salone,
+  come il salvataggio di regole caparra e automazioni che la citano:
+  un'etichetta (o una regola, o un'automazione) sparita nel frattempo è un 404.
 - GET `/categories` + CRUD (scope clients). GET `/{id}` → dettaglio + computed
   {visits, total_spent, last_visit} (aggregati lazy da sales). POST/PUT (scope clients, log).
   DELETE (scope clients) → soft: is_active=False + log `client.deleted`.
@@ -280,10 +295,14 @@ risposte in `presenters.py`.
 - POST `/appointments` {client_id, items, start, flexible?} (scope agenda) → create_appointment via dashboard.
 - POST `/appointments/{id}/move` {start, operator_id?} (scope agenda) → rivalida slot,
   sposta (anche items stesso delta), log + emit `appointment.moved` + free_slot_event sul vecchio orario.
+  La scadenza di una caparra richiesta si ricalcola sull'orario nuovo (anche con
+  «Indietro» e con lo stacco del primo servizio).
 - POST `/appointments/{id}/check-in` (scope agenda) → status checked_in, log, emit `appointment.checked_in`.
 - POST `/appointments/{id}/start` (scope agenda) → status in_progress.
 - POST `/appointments/{id}/no-show` {reason} (scope agenda) → status no_show,
   deposit paid→forfeited, cancel_reason, log, emit `appointment.no_show`, free_slot_event.
+  Con la caparra ancora «richiesta» il link di pagamento si ritira (messaggi non
+  ancora partiti annullati, sessione Stripe chiusa); «Indietro» ne manda uno nuovo.
   (L'addebito Stripe dell'intero importo è responsabilità di sales: qui solo evento+stato.)
 - POST `/appointments/{id}/cancel` {reason, by_client?} (scope agenda) → status cancelled.
   Di serie annulla il SALONE: nessuna penale, deposit paid→refund_due. Con `by_client: true`
@@ -296,6 +315,10 @@ risposte in `presenters.py`.
   refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
   Log, emit `appointment.cancelled` {…, reason, late, by_client}, free_slot_event.
 - PUT `/appointments/{id}` {items?, note?} (scope agenda) → modifica trattamenti (snapshot nuovi), log.
+  Se modifica o stacco liberano tempo, `slot.freed` lo annuncia come lo
+  spostamento (nei match anche chi aspettava il servizio tolto o staccato). Se la
+  caparra da pagare scende a 0 € diventa «nessuna», senza scadenza e con il link
+  chiuso; il rilascio automatico non tocca le caparre richieste a 0 €.
 - GET `/appointments/{id}/margin` → stima margine: revenue = Σ item.price;
   supplier_cost/product_cost da Service (snapshot corrente); labor = Σ(duration/60 × operator.hourly_cost);
   → {revenue, supplier_cost, product_cost, labor_cost, margin, margin_pct}.
@@ -305,7 +328,8 @@ risposte in `presenters.py`.
   POST `/undo` {entry_id?} → rimette le cose com'erano (`agenda.undo.perform`):
   ripristina l'istantanea, cancella ciò che il gesto aveva creato e ferma i
   messaggi non ancora partiti; 409 se nel frattempo qualcuno ha toccato le
-  stesse righe o il conto è passato in cassa.
+  stesse righe o il conto è passato in cassa. Anche per una pausa: 409 se il
+  tempo che riprende è stato occupato da una visita o da un'altra pausa.
 - GET `/waitlist` (scope agenda) → entries attive con cliente/servizio.
   POST `/waitlist/{id}/contacted` → status contacted, log.
 - GET `/availability?date=&items=<JSON>` (staff_auth) → get_free_slots.
@@ -367,7 +391,7 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   response: sale + breakdown per operatrice.
 - POST `/pos` (scope sales) {client_id?, blocks, payments} → finalize_sale(kind=pos).
   Vendita gift card dal POS: line_type gift_card con {value, recipient_name?}.
-- GET `/` (paginate, scope sales) filtri: kind, date_from/to, q (nome cliente), operator_id;
+- GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id;
   response include KPI header {revenue, count, items_count} sul filtro corrente.
 - GET `/{id}` → dettaglio con righe e pagamenti.
 - GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total} di oggi
@@ -375,12 +399,21 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - POST `/appointments/{appointment_id}/charge-no-show` (scope sales) → charge_full_amount, log.
   Solo su appuntamenti no_show; un solo addebito per appuntamento (no_show_payment_intent_id +
   idempotency key Stripe), il secondo tentativo → 409.
-- POST `/client/setup-intent` (client_auth) → create_setup_intent (salvataggio carta dall'app).
+- POST `/client/setup-intent` (client_auth) → create_setup_intent (salvataggio carta dall'app):
+  nei metadata `salon_id` e l'account firmato (`acct`), come per i pagamenti, e il
+  webhook riconosce l'account allo stesso modo.
 - POST `/stripe/webhook` (no auth) → firma OBBLIGATORIA (503 senza STRIPE_WEBHOOK_SECRET, 400 se non valida);
   payment_intent.succeeded con metadata.appointment_id e metadata.kind=deposit → deposit_status
   required→paid (una sola volta, importo ≥ caparra) + deposit_payment_intent_id + log;
   kind=no_show non tocca la caparra (log sale.no_show_paid);
+  `deposit.paid` ha la stessa forma online e con l'incasso al banco: i campi
+  dell'appuntamento, come gli altri eventi dell'agenda, più `amount`;
   setup_intent.succeeded → salva payment_method sul cliente.
+  Caparra pagata per un appuntamento che non c'è più → rimborso e una sola riga
+  `deposit.orphan_payment` (prima «in corso», poi l'esito; la chiamata a Stripe è
+  fuori dalla transazione). Mentre un'altra consegna sta rimborsando, 503 «Rimborso
+  della caparra in corso: riprova tra poco», così Stripe ritenta; una riga ferma
+  «in corso» da più di 10 minuti si riprende con la stessa chiave di idempotenza.
 
 **Tests**: finalize_sale ok e mismatch pagamenti → errore; sconto/omaggio amounts;
 deposito detratto; today-summary.
@@ -426,10 +459,12 @@ deposito detratto; today-summary.
   {qty, kind: internal_use/adjustment/transfer, reason?} → apply_movement.
 - POST `/load-csv` {rows:[{name|sku, qty, supplier_id?}], supplier_id?} → carico multiplo
   (match per sku poi nome; non sovrascrive: somma).
-- GET `/products/{id}/movements` + GET `/movements` (storico globale, paginate, filtri kind/date).
+- GET `/products/{id}/movements` + GET `/movements` (storico globale, paginate, filtri kind/date;
+  data inesistente → 400).
 - CRUD `/suppliers` (la propagazione ai prodotti è automatica via FK).
 - GET `/orders`; POST `/orders/generate` → generate_draft_orders;
-  PUT `/orders/{id}` {lines:[{id, qty_ordered}]}; POST `/orders/{id}/send` {method} →
+  PUT `/orders/{id}` {lines:[{id, qty_ordered}]} (la stessa riga due volte → 400 «La stessa
+  riga d'ordine compare più volte»); POST `/orders/{id}/send` {method} →
   status sent + emit `supplier.order` {supplier, righe} + log;
   POST `/orders/{id}/receive` {lines:[{id, qty_received}]} → apply_movement load per riga,
   status received/partial (se discrepanze), response con discrepanze evidenziate.
@@ -483,9 +518,14 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loy
 
 **Endpoint staff** (/api/marketing) — scritture scope marketing, log
 - CRUD `/coupons` (filtri origin/status/q) + POST `/coupons/{id}/redeem` {sale_id?} → redeemed.
+  Un coupon intestato si lega solo a una vendita della stessa cliente: su quella
+  di un'altra, o senza cliente, 422 «Coupon riservato a un altro cliente:
+  intestalo alla vendita» (come in cassa).
 - GET `/gift-cards` + KPI {sold_total, redeemed_total, outstanding};
   POST `/gift-cards` (creazione/vendita manuale: se paid → log incasso);
-  POST `/gift-cards/{id}/mark-paid` {method}.
+  POST `/gift-cards/{id}/mark-paid` {method}. `paid_method`/`method` è uno dei metodi
+  della cassa (`cash`, `card`, `other`, `gift_card`; "" = non indicato), al massimo
+  20 caratteri; altrimenti 422 «Metodo di pagamento non valido».
 - CRUD `/loyalty-programs`; GET `/loyalty-programs/{id}/accounts` (paginate).
 - CRUD `/communications`; POST `/communications/{id}/send` → risolve audience in
   client ids (labels → clienti con quelle categorie; consents.marketing True) →
@@ -528,7 +568,9 @@ origin=loyalty, validate_coupon scaduto, send communication → outbox event.
 
 **Endpoint** (/api/automations) — scritture scope marketing
 - GET `/` ; POST/PUT/DELETE (su create/update: log + emit `automation.updated`
-  con la definizione completa — Yourang si sincronizza da qui).
+  con la definizione completa — Yourang si sincronizza da qui). Create e update
+  salvano sotto il lock del salone; un PUT su un'automazione eliminata nel
+  frattempo → 404 «Automazione non trovata».
 - POST `/{id}/toggle` → active on/off + emit `automation.updated`.
 - GET `/events-catalog` (static): [{value, label_it, label_en}] per gli event sopra +
   operatori cmp disponibili + campi filtro standard (reliability, categories, total_spent,
@@ -577,7 +619,10 @@ del salone cifrati sulla connessione, segreto del webhook per salone.
 - GET `/yourang/oauth/start` (staff, titolare) e GET `/yourang/oauth/login/start`
   (pubblico) → `{authorize_url, nonce}`. Lo `state` sta a database con il verifier
   PKCE (e, per il collegamento, salone e utente); il `nonce` (HMAC dello state)
-  resta nel sessionStorage della finestra che avvia il flusso.
+  resta nel sessionStorage della finestra che avvia il flusso. Se Yourang non
+  risponde (discovery) → 503 «Yourang non risponde: riprova tra qualche minuto»,
+  senza salvare lo state; a ogni avvio si cancellano gli state scaduti.
+  `/login/start` ha un tetto per IP: 30 avvii ogni 15 minuti, poi 429.
 - POST `/yourang/oauth/exchange` `{code, state, nonce}`: il `nonce` si controlla
   prima di consumare lo state; senza, o non valido → 400. State sconosciuto,
   già usato o più vecchio di 10 minuti → 400. Il modo lo decide lo state (con

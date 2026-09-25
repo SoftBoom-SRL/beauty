@@ -48,7 +48,13 @@ export default function ComunicazioniSection() {
       if (!req.isLatest(seq)) return;
       toastApiError(err, fireToast, t);
     } finally {
-      append ? setLoadingMore(false) : setLoading(false);
+      // Solo l'ultima richiesta spegne il caricamento: quella superata
+      // scartava la risposta ma toglieva lo scheletro, e cambiando filtro a
+      // richiesta in volo restava a video, finché non arrivava la nuova, la
+      // lista del filtro di prima sotto quello nuovo (voce 46). L'ultima li
+      // spegne tutti e due: un «Carica altre» superato da un cambio di filtro
+      // resterebbe altrimenti su «Caricamento…».
+      if (req.isLatest(seq)) { setLoading(false); setLoadingMore(false); }
     }
   }, [statusF, fireToast, t, req]);
 

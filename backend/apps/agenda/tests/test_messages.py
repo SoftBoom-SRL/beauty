@@ -18,7 +18,7 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import DepositRule, OutboxEvent, SalonSettings
 
 from ..models import Appointment, WaitlistEntry
-from ..services.appointments import create_appointment, edit_appointment, move_appointment
+from ..services.appointments import create_appointment, edit_appointment, move_appointment, split_appointment
 from ..services.messages import appointment_event_key
 from ..services.transitions import cancel_appointment, mark_no_show
 from .base import WIDE, AgendaTestBase, MessagesTestBase, _aware
@@ -39,7 +39,7 @@ class AutomationDelayTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         return user
 
@@ -261,6 +261,89 @@ class FreedSlotSaysWhatReallyFreedUpTests(MessagesTestBase):
         self.assertNotIn(long_wait.id, event.payload["matching_waitlist"])
 
 
+class EditAndSplitFreeTheirTimeTests(MessagesTestBase):
+    """Bug sospetto 3 (24/09): modifica e stacco annunciano il tempo liberato, come lo spostamento."""
+
+    def _visit(self):
+        """10:00–11:30 con Giulia (60' + 30'), già confermata alla cliente."""
+        appointment = self._book(10, items=[
+            {"service_id": self.svc60.id, "operator_id": self.op1.id},
+            {"service_id": self.svc30.id, "operator_id": self.op1.id},
+        ])
+        self._all_sent()
+        return appointment
+
+    def test_removing_a_service_frees_its_time(self):
+        appointment = self._visit()
+        first = appointment.items.order_by("order").first()
+        edit_appointment(
+            appointment,
+            items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            actor=self.user,
+        )
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 30)])
+
+    def test_shortening_a_service_frees_the_rest(self):
+        appointment = self._book(10)
+        self._all_sent()
+        item = appointment.items.get()
+        edit_appointment(
+            appointment,
+            items=[{"id": item.id, "service_id": self.svc60.id, "operator_id": self.op1.id, "duration_min": 45}],
+            actor=self.user,
+        )
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 10, 45), 15)])
+
+    def test_detaching_a_service_to_another_day_frees_its_time(self):
+        appointment = self._visit()
+        last = appointment.items.order_by("order").last()
+        split_appointment(appointment, last.id, _aware(self.day + dt.timedelta(days=1), 15), actor=self.user)
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 30)])
+
+    def test_a_service_detached_a_little_later_frees_only_what_it_left(self):
+        appointment = self._visit()
+        last = appointment.items.order_by("order").last()
+        # 11:00–11:30 → 11:15–11:45: dalle 11:15 Giulia è ancora occupata con lei
+        split_appointment(appointment, last.id, _aware(self.day, 11, 15), actor=self.user)
+        self.assertEqual(self._freed(), [(self.op1.id, _aware(self.day, 11), 15)])
+
+    def test_who_waits_for_the_removed_service_is_matched(self):
+        """Seguito della voce 3: i match contano anche i servizi che c'erano prima."""
+        waiting = WaitlistEntry.objects.create(salon=self.salon, client=self.client_obj, service=self.svc30)
+        appointment = self._visit()
+        first = appointment.items.order_by("order").first()
+        edit_appointment(
+            appointment,
+            items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            actor=self.user,
+        )
+        (event,) = self._pending("slot:")
+        self.assertEqual(event.payload["matching_waitlist"], [waiting.id])
+
+    def test_who_waits_for_the_detached_service_is_matched(self):
+        waiting = WaitlistEntry.objects.create(salon=self.salon, client=self.client_obj, service=self.svc30)
+        appointment = self._visit()
+        last = appointment.items.order_by("order").last()
+        split_appointment(appointment, last.id, _aware(self.day + dt.timedelta(days=1), 15), actor=self.user)
+        (event,) = self._pending("slot:")
+        self.assertEqual(event.payload["matching_waitlist"], [waiting.id])
+
+    def test_going_back_takes_the_announcement_back(self):
+        appointment = self._visit()
+        first = appointment.items.order_by("order").first()
+        edit_appointment(
+            appointment,
+            items=[{"id": first.id, "service_id": self.svc60.id, "operator_id": self.op1.id}],
+            actor=self.user,
+        )
+        self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(self._freed(), [])
+        last = appointment.items.order_by("order").last()
+        split_appointment(appointment, last.id, _aware(self.day + dt.timedelta(days=1), 15), actor=self.user)
+        self.assertEqual(self._undo().status_code, 200)
+        self.assertEqual(self._freed(), [])
+
+
 class ClientWhoKnowsIsAlwaysToldTests(MessagesTestBase):
     """03-05: chi ha prenotato dall'app o ha il link caparra va avvisata anche entro la trattenuta."""
 
@@ -356,6 +439,55 @@ class CancelClosesTheDepositLinkTests(MessagesTestBase):
         self.assertEqual(calls, ["cs_1"])
         link.refresh_from_db()
         self.assertEqual(link.status, OutboxEvent.Status.SUPERSEDED)
+
+
+class NoShowClosesTheDepositLinkTests(MessagesTestBase):
+    """Bug sospetto 1 (24/09): col no-show il link della caparra non incassa più.
+
+    Annullamento e rilascio lo facevano già; il no-show lasciava il link
+    pagabile, la cliente pagava a visita saltata e la caparra le tornava in
+    automatico, con le commissioni Stripe perse dal salone.
+    """
+
+    def _started(self, deposit_status):
+        appointment = create_appointment(
+            self.salon, self.client_obj,
+            [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+            timezone.now() - dt.timedelta(minutes=20), via="dashboard", force=True,
+        )
+        Appointment.objects.filter(pk=appointment.pk).update(
+            deposit_status=deposit_status, deposit_amount=Decimal("20.00"),
+            deposit_checkout_session_id="cs_1", deposit_payment_link="https://pay.test/cs_1",
+        )
+        appointment.refresh_from_db()
+        return appointment
+
+    def _no_show(self, appointment):
+        calls = []
+        with patch(
+            "apps.sales.stripe_service.expire_deposit_checkout",
+            side_effect=lambda a: calls.append(a.deposit_checkout_session_id),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                mark_no_show(appointment, reason="non venuta", actor=self.user)
+                self.assertEqual(calls, [], "Stripe va chiamato solo a transazione chiusa")
+        return calls
+
+    def test_an_unpaid_deposit_link_is_withdrawn_and_closed(self):
+        appointment = self._started(Appointment.DepositStatus.REQUIRED)
+        link = OutboxEvent.objects.create(
+            salon=self.salon, event_type="deposit.payment_link",
+            payload={"appointment_id": appointment.id},
+        )
+        self.assertEqual(self._no_show(appointment), ["cs_1"])
+        link.refresh_from_db()
+        self.assertEqual(link.status, OutboxEvent.Status.SUPERSEDED)
+
+    def test_a_paid_deposit_leaves_the_link_alone(self):
+        appointment = self._started(Appointment.DepositStatus.PAID)
+        self.assertEqual(self._no_show(appointment), [])
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.deposit_status, Appointment.DepositStatus.FORFEITED)
 
 
 class PayloadCarriesThePreferencesTests(MessagesTestBase):

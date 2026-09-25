@@ -4,6 +4,9 @@ export { api, qs, mediaUrl, API_URL, setTokenProvider, setOnUnauthorized } from 
 // L'errore dell'API e il testo o il toast che se ne mostra (logica pura).
 //   catch (err) { toastApiError(err, fireToast, t); }  ·  setErr(apiErrorText(err, t))
 export { ApiError, apiErrorText, toastApiError } from './apiErrors.js';
+// Copia negli appunti che dice se è riuscita (logica pura):
+//   fireToast(await copyText(link) ? { msg: 'Copiato', … } : { msg: 'Copia non riuscita', … })
+export { copyText } from './clipboard.js';
 
 // Auth stores are namespaced (both expose login/logout/getSession/subscribe):
 //   import { staffAuth, clientAuth } from '@youty/shared';

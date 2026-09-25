@@ -82,7 +82,7 @@ class GiftCardServiceApiTests(TestCase):
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
         user = User.objects.create_user(email="sole@theparlour.it", password="theparlour")
-        role = Role.objects.create(salon=self.salon, name="Manager", scopes=["marketing"])
+        role = Role.objects.create(salon=self.salon, name="Manager di prova", scopes=["marketing"])
         Membership.objects.create(user=user, salon=self.salon, role=role, is_owner=True)
         tokens = create_staff_tokens(user, self.salon)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
@@ -328,6 +328,38 @@ class GiftCardCashInTests(OwnerTestBase):
         second = self._post(f"/api/marketing/gift-cards/{card_id}/mark-paid", {"method": "cash"})
         self.assertEqual(second.status_code, 422, second.content)
         self.assertEqual(Sale.objects.filter(salon=self.salon).count(), 1)
+
+    def test_the_payment_method_is_one_of_the_cash_desk(self):
+        """Bug sospetti del 24/09, voce 12: il metodo d'incasso della carta è uno di quelli della cassa.
+
+        Passava qualunque stringa: più lunga della colonna (20 caratteri),
+        PostgreSQL rifiutava la riga con un 500; corta ma inventata
+        («bonifico»), restava sulla carta mentre in cassa il pagamento
+        diventava «other».
+        """
+        from apps.sales.models import Payment, Sale
+
+        for method in ("x" * 21, "bonifico"):
+            with self.subTest(method=method):
+                res = self._post(
+                    "/api/marketing/gift-cards", {"value": "40", "paid": True, "paid_method": method}
+                )
+                self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(GiftCard.objects.exists())
+
+        card_id = self._post("/api/marketing/gift-cards", {"value": "40", "paid": False}).json()["id"]
+        for method in ("x" * 21, "bonifico"):
+            with self.subTest(method=method):
+                res = self._post(f"/api/marketing/gift-cards/{card_id}/mark-paid", {"method": method})
+                self.assertEqual(res.status_code, 422, res.content)
+        card = GiftCard.objects.get(pk=card_id)
+        self.assertEqual((card.payment_status, card.paid_method), (GiftCard.PaymentStatus.UNPAID, ""))
+        self.assertFalse(Sale.objects.exists())
+
+        # Quelli che manda la dashboard (carta, contanti, altro) passano.
+        res = self._post(f"/api/marketing/gift-cards/{card_id}/mark-paid", {"method": "other"})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(Payment.objects.get(sale__salon=self.salon).method, Payment.Method.OTHER)
 
     def test_a_loyalty_reward_card_is_not_counted_as_money_sold(self):
         """I premi fedeltà nascono «pagati» col metodo loyalty: nessuno li ha

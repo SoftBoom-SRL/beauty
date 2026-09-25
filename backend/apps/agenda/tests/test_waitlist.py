@@ -25,7 +25,7 @@ class WaitlistTests(AgendaTestBase):
 
         self.client_auth = client_bearer(self.client_obj)
         user = User.objects.create_user(email="desk@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         self.staff_auth = bearer(user, self.salon)
 

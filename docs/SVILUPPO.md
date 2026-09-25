@@ -240,7 +240,7 @@ comuni a tutte le app in `common/testing` (`aware`, `post_json`, `put_json`,
   stato chiamato.
 - I nomi dei ruoli di prova non devono essere quelli dei ruoli di sistema
   («Manager», «Front desk», «Operatrice»): `ensure_default_roles` li
-  adotterebbe.
+  adotterebbe. Lo controlla `common/tests/test_role_names.py`.
 - Un test non deve dipendere dall'ora in cui gira. Date e ore di prova nel
   fuso del salone (`aware(giorno, ora)`, `timezone.localdate()`,
   `timezone.localtime()`), mai `timezone.now().replace(hour=…)`, che è UTC: fra

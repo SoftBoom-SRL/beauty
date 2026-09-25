@@ -23,7 +23,7 @@ class AgendaDayLocationTests(AgendaTestBase):
         from apps.core.models import Location
 
         user = User.objects.create_user(email="front@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         auth = {"HTTP_AUTHORIZATION": f"Bearer {create_staff_tokens(user, self.salon)['access']}"}
         centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
@@ -56,7 +56,7 @@ class RangeAndGiftTests(AgendaTestBase):
         from apps.accounts.models import Membership, Role, User
 
         user = User.objects.create_user(email="range@theparlour.it", password="x" * 10)
-        role = Role.objects.create(salon=self.salon, name="Front desk", scopes=["agenda"])
+        role = Role.objects.create(salon=self.salon, name="Front desk di prova", scopes=["agenda"])
         Membership.objects.create(user=user, salon=self.salon, role=role)
         return bearer(user, self.salon)
 

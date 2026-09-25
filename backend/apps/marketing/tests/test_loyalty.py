@@ -331,6 +331,17 @@ class LoyaltyProgramValidationTests(OwnerTestBase):
         )
         self.assertFalse(LoyaltyProgram.objects.filter(salon=self.salon).exists())
 
+    def test_a_colour_with_a_trailing_newline_is_refused(self):
+        """Bug sospetti del 24/09, voce 13: il colore si controllava con `$`.
+
+        Con `re.match`, `$` accetta anche un a capo finale: «#AABBCC\\n»
+        passava e arrivava a una colonna di sette caratteri, che PostgreSQL
+        rifiuta (500); su SQLite il colore con l'a capo restava salvato.
+        """
+        self.assertEqual(self._post(color="#AABBCC\n").status_code, 422)
+        self.assertFalse(LoyaltyProgram.objects.filter(salon=self.salon).exists())
+        self.assertEqual(self._post(color="#AABBCC").status_code, 200)
+
 
 class _Base(StaffRequestsMixin, TestCase):
     def setUp(self):

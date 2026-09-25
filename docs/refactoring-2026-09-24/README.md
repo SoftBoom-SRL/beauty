@@ -10,7 +10,7 @@ descrive la struttura di oggi. Qui c'è cosa è cambiato rispetto a prima, come
 | File | Cosa |
 |---|---|
 | questo | il rapporto |
-| [`BUG-SOSPETTI.md`](BUG-SOSPETTI.md) | i possibili bug trovati lungo la strada e **non** corretti |
+| [`BUG-SOSPETTI.md`](BUG-SOSPETTI.md) | i possibili bug trovati lungo la strada: non corretti durante il refactoring, corretti subito dopo (commit per commit in fondo al file) |
 | [`MAPPA-TEST.md`](MAPPA-TEST.md) | dove è finita ogni classe di test dei vecchi `tests.py` e `tests_caccia22_*.py` |
 
 ## 1. In breve
@@ -54,8 +54,9 @@ area con un merge ciascuno («Unisci: …»). **Non è su `main`**: un push su
   controlla uno), i tipi e il contenuto degli eventi per Yourang e le chiavi di
   idempotenza.
 - **Comportamento**: nessun bug è stato corretto di nascosto. Quelli trovati
-  sono in [`BUG-SOSPETTI.md`](BUG-SOSPETTI.md), da correggere uno per commit con
-  il test che lo riproduce.
+  sono in [`BUG-SOSPETTI.md`](BUG-SOSPETTI.md): corretti subito dopo il
+  refactoring, uno per commit con il test che lo riproduce (i commit sono in
+  fondo a quel file).
 - Le sole correzioni riguardano **test** che fallivano a certe ore, non il codice:
   - cinque test degli insight, rossi il primo del mese fra mezzanotte e le 2 e
     nelle prime ore dell'anno;

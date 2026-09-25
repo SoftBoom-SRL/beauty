@@ -95,11 +95,17 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
     category_cache: dict[str, ClientCategory] = {}
 
     def category_for(name: str) -> ClientCategory:
-        key = name.strip().lower()
+        # Si cerca, e si tiene in cache, il nome che si crea: troncato ai 60
+        # caratteri della colonna. Cercato intero, un nome più lungo non
+        # ritrovava l'etichetta già creata (dall'import prima, o da un nome con
+        # gli stessi 60 caratteri iniziali), e la nuova creazione urtava il
+        # vincolo (salone, nome): ogni riga con quell'etichetta rifiutata.
+        label = name.strip()[:60]
+        key = label.lower()
         if key not in category_cache:
-            cat = ClientCategory.objects.filter(salon=salon, name__iexact=name.strip()).first()
+            cat = ClientCategory.objects.filter(salon=salon, name__iexact=label).first()
             if cat is None:
-                cat = ClientCategory.objects.create(salon=salon, name=name.strip()[:60])
+                cat = ClientCategory.objects.create(salon=salon, name=label)
             category_cache[key] = cat
         return category_cache[key]
 
@@ -107,9 +113,13 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
         # savepoint per riga: una riga rifiutata dal database non porta
         # via con sé quelle già importate. I contatori e le cache di
         # deduplicazione vengono riportati indietro insieme ai dati, altrimenti
-        # il riepilogo conterebbe una riga che non è stata scritta.
+        # il riepilogo conterebbe una riga che non è stata scritta. Anche la
+        # cache delle etichette: un'etichetta nata nella riga rifiutata sparisce
+        # col savepoint, e la cache la dava alle righe dopo, che il database
+        # rifiutava a loro volta (voce 23 dei bug sospetti del 24/09).
         counters = (created, updated, skipped)
         phones_before, emails_before = set(by_phone), set(by_email)
+        categories_before = set(category_cache)
         warnings_before = len(warnings)
         try:
             with transaction.atomic():
@@ -273,6 +283,8 @@ def import_rows(salon, rows: list[dict], *, update_existing: bool = True, actor=
                 by_phone.pop(key, None)
             for key in set(by_email) - emails_before:
                 by_email.pop(key, None)
+            for key in set(category_cache) - categories_before:
+                category_cache.pop(key, None)
             del warnings[warnings_before:]
             errors.append({"row": index, "reason": f"Riga rifiutata dal database: {exc}"})
             skipped = counters[2] + 1

@@ -29,9 +29,9 @@ const src = (f) => new URL(`../src/${f}`, import.meta.url).href;
 const INDEX = exportsOf(new URL('../src/index.js', import.meta.url));
 const ALL = new Set(Object.values(INDEX).flat());
 // I moduli puri, che i sostituti riesportano veri (gli altri tirano dentro React o fetch).
-const PURE = ['format.js', 'labels.js', 'phone.js', 'apiErrors.js'];
+const PURE = ['format.js', 'labels.js', 'phone.js', 'apiErrors.js', 'clipboard.js'];
 // Lo SHARED della griglia non ha il telefono: i componenti che carica non lo usano.
-const HARNESS = ['format.js', 'labels.js', 'apiErrors.js'];
+const HARNESS = ['format.js', 'labels.js', 'apiErrors.js', 'clipboard.js'];
 const missingIn = (mods, ns) => mods.flatMap((m) => INDEX[src(m)].filter((n) => !(n in ns)).map((n) => `${m}: ${n}`));
 
 test('la lettura dell\'indice trova i moduli puri e i componenti', () => {

@@ -195,6 +195,12 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
     sale = None
     if data.sale_id:
         sale = salon_get(Sale, ctx, data.sale_id)
+        # Un buono intestato si lega solo a una vendita della sua cliente, con
+        # la regola e il messaggio della cassa (`validate_coupon`): prima
+        # passava la vendita di chiunque, e il buono di Maria risultava usato
+        # nella vendita di Anna, o in una vendita senza cliente.
+        if coupon.client_id and sale.client_id != coupon.client_id:
+            raise HttpError(422, "Coupon riservato a un altro cliente: intestalo alla vendita")
     # Il consumo è una sola UPDATE filtrata su status='active': è il database a
     # decidere chi arriva primo. Con il leggi-poi-scrivi di prima, due banchi che
     # battevano lo stesso codice nello stesso istante lo trovavano attivo
