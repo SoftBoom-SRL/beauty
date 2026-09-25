@@ -19,6 +19,23 @@ from ..models import ActivityLog, Salon, SalonSettings
 from ..services import emit_event, log_activity
 from .base import _owner
 
+# Il generatore dello stream chiude alla fine le connessioni al database
+# (close_old_connections): in produzione libera la connessione del thread. Nei
+# test gira dentro la transazione di TestCase: SQLite in memoria ignora la
+# chiusura, PostgreSQL chiude davvero, e ogni test dopo il primo stream cadeva
+# con «the connection is closed» (14 errori con DATABASE_URL su PostgreSQL 16).
+# Qui la chiusura è finta per tutto il modulo; che avvenga lo prova
+# test_the_stream_releases_the_db_connection_at_the_end.
+_close_patch = patch("apps.core.views.close_old_connections")
+
+
+def setUpModule():
+    _close_patch.start()
+
+
+def tearDownModule():
+    _close_patch.stop()
+
 
 class CoreTests(TestCase):
     def setUp(self):
@@ -271,6 +288,14 @@ class ActivityStreamTests(TestCase):
         self.assertIn("event: ready", frames[0])
         self.assertIn("event: bye", frames[-1])
 
+    def test_the_stream_releases_the_db_connection_at_the_end(self):
+        from apps.core.views import close_old_connections, event_generator
+
+        close_old_connections.reset_mock()   # il finto di _close_patch
+        frames = list(event_generator(self.salon.id, 0, scopes={"agenda"}, max_seconds=0, poll=0))
+        self.assertIn("event: bye", frames[-1])
+        close_old_connections.assert_called_once_with()
+
     def test_generator_pushes_new_events_after_cursor(self):
         from apps.core.views import event_generator
 
@@ -343,6 +368,21 @@ class StreamConnectionCapTests(TestCase):
         self.assertEqual(res.status_code, 200, res.content)
         return res.json()["ticket"]
 
+    @staticmethod
+    def _close(res):
+        """Chiude lo stream come il client di test (e il server): close() manda
+        request_finished, e il close_old_connections di Django attaccato al
+        segnale chiudeva davvero la connessione su PostgreSQL, dentro la
+        transazione del test."""
+        from django.core.signals import request_finished
+        from django.db import close_old_connections
+
+        request_finished.disconnect(close_old_connections)
+        try:
+            res.close()
+        finally:
+            request_finished.connect(close_old_connections)
+
     @override_settings(SSE_MAX_CONNECTIONS=2)
     def test_beyond_the_cap_the_stream_is_refused_and_the_slot_comes_back(self):
         from apps.core import views
@@ -358,11 +398,11 @@ class StreamConnectionCapTests(TestCase):
             self.assertEqual(refused["Retry-After"], "30")
 
             for res in open_responses:
-                res.close()
+                self._close(res)
             self.assertEqual(views.open_stream_count(), 0)
             again = self.client.get(f"/api/core/activity/stream?ticket={self._ticket()}")
             self.assertEqual(again.status_code, 200)
-            again.close()
+            self._close(again)
 
     def test_a_zeroed_setting_falls_back_to_the_default_in_force(self):
         """Il ripiego era rimasto a 40, il vecchio tetto che con 24 thread non
@@ -373,11 +413,18 @@ class StreamConnectionCapTests(TestCase):
 
         from apps.core import views
 
-        with override_settings(SSE_MAX_CONNECTIONS=0):
+        # il reload rilegge close_old_connections da django.db, quella vera: il
+        # finto del modulo (_close_patch) si rimette dopo, se no i test che
+        # seguono chiudono davvero la connessione
+        _close_patch.stop()
+        try:
+            with override_settings(SSE_MAX_CONNECTIONS=0):
+                importlib.reload(views)
+                self.assertEqual(views.STREAM_MAX_CONCURRENT, 12)
             importlib.reload(views)
-            self.assertEqual(views.STREAM_MAX_CONCURRENT, 12)
-        importlib.reload(views)
-        self.assertEqual(views.STREAM_MAX_CONCURRENT, django_settings.SSE_MAX_CONNECTIONS)
+            self.assertEqual(views.STREAM_MAX_CONCURRENT, django_settings.SSE_MAX_CONNECTIONS)
+        finally:
+            _close_patch.start()
 
 
 # ---------------------------------------------------------------------------
