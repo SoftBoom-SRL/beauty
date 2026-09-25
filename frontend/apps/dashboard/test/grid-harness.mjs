@@ -257,9 +257,20 @@ export function installDom({ pills = [], storage = {} } = {}) {
     // i popover (useClickAway) ascoltano il clic fuori sul documento
     addEventListener() {}, removeEventListener() {},
   };
+  /* Fotogrammi finti (lo scorrimento automatico ai bordi ne usa uno dopo
+   * l'altro): restano in coda finché il test non li fa scattare con
+   * `frames(n)`, così niente gira da solo dopo la fine del test. */
+  let queue = [], nextId = 1;
+  globalThis.requestAnimationFrame = (fn) => { const id = nextId++; queue.push({ id, fn }); return id; };
+  globalThis.cancelAnimationFrame = (id) => { queue = queue.filter((f) => f.id !== id); };
   return {
     fire(type, ev) { for (const fn of [...(listeners[type] || [])]) fn(ev); },
     storage,
+    /** Fa scattare `n` fotogrammi (ognuno solo i callback in coda prima di lui). */
+    frames(n = 1) {
+      for (let i = 0; i < n; i++) { const now = queue; queue = []; now.forEach((f) => f.fn(16 * (i + 1))); }
+    },
+    pendingFrames: () => queue.length,
   };
 }
 

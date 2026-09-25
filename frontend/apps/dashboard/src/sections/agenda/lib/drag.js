@@ -32,15 +32,75 @@ export const snapTolerance = (step) => Math.min(8, Math.max(4, Math.floor(step /
  *  altro orario: senza lo scroll il blocco si staccava dal puntatore. */
 export const dragDy = (d, scrollTop) => d.cy - d.startY + (scrollTop - (d.startScroll || 0));
 
+/* ---- Scorrimento automatico ai bordi ---------------------------------------
+ * Il puntatore catturato dalla griglia non fa scorrere niente da solo: per
+ * portare un blocco alle 18 quando lo schermo arriva alle 17 bisognava
+ * lasciarlo, scorrere e riprenderlo, e trascinandolo verso il fondo restava
+ * mezzo fuori vista. Vicino al bordo (dentro la griglia, `zone` px) la griglia
+ * scorre da sola, piano sul limite della fascia e più svelta verso il bordo. */
+export const EDGE_ZONE = 48;      // px dal bordo in cui comincia a scorrere
+export const EDGE_MAX = 16;       // px per fotogramma sul bordo
+/* Fotogrammi (~200 ms) col puntatore fermo nella fascia prima di cominciare:
+ * un blocco preso vicino al bordo alto faceva scorrere la griglia appena lo
+ * si muoveva, e anche solo attraversando la fascia per arrivare alla
+ * striscia dei giorni la giornata saltava di un'ora. */
+export const EDGE_DELAY_FRAMES = 12;
+
+/** Di quanti px scorrere in un fotogramma col puntatore in `p` (x o y), in
+ *  un'area che va da `lo` a `hi`: negativo verso `lo`, positivo verso `hi`,
+ *  0 lontano dai bordi. Fuori dall'area niente: lì il puntatore indica altro
+ *  (l'intestazione, la striscia dei giorni sopra la griglia). */
+export function edgeSpeed(p, lo, hi, zone = EDGE_ZONE, max = EDGE_MAX) {
+  if (!(p >= lo && p <= hi)) return 0;
+  const z = Math.min(zone, (hi - lo) / 4);   // in un'area bassa le due fasce non si toccano
+  if (z <= 0) return 0;
+  const pull = (dist) => Math.max(1, Math.round(max * ((z - dist) / z) ** 2));
+  if (p < lo + z) return -pull(p - lo);
+  if (p > hi - z) return pull(hi - p);
+  return 0;
+}
+
+/** Dove sta il badge che segue il puntatore (cx, cy): in basso a destra, ma
+ *  sopra il puntatore vicino al fondo della finestra e a sinistra vicino al
+ *  bordo destro. Trascinando verso l'ultima ora sullo schermo — proprio dove
+ *  la griglia scorre da sola — il badge finiva fuori dalla finestra, e con
+ *  lui l'orario d'arrivo. `view` = { innerWidth, innerHeight }. */
+export function badgeSpot(cx, cy, view) {
+  const w = view?.innerWidth ?? Infinity, h = view?.innerHeight ?? Infinity;
+  return {
+    ...(cy + 18 + 44 > h ? { bottom: h - cy + 14 } : { top: cy + 18 }),
+    ...(cx + 18 + 320 > w ? { right: w - cx + 14 } : { left: cx + 18 }),
+  };
+}
+
 /** Orario d'arrivo di un blocco trascinato: la fascia più vicina a `rawMin`,
  *  oppure l'aggancio `snap` (vince sulla griglia), dentro la fascia oraria
- *  `g0`–`g1`. Ritorna anche l'aggancio da mostrare nel badge: solo se sposta
- *  davvero il blocco rispetto alla fascia. */
-export function snapStart(rawMin, step, snap, g0, g1) {
+ *  `g0`–`g1`. `head` e `tail` = quanto di quello che si muove sta prima e
+ *  dopo l'inizio del blocco preso (vedi dragReach): tutto deve restare fra
+ *  `g0` e `g1`. Ora che la griglia arriva a mezzanotte, una visita di un'ora
+ *  e tre quarti portata in fondo finiva alle «25:30». Ritorna anche
+ *  l'aggancio da mostrare nel badge: solo se sposta davvero il blocco
+ *  rispetto alla fascia. */
+export function snapStart(rawMin, step, snap, g0, g1, { head = 0, tail = step } = {}) {
   let ns = Math.round(rawMin / step) * step;
   const shown = snap && snap.min !== ns ? snap : null;
   if (snap) ns = snap.min;
-  return { ns: Math.max(g0, Math.min(g1 - step, ns)), snap: shown };
+  return { ns: Math.max(g0 + head, Math.min(g1 - Math.max(step, tail), ns)), snap: shown };
+}
+
+/** Quanto si muove insieme al blocco preso in vista giorno, prima (`head`) e
+ *  dopo (`tail`) il suo inizio: il servizio staccato o la pausa da soli; la
+ *  visita intera con tutti i suoi servizi, anche quelli delle colleghe, che
+ *  slittano con lei. */
+export function dragReach(d) {
+  if (d.kind === 'pause') return { head: 0, tail: d.obj.duration_min || 0 };
+  if (d.detach) return { head: 0, tail: d.block.dur || 0 };
+  const blocks = itemBlocks(d.block.appt);
+  if (!blocks.length) return { head: 0, tail: d.block.dur || 0 };
+  return {
+    head: Math.max(0, d.orig - Math.min(...blocks.map((b) => b.startMin))),
+    tail: Math.max(...blocks.map((b) => b.startMin + b.dur)) - d.orig,
+  };
 }
 
 /* Nessuno slot è vietato: fuori turno, sovrapposizione e fase di posa sono
@@ -261,7 +321,8 @@ export function itemPosition(block, d, pending) {
     if (d.detach) {
       // stacco: gli altri servizi della visita restano dove sono
       if (d.itemId !== block.item.id) return { startMin: block.startMin, opId: block.opId, ...phases };
-      return { startMin: d.ns, opId: d.nop, ...phases, dragging: true, verdict: d.verdict };
+      // `detach`: il servizio sta lasciando la visita (niente spina che lo leghi)
+      return { startMin: d.ns, opId: d.nop, ...phases, dragging: true, detach: true, verdict: d.verdict };
     }
     // sposta tutti i blocchi della stessa visita del delta trascinato; quelli
     // della colonna di partenza seguono anche il cambio di operatrice

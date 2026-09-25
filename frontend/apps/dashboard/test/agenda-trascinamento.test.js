@@ -7,7 +7,7 @@ import { test } from 'node:test';
 
 import { itemBlocks } from '../src/sections/agenda/lib.js';
 import {
-  bestSnap, bestSnapEnd, canDo, dayDragContext, dragBadge, dragDy, dragSpan, dropIntent, itemPosition, opFirstName,
+  badgeSpot, bestSnap, bestSnapEnd, canDo, dayDragContext, dragBadge, dragDy, dragReach, dragSpan, dropIntent, edgeSpeed, itemPosition, opFirstName,
   pausePosition, resizeStep, skillVerdict, snapAnchors, snapStart, snapTolerance, validateDrag, verdictTone, visitVerdict,
 } from '../src/sections/agenda/lib/drag.js';
 
@@ -69,6 +69,36 @@ test('orario d\'arrivo: la fascia, oppure l\'aggancio se è vicino, dentro la gr
   // mai prima dell'inizio della griglia, mai oltre l'ultima fascia
   assert.equal(snapStart(500, 15, null, 540, 1260).ns, 540);
   assert.equal(snapStart(1300, 15, null, 540, 1260).ns, 1245);
+});
+
+test('tutto quello che si muove resta entro la mezzanotte', () => {
+  // un servizio di 1h45 portato in fondo alla giornata: finisce alle 24:00, non alle «25:30»
+  assert.equal(snapStart(23 * 60 + 45, 15, null, 0, 1440, { tail: 105 }).ns, 22 * 60 + 15);
+  // la piega (seconda della visita, un'ora dopo l'inizio) portata a mezzanotte e mezza: la visita parte alle 00:00
+  assert.equal(snapStart(20, 15, null, 0, 1440, { head: 60, tail: 30 }).ns, 60);
+  // quello che è corto resta all'ultima fascia
+  assert.equal(snapStart(1500, 15, null, 0, 1440, { tail: 5 }).ns, 1425);
+  // quanto si muove col blocco preso: la visita di Maria dalla piega (11:00) va dalle 10:00 alle 11:30
+  assert.deepEqual(dragReach(wholeDrag(maria, 412)), { head: 60, tail: 30 });
+  assert.deepEqual(dragReach(wholeDrag(maria, 411)), { head: 0, tail: 90 });
+  // staccata la piega va da sola; la pausa è la pausa
+  assert.deepEqual(dragReach(detachDrag(maria, 412)), { head: 0, tail: 30 });
+  assert.deepEqual(dragReach(pauseDrag()), { head: 0, tail: 60 });
+});
+
+test('scorrimento ai bordi: dentro la fascia, più svelto verso il bordo, mai fuori', () => {
+  // area 100..900, fascia 48 px
+  assert.equal(edgeSpeed(500, 100, 900), 0);
+  assert.equal(edgeSpeed(100, 100, 900), -16);        // sul bordo alto: il massimo, in su
+  assert.equal(edgeSpeed(900, 100, 900), 16);
+  assert.ok(edgeSpeed(870, 100, 900) > 0 && edgeSpeed(870, 100, 900) < edgeSpeed(890, 100, 900));
+  assert.equal(edgeSpeed(147, 100, 900), -1, 'al limite della fascia, piano');
+  // fuori dall'area (sopra, sull'intestazione) niente
+  assert.equal(edgeSpeed(99, 100, 900), 0);
+  assert.equal(edgeSpeed(901, 100, 900), 0);
+  // in un'area bassa le due fasce non si toccano
+  assert.equal(edgeSpeed(150, 100, 200), 0);
+  assert.equal(edgeSpeed(101, 100, 200), -Math.round(16 * (24 / 25) ** 2));
 });
 
 test('il contesto: tutti i blocchi e le pause del giorno, e le righe per operatrice', () => {
@@ -201,7 +231,8 @@ test('dove si disegna un servizio: trascinamento > attesa del server > dati del 
   assert.deepEqual(itemPosition(b411, { ...whole, moved: false }, null), still);   // non ancora un trascinamento
   // lo stacco muove solo quel servizio
   const split = detachDrag(maria, 412, { ns: 700, nop: 1, moved: true, verdict: 'V' });
-  assert.deepEqual(itemPosition(b412, split, null), { startMin: 700, opId: 1, activeMin: 30, soakMin: 0, dragging: true, verdict: 'V' });
+  // (`detach`: il servizio lascia la visita, e in colonna niente spina lo segue)
+  assert.deepEqual(itemPosition(b412, split, null), { startMin: 700, opId: 1, activeMin: 30, soakMin: 0, dragging: true, detach: true, verdict: 'V' });
   assert.deepEqual(itemPosition(b411, split, null), still);
   // allungando la manicure la piega dopo slitta
   const resize = resizeDrag(maria, 411, { ndur: 75 });
@@ -235,4 +266,14 @@ test('il badge dice durata e inizio di quello che si muove davvero', () => {
   assert.deepEqual(dragBadge(wholeDrag(maria, 411, { ns: 630 })), { detach: false, durMin: 90, start: 630, group: 1, moving: true });
   assert.deepEqual(dragBadge(wholeDrag(sara, 421, { ns: 960 })), { detach: false, durMin: 30, start: 960, group: 1, moving: false });
   assert.deepEqual(dragBadge(pauseDrag({ ns: 800 })), { detach: false, durMin: 60, start: 800, group: 1, moving: false });
+});
+
+test('il badge del trascinamento resta nella finestra', () => {
+  const view = { innerWidth: 1440, innerHeight: 900 };
+  // di solito in basso a destra del puntatore
+  assert.deepEqual(badgeSpot(500, 400, view), { top: 418, left: 518 });
+  // vicino al fondo sale sopra il puntatore, vicino al bordo destro va a sinistra
+  assert.deepEqual(badgeSpot(500, 880, view), { bottom: 34, left: 518 });
+  assert.deepEqual(badgeSpot(1300, 400, view), { top: 418, right: 154 });
+  assert.deepEqual(badgeSpot(1300, 880, view), { bottom: 34, right: 154 });
 });

@@ -4,7 +4,7 @@
 // parte di DayGrid.
 import { Icon, parseISO, timeLabel } from '@youty/shared';
 import { dayLabel } from '../lib.js';
-import { dragBadge, verdictTone } from '../lib/drag.js';
+import { badgeSpot, dragBadge, verdictTone } from '../lib/drag.js';
 
 /** `d` = il trascinamento in corso (drag.current); `opName(opId)` = il nome
  *  dell'operatrice da scrivere. */
@@ -20,7 +20,7 @@ export default function DayDragBadge({ d, t, opName }) {
     const dayLbl = dd ? dayLabel(d.dayTarget, t) : '';
     const at = timeLabel(detach ? d.orig : start);
     return (
-      <div className="dk-drag-badge" style={{ top: d.cy + 18, left: d.cx + 18 }}>
+      <div className="dk-drag-badge" style={badgeSpot(d.cx, d.cy, window)}>
         <Icon name={dd ? 'calendar' : 'x'} size={14} color="#fff" stroke={2.6} />
         {dd
           ? <span>{detach ? t(`Stacca su ${dayLbl}, ${at}`, `Detach to ${dayLbl}, ${at}`) : t(`${dayLbl}, stesso orario (${at})`, `${dayLbl}, same time (${at})`)}</span>
@@ -29,7 +29,7 @@ export default function DayDragBadge({ d, t, opName }) {
     );
   }
   return (
-    <div className={'dk-drag-badge' + (tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={{ top: d.cy + 18, left: d.cx + 18 }}>
+    <div className={'dk-drag-badge' + (tone === 'warn' ? ' dk-drag-badge--warn' : '')} style={badgeSpot(d.cx, d.cy, window)}>
       <Icon name={tone === 'warn' ? 'alert' : 'check'} size={14} color="#fff" stroke={2.6} />
       <span className="tabnum">{timeLabel(start)}–{timeLabel(start + durMin)}</span>
       <span>· {opName(d.nop)}</span>

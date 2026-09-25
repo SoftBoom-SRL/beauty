@@ -21,7 +21,7 @@ export default function ZoomControls({ zoom, setZoom, fitZoom, t }) {
         onClick={() => setZoom((z) => zoomStep(z, 1))} title={t('Ingrandisci: ore più alte, si leggono i quarti (tasto +, o ⌘ e rotella)', 'Zoom in: taller hours, quarters readable (+ key, or ⌘ and wheel)')} aria-label={t('Ingrandisci', 'Zoom in')}>+</button>
       <button onClick={fitZoom} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '0 9px' }}
         aria-label={t('Adatta', 'Fit')}
-        title={t('Adatta: tutta la giornata in una schermata, senza scorrere', 'Fit: the whole day in one screen, no scrolling')}>
+        title={t('Adatta: l\'orario di lavoro in una schermata, dall\'inizio', 'Fit: the working hours in one screen, from the start')}>
         <Icon name="fit" size={14} /><span className="dk-ag-lbl">{t('Adatta', 'Fit')}</span>
       </button>
     </div>

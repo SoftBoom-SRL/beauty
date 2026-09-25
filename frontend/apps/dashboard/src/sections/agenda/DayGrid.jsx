@@ -1,6 +1,6 @@
-// DayGrid — la giornata, una colonna per operatrice, sulla fascia oraria del
-// giorno (orari del centro e turni, allargata per quello che c'è: vedi
-// dayGridRange; non più fissa 08:00–20:00).
+// DayGrid — la giornata, una colonna per operatrice, sulle 24 ore (GRID_DAY):
+// fuori turno tratteggiato, apertura sulla giornata di lavoro (dayGridRange,
+// firstScrollMin).
 // Ogni SERVIZIO di una visita è un blocco a sé, nella colonna della sua operatrice,
 // all'orario concatenato dallo start della visita, colorato per categoria di servizio.
 // Drag di un blocco = sposta QUEL servizio, da solo: un'operatrice in ritardo
@@ -18,10 +18,10 @@ import { useEffect, useRef } from 'react';
 import { useDash } from '../../ctx.jsx';
 import {
   PXM, COLW, DAY_HOURS_W, aStartMin, firstName, itemBlocks, explainSlot, gridMarks,
-  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf,
+  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin,
 } from './lib.js';
 import {
-  dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, resizeStep, dragDy, dropIntent,
+  dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, dragReach, resizeStep, dragDy, dropIntent,
   itemPosition, pausePosition, verdictTone,
 } from './lib/drag.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
@@ -54,10 +54,14 @@ export default function DayGrid({
 
   // px per minuto alla scala scelta da chi guarda (zoom personale)
   const pxm = PXM * (zoom || 1);
-  /* Fascia oraria del giorno (12-04): orari del centro e turni, allargata per
-   * appuntamenti, pause e l'ombra dell'appuntamento aperto (vedi dayGridRange).
-   * Prima era fissa 08–20. */
-  const { start: G0, end: G1 } = dayGridRange(allRows || rows, openingFor(settings, date), ghost);
+  /* La griglia copre le 24 ore (vedi GRID_DAY in lib/grid.js): stretta sulla
+   * giornata di lavoro ci stava tutta nello schermo e non scorreva più, e
+   * prima delle 9 o dopo le 19 non si cliccava né si trascinava niente. La
+   * giornata di lavoro (orari del centro, turni, appuntamenti, pause e
+   * l'ombra dell'appuntamento aperto: dayGridRange) dice dove si apre e che
+   * cosa riempie lo schermo con «Adatta». */
+  const { start: G0, end: G1 } = GRID_DAY;
+  const work = dayGridRange(allRows || rows, openingFor(settings, date), ghost);
   const marks = gridMarks(step, G0, G1);             // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (G1 - G0) * pxm;
   /* `rows` = le colonne da disegnare (le operatrici spente nel filtro «Team» non ci
@@ -92,7 +96,7 @@ export default function DayGrid({
   /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica): il
    * minuto in cima si ricorda in `scrollMemo`, che vive nella sezione e
    * sopravvive al rimontaggio, e l'ombra fuori vista si porta in vista. */
-  const rememberScroll = useScrollMemo({ scrollRef, headRef, memo: scrollMemo, g0: G0, pxm, ghost, dayKey: date, initialMin: nowMin != null && nowMin > G0 && nowMin < G1 ? nowMin - 60 : null });
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, memo: scrollMemo, g0: G0, pxm, ghost, dayKey: date, initialMin: firstScrollMin(work, nowMin) });
   function onGridScroll() {
     rememberScroll();
     onDragScroll();
@@ -103,8 +107,13 @@ export default function DayGrid({
    * pointerup e pointercancel si ascoltano anche su window (onUpRef =
    * l'ultimo onUp): dove la cattura del puntatore non è supportata o si
    * perde, il rilascio fuori dalla griglia non arrivava a nessuno e il blocco
-   * restava attaccato al puntatore (bug sospetti del 24/09, n. 51). */
-  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef });
+   * restava attaccato al puntatore (bug sospetti del 24/09, n. 51).
+   * Vicino ai bordi la griglia scorre da sola (followEdge), e dopo un rilascio
+   * l'anteprima tace finché il puntatore non si muove (hoverOk). */
+  const {
+    drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture, followEdge, hoverOk, pointerMoved,
+  } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef, scrollRef, headRef, gutter: DAY_HOURS_W });
+  const hoverIfOk = (a, el) => { if (onHover && hoverOk()) onHover(a, el); };
 
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
@@ -131,7 +140,12 @@ export default function DayGrid({
 
   /* Il punto cade nella parte di griglia che si vede davvero? Le colonne, sotto
    * l'intestazione fissa delle operatrici e a destra della colonna delle ore.
-   * Fuori da qui il puntatore non indica né un'ora né un'operatrice. */
+   * Fuori da qui il puntatore non indica né un'ora né un'operatrice.
+   * In verticale conta l'area che scorre, non il corpo delle colonne: in
+   * fondo alla giornata restano 8 px sotto le 24:00, e il blocco portato fin
+   * lì (scorrendo da solo verso il bordo) diventava «fuori dalla griglia» e il
+   * rilascio si annullava. L'orario resta comunque dentro la griglia
+   * (snapStart). */
   function inGrid(x, y) {
     const el = scrollRef.current;
     const cols = el?.querySelector('.dk-tl-cols');
@@ -140,7 +154,8 @@ export default function DayGrid({
     const c = cols.getBoundingClientRect();
     const head = headRef.current?.getBoundingClientRect();
     const left = Math.max(c.left, v.left + DAY_HOURS_W), right = Math.min(c.right, v.right);
-    const top = Math.max(c.top, head ? head.bottom : v.top), bottom = Math.min(c.bottom, v.bottom);
+    const top = head ? head.bottom : v.top;
+    const bottom = v.top + (el.clientTop || 0) + (el.clientHeight ?? v.height);
     return x >= left && x < right && y >= top && y < bottom;
   }
 
@@ -167,6 +182,9 @@ export default function DayGrid({
   function beginDrag(e, d) {
     if (e.isPrimary === false) return false;
     startGesture();
+    // la scheda di anteprima si chiude appena si preme: allungando un blocco
+    // restava aperta sopra la griglia, con la durata di prima
+    onLeave && onLeave();
     drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, startScroll: scrollRef.current?.scrollTop || 0 };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
     return true;
@@ -221,9 +239,12 @@ export default function DayGrid({
 
   function onMove(e) {
     const d = drag.current;
-    if (!d || otherPointer(e)) return;
+    if (!d) { pointerMoved(e); return; }
+    if (otherPointer(e)) return;
     d.cx = e.clientX; d.cy = e.clientY;
     track(d);
+    // la durata si allunga solo in verticale
+    if (d.moved) followEdge(d.cx, d.cy, { x: d.mode !== 'resize' });
   }
   /* Scorrendo la griglia (rotella) durante un trascinamento il puntatore non si
    * muove, ma sotto di lui passa un altro orario: i minuti si ricalcolano
@@ -270,7 +291,7 @@ export default function DayGrid({
     d.outside = false; d.dayTarget = null;
     const rawMin = d.orig + dy / pxm;
     const nop = colFromX(d.cx) ?? d.origOp;
-    const { ns, snap } = snapStart(rawMin, step, bestSnap(dragCtx, rawMin, d, nop), G0, G1);
+    const { ns, snap } = snapStart(rawMin, step, bestSnap(dragCtx, rawMin, d, nop), G0, G1, dragReach(d));
     d.snap = snap;
     d.ns = ns; d.nop = nop;
     d.moved = d.moved || Math.abs(dy) > 4 || nop !== d.origOp;
@@ -364,6 +385,8 @@ export default function DayGrid({
 
   /* posizione: ghost del drag attivo > override ottimistico (pending) > valore server */
   const itemPos = (block) => itemPosition(block, drag.current, pending);
+  // la posizione ferma (server o spostamento in salvataggio): decide le corsie
+  const restPos = (block) => itemPosition(block, null, pending);
   const pausePos = (p) => pausePosition(p, drag.current, pending);
 
   const d = drag.current;
@@ -390,10 +413,14 @@ export default function DayGrid({
         </div>
       </div>
 
-      {/* grid body — `data-span-min`: quanti minuti copre, per «Adatta» */}
+      {/* grid body — `data-g0` e `data-work-*`: da dove parte la griglia e la
+          giornata di lavoro, per «Adatta» (useAgendaZoom) */}
       {/* 8 px d'aria sotto l'intestazione: l'etichetta della prima ora (centrata
-          sulla sua riga) finiva sotto la testata e si leggeva a metà */}
-      <div data-span-min={G1 - G0} style={{ display: 'flex', position: 'relative', height: gridH, marginTop: 8 }}>
+          sulla sua riga) finiva sotto la testata e si leggeva a metà.
+          zIndex 0: il corpo è un livello a sé, SOTTO l'intestazione fissa (9).
+          Senza, il blocco trascinato (20) passava sopra i nomi delle
+          operatrici quando lo si portava in cima. */}
+      <div data-g0={G0} data-work-start={work.start} data-work-end={work.end} style={{ display: 'flex', position: 'relative', zIndex: 0, height: gridH, marginTop: 8 }}>
         {/* hour gutter (sticky left) */}
         <HourGutter g0={G0} g1={G1} pxm={pxm} variant="day" />
         {/* columns */}
@@ -416,13 +443,8 @@ export default function DayGrid({
                 style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: `color-mix(in srgb, ${colorOf(o.id)} 6%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t} />
-                {/* traccia dell'origine durante il drag.
-                    Con le forbici si muove UN servizio: la traccia sotto tutti
-                    quelli della visita faceva sembrare che partisse tutta,
-                    mentre gli altri restano fermi davvero (vedi itemPos). */}
-                {dragging && d.kind === 'item' && itemBlocks(d.block.appt).filter((b) => b.opId === o.id && (!d.detach || b.item.id === d.itemId)).map((b) => (
-                  <div key={'g' + b.item.id} className="dk-drag-ghost" style={{ top: (b.startMin - G0) * pxm + 1.5, height: b.dur * pxm - 3 }} />
-                ))}
+                {/* la traccia dei servizi che si muovono la disegna VisitBlocks,
+                    nella loro corsia; qui quella della pausa */}
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (
                   <div className="dk-drag-ghost" style={{ top: (d.orig - G0) * pxm + 1.5, height: d.obj.duration_min * pxm - 3 }} />
                 )}
@@ -430,9 +452,9 @@ export default function DayGrid({
                 {ghost && <GhostBlocks ghost={ghost} opId={o.id} firstId={ghostFirstId} g0={G0} pxm={pxm} t={t} />}
                 {/* servizi nelle loro corsie, con la spina di ogni visita (vedi VisitBlocks) */}
                 <VisitBlocks
-                  opId={o.id} blocks={allBlocks} itemPos={itemPos} g0={G0} pxm={pxm} t={t} lang={lang} canWrite={canWrite}
+                  opId={o.id} blocks={allBlocks} itemPos={itemPos} restPos={restPos} g0={G0} pxm={pxm} t={t} lang={lang} canWrite={canWrite}
                   dragging={dragging} openApptId={openApptId} itemColor={itemColor} colorOf={colorOf} soakLabel={soakLabel}
-                  onItemDown={onItemDown} onItemResizeDown={onItemResizeDown} onHover={onHover} onLeave={onLeave}
+                  onItemDown={onItemDown} onItemResizeDown={onItemResizeDown} onHover={hoverIfOk} onLeave={onLeave}
                   onSlotMenuAt={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows: dataRows }))}
                 />
                 {/* pauses */}

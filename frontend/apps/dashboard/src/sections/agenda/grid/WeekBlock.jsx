@@ -51,7 +51,9 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
         background: svcTint((a.items || [])[0]),
         border: moving ? '2px solid var(--ink)' : 'none',
         boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : '0 1px 2px rgba(17,24,39,0.1)',
-        transform: moving ? 'scale(1.03)' : 'none', transition: moving ? 'none' : 'box-shadow 150ms',
+        // niente ingrandimento sulla copia trascinata: spostava i bordi rispetto
+        // all'orario d'arrivo (come in vista giorno)
+        transition: moving ? 'none' : 'box-shadow 150ms',
         opacity: a.status === 'no_show' ? 0.5 : moving ? 0.92 : 1,
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none',
         pointerEvents: moving ? 'none' : 'auto', zIndex: moving ? 20 : 2,

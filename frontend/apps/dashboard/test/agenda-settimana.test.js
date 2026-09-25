@@ -9,6 +9,7 @@ import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
 import { WHEEL_ZOOM_FACTOR, weekDayOps } from '../src/sections/agenda/lib.js';
+import { EDGE_DELAY_FRAMES } from '../src/sections/agenda/lib/drag.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
 
 // i pezzi senza hook della griglia, che per i test fanno parte di WeekView
@@ -173,7 +174,7 @@ test('in settimana la rotella durante il trascinamento sposta l\'orario', async 
   const g = setup();
   await loadWeek(g, W1);
   g.block().props.onDown(ptr(430, 400));
-  g.scrollEl.scrollTop = 81;              // +60 minuti sotto un puntatore fermo
+  g.scrollEl.scrollTop += 81;             // +60 minuti sotto un puntatore fermo
   g.root().props.onScroll?.();
   g.m.render();
   g.root().props.onPointerUp(ptr(430, 400));
@@ -240,8 +241,8 @@ test('in settimana il clic per prenotare apre la fascia sotto il puntatore, come
   const g = setup();
   globalThis.__dash.settings = { slot_interval_min: 30 };   // fasce da mezz'ora
   await loadWeek(g, W1);
-  // giovedì alle 10:50: la griglia parte dalle 08:00, a 160 px dall'alto
-  const y = 160 + (10 * 60 + 50 - 8 * 60) * PXM;
+  // giovedì alle 10:50: la griglia parte dalla mezzanotte, a 160 px dall'alto
+  const y = 160 + (10 * 60 + 50) * PXM;
   const el = (left, width) => ({ getBoundingClientRect: () => rect(left, 160, width, 12 * 60 * PXM), closest: () => null });
   const thu = find(g.root(), (x) => x.props?.['data-daycol'] === 3);
   // clic sul fondo del giorno, dove cade la sotto-colonna di Giulia (x 466–526) …
@@ -291,4 +292,79 @@ test('cambiando settimana la scheda di anteprima del blocco di prima sparisce', 
   g.m.render({ ...g.m.props, weekStart: W2[0] });   // → (tastiera o frecce)
   await loadWeek(g, W2);                             // la settimana nuova arriva
   assert.equal(card(), null, 'il blocco è sparito senza mouseleave: la scheda non resta incollata');
+});
+
+/* ---- 25/09: difetti visti trascinando nell'app vera ---- */
+
+test('in settimana trascinando un blocco i vicini non cambiano corsia', async () => {
+  const g = setup();
+  // Rita alle 15:00 con Anna, accanto a Sara: due corsie
+  const rita = (date) => ({ ...sara(date), id: 43, client_name: 'Rita Blu', duration_min: 60,
+    items: [{ service_id: 1, operator_id: 1, duration_min: 60, soak_min: 0, service_name: 'Colore' }] });
+  g.api.weekGets().at(-1).resolve(W1.map((date, i) => ({ date, count: i === 3 ? 2 : 0, by_status: {}, appointments: i === 3 ? [sara(date), rita(date)] : [] })));
+  await tick();
+  g.m.render();
+  const ritaEl = () => find(g.root(), (el) => typeof el.type === 'function' && el.props.a?.id === 43 && !el.props.moving);
+  assert.equal(ritaEl().props.lc, 2);
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));
+  g.m.render();
+  // prima Sara usciva dal calcolo e Rita si allargava a tutta la sotto-colonna
+  assert.equal(ritaEl().props.lc, 2, 'Rita resta nella sua corsia');
+  assert.ok(find(g.root(), (el) => el.key === 42 && el.props?.className === 'dk-drag-ghost'), 'la traccia di Sara nella sua corsia');
+  assert.ok(find(g.root(), (el) => el.props?.moving && el.props.a?.id === 42), 'la copia che segue il puntatore');
+});
+
+test('in settimana dopo il rilascio la scheda non compare da sola', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));
+  g.m.render();
+  g.root().props.onPointerUp(ptr(430, 481));
+  g.m.render();
+  const card = () => find(g.root(), (el) => el.props?.hover && el.props.hints === 'week');
+  const enter = () => { const b = g.block(); b.props.onHover(b.props.a, { getBoundingClientRect: () => rect(430, 481, 60, 40) }); g.m.render(); };
+  enter();
+  assert.equal(card(), null, 'il puntatore fermo sul blocco appena lasciato non apre la scheda');
+  g.root().props.onPointerMove(ptr(445, 495));
+  enter();
+  assert.ok(card(), 'dopo un movimento vero sì');
+});
+
+test('in settimana trascinando verso i bordi la griglia scorre anche di lato', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.scrollEl.scrollLeft = 200;
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));
+  // al bordo destro (1000): verso domenica
+  g.root().props.onPointerMove(ptr(995, 481));
+  g.win.frames(EDGE_DELAY_FRAMES + 4);
+  assert.ok(g.scrollEl.scrollLeft > 200, `scrollLeft ${g.scrollEl.scrollLeft}`);
+  // appena a destra della colonna delle ore (46): verso lunedì
+  const right = g.scrollEl.scrollLeft;
+  g.root().props.onPointerMove(ptr(52, 481));
+  g.win.frames(EDGE_DELAY_FRAMES);
+  assert.equal(g.scrollEl.scrollLeft, right, 'cambiando bordo si riparte dall\'attesa');
+  g.win.frames(4);
+  assert.ok(g.scrollEl.scrollLeft < right);
+  // sopra la colonna delle ore non indica un giorno: fermo
+  const still = g.scrollEl.scrollLeft;
+  g.root().props.onPointerMove(ptr(30, 481));
+  g.win.frames(EDGE_DELAY_FRAMES + 4);
+  assert.equal(g.scrollEl.scrollLeft, still);
+  g.root().props.onPointerUp(ptr(30, 481));
+  assert.equal(g.win.pendingFrames(), 0);
+});
+
+test('in settimana l\'appuntamento trascinato in fondo finisce entro la mezzanotte', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  g.block().props.onDown(ptr(430, 400));
+  // tanto più giù della mezzanotte (il puntatore resta sul giovedì)
+  g.root().props.onPointerMove(ptr(430, 400 + 10 * 60 * PXM));
+  g.root().props.onPointerUp(ptr(430, 400 + 10 * 60 * PXM));
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].body.start, isoAtMin(W1[3], 24 * 60 - 30), 'Sara (30\') alle 23:30');
 });

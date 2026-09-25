@@ -3,10 +3,15 @@
 // sposa forzata alle 07:00 non si vedeva e con i turni fino alle 21 la fascia
 // 20–21 non si poteva usare. Sfogliando i giorni la griglia tornava in cima e
 // l'ombra dell'appuntamento aperto finiva fuori schermo.
+// 25/09: stretta sulla giornata di lavoro, tolta la barra alta dell'agenda la
+// griglia ci stava tutta nello schermo e non scorreva più (nei giorni senza
+// appuntamenti per niente). Ora copre le 24 ore e si apre sulla giornata di
+// lavoro; «Adatta» riempie lo schermo con quella.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { dayGridRange, gridMarks, gridRange, openingFor, weekGridRange } from '../src/sections/agenda/lib.js';
+import { toDateStr, todayStr } from '@youty/shared';
+import { GRID_DAY, dayGridRange, firstScrollMin, gridMarks, gridRange, mondayOf, openingFor, weekDaysOf, weekGridRange } from '../src/sections/agenda/lib.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, textOf, tick } from './grid-harness.mjs';
 
 // i pezzi senza hook delle griglie, che per i test fanno parte di DayGrid e WeekView
@@ -14,6 +19,7 @@ const DAY_PARTS = ['OperatorHeaderCell', 'OpColorPicker', 'HourGutter', 'GridLin
 const { default: DayGrid } = await loadComponent('apps/dashboard/src/sections/agenda/DayGrid.jsx', { expand: DAY_PARTS });
 const WEEK_PARTS = ['WeekDayHeader', 'HourGutter', 'WeekDayColumn', 'GridLines', 'NowLine', 'WeekDragBadge'];
 const { default: WeekView } = await loadComponent('apps/dashboard/src/sections/agenda/WeekView.jsx', { expand: WEEK_PARTS });
+const { useAgendaZoom } = await loadComponent('apps/dashboard/src/sections/agenda/hooks/useAgendaZoom.js');
 
 const PXM = 1.35;
 const DATE = '2026-10-03';   // sabato
@@ -25,7 +31,7 @@ const one = (id, op, hm, dur, d = DATE) => ({
 });
 const WEEK_HOURS = { 0: [['09:00', '19:00']], 1: [['09:00', '19:00']], 2: [['09:00', '19:00']], 3: [['09:00', '19:00']], 4: [['09:00', '19:00']], 5: [['09:00', '19:00']], 6: [] };
 
-test('senza orari né turni la fascia resta 08–20, e si allarga per quello che c\'è', () => {
+test('la giornata di lavoro: senza orari né turni 08–20, e si allarga per quello che c\'è', () => {
   assert.deepEqual(gridRange([], []), { start: 8 * 60, end: 20 * 60 });
   assert.deepEqual(gridRange([], [[7 * 60, 9 * 60]]), { start: 7 * 60, end: 20 * 60 });
   // a ore piene
@@ -62,6 +68,23 @@ test('la fascia della settimana e i segni orari coprono tutta la fascia', () => 
   assert.deepEqual(openingFor({ opening_hours_week: WEEK_HOURS }, DATE), [['09:00', '19:00']]);
   assert.deepEqual(openingFor({ opening_hours_week: WEEK_HOURS }, '2026-10-04'), [], 'domenica chiuso');
   assert.deepEqual(openingFor({}, DATE), []);
+});
+
+test('la griglia copre le 24 ore e si apre sulla giornata di lavoro', () => {
+  assert.deepEqual(GRID_DAY, { start: 0, end: 24 * 60 });
+  const work = { start: 9 * 60, end: 19 * 60 };
+  // non oggi: mezz'ora prima che cominci (non la mezzanotte)
+  assert.equal(firstScrollMin(work), 8 * 60 + 30);
+  assert.equal(firstScrollMin(work, null), 8 * 60 + 30);
+  // oggi, a giornata in corso: un'ora prima di adesso
+  assert.equal(firstScrollMin(work, 15 * 60 + 20), 14 * 60 + 20);
+  assert.equal(firstScrollMin(work, 9 * 60), 8 * 60);
+  // oggi prima dell'apertura o dopo la chiusura: la giornata dall'inizio
+  assert.equal(firstScrollMin(work, 7 * 60), 8 * 60 + 30);
+  assert.equal(firstScrollMin(work, 22 * 60), 8 * 60 + 30);
+  // la sposa delle 00:15 non manda sotto zero
+  assert.equal(firstScrollMin({ start: 0, end: 60 }), 0);
+  assert.equal(firstScrollMin({ start: 0, end: 60 }, 20), 0);
 });
 
 /* ---- vista giorno ---- */
@@ -104,11 +127,43 @@ test('vista giorno: la sposa delle 07:00 è in griglia, non sotto l\'intestazion
     { operator: { id: 1, name: 'Anna Neri' }, windows: [['09:00', '19:00']], appointments: [one(1, 1, '07:00', 90)], pauses: [] },
     { operator: { id: 2, name: 'Giulia Verdi' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },
   ];
-  const { m } = day(rows);
-  assert.equal(hourLabels(m.tree)[0], '07:00');
+  const { m, scrollEl } = day(rows);
+  assert.equal(hourLabels(m.tree)[0], '00:00');
   const blk = find(m.tree, (el) => typeof el.type === 'function' && el.props.block?.item?.id === 10);
   const out = blk.type(blk.props);
-  assert.ok(out.props.style.top >= 0, `il blocco comincia dentro la griglia (top ${out.props.style.top})`);
+  assert.equal(out.props.style.top, 7 * 60 * PXM + 1.5, 'il blocco alle 07:00, dentro la griglia');
+  // si apre mezz'ora prima della giornata di lavoro, che comincia con lei
+  assert.equal(scrollEl.scrollTop, (6 * 60 + 30) * PXM);
+});
+
+test('vista giorno: senza appuntamenti la griglia copre le 24 ore e scorre', () => {
+  const rows = [
+    { operator: { id: 1, name: 'Anna Neri' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },
+    { operator: { id: 2, name: 'Giulia Verdi' }, windows: [], appointments: [], pauses: [] },
+  ];
+  const { m, scrollEl } = day(rows);
+  const body = find(m.tree, (el) => el.props?.['data-work-start'] != null);
+  // alta 24 ore: in uno schermo da 600 px c'è sempre da scorrere
+  assert.equal(body.props.style.height, 24 * 60 * PXM);
+  assert.ok(body.props.style.height > scrollEl.clientHeight);
+  assert.deepEqual([body.props['data-g0'], body.props['data-work-start'], body.props['data-work-end']], [0, 9 * 60, 19 * 60]);
+  // il corpo è un livello a sé, sotto l'intestazione fissa: il blocco
+  // trascinato non passa sopra i nomi delle operatrici
+  assert.equal(body.props.style.zIndex, 0);
+  assert.deepEqual([hourLabels(m.tree)[0], hourLabels(m.tree).at(-1)], ['00:00', '24:00']);
+  // si apre alle 08:30, mezz'ora prima dei turni
+  assert.equal(scrollEl.scrollTop, (8 * 60 + 30) * PXM);
+  // fuori turno tratteggiato: la notte e la sera per Anna, tutto il giorno per Giulia
+  const closed = findAll(m.tree, (el) => el.type === 'div' && typeof el.props?.style?.background === 'string' && el.props.style.background.startsWith('repeating-linear-gradient(135deg, rgba(17,24,39,0.07)'));
+  const spans = closed.map((el) => [Math.round(el.props.style.top / PXM), Math.round((el.props.style.top + el.props.style.height) / PXM)]);
+  assert.deepEqual(spans, [[0, 9 * 60], [19 * 60, 24 * 60], [0, 24 * 60]]);
+  // la scritta sta vicino all'orario di lavoro (non alle 4 del mattino), al
+  // centro per chi non è in turno
+  const label = (el) => find(el, (x) => x.props?.className === 'dk-closed-label');
+  assert.deepEqual(label(closed[0]).props.style, { bottom: 14 });
+  assert.deepEqual(label(closed[1]).props.style, { top: 14 });
+  assert.equal(label(closed[2]).props.style.top, '50%');
+  assert.equal(textOf(label(closed[2])), 'Non in turno');
 });
 
 test('vista giorno: con i turni fino alle 21 la fascia 20–21 si clicca e ci si trascina', () => {
@@ -117,7 +172,7 @@ test('vista giorno: con i turni fino alle 21 la fascia 20–21 si clicca e ci si
     { operator: { id: 2, name: 'Giulia Verdi' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },
   ];
   const { m, cb } = day(rows);
-  assert.equal(hourLabels(m.tree).at(-1), '21:00');
+  assert.equal(hourLabels(m.tree).at(-1), '24:00');
   // clic alle 20:30 nella colonna di Anna
   const col = find(m.tree, (el) => el.key === 1 && typeof el.props?.onClick === 'function' && el.props.style?.position === 'relative');
   const labels = hourLabels(m.tree);
@@ -145,19 +200,19 @@ test('vista giorno: sul giorno dopo la griglia resta alla stessa ora', () => {
   // il giorno prima si guardava dalle 14:00 in giù
   const scrollMemo = { current: 14 * 60 };
   const { scrollEl } = day(rows, { scrollMemo });
-  assert.equal(scrollEl.scrollTop, (14 * 60 - 9 * 60) * PXM);
+  assert.equal(scrollEl.scrollTop, 14 * 60 * PXM);
 });
 
-test('vista giorno: oggi si apre un\'ora prima di adesso; fuori dalla fascia dall\'inizio', () => {
+test('vista giorno: oggi si apre un\'ora prima di adesso; a giornata finita dall\'inizio', () => {
   const rows = [
     { operator: { id: 1, name: 'Anna Neri' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },
   ];
   const { scrollEl } = day(rows, { nowMin: 15 * 60 + 20, scrollMemo: { current: null } });
-  assert.equal(scrollEl.scrollTop, (14 * 60 + 20 - 9 * 60) * PXM);
-  // alle 22 la giornata è finita: si guarda dall'inizio, non dal fondo
-  assert.equal(day(rows, { nowMin: 22 * 60, scrollMemo: { current: null } }).scrollEl.scrollTop, 0);
+  assert.equal(scrollEl.scrollTop, (14 * 60 + 20) * PXM);
+  // alle 22 la giornata è finita: si guarda dall'inizio (08:30), non dal fondo
+  assert.equal(day(rows, { nowMin: 22 * 60, scrollMemo: { current: null } }).scrollEl.scrollTop, (8 * 60 + 30) * PXM);
   // un minuto già ricordato (sfogliando i giorni) vince su adesso
-  assert.equal(day(rows, { nowMin: 15 * 60, scrollMemo: { current: 10 * 60 } }).scrollEl.scrollTop, (10 * 60 - 9 * 60) * PXM);
+  assert.equal(day(rows, { nowMin: 15 * 60, scrollMemo: { current: 10 * 60 } }).scrollEl.scrollTop, 10 * 60 * PXM);
 });
 
 test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
@@ -168,13 +223,16 @@ test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
   // appuntamento aperto nel pannello: martedì alle 17:30 con Anna; a video sabato, griglia in cima
   const ghost = one(7, 1, '17:30', 60, '2026-09-29');
   const { scrollEl } = day(rows, { ghost }, {}, 68);
-  const top = 68 + (17 * 60 + 30 - 9 * 60) * PXM;             // nel contenuto: corpo 8 px sotto la testata (60)
+  const top = 68 + (17 * 60 + 30) * PXM;                      // nel contenuto: corpo 8 px sotto la testata (60)
   assert.equal(scrollEl.scrollTop, top - 60 - 40, 'l\'ombra 40 px sotto la testata, contando lo stacco');
   assert.ok(top >= scrollEl.scrollTop + 60 && top + 24 <= scrollEl.scrollTop + 600, `l'ombra (y ${top}) è nell'area visibile (scrollTop ${scrollEl.scrollTop})`);
 });
 
 /* ---- vista settimana ---- */
-test('vista settimana: l\'appuntamento delle 07:00 è in griglia', async () => {
+/* La settimana montata: `dates` = i sette giorni (la sposa delle 07:00 il
+ * sabato 03/10, se c'è), `scroll` e `querySelector` = quello che serve del
+ * contenitore (scorrimento di lato, colonne dei giorni). */
+async function week({ settings = { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, weekStart = '2026-09-28', dates = null, scroll = {}, querySelector = () => null } = {}) {
   installDom();
   let resolveWeek = null;
   globalThis.__api = {
@@ -183,30 +241,91 @@ test('vista settimana: l\'appuntamento delle 07:00 è in griglia', async () => {
   };
   globalThis.__dash = {
     t: (it) => it, lang: 'it', showRevenue: false, fireToast: spy(), openModal: spy(), hasScope: () => true,
-    settings: { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, locationId: null, modal: null,
+    settings, locationId: null, modal: null,
     live: { subscribe: () => () => {} },
   };
   const scrollEl = {
     scrollTop: 0, clientHeight: 600, getBoundingClientRect: () => rect(0, 100, 1000, 600),
-    querySelector: () => null, querySelectorAll: () => [], setPointerCapture() {}, addEventListener() {}, removeEventListener() {},
+    querySelector, querySelectorAll: () => [], setPointerCapture() {}, addEventListener() {}, removeEventListener() {},
+    ...scroll,
   };
   const m = mount(WeekView, {
-    weekStart: '2026-09-28', operators: [{ id: 1, first_name: 'Anna', last_name: 'Neri' }], colorOf: () => '#C9B8F2',
+    weekStart, operators: [{ id: 1, first_name: 'Anna', last_name: 'Neri' }], colorOf: () => '#C9B8F2',
     itemColor: null, nowMin: null, onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy(),
-    pickMode: false, ghost: null, ghostDate: '2026-09-28', zoom: 1, onZoom: null,
+    pickMode: false, ghost: null, ghostDate: weekStart, zoom: 1, onZoom: null,
   }, { attach: (tree) => { if (tree?.props?.ref) tree.props.ref.current = scrollEl; } });
-  const dates = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
-  resolveWeek(dates.map((date) => ({
+  const days = dates || ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
+  resolveWeek(days.map((date) => ({
     date, count: date === DATE ? 1 : 0, by_status: {},
     appointments: date === DATE ? [{ id: 1, start: at('07:00'), client_name: 'Sposa', operator_id: 1, status: 'confirmed', duration_min: 90, total_price: '50.00', items: [] }] : [],
   })));
   await tick();
   m.render();
+  return { m, scrollEl };
+}
+
+test('vista settimana: l\'appuntamento delle 07:00 è in griglia', async () => {
+  const { m, scrollEl } = await week();
   const labels = hourLabels(m.tree);
-  assert.equal(labels[0], '07:00');
-  assert.equal(labels.at(-1), '19:00', 'fino alla chiusura del centro');
+  assert.deepEqual([labels[0], labels.at(-1)], ['00:00', '24:00'], 'le 24 ore');
   const blk = find(m.tree, (el) => typeof el.type === 'function' && el.props.a?.id === 1);
   const out = blk.type(blk.props);
-  assert.ok(out.props.style.top >= 0, `il blocco comincia dentro la griglia (top ${out.props.style.top})`);
+  assert.equal(out.props.style.top, 7 * 60 * PXM + 1, 'il blocco alle 07:00, dentro la griglia');
   assert.ok(textOf(out).includes('Sposa'));
+  // si apre mezz'ora prima della giornata di lavoro della settimana (07:00)
+  assert.equal(scrollEl.scrollTop, (6 * 60 + 30) * PXM);
+  // fuori dagli orari del centro tratteggiato; la domenica chiusa tutta, con la scritta
+  const closedOf = (i) => find(m.tree, (el) => el.props?.['data-daycol'] === i).props.children
+    .flat(Infinity).find((el) => el?.props?.windows !== undefined && el.props.labels);
+  assert.deepEqual(closedOf(0).props.windows, [['09:00', '19:00']]);
+  assert.deepEqual(closedOf(6).props.windows, []);
+  assert.deepEqual(closedOf(6).props.labels, { some: null, none: 'Chiuso' });
+});
+
+test('vista settimana: senza orari del centro impostati niente tratteggio', async () => {
+  const { m } = await week({ settings: { slot_interval_min: 15 } });
+  const col = find(m.tree, (el) => el.props?.['data-daycol'] === 0);
+  assert.equal(col.props.children.flat(Infinity).find((el) => el?.props?.labels), undefined);
+});
+
+test('vista settimana: la settimana in corso si apre con oggi in vista', async () => {
+  // una settimana più larga dello schermo (1000 px): sette giorni da 400 px
+  // dopo la colonna delle ore (46); si parte da dove oggi NON si vede
+  const today = todayStr();
+  const days = weekDaysOf(mondayOf(today)).map((d) => toDateStr(d));
+  const idx = days.indexOf(today);
+  assert.ok(idx >= 0);
+  const cols = days.map((_, i) => ({ offsetLeft: 46 + i * 400, offsetWidth: 400 }));
+  const { scrollEl } = await week({
+    weekStart: days[0], dates: days, scroll: { scrollLeft: idx >= 3 ? 0 : 2000, clientWidth: 1000 },
+    querySelector: (sel) => { const mm = /data-daycol="(\d)"/.exec(sel); return mm ? cols[Number(mm[1])] : null; },
+  });
+  // oggi subito dopo la colonna delle ore
+  assert.equal(scrollEl.scrollLeft, idx * 400);
+  // un'altra settimana (senza oggi) non si sposta di lato
+  const other = await week({
+    weekStart: '2020-01-06', dates: ['2020-01-06', '2020-01-07', '2020-01-08', '2020-01-09', '2020-01-10', '2020-01-11', '2020-01-12'],
+    scroll: { scrollLeft: 0, clientWidth: 1000 },
+    querySelector: (sel) => { const mm = /data-daycol="(\d)"/.exec(sel); return mm ? cols[Number(mm[1])] : null; },
+  });
+  assert.equal(other.scrollEl.scrollLeft, 0);
+});
+
+/* ---- «Adatta» ---- */
+test('«Adatta» riempie lo schermo con la giornata di lavoro e la porta in cima', () => {
+  const dom = installDom();
+  // il corpo della griglia: 58 px sotto l'inizio (testata 50 + 8 d'aria), giornata 09–19
+  const body = { offsetTop: 58, dataset: { g0: '0', workStart: String(9 * 60), workEnd: String(19 * 60) }, previousElementSibling: { offsetHeight: 50 } };
+  const scrollEl = { clientHeight: 826, scrollTop: 0, querySelector: (sel) => (sel === '.dk-tl-cols' ? { parentElement: body } : null) };
+  document.querySelector = (sel) => (sel === '.dk-tl-cols' ? { closest: () => scrollEl } : null);
+  let api = null;
+  const m = mount(() => { api = useAgendaZoom(); return null; }, {});
+  api.fitZoom();
+  m.render();
+  // le dieci ore nei 760 px sotto la testata (8 d'aria sopra e sotto), non le 24
+  const z = (826 - 50 - 16) / (10 * 60 * PXM);
+  assert.ok(Math.abs(api.zoom - z) < 1e-9, `zoom ${api.zoom}`);
+  // al fotogramma dopo, le 09:00 appena sotto la testata
+  dom.frames(1);
+  assert.ok(Math.abs(scrollEl.scrollTop - (58 + 9 * 60 * PXM * z - 50 - 8)) < 1e-6, `scrollTop ${scrollEl.scrollTop}`);
 });

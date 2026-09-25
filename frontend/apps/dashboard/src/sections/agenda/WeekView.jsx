@@ -8,7 +8,7 @@
 // con traccia tratteggiata all'origine, colonna di destinazione evidenziata e badge
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toastApiError, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
@@ -18,6 +18,7 @@ import WeekDayColumn from './grid/WeekDayColumn.jsx';
 import WeekDragBadge from './grid/WeekDragBadge.jsx';
 import {
   PXM, WEEK_HOURS_W, HOVER_CLEAR_WEEK, isoAtMin, gridMarks, weekGridRange, slotStep, openApptIdOf, hoverPlacement,
+  GRID_DAY, firstScrollMin, openingFor,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
 import { retryForced } from './lib/retry.js';
@@ -65,12 +66,16 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const ready = days !== null;
 
   const pxm = PXM * (zoom || 1);   // scala scelta da chi guarda (zoom personale)
-  /* Fascia oraria della settimana (12-04): orari del centro dei sette giorni,
-   * allargata per gli appuntamenti e l'ombra (vedi weekGridRange). Era fissa
-   * 08–20, e la sposa delle 07:00 in settimana non c'era. I turni in settimana
-   * non arrivano: la vista giorno li vede. Si calcola prima degli hook che la
+  /* Le 24 ore, come in vista giorno (GRID_DAY): la griglia stretta sugli
+   * orari non scorreva più. La giornata di lavoro della settimana (orari del
+   * centro dei sette giorni, appuntamenti e ombra: weekGridRange) dice dove si
+   * apre e che cosa riempie lo schermo con «Adatta». I turni in settimana non
+   * arrivano: la vista giorno li vede. Si calcola prima degli hook che la
    * leggono (zoom, scroll), anche durante il caricamento. */
-  const { start: G0, end: G1 } = weekGridRange(days, settings?.opening_hours_week, ghost);
+  const { start: G0, end: G1 } = GRID_DAY;
+  const work = weekGridRange(days, settings?.opening_hours_week, ghost);
+  // orari del centro impostati? Senza, niente tratteggio (non si sa quando è chiuso)
+  const hoursSet = Object.keys(settings?.opening_hours_week || {}).length > 0;
   const marks = gridMarks(step, G0, G1);   // ora piena / mezz'ora / quarti (solo passo 15)
   const gridH = (G1 - G0) * pxm;
 
@@ -82,14 +87,32 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   /* Il trascinamento: Esc lo annulla e, qui, anche pointerup e pointercancel su
    * window: se la cattura non è supportata o il rilascio avviene fuori
-   * dall'area, il drag non resta mai "appeso" (onUpRef = l'ultimo onUp). */
-  const { drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture } = useGridDrag({ windowUpRef: onUpRef });
+   * dall'area, il drag non resta mai "appeso" (onUpRef = l'ultimo onUp).
+   * Vicino ai bordi la griglia scorre da sola, anche di lato verso gli altri
+   * giorni (followEdge); dopo un rilascio l'anteprima tace (hoverOk). */
+  const {
+    drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture, followEdge, hoverOk, pointerMoved,
+  } = useGridDrag({ windowUpRef: onUpRef, scrollRef, headRef, gutter: WEEK_HOURS_W });
 
   /* Cambiando settimana la griglia passa dallo scheletro e tornava in cima:
    * l'ombra dell'appuntamento aperto finiva fuori schermo. Il minuto in cima si
    * ricorda e si ritrova (anche se la fascia cambia); l'ombra, se resta fuori
    * vista, si porta in vista. */
-  const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready, initialMin: nowMin != null && nowMin > G0 && nowMin < G1 ? nowMin - 60 : null });
+  const rememberScroll = useScrollMemo({ scrollRef, headRef, g0: G0, pxm, ghost, dayKey: ghostDate, ready, initialMin: firstScrollMin(work, nowMin) });
+  /* Aprendo la settimana in corso si vede oggi. Con tante operatrici la
+   * settimana è più larga dello schermo e si apriva sempre dal lunedì: il
+   * venerdì bisognava andarlo a cercare scorrendo di lato. Oggi va a
+   * sinistra, subito dopo la colonna delle ore; i giorni passati restano a un
+   * colpo di rotella. Solo se oggi non si vede già tutto. */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!ready || !el?.querySelector) return;
+    const idx = (days || []).findIndex((d) => d.date === todayStr());
+    const col = idx >= 0 ? el.querySelector(`[data-daycol="${idx}"]`) : null;
+    if (!col) return;
+    const from = col.offsetLeft - WEEK_HOURS_W, to = col.offsetLeft + col.offsetWidth;
+    if (from < el.scrollLeft || to > el.scrollLeft + el.clientWidth) el.scrollLeft = Math.max(0, from);
+  }, [ready, weekStart]); // eslint-disable-line react-hooks/exhaustive-deps
   function onGridScroll() {
     rememberScroll();
     onDragScroll();
@@ -139,6 +162,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (e.isPrimary === false) return;
     e.preventDefault();                                     // niente selezione testo (il pointerup arriva comunque)
     startGesture();
+    setHover(null);                                         // la scheda di anteprima si chiude appena si preme
     drag.current = {
       id: appt.id, obj: appt, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
@@ -158,9 +182,11 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   function onMove(e) {
     const d = drag.current;
-    if (!d || !canWrite || otherPointer(e)) return;
+    if (!d) { pointerMoved(e); return; }
+    if (!canWrite || otherPointer(e)) return;
     d.cx = e.clientX; d.cy = e.clientY;
     track(d);
+    if (d.moved) followEdge(d.cx, d.cy);
   }
   // La rotella durante il trascinamento sposta l'orario sotto il puntatore:
   // i minuti tengono conto anche dello scorrimento (come in vista giorno).
@@ -174,7 +200,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     const { dayIdx, opId } = targetFromX(d.cx);
     const rawMin = d.orig + dy / pxm;
     const near = weekBestSnap(rawMin, dayData[dayIdx == null ? d.origDayIdx : dayIdx], opId == null ? d.origOp : opId, d, snapTol);
-    const { ns, snap } = snapStart(rawMin, step, near, G0, G1);
+    // tutto l'appuntamento entro la mezzanotte (vedi snapStart)
+    const { ns, snap } = snapStart(rawMin, step, near, G0, G1, { tail: d.obj.endMin - d.obj.startMin });
     d.snap = snap;
     d.ns = ns;
     d.dayIdx = dayIdx == null ? d.origDayIdx : dayIdx;
@@ -294,7 +321,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   // anteprima al passaggio del mouse, con la scheda della vista giorno (hoverShape)
   const openHover = (a, el) => {
-    if (drag.current) return;
+    if (!hoverOk()) return;
     setHover({ a: hoverShape(a), ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });
   };
   const closeHover = () => setHover(null);
@@ -319,8 +346,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
           />
         ))}
       </div>
-      {/* grid — `data-span-min`: quanti minuti copre, per «Adatta» */}
-      <div data-span-min={G1 - G0} style={{ display: 'flex', height: gridH, position: 'relative', width: 'max-content', minWidth: '100%' }}>
+      {/* grid — `data-g0` e `data-work-*`: da dove parte la griglia e la
+          giornata di lavoro, per «Adatta» (useAgendaZoom). zIndex 0: sotto
+          l'intestazione fissa, anche la copia trascinata (vedi DayGrid) */}
+      <div data-g0={G0} data-work-start={work.start} data-work-end={work.end} style={{ display: 'flex', height: gridH, position: 'relative', zIndex: 0, width: 'max-content', minWidth: '100%' }}>
         {/* colonna delle ore: etichette in grassetto centrate sulla riga, ":30" in piccolo, tacca allineata */}
         <HourGutter g0={G0} g1={G1} pxm={pxm} variant="week" />
         {dayData.map((d, i) => {
@@ -333,6 +362,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
             <WeekDayColumn
               key={i} day={d} index={i} width={dayW} isToday={isToday} isTargetDay={isTargetDay} looseTarget={looseTarget}
               dragging={dragging} dg={dg} movingObj={movingObj} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
+              opening={hoursSet ? openingFor(settings, d.date) : null}
               ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
               colorOf={colorOf} itemColor={itemColor}
               onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onHover={openHover} onLeave={closeHover}

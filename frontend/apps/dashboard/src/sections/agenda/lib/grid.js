@@ -69,12 +69,21 @@ export const GRID_LINE_STYLE = {
 };
 
 /* ---- Fascia oraria delle griglie (vista giorno e settimana) -----------------
- * Era fissa, 08:00–20:00: la sposa forzata alle 07:00 non compariva né in
- * giorno né in settimana (il blocco finiva sotto l'intestazione), e con i turni
- * fino alle 21 la fascia 20–21 non si poteva cliccare e un trascinamento la
- * schiacciava alle 19:45. Ora la fascia è quella del giorno: orari del centro e
- * turni, allargata a ore piene per gli appuntamenti e le pause che ci sono
- * davvero. Senza orari né turni si parte dalle 08–20 di sempre.
+ * Le griglie coprono la giornata INTERA, 00:00–24:00 (GRID_DAY), come i
+ * calendari che si usano tutti i giorni: le ore fuori orario sono tratteggiate
+ * e si aprono sulla giornata di lavoro (firstScrollMin). Prima la griglia era
+ * stretta sulla giornata di lavoro: tolta la barra alta dell'agenda, ci stava
+ * tutta nello schermo e non scorreva più — soprattutto nei giorni senza
+ * appuntamenti — e prima delle 9 o dopo le 19 non si poteva né cliccare né
+ * trascinare niente. Ancora prima era fissa 08:00–20:00: la sposa forzata
+ * alle 07:00 non compariva, e con i turni fino alle 21 la fascia 20–21 non si
+ * usava. */
+export const GRID_DAY = { start: 0, end: 24 * 60 };
+
+/* La giornata di LAVORO: orari del centro e turni, allargata a ore piene per
+ * gli appuntamenti e le pause che ci sono davvero; senza orari né turni le
+ * 08–20 di sempre. Dice dove si apre la griglia e che cosa riempie lo
+ * schermo con «Adatta».
  * `base` e `extra` = [[da, a], …] in minuti dalla mezzanotte. */
 export function gridRange(base, extra = []) {
   const all = [...((base && base.length) ? base : [[DK_START, DK_END]]), ...(extra || [])];
@@ -88,6 +97,16 @@ export function gridRange(base, extra = []) {
   const start = Math.max(0, Math.floor(lo / 60) * 60);
   const end = Math.min(24 * 60, Math.max(start + 60, Math.ceil(hi / 60) * 60));
   return { start, end };
+}
+
+/** Il minuto da mettere in cima alla griglia la prima volta che si apre:
+ *  oggi, se la giornata di lavoro `work` ({ start, end }) è in corso, un'ora
+ *  prima di adesso (aprendo alle 16 si vedeva la mattina già passata);
+ *  altrimenti mezz'ora prima che cominci — non la mezzanotte, ora che la
+ *  griglia copre tutte le 24 ore. `nowMin` = null se non è oggi. */
+export function firstScrollMin(work, nowMin = null) {
+  if (nowMin != null && nowMin >= work.start && nowMin < work.end) return Math.max(0, nowMin - 60);
+  return Math.max(0, work.start - 30);
 }
 
 /** Fascia della vista giorno. `rows` = righe di /agenda/day (turni,

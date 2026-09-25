@@ -7,7 +7,7 @@ import { Icon, statusMeta, timeLabel } from '@youty/shared';
 import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
-export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, resizing = false, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -53,11 +53,13 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // leggibile sopra gli altri.
         ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
-        boxShadow: dragging ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : '0 1px 3px rgba(17,24,39,0.12)',
+        boxShadow: dragging || resizing ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : '0 1px 3px rgba(17,24,39,0.12)',
         // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
-        // contorno spariva sotto il vicino di corsia.
-        zIndex: dragging ? 20 : highlight ? 3 : 2, overflow: 'hidden',
+        // contorno spariva sotto il vicino di corsia. Allungandolo, il blocco
+        // resta nella sua corsia e passa SOPRA quello che copre (le corsie
+        // cambiano solo al rilascio: vedi VisitBlocks).
+        zIndex: dragging || resizing ? 20 : highlight ? 3 : 2, overflow: 'hidden',
         // I quattro lati uno per uno: con `padding` breve accanto a
         // `paddingLeft`, a ogni cambio d'altezza (zoom, durata) React
         // riscriveva solo il breve e il rientro della spina tornava a 9 px,
@@ -66,7 +68,10 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         paddingTop: compact ? 3 : 6, paddingBottom: compact ? 3 : 6,
         paddingLeft: grouped ? 21 : compact ? 9 : 10,
         paddingRight: compact && isFirst && appt.deposit_status === 'paid' ? 30 : compact ? 9 : 10,
-        cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', transform: dragging ? 'scale(1.03)' : 'none',
+        // Niente ingrandimento durante il trascinamento: `scale(1.03)` spostava
+        // i bordi di qualche pixel (tre minuti su un blocco lungo) rispetto
+        // all'orario d'arrivo, e staccava il blocco dalla spina che lo segue.
+        cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none',
         opacity: appt.status === 'no_show' ? 0.5 : dragging ? 0.92 : 1, transition: dragging ? 'none' : 'box-shadow 150ms',
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,
       }}
@@ -97,7 +102,10 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         </div>
       )}
       {showTime && <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 2, flexShrink: 0 }}>
-        <span className="tabnum" style={{ fontSize: 11, fontWeight: 600, color: ink.sub, whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{dragging || !compact ? '–' + timeLabel(startMin + active + soak) : ''}</span>
+        {/* nei blocchi bassi solo l'inizio, anche trascinando: con la fine il
+            nome della cliente si riduceva a «…» proprio mentre la si sposta
+            (l'orario intero lo dice il badge accanto al puntatore) */}
+        <span className="tabnum" style={{ fontSize: 11, fontWeight: 600, color: ink.sub, whiteSpace: 'nowrap' }}>{timeLabel(startMin)}{!compact ? '–' + timeLabel(startMin + active + soak) : ''}</span>
         {grouped && (
           <span className="tabnum" style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.02em', color: ink.ink, background: ink.chip, borderRadius: 5, padding: '1px 4px', flexShrink: 0 }}>{index + 1}/{total}</span>
         )}

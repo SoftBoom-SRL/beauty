@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { EDGE_DELAY_FRAMES } from '../src/sections/agenda/lib/drag.js';
 import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, textOf } from './grid-harness.mjs';
 
 // i pezzi senza hook della griglia, che per i test fanno parte di DayGrid
@@ -53,7 +54,8 @@ function setup(extraProps = {}, dash = {}) {
     querySelectorAll: () => [],
     setPointerCapture() {}, addEventListener() {}, removeEventListener() {},
   };
-  const colsEl = { getBoundingClientRect: () => rect(64, 160 - scrollEl.scrollTop, 936, 16 * 60 * PXM), parentElement: { offsetTop: 60 } };
+  // le colonne coprono le 24 ore (GRID_DAY)
+  const colsEl = { getBoundingClientRect: () => rect(64, 160 - scrollEl.scrollTop, 936, 24 * 60 * PXM), parentElement: { offsetTop: 60 } };
   const headEl = { getBoundingClientRect: () => rect(0, 100, 1000, 60) };
   const cb = {};
   for (const k of ['onOpenAppt', 'onSlotMenu', 'onInvalidDrop', 'onDropOnDate', 'onDragChange', 'onSplitItem', 'onMoveAppt',
@@ -159,7 +161,7 @@ test('la rotella durante il trascinamento sposta l\'orario sotto il puntatore', 
   const g = setup();
   g.block(421).props.onDown(ptr(300, 400));
   // il puntatore resta fermo, la griglia scorre di 81 px = 60 minuti
-  g.scrollEl.scrollTop = 81;
+  g.scrollEl.scrollTop += 81;
   g.root().props.onScroll?.();
   g.m.render();
   g.root().props.onPointerUp(ptr(300, 400));
@@ -297,4 +299,215 @@ test('anche il ridimensionamento è un gesto in corso: i tasti dell\'agenda lo v
   assert.equal(document.body.classList.contains('dk-dragging'), false, 'il ridimensionamento non muove il blocco');
   g.root().props.onPointerUp(ptr(300, 540));
   assert.equal(document.body.classList.contains('dk-gesture'), false, 'spento al rilascio');
+});
+
+/* ---- 25/09: difetti visti trascinando nell'app vera ---- */
+
+test('trascinando in un\'altra colonna i blocchi che ci sono non cambiano corsia', () => {
+  const g = setup();
+  const lanes = (id) => { const b = g.block(id); return [b.props.lane, b.props.laneCount]; };
+  assert.deepEqual(lanes(441), [0, 1]);
+  // Sara (15:00, Anna) portata sopra Luca (19:45, Giulia)
+  g.block(421).props.onDown(ptr(300, 400));
+  moveAll(g, 800, 400 + (19 * 60 + 45 - 15 * 60) * PXM);
+  // prima Luca si dimezzava (e tornava intero) a ogni passaggio del blocco
+  assert.deepEqual(lanes(441), [0, 1], 'Luca resta a tutta larghezza');
+  const sara = findAll(g.root(), (el) => typeof el.type === 'function' && el.props.block?.item?.id === 421);
+  assert.equal(sara.length, 1, 'un solo blocco di Sara: quello che viaggia');
+  assert.equal(sara[0].props.dragging, true);
+  assert.equal(sara[0].props.startMin, 19 * 60 + 45);
+  assert.ok(find(g.root(), (el) => el.key === 'g421' && el.props.className === 'dk-drag-ghost'), 'la traccia resta nella colonna di Anna');
+  // nel blocco basso trascinato il nome della cliente resta leggibile: solo
+  // l'inizio accanto (l'orario intero lo dice il badge)
+  const out = sara[0].type(sara[0].props);
+  assert.match(textOf(out), /Sara Bianchi/);
+  const time = find(out, (el) => el.type === 'span' && el.props?.className === 'tabnum');
+  assert.equal(textOf(time), '19:45');
+});
+
+test('staccando un servizio la spina resta sulla visita e i vicini non si stringono', () => {
+  // Sofia: ricostruzione 09:30–11:15 + nail art 11:15–11:45, poi Noor alle 12:00, tutte con Anna
+  const sofia = appt(46, 1, '09:30', 'Sofia Ricci', [item(461, 'Ricostruzione', 1, 105, 0), item(462, 'Nail art', 1, 30, 1)]);
+  const noor = appt(47, 1, '12:00', 'Noor Haddad', [item(471, 'Semipermanente', 1, 60)]);
+  const rows = [{ ...ROWS[0], appointments: [sofia, noor], pauses: [] }, { ...ROWS[1], appointments: [] }];
+  const g = setup({ rows, allRows: rows });
+  const lanes = (id) => { const b = g.block(id); return [b.props.lane, b.props.laneCount]; };
+  // il corpo della ricostruzione stacca QUEL servizio, giù fino alle 14:00
+  g.block(461).props.onDown(ptr(300, 300));
+  moveAll(g, 300, 300 + (14 * 60 - (9 * 60 + 30)) * PXM);
+  assert.equal(g.block(461).props.dragging, true);
+  // prima la visita si allungava fino al puntatore: Noor e la nail art a metà colonna
+  assert.deepEqual(lanes(471), [0, 1]);
+  assert.deepEqual(lanes(462), [0, 1]);
+  // la spina copre la nail art che resta, non mezza giornata
+  const spine = find(g.root(), (el) => el.key === 'sp46');
+  assert.equal(spine.props.style.top, (11 * 60 + 15) * PXM + 1.5);
+  assert.equal(spine.props.style.height, 30 * PXM - 3);
+  assert.equal(find(g.root(), (el) => el.key === 'fs46'), null, 'il servizio staccato esce dalla visita: niente spina con lui');
+});
+
+test('trascinando la spina la visita viaggia con la sua spina', () => {
+  const sofia = appt(46, 1, '09:30', 'Sofia Ricci', [item(461, 'Ricostruzione', 1, 105, 0), item(462, 'Nail art', 1, 30, 1)]);
+  const rows = [{ ...ROWS[0], appointments: [sofia], pauses: [] }, { ...ROWS[1], appointments: [] }];
+  const g = setup({ rows, allRows: rows });
+  find(g.root(), (el) => el.key === 'sp46').props.onPointerDown(ptr(70, 300));
+  moveAll(g, 800, 381);                                // Giulia, +60'
+  const fly = find(g.root(), (el) => el.key === 'fs46');
+  assert.ok(fly, 'la spina segue la visita');
+  assert.equal(fly.props.style.top, (10 * 60 + 30) * PXM + 1.5);
+  assert.equal(fly.props.style.height, 135 * PXM - 3);
+  assert.equal(fly.props.style.pointerEvents, 'none');
+  assert.equal(find(g.root(), (el) => el.key === 'sp46'), null, 'nella colonna di partenza restano le tracce');
+});
+
+test('allungando un blocco i vicini restano nella loro corsia e lui passa sopra', () => {
+  const g = setup();
+  const elena = () => { const b = g.block(431); return [b.props.lane, b.props.laneCount]; };
+  // Sara 15:00 (30') allungata fino alle 19:35, sopra Elena (19:00)
+  g.block(421).props.onResizeDown(ptr(300, 440));
+  assert.equal(g.cb.onLeave.calls.length, 1, 'la scheda di anteprima si chiude alla pressione');
+  moveAll(g, 300, 440 + 245 * PXM);
+  assert.deepEqual(elena(), [0, 1]);
+  const sara = g.block(421);
+  assert.equal(sara.props.activeMin, 275);
+  assert.equal(sara.props.resizing, true);
+  assert.equal(sara.type(sara.props).props.style.zIndex, 20);
+  g.root().props.onPointerUp(ptr(300, 440 + 245 * PXM));
+  assert.deepEqual(g.cb.onResizeItem.calls.map(([a, it, dur]) => [a.id, it.id, dur]), [[42, 421, 275]]);
+});
+
+test('dopo il rilascio la scheda dell\'appuntamento non compare da sola', () => {
+  const g = setup();
+  g.block(421).props.onDown(ptr(300, 400));
+  moveAll(g, 300, 481);
+  g.root().props.onPointerUp(ptr(300, 481));
+  g.m.render();
+  // il browser fa «entrare» il puntatore fermo nel blocco che gli arriva sotto
+  const enter = () => { const b = g.block(421); b.type(b.props).props.onMouseEnter({ currentTarget: {} }); };
+  enter();
+  assert.deepEqual(g.cb.onHover.calls, [], 'prima compariva, con l\'orario di prima dello spostamento');
+  // i movimenti «finti» del browser (stesse coordinate) e i tremolii non contano
+  g.root().props.onPointerMove(ptr(300, 481));
+  g.root().props.onPointerMove(ptr(302, 483));
+  enter();
+  assert.equal(g.cb.onHover.calls.length, 0);
+  // un movimento vero e la scheda torna
+  g.root().props.onPointerMove(ptr(310, 490));
+  enter();
+  assert.equal(g.cb.onHover.calls.length, 1);
+});
+
+test('un clic (senza trascinare) non spegne la scheda', () => {
+  const g = setup();
+  g.block(421).props.onDown(ptr(300, 400));
+  g.root().props.onPointerUp(ptr(300, 400));
+  g.m.render();
+  const b = g.block(421);
+  b.type(b.props).props.onMouseEnter({ currentTarget: {} });
+  assert.equal(g.cb.onHover.calls.length, 1);
+});
+
+test('trascinando verso il bordo la griglia scorre da sola, e il rilascio la ferma', () => {
+  const g = setup();
+  const top0 = g.scrollEl.scrollTop;
+  g.block(421).props.onDown(ptr(300, 500));
+  moveAll(g, 300, 560);
+  assert.equal(g.win.pendingFrames(), 0, 'lontano dai bordi non scorre');
+  // 5 px sopra il fondo del contenitore (900): prima un attimo di attesa
+  moveAll(g, 300, 895);
+  assert.equal(g.win.pendingFrames(), 1);
+  g.win.frames(EDGE_DELAY_FRAMES);
+  assert.equal(g.scrollEl.scrollTop, top0, 'non ancora');
+  g.win.frames(10);
+  const scrolled = g.scrollEl.scrollTop - top0;
+  assert.ok(scrolled >= 100, `scorsa di ${scrolled} px`);
+  // lo scroll vero fa scattare onScroll: il blocco scende con la griglia
+  g.root().props.onScroll();
+  g.root().props.onPointerUp(ptr(300, 895));
+  const start = g.cb.onMoveAppt.calls[0]?.[1] ?? g.cb.onInvalidDrop.calls[0]?.[2].newApptStart;
+  const still = 15 * 60 + (895 - 500) / PXM;
+  assert.ok(start >= still + 60, `arrivo ${start}: oltre dove arrivava senza scorrere (${still})`);
+  // finito il gesto non scorre più niente
+  const after = g.scrollEl.scrollTop;
+  g.win.frames(5);
+  assert.equal(g.scrollEl.scrollTop, after);
+  assert.equal(g.win.pendingFrames(), 0);
+});
+
+test('lo scorrimento automatico sale sotto l\'intestazione, non sopra', () => {
+  const g = setup();
+  const top0 = g.scrollEl.scrollTop;
+  g.block(421).props.onDown(ptr(300, 500));
+  moveAll(g, 300, 450);
+  // sopra l'intestazione (fino a y 160) il puntatore indica la striscia dei giorni
+  moveAll(g, 300, 150);
+  assert.equal(g.win.pendingFrames(), 0);
+  // appena sotto: sale
+  moveAll(g, 300, 165);
+  g.win.frames(EDGE_DELAY_FRAMES + 3);
+  assert.ok(g.scrollEl.scrollTop < top0, 'la griglia sale');
+  // Esc ferma anche lo scorrimento
+  g.win.fire('keydown', { key: 'Escape', preventDefault() {} });
+  const after = g.scrollEl.scrollTop;
+  g.win.frames(3);
+  assert.equal(g.scrollEl.scrollTop, after);
+});
+
+test('il ridimensionamento scorre solo in verticale', () => {
+  const g = setup();
+  g.scrollEl.scrollLeft = 0;
+  const top0 = g.scrollEl.scrollTop;
+  g.block(421).props.onResizeDown(ptr(300, 440));
+  moveAll(g, 995, 895);                                // angolo in basso a destra
+  g.win.frames(EDGE_DELAY_FRAMES + 3);
+  assert.ok(g.scrollEl.scrollTop > top0, 'in giù sì');
+  assert.equal(g.scrollEl.scrollLeft, 0, 'di lato no: la durata non cambia colonna');
+  g.root().props.onPointerUp(ptr(995, 895));
+});
+
+test('attraversando di corsa la fascia del bordo la griglia non scorre', () => {
+  // il blocco preso vicino all'intestazione e portato sulla striscia dei giorni
+  const g = setup();
+  const top0 = g.scrollEl.scrollTop;
+  g.block(421).props.onDown(ptr(300, 200));
+  moveAll(g, 300, 190);                                // nella fascia (160–208)
+  g.win.frames(3);
+  moveAll(g, 300, 175);
+  g.win.frames(3);
+  moveAll(g, 300, 120);                                // sopra la griglia
+  g.win.frames(EDGE_DELAY_FRAMES);
+  assert.equal(g.scrollEl.scrollTop, top0, 'la giornata resta dov\'era');
+  g.root().props.onPointerUp(ptr(300, 120));
+});
+
+test('portato fino in fondo alla giornata il blocco si rilascia, non si annulla', () => {
+  const g = setup();
+  // in fondo alle 24 ore: sotto le 24:00 restano 8 px dell'area che scorre
+  g.scrollEl.scrollTop = 24 * 60 * PXM + 60 + 8 - 800;
+  g.root().props.onScroll();
+  const bodyBottom = 160 - g.scrollEl.scrollTop + 24 * 60 * PXM;
+  g.block(431).props.onDown(ptr(300, 600));
+  moveAll(g, 300, 640);
+  moveAll(g, 300, Math.ceil(bodyBottom) + 3);          // sotto il corpo, dentro il contenitore
+  const badge = find(g.root(), (el) => String(el.props?.className || '').includes('dk-drag-badge'));
+  assert.doesNotMatch(textOf(badge), /Fuori dalla griglia/);
+  g.root().props.onPointerUp(ptr(300, Math.ceil(bodyBottom) + 3));
+  assert.equal(g.cb.onMoveAppt.calls.length + g.cb.onInvalidDrop.calls.length, 1, 'il rilascio sposta');
+});
+
+test('trascinata in fondo alla giornata, la visita finisce entro la mezzanotte', () => {
+  const g = setup();
+  // Elena (19:00, 90'): in fondo, all'ultima riga della griglia
+  g.scrollEl.scrollTop = 24 * 60 * PXM + 60 + 8 - 800;
+  g.root().props.onScroll();
+  g.block(431).props.onDown(ptr(300, 500));
+  moveAll(g, 300, 890);
+  assert.equal(g.block(431).props.startMin, 22 * 60 + 30, 'si ferma quando la fine tocca le 24:00');
+  // in fondo alla finestra (900) il badge sale sopra il puntatore: si legge
+  const badge = find(g.root(), (el) => String(el.props?.className || '').includes('dk-drag-badge'));
+  assert.equal(badge.props.style.bottom, 900 - 890 + 14);
+  assert.equal(badge.props.style.top, undefined);
+  g.root().props.onPointerUp(ptr(300, 890));
+  const start = g.cb.onMoveAppt.calls[0]?.[1] ?? g.cb.onInvalidDrop.calls[0]?.[2].newApptStart;
+  assert.equal(start, 22 * 60 + 30);
 });

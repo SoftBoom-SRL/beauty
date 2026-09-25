@@ -24,8 +24,8 @@ export {
 } from './lib/calendar.js';
 
 export {
-  clampZoom, zoomStep, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, gridRange, dayGridRange,
-  weekGridRange, openingFor, gridMarks, visibleMarks, closedIntervals,
+  clampZoom, zoomStep, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, GRID_DAY, gridRange, dayGridRange,
+  weekGridRange, firstScrollMin, openingFor, gridMarks, visibleMarks, closedIntervals,
 } from './lib/grid.js';
 
 export { moveIsNoop, ghostBlockAt, moveHereTarget, explainSlot } from './lib/slots.js';

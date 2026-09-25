@@ -20,17 +20,30 @@ export function useAgendaZoom() {
   useEffect(() => {
     try { localStorage.setItem('dk-agenda-zoom', String(zoom)); } catch { /* ignore */ }
   }, [zoom]);
-  /* «Adatta»: la giornata intera in una schermata, senza scorrere. Si misura
-   * l'area visibile della griglia — è lei che detta quanto ci sta. */
+  /* «Adatta»: la giornata di LAVORO in una schermata, dall'inizio. La griglia
+   * copre le 24 ore (GRID_DAY): adattarla tutta avrebbe schiacciato la
+   * giornata in un terzo di schermo. Si misura l'area visibile della griglia,
+   * sotto l'intestazione fissa; la giornata la dice la griglia stessa
+   * (`data-work-start`/`data-work-end` sul corpo). */
   const fitZoom = useCallback(() => {
     const el = document.querySelector('.dk-tl-cols')?.closest('.scroll')
       || document.querySelector('[data-daycol]')?.closest('.scroll');
     if (!el) return;
     const body = el.querySelector('.dk-tl-cols')?.parentElement || el.querySelector('[data-daycol]')?.parentElement;
-    const disponibile = el.clientHeight - (body ? body.offsetTop : 0) - 8;
-    // la fascia oraria non è più fissa (08–20): la dice la griglia stessa
-    const span = Number(body?.dataset?.spanMin) || (DK_END - DK_START);
-    if (disponibile > 60) setZoom(disponibile / (span * PXM));
+    const top0 = body ? body.offsetTop : 0;
+    const headH = body?.previousElementSibling?.offsetHeight || 0;
+    const from = Number(body?.dataset?.workStart ?? DK_START);
+    const to = Number(body?.dataset?.workEnd ?? DK_END);
+    const g0 = Number(body?.dataset?.g0 ?? 0);
+    // 8 px d'aria sopra e sotto la giornata
+    const disponibile = el.clientHeight - headH - 16;
+    if (disponibile <= 60 || !(to > from)) return;
+    const z = clampZoom(disponibile / ((to - from) * PXM));
+    setZoom(z);
+    /* Poi la giornata si porta in cima. Al fotogramma dopo: prima lo zoom
+     * nuovo si disegna, e useGridZoom rimette al centro il minuto che c'era. */
+    const go = () => { el.scrollTop = Math.max(0, top0 + (from - g0) * PXM * z - headH - 8); };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go); else setTimeout(go, 0);
   }, [setZoom]);
   return { zoom, setZoom, fitZoom };
 }
