@@ -12,16 +12,20 @@ import ChunkErrorBoundary from './ChunkErrorBoundary.jsx';
 import YourangReturn from './YourangReturn.jsx';
 
 const AnalystDrawer = lazy(() => import('../sections/insight/AnalystDrawer.jsx'));
+const SIDE_CHOICE_KEY = 'dk-side-choice';   // la barra laterale scelta col bottone: '1' compressa, '0' aperta
 
 export default function Shell() {
   const { tab, drawer, setDrawer, toastProps, t, lang, hasScope, fireToast } = useDash();
 
   /* Finché non la si sceglie, sotto i 1366 px (portatili piccoli, iPad in
    * orizzontale) la barra laterale parte compressa: aperta si prendeva 252 px
-   * e l'agenda andava a capo o scorreva di lato. Scelta una volta, resta. */
+   * e l'agenda andava a capo o scorreva di lato. Scelta una volta, resta.
+   * La scelta sta in una chiave nuova: la vecchia `dk-side-collapsed` la
+   * scriveva a ogni apertura anche chi non aveva mai toccato il bottone, e
+   * il suo '0' non vuol dire niente. Il suo '1' sì (una compressione voluta). */
   const [sideCollapsed, setSideCollapsed] = useState(() => {
     try {
-      const v = localStorage.getItem('dk-side-collapsed');
+      const v = localStorage.getItem(SIDE_CHOICE_KEY) ?? (localStorage.getItem('dk-side-collapsed') === '1' ? '1' : null);
       if (v !== null) return v === '1';
     } catch { /* ignore */ }
     return window.innerWidth < 1366;
@@ -30,7 +34,7 @@ export default function Shell() {
   const toggleSide = () => {
     const next = !sideCollapsed;
     setSideCollapsed(next);
-    try { localStorage.setItem('dk-side-collapsed', next ? '1' : '0'); } catch { /* ignore */ }
+    try { localStorage.setItem(SIDE_CHOICE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
   };
 
   const Section = SECTIONS[tab];

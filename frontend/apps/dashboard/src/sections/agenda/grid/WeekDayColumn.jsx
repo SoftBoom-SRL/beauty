@@ -6,6 +6,7 @@
 // nei test fa parte di WeekView.
 import { timeLabel } from '@youty/shared';
 import { WEEK_DAY_BORDER, WEEK_TODAY_BG, weekLayout } from '../lib.js';
+import { weekColOf } from '../lib/week.js';
 import GridLines from './GridLines.jsx';
 import NowLine from './NowLine.jsx';
 import WeekBlock from './WeekBlock.jsx';
@@ -30,7 +31,8 @@ export default function WeekDayColumn({
       <NowLine nowMin={nowMin} g0={g0} g1={g1} pxm={pxm} variant="week" />
       {day.dayOps.map((o) => {
         // il blocco trascinato esce dalla sua corsia: al suo posto la traccia, e riappare dove punta il cursore
-        const opList = day.list.filter((a) => a.operator_id === o.id && !(dragging && a.id === dg.id));
+        // la colonna del disegno: col filtro «Team» può non essere la principale (weekColOf)
+        const opList = day.list.filter((a) => weekColOf(a) === o.id && !(dragging && a.id === dg.id));
         const isTarget = isTargetDay && dg.nop === o.id;
         const isOrigin = dragging && dg.origDayIdx === index && dg.origOp === o.id;
         return (

@@ -6,7 +6,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { inkOn, restingIds, visibleDayRows, wantsLightText, workingOperatorIds } from '../src/sections/agenda/lib.js';
+import {
+  hiddenIdsOf, inkOn, locationOperators, parseHiddenIds, restingIds, visibleDayRows, wantsLightText, workingOperatorIds,
+} from '../src/sections/agenda/lib.js';
 
 const it = (id, op) => ({ id, service_id: id, operator_id: op, duration_min: 30, soak_min: 0 });
 /* Anna lavora; Bea è a riposo ma fa la piega dentro la visita di Anna; Carla
@@ -67,4 +69,29 @@ test('un colore che non si sa leggere resta col testo scuro di sempre', () => {
   assert.equal(wantsLightText(null), false);
   assert.equal(inkOn('var(--clay)').ink, 'var(--ink)');
   assert.equal(inkOn('#1A1A2E', 0.82).ink, '#FFFFFF');
+});
+
+test('nessuno ha turni quel giorno: «Solo chi lavora oggi» non ha niente su cui decidere', () => {
+  const noShifts = ROWS.map((r) => ({ ...r, windows: [] }));
+  assert.deepEqual(ids(visibleDayRows(noShifts, {}, { onlyWorking: true })), [1, 2, 3, 4], 'le colonne libere restano');
+  assert.deepEqual(restingIds(noShifts, {}), []);
+});
+
+test('spente valgono solo fra le operatrici elencate: un id rimasto salvato non nasconde niente', () => {
+  const ops = [{ id: 1 }, { id: 2 }];
+  assert.deepEqual(hiddenIdsOf({ 1: false, 2: true, 9: false }, ops), [1], 'la 9 non c\'è più');
+  assert.deepEqual(hiddenIdsOf({}, ops), []);
+});
+
+test('le spente salvate si leggono con pazienza', () => {
+  assert.deepEqual(parseHiddenIds('[2, "3", 4.5, null]'), [2, 3]);
+  assert.deepEqual(parseHiddenIds('rotto'), []);
+  assert.deepEqual(parseHiddenIds('{"a":1}'), []);
+  assert.deepEqual(parseHiddenIds(null), []);
+});
+
+test('le operatrici della sede: chi non ha sede vale per tutte', () => {
+  const ops = [{ id: 1, location_id: 1 }, { id: 2, location_id: null }, { id: 3, location_id: 2 }];
+  assert.deepEqual(locationOperators(ops, 1).map((o) => o.id), [1, 2]);
+  assert.deepEqual(locationOperators(ops, null).map((o) => o.id), [1, 2, 3], 'senza sede scelta, tutte');
 });

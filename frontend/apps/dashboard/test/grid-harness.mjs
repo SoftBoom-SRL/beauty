@@ -227,23 +227,38 @@ export function textOf(el) {
 /* ---- DOM finto ---- */
 export const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top });
 
-/** window/document minimi. `pills`: [{ iso, rect }] della striscia dei giorni. */
-export function installDom({ pills = [] } = {}) {
+/** window/document minimi. `pills`: [{ iso, rect }] della striscia dei giorni.
+ *  `storage`: l'oggetto dietro il localStorage finto (passando lo stesso a due
+ *  installazioni si prova quello che resta sulla postazione). Il classList del
+ *  body è vero (add, remove, contains): i tasti guardano `dk-dragging`. */
+export function installDom({ pills = [], storage = {} } = {}) {
   const listeners = {};
   globalThis.window = {
     innerWidth: 1400, innerHeight: 900,
     addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
     removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((f) => f !== fn); },
   };
+  globalThis.localStorage = {
+    getItem: (k) => (k in storage ? storage[k] : null),
+    setItem: (k, v) => { storage[k] = String(v); },
+    removeItem: (k) => { delete storage[k]; },
+  };
+  const classes = new Set();
   globalThis.document = {
-    body: { classList: { add() {}, remove() {} }, style: { setProperty() {}, removeProperty() {} } },
+    body: {
+      classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) },
+      style: { setProperty() {}, removeProperty() {} },
+    },
     querySelectorAll: (sel) => (sel === '[data-daydrop]'
       ? pills.map((p) => ({ getAttribute: () => p.iso, getBoundingClientRect: () => p.rect }))
       : []),
     querySelector: () => null,
+    // i popover (useClickAway) ascoltano il clic fuori sul documento
+    addEventListener() {}, removeEventListener() {},
   };
   return {
     fire(type, ev) { for (const fn of [...(listeners[type] || [])]) fn(ev); },
+    storage,
   };
 }
 

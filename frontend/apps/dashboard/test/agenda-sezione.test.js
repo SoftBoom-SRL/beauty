@@ -43,8 +43,8 @@ const rowsFor = (appts = []) => OPS.map((o) => ({
   appointments: appts.filter((a) => a.operator_id === o.id), pauses: [],
 }));
 
-function setup({ modal = null, undo = [], rows = null } = {}) {
-  const win = installDom();
+function setup({ modal = null, undo = [], rows = null, storage = {} } = {}) {
+  const win = installDom({ storage });
   globalThis.setInterval = () => 0;      // l'orologio dell'agenda (ogni 30 s) non serve qui
   globalThis.clearInterval = () => {};
   const ApiError = globalThis.__ApiError;
@@ -411,4 +411,66 @@ test('il filtro «Team» vale anche in settimana, senza l\'interruttore dei turn
   assert.deepEqual(g.wv().props.hiddenOps, [1], 'la settimana riceve le spente');
   assert.equal(team().props.setOnlyWorking, undefined, '«Solo chi lavora oggi» è del giorno');
   assert.equal(team().props.shown, 3);
+});
+
+test('le colonne spente restano sulla postazione, e «Solo» lascia una colonna sola', async () => {
+  const storage = {};
+  const g = setup({ storage });
+  await ready(g);
+  const team = () => find(g.m.tree, (el) => el.type?.name === 'TeamFilter');
+  team().props.toggleVis(2);                         // Giulia spenta
+  g.render();
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 3, 4]);
+  assert.equal(storage['dk-agenda-hidden-ops'], '[2]', 'si salvano solo le spente');
+  g.m.unmount();
+  const again = setup({ storage });                  // la pagina ricaricata
+  await ready(again);
+  assert.deepEqual(again.dg().props.rows.map((r) => r.operator.id), [1, 3, 4], 'Giulia resta spenta');
+  find(again.m.tree, (el) => el.type?.name === 'TeamFilter').props.only(3);
+  again.render();
+  assert.deepEqual(again.dg().props.rows.map((r) => r.operator.id), [3]);
+});
+
+test('un id spento di un\'operatrice che non è più in elenco non nasconde la sua riga orfana', async () => {
+  // Bea (4) è stata disattivata: non è più fra le operatrici, ma il server
+  // manda ancora la sua riga perché i suoi appuntamenti restino riassegnabili
+  const storage = { 'dk-agenda-hidden-ops': '[4]' };
+  const g = setup({ storage });
+  g.dash.operators = OPS.filter((o) => o.id !== 4);
+  g.render();
+  await ready(g);
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 2, 3, 4]);
+});
+
+test('i tasti di navigazione tacciono a metà trascinamento', async () => {
+  const g = setup();
+  await ready(g);
+  document.body.classList.add('dk-dragging');
+  g.win.fire('keydown', { key: 'ArrowRight', target: { tagName: 'BODY' }, preventDefault() {} });
+  g.render();
+  assert.equal(g.dg().props.date, TODAY, 'il blocco in mano non cade in un altro giorno');
+  document.body.classList.remove('dk-dragging');
+});
+
+test('cambiando giorno da tastiera si chiudono il menu dello slot e la scheda di anteprima', async () => {
+  const g = setup();
+  await ready(g);
+  g.dg().props.onSlotMenu(1, 11 * 60, 300, 300, { ok: true, code: 'ok', label: 'Disponibile' });
+  g.dg().props.onHover(sara, { getBoundingClientRect: () => ({ left: 100, right: 260, top: 200, bottom: 240, width: 160, height: 40 }) });
+  g.render();
+  assert.ok(find(g.m.tree, (el) => el.type?.name === 'SlotMenu'), 'il menu è aperto');
+  assert.ok(find(g.m.tree, (el) => el.type?.name === 'ApptHoverCard'), 'la scheda è aperta');
+  g.win.fire('keydown', { key: 'ArrowRight', target: { tagName: 'BODY' }, preventDefault() {} });
+  g.render();
+  await ready(g);
+  assert.equal(g.dg().props.date, plus(1));
+  assert.equal(find(g.m.tree, (el) => el.type?.name === 'SlotMenu'), null, 'il menu del giorno prima si chiude');
+  assert.equal(find(g.m.tree, (el) => el.type?.name === 'ApptHoverCard'), null, 'la scheda del giorno prima sparisce');
+});
+
+test('«Solo chi lavora oggi» non nasconde niente quando nessuno ha turni quel giorno', async () => {
+  const rows = rowsFor([sara]).map((r) => ({ ...r, windows: [] }));   // un salone che i turni non li usa
+  const g = setup({ rows });
+  await ready(g);
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [1, 2, 3, 4]);
 });

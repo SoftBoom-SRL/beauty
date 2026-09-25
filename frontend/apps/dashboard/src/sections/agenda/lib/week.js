@@ -27,23 +27,43 @@ export function weekDayOps(operators, locationId, appointments, orphanName) {
   return base.concat(extra);
 }
 
+/** La sotto-colonna dove si disegna una visita, col filtro «Team» che spegne
+ *  gli id di `off`: quella della principale se è accesa, altrimenti quella
+ *  della prima operatrice accesa fra i servizi; null se sono tutte spente.
+ *  Scartandola solo per la principale, spegnere Anna faceva sparire anche la
+ *  piega di Giulia dentro la visita di Anna (la vista giorno lo evita apposta:
+ *  il filtro decide le colonne, non i dati). */
+export function weekColumnFor(a, off) {
+  if (!off.has(a.operator_id)) return a.operator_id;
+  const other = (a.items || []).map((it) => it.operator_id).find((id) => id != null && !off.has(id));
+  return other ?? null;
+}
+
+/** La sotto-colonna in cui una visita è disegnata (vedi weekColumnFor). */
+export const weekColOf = (a) => a.colOp ?? a.operator_id;
+
 /** I sette giorni del payload /agenda/week pronti da disegnare: `list` =
  *  appuntamenti con startMin/endMin, `dayOps` = sotto-colonne (weekDayOps).
  *  `pending` = { id, dayIdx, ns, nop } dello spostamento in POST: override
  *  ottimistico, l'appuntamento compare già nel giorno/operatrice/orario di
  *  arrivo. `orphanName` = il nome di chi non è più in team. `hidden` = gli id
- *  delle operatrici spente nel filtro «Team»: niente sotto-colonna, e i loro
- *  appuntamenti (in settimana una visita sta nella colonna dell'operatrice
- *  principale) non si contano nella testata del giorno. Senza filtro con
- *  cinque operatrici la domenica usciva dallo schermo. */
+ *  delle operatrici spente nel filtro «Team»: niente sotto-colonna; una
+ *  visita resta finché una delle sue operatrici è accesa, disegnata nella
+ *  colonna di quella (`colOp`, solo per il disegno: `operator_id` resta la
+ *  principale), e la testata del giorno conta quello che si vede. Senza
+ *  filtro con cinque operatrici la domenica usciva dallo schermo. */
 export function weekDays(days, pending, operators, locationId, orphanName, hidden = []) {
   const off = new Set(hidden);
   const pendingSrc = pending ? days.flatMap((d) => d.appointments).find((a) => a.id === pending.id) : null;
   return days.map((d, i) => {
     const src = pending ? d.appointments.filter((a) => a.id !== pending.id) : d.appointments;
-    const list = src
-      .filter((a) => !off.has(a.operator_id))
-      .map((a) => { const s = minutesOfDay(a.start); return { ...a, startMin: s, endMin: s + (a.duration_min || 0) }; });
+    const list = [];
+    for (const a of src) {
+      const col = weekColumnFor(a, off);
+      if (col == null) continue;                      // nessuna delle sue operatrici è accesa
+      const s = minutesOfDay(a.start);
+      list.push({ ...a, ...(col !== a.operator_id ? { colOp: col } : {}), startMin: s, endMin: s + (a.duration_min || 0) });
+    }
     if (pendingSrc && pending.dayIdx === i) {
       list.push({ ...pendingSrc, operator_id: pending.nop, startMin: pending.ns, endMin: pending.ns + (pendingSrc.duration_min || 0) });
     }
@@ -81,7 +101,7 @@ export function weekBestSnap(rawMin, day, opId, d, tol) {
     best = { min, dist, label };
   };
   for (const a of day.list) {
-    if (a.id === d.id || a.operator_id !== opId) continue;
+    if (a.id === d.id || weekColOf(a) !== opId) continue;
     consider(a.endMin, a.client_name);                 // ci si attacca sotto
     consider(a.startMin - span, a.client_name);        // ci si attacca sopra
   }

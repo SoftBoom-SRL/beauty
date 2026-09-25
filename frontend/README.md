@@ -53,9 +53,11 @@ log del backend.
 La sezione **agenda** è la più grande e ha una struttura sua:
 `agendaApi.js` (tutti i suoi endpoint), `lib.js` (facciata che ri-esporta i
 moduli puri di `lib/`: date, griglia, orari, lista d'attesa, trascinamento,
-settimana, testi degli avvisi, «409 → riprova forzando»), `constants.js`,
+settimana, testi degli avvisi, «409 → riprova forzando», colonne del filtro
+«Team» in `team.js`, testo leggibile sui colori in `colors.js`), `constants.js`,
 `hooks/` (dati, live, undo, gesti, zoom, scroll, trascinamento comune a giorno e
-settimana), `grid/` e `parts/` (pezzi della griglia e della barra), `month/`,
+settimana), `grid/` e `parts/` (pezzi della griglia e della barra; la barra
+sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`), `month/`,
 `modals/` (dettaglio appuntamento con `detail/`, nuova prenotazione con
 `newappt/`, `rules.js` con le regole pure dei pannelli).
 
@@ -194,8 +196,9 @@ openModal('newappt', { prefill: { start, operatorId } });
 - `apps/dashboard/test/grid-harness.mjs` compila con esbuild e un React finto i
   componenti della griglia dell'agenda e simula i gesti del puntatore
   (`expand` per i sotto-componenti senza hook). Il React finto ha solo
-  useState, useRef, useEffect, useLayoutEffect, useCallback e useMemo: i
-  componenti che monta devono restare in questo insieme.
+  useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo e memo
+  (senza memoria): i componenti che monta devono restare in questo insieme.
+  `installDom` dà anche un `localStorage` finto (vuoto a ogni installazione).
 - `apps/client-app/test/load.mjs` fa lo stesso per hook e schermi della web
   app (`renderHook`, `mount`).
 - Il JSX in generale non è coperto dai test: per i cambiamenti che toccano

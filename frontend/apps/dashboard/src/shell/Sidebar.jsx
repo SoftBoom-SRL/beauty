@@ -41,12 +41,12 @@ export default function Sidebar({ collapsed, onToggleCollapse }) {
       </div>
       <nav className="dk-nav">
         {NAV_MAIN.map((n) => (
-          <NavItem key={n.id} n={n} active={tab === n.id} onClick={() => setTab(n.id)}
+          <NavItem key={n.id} n={n} active={tab === n.id} onClick={() => setTab(n.id)} collapsed={collapsed}
             subtabs={SECTION_SUBTABS[n.id]} subTab={subTab} onSub={(s) => setTab(n.id, s)} />
         ))}
         <div className="dk-navsection">{t('Gestione', 'Manage')}</div>
         {NAV_MANAGE.map((n) => (
-          <NavItem key={n.id} n={n} active={tab === n.id} onClick={() => setTab(n.id)}
+          <NavItem key={n.id} n={n} active={tab === n.id} onClick={() => setTab(n.id)} collapsed={collapsed}
             subtabs={SECTION_SUBTABS[n.id]} subTab={subTab} onSub={(s) => setTab(n.id, s)} />
         ))}
       </nav>
@@ -55,10 +55,13 @@ export default function Sidebar({ collapsed, onToggleCollapse }) {
   );
 }
 
-function NavItem({ n, active, onClick, subtabs, subTab, onSub }) {
+/* Compressa (di partenza sotto i 1366 px, vedi Shell) la voce è solo
+ * un'icona: il nome resta per i lettori di schermo e nel suggerimento. */
+function NavItem({ n, active, onClick, subtabs, subTab, onSub, collapsed }) {
   return (
     <React.Fragment>
-      <button className={'dk-navitem' + (active ? ' dk-navitem--active' : '')} onClick={onClick}>
+      <button className={'dk-navitem' + (active ? ' dk-navitem--active' : '')} onClick={onClick}
+        aria-label={n.label} aria-current={active ? 'page' : undefined} title={collapsed ? n.label : undefined}>
         <Icon name={n.icon} size={20} color="currentColor" stroke={active ? 2 : 1.7} />
         <span className="lbl" style={{ whiteSpace: 'nowrap' }}>{n.label}</span>
         {n.badge ? <span className="badge">{n.badge}</span> : null}

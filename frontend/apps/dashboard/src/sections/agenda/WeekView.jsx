@@ -24,7 +24,7 @@ import { retryForced } from './lib/retry.js';
 import { weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
-  weekDays, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
+  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
 } from './lib/week.js';
 import { useWeekData } from './hooks/useWeekData.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
@@ -139,7 +139,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       id: appt.id, obj: appt, pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
       startScroll: scrollRef.current?.scrollTop || 0,
-      orig: appt.startMin, origOp: appt.operator_id, origDayIdx: dayIdx,
+      // la colonna da cui parte, quella in cui è disegnato (weekColOf): con la
+      // principale spenta nel filtro, trascinarlo nella stessa colonna non
+      // deve passare i servizi della principale a un'altra
+      orig: appt.startMin, origOp: weekColOf(appt), origDayIdx: dayIdx,
       ns: appt.startMin, nop: appt.operator_id, dayIdx, hoverOp: null, moved: false,
     };
     // il contenitore riceve TUTTI gli eventi fino al rilascio, anche fuori dall'area o sopra altri blocchi

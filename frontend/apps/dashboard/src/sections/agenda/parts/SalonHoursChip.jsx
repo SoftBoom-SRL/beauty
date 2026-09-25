@@ -17,13 +17,13 @@ export default function SalonHoursChip({ settings, date, t, isOwner, onOpen }) {
       ? [t('Centro', 'Salon'), hours]
       : [t('Centro', 'Salon'), t('chiuso', 'closed')];
   return (
-    <button type="button" onClick={onOpen} title={`${lead} ${main} · ` + t('orari di apertura del centro, clicca per modificarli', 'salon opening hours, click to edit')}
+    <button type="button" onClick={onOpen} aria-label={`${lead} ${main}`} title={`${lead} ${main} · ` + t('orari di apertura del centro, clicca per modificarli', 'salon opening hours, click to edit')}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 30, minWidth: 30, justifyContent: 'center', padding: '0 9px', borderRadius: 99, border: '1px solid ' + (has ? 'var(--hair)' : 'color-mix(in srgb, var(--warn) 55%, transparent)'), background: has ? 'var(--surface)' : 'var(--warn-tint)', color: has ? (ranges.length ? 'var(--ink-2)' : 'var(--muted)') : 'var(--warn)', fontSize: 12, fontWeight: 650, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
       <Icon name="clock" size={13} color="currentColor" />
       {/* con la barra stretta resta solo l'icona: grigia con gli orari
           impostati (le ore chiuse si vedono nella griglia), ambra quando
           mancano, che resta un invito anche senza parole */}
-      <span className={'tabnum ' + (has ? 'dk-ag-t2' : 'dk-ag-t3')}><span className="dk-ag-lbl">{lead} </span>{main}</span>
+      <span className={'tabnum dk-hours-txt ' + (has ? 'dk-ag-t2' : 'dk-ag-t3')}><span className="dk-ag-lbl">{lead} </span>{main}</span>
     </button>
   );
 }

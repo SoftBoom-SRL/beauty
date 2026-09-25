@@ -35,7 +35,10 @@
    etichette ripetute dai suggerimenti, e solo alla fine si va a capo.
    ============================================================ */
 .dk-agbar { container-type: inline-size; display: flex; align-items: center; gap: 8px; row-gap: 8px; flex-wrap: wrap; min-height: 52px; padding: 8px 16px; border-bottom: 1px solid var(--hair); background: var(--surface); flex-shrink: 0; box-sizing: border-box; }
-.dk-agbar__group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* I gruppi non si stringono finché la barra può andare a capo; se un gruppo
+   da solo non ci sta (pannello di destra e drawer aperti insieme) va a capo
+   al suo interno, invece di uscire dalla barra sotto il pannello. */
+.dk-agbar__group { display: flex; align-items: center; gap: 6px; row-gap: 8px; flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
 .dk-agbar__spacer { flex: 1; min-width: 4px; }
 /* bottone di testo della barra (Oggi, Indietro, Team) */
 .dk-agbtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 120ms var(--ease), border-color 120ms var(--ease); flex-shrink: 0; }
@@ -63,15 +66,24 @@
 .dk-agdays > button.is-today::after { content: ""; width: 4px; height: 4px; border-radius: 99px; background: var(--clay); margin-top: 1px; }
 .dk-agdays > button.is-today[aria-pressed="true"]::after { background: #fff; }
 .dk-agdays--drop { background: var(--clay-tint); box-shadow: inset 0 0 0 1px var(--clay); }
-/* Colonna stretta, a gradini (larghezze misurate sulla barra vera):
-   - sotto i 1440 px spariscono le etichette ripetute nei suggerimenti
-     (Indietro, Team, Adatta, la percentuale, «Centro»);
-   - sotto i 1180 il mese si abbrevia, gli orari impostati restano solo
+/* Colonna stretta, a gradini. Le soglie sono misurate sulla barra vera coi
+   testi più lunghi («Orari del centro: imposta», «Settembre»), facendo
+   variare la larghezza: ogni gradino deve scattare PRIMA che il contenuto
+   smetta di starci (con le soglie stimate, fra 1441 e 1466 px e fra 1061 e
+   1094 la barra andava a capo con lo spazio che il gradino dopo avrebbe
+   liberato):
+   - fino a 1480 px di contenuto spariscono le etichette ripetute nei
+     suggerimenti (Indietro, Team, Adatta, la percentuale, «Centro»);
+   - fino a 1180 il mese si abbrevia, gli orari impostati restano solo
      nell'icona (la griglia li mostra comunque) e i giorni si stringono;
-   - sotto i 1060 la vista diventa un menu;
-   - sotto i 900 circa la barra va a capo: due righe basse, mai le tre di prima. */
+   - fino a 1100 la vista diventa un menu;
+   - sotto i 940 circa la barra va a capo: due righe basse, mai le tre di prima. */
+/* orari del centro lunghi (due fasce): puntini, il testo intero è nel
+   suggerimento. Prima dei gradini: a parità di selettore vince chi viene
+   dopo, e il display dei gradini deve poterlo nascondere. */
+.dk-agbar .dk-hours-txt { display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .dk-agbar .dk-ag-t2only, .dk-agbar .dk-ag-t3only { display: none; }
-@container (max-width: 1440px) {
+@container (max-width: 1480px) {
   .dk-agbar .dk-ag-lbl { display: none; }
   .dk-agbar .dk-agbtn--icon-narrow { padding: 0 9px; }
 }
@@ -80,7 +92,7 @@
   .dk-agbar .dk-ag-t2only { display: inline-flex; }
   .dk-agbar .dk-agdays > button { width: 34px; min-width: 34px; }
 }
-@container (max-width: 1060px) {
+@container (max-width: 1100px) {
   .dk-agbar .dk-ag-t3 { display: none; }
   .dk-agbar .dk-ag-t3only { display: inline-flex; }
 }
@@ -91,11 +103,14 @@
    il passaggio esiste (sul tablet resta visibile, se no non si trova) */
 @media (hover: hover) {
   .dk-ophead .dk-ophead__pal { opacity: 0; transition: opacity 120ms var(--ease); }
-  .dk-ophead:hover .dk-ophead__pal, .dk-ophead .dk-ophead__pal[aria-expanded="true"] { opacity: 1; }
+  .dk-ophead:hover .dk-ophead__pal, .dk-ophead .dk-ophead__pal[aria-expanded="true"],
+  .dk-ophead .dk-ophead__pal:focus-visible, .dk-ophead:focus-within .dk-ophead__pal { opacity: 1; }
 }
 
 /* popover del filtro Team */
-.dk-teampop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 70; width: 300px; padding: 6px; box-shadow: var(--sh-pop); }
+/* verso destra: dopo il bottone Team vengono sempre Indietro, zoom e vista,
+   e ancorato a destra usciva dallo schermo quando la barra va a capo */
+.dk-teampop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 70; width: 300px; max-width: calc(100vw - 32px); padding: 6px; box-shadow: var(--sh-pop); box-sizing: border-box; }
 .dk-teamrow { display: flex; align-items: center; gap: 4px; border-radius: 9px; padding-right: 4px; }
 .dk-teamrow:hover { background: var(--surface-2); }
 .dk-teamrow__main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: none; background: transparent; text-align: left; cursor: pointer; border-radius: 9px; }

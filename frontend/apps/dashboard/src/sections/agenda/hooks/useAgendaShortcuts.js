@@ -27,6 +27,9 @@ export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoo
       // il drawer di gruppo non è un modale del registry; hasOpenLayer: ogni
       // altro pannello o drawer aperto (l'assistente, un drawer di sezione)
       if (modal || groupOpen || hasOpenLayer()) return;
+      // a metà trascinamento il blocco è ancora in mano: cambiare giorno o
+      // vista lo farebbe cadere nel vuoto
+      if (document.body?.classList?.contains?.('dk-dragging')) return;
       // dopo un clic su «Oggi» o su una freccia il fuoco resta sul bottone: le
       // frecce devono funzionare anche lì (i campi sono già esclusi sopra)
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey) {

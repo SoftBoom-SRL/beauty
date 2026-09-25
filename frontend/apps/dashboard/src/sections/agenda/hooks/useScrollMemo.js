@@ -20,7 +20,9 @@ export function useScrollMemo({ scrollRef, headRef, memo, g0, pxm, ghost, dayKey
   const mem = memo || ownMemo;
   /* Senza un minuto da ricordare (la prima apertura) si parte da
    * `initialMin`: oggi, un'ora prima di adesso. Aprendo l'agenda alle 16 si
-   * vedeva la mattina già passata e bisognava scorrere per trovare adesso. */
+   * vedeva la mattina già passata e bisognava scorrere per trovare adesso.
+   * Da lì il minuto si ricorda come uno scorrimento a mano: sfogliando i
+   * giorni si resta alla stessa ora, che è lo scopo del memo. */
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const target = mem.current ?? initialMin;
@@ -30,9 +32,15 @@ export function useScrollMemo({ scrollRef, headRef, memo, g0, pxm, ghost, dayKey
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!ready || !el || !ghost) return;
-    const top = (minutesOfDay(ghost.start) - g0) * pxm;                 // nella griglia, sotto l'intestazione
-    const visible = el.clientHeight - (headRef.current?.offsetHeight || 0);
-    if (top < el.scrollTop || top + 24 > el.scrollTop + visible) el.scrollTop = Math.max(0, top - 40);
+    /* In coordinate del contenuto: dove comincia davvero il corpo della
+     * griglia (in giorno c'è uno stacco di 8 px sotto l'intestazione), come
+     * fanno lo zoom e «Adatta». Contando l'altezza dell'intestazione il
+     * controllo era sfasato di quegli 8 px. */
+    const headH = headRef.current?.offsetHeight || 0;
+    const body = (el.querySelector('.dk-tl-cols') || el.querySelector('[data-daycol]'))?.parentElement;
+    const top0 = body ? body.offsetTop : headH;
+    const top = top0 + (minutesOfDay(ghost.start) - g0) * pxm;
+    if (top < el.scrollTop + headH || top + 24 > el.scrollTop + el.clientHeight) el.scrollTop = Math.max(0, top - headH - 40);
   }, [ready, ghost?.id, ghost?.start, dayKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return function remember() {
     const el = scrollRef.current;

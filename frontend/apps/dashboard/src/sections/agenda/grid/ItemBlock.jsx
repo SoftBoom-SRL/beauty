@@ -57,11 +57,15 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
         // contorno spariva sotto il vicino di corsia.
-        zIndex: dragging ? 20 : highlight ? 3 : 2, padding: compact ? '3px 9px' : '6px 10px', overflow: 'hidden',
-        // la spina della visita (12 px a sinistra) non copre il testo, e il
-        // bollino della caparra incassata non copre l'ora nei blocchi bassi
+        zIndex: dragging ? 20 : highlight ? 3 : 2, overflow: 'hidden',
+        // I quattro lati uno per uno: con `padding` breve accanto a
+        // `paddingLeft`, a ogni cambio d'altezza (zoom, durata) React
+        // riscriveva solo il breve e il rientro della spina tornava a 9 px,
+        // col nome sotto la spina. La spina (12 px a sinistra) non copre il
+        // testo, e il bollino della caparra non copre l'ora nei blocchi bassi.
+        paddingTop: compact ? 3 : 6, paddingBottom: compact ? 3 : 6,
         paddingLeft: grouped ? 21 : compact ? 9 : 10,
-        ...(compact && isFirst && appt.deposit_status === 'paid' ? { paddingRight: 30 } : {}),
+        paddingRight: compact && isFirst && appt.deposit_status === 'paid' ? 30 : compact ? 9 : 10,
         cursor: canWrite ? 'grab' : 'pointer', touchAction: 'none', transform: dragging ? 'scale(1.03)' : 'none',
         opacity: appt.status === 'no_show' ? 0.5 : dragging ? 0.92 : 1, transition: dragging ? 'none' : 'box-shadow 150ms',
         display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'baseline' : 'stretch', gap: compact ? 6 : 0,

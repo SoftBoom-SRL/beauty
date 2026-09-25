@@ -12,7 +12,9 @@ export default function ViewSelector({ calView, setCalView, t }) {
           <button key={v} onClick={() => setCalView(v)} aria-pressed={calView === v} title={t(`${it} (${key})`, `${en} (${key})`)}>{t(it, en)}</button>
         ))}
       </div>
-      <select className="dk-agselect dk-ag-t3only" value={calView} onChange={(e) => setCalView(e.target.value)} aria-label={t('Vista', 'View')}>
+      {/* scelta la vista il fuoco lascia il menu: se no le frecce cambiavano
+          ancora vista invece di sfogliare, e T non faceva niente */}
+      <select className="dk-agselect dk-ag-t3only" value={calView} onChange={(e) => { setCalView(e.target.value); e.target.blur(); }} aria-label={t('Vista', 'View')}>
         {VIEWS.map(([v, it, en]) => <option key={v} value={v}>{t(it, en)}</option>)}
       </select>
     </>

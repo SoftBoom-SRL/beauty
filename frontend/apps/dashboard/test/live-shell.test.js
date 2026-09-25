@@ -7,7 +7,7 @@ import { test } from 'node:test';
 
 import { createBatcher, createSeen } from '../src/liveSeen.js';
 import { isChunkLoadError, reloadOnce, reloadPending, RELOAD_KEY, RELOAD_WINDOW_MS } from '../src/shell/chunkReload.js';
-import { installDom, loadComponent, mount, spy } from './grid-harness.mjs';
+import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
 const { Topbar, useEscLayer } = await loadComponent('apps/dashboard/test/fixtures/topbar-livelli.js');
 
@@ -188,4 +188,24 @@ test('N: le stesse guardie dell\'agenda, e in agenda il tasto resta suo (voce 42
     agenda.fire(key('n'));
     assert.deepEqual(agenda.openModal.calls, []);
   } finally { agenda.m.unmount(); }
+});
+
+test('«Prenotazione di gruppo» nel menu di «Prenota» porta all\'agenda col drawer; senza permesso non c\'è', () => {
+  const setDeepLink = spy(), setTab = spy();
+  const { m } = topbar('pos', { hasScope: () => true, setDeepLink, setTab });
+  try {
+    const btn = (text) => find(m.tree, (el) => el.type === 'button' && textOf(el).includes(text));
+    find(m.tree, (el) => el.type === 'button' && el.props['aria-label'] === 'Altre creazioni').props.onClick();
+    m.render();
+    btn('Prenotazione di gruppo').props.onClick();
+    assert.deepEqual(setDeepLink.calls, [['group-booking']]);
+    assert.deepEqual(setTab.calls, [['agenda']]);
+  } finally { m.unmount(); }
+  const ro = topbar('pos', { hasScope: () => false, setDeepLink, setTab });
+  try {
+    find(ro.m.tree, (el) => el.type === 'button' && el.props['aria-label'] === 'Altre creazioni').props.onClick();
+    ro.m.render();
+    assert.equal(find(ro.m.tree, (el) => el.type === 'button' && textOf(el).includes('Prenotazione di gruppo')), null);
+    assert.ok(find(ro.m.tree, (el) => el.type === 'button' && textOf(el).includes('Nuovo cliente')), 'il resto del menu resta');
+  } finally { ro.m.unmount(); }
 });

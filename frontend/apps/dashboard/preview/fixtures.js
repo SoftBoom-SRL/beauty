@@ -13,7 +13,8 @@ const SVC_OPS = { 10: [3], 11: [3], 12: [1, 2], 13: [1, 2], 14: [4, 5] };
 /* Colori come quelli di seed_demo (saturi per le operatrici, pastello per le
  * categorie): con i pastello di ripiego l'anteprima era più gentile del
  * salone vero, e un testo illeggibile su un colore pieno non si vedeva qui.
- * Noor oggi non lavora: serve a vedere la colonna «non in turno». */
+ * Noor oggi non lavora: la nasconde «Solo chi lavora oggi» (nel filtro Team
+ * risulta a riposo); spento l'interruttore, si vede la colonna «non in turno». */
 export const OPERATORS = [
   { id: 1, first_name: 'Anna', last_name: 'Ferri', initials: 'AF', name: 'Anna Ferri', role_title: 'Hair stylist', color: '#6366F1', active: true },
   { id: 2, first_name: 'Giulia', last_name: 'Neri', initials: 'GN', name: 'Giulia Neri', role_title: 'Estetista', color: '#F59E0B', active: true },

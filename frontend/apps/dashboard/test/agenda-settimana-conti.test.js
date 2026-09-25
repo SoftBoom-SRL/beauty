@@ -6,7 +6,7 @@ import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
 import {
-  hoverShape, movingBlock, weekBestSnap, weekDays, weekDropChanged, weekGhostSpans, weekMoveBody, whereLabel,
+  hoverShape, movingBlock, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans, weekMoveBody, whereLabel,
 } from '../src/sections/agenda/lib/week.js';
 
 const t = (it) => it;
@@ -120,4 +120,27 @@ test('filtro «Team» in settimana: niente sotto-colonna né appuntamenti delle 
   assert.deepEqual(days[3].by_status, { checked_in: 1 });
   // senza filtro conteggi e stati restano quelli del server
   assert.equal(weekDays(payload([giulia]), null, OPS, 1, '')[3].count, 0);
+});
+
+test('filtro «Team» in settimana: la visita di una spenta resta nella colonna della collega accesa che ci lavora', () => {
+  // manicure con Anna (principale) + piega con Giulia, giovedì alle 10
+  const visita = {
+    ...sara, id: 44, start: '2026-10-01T10:00:00+02:00', operator_id: 1, duration_min: 60,
+    items: [{ service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0 }, { service_id: 2, operator_id: 2, duration_min: 30, soak_min: 0 }],
+  };
+  const days = weekDays(payload([visita]), null, OPS, 1, '', [1]);   // Anna spenta
+  const shown = days[3].list.find((a) => a.id === 44);
+  assert.ok(shown, 'la piega di Giulia non sparisce con Anna');
+  assert.equal(shown.operator_id, 1, 'la principale resta Anna: serve agli spostamenti');
+  assert.equal(weekColOf(shown), 2, 'disegnata nella colonna di Giulia');
+  assert.equal(days[3].count, 1, 'e contata nella testata');
+  // accesa la principale, niente colonna di disegno a parte
+  assert.equal(weekDays(payload([visita]), null, OPS, 1, '')[3].list.find((a) => a.id === 44).colOp, undefined);
+  // tutte e due spente: la visita non si vede
+  assert.equal(weekDays(payload([visita]), null, OPS, 1, '', [1, 2])[3].list.some((a) => a.id === 44), false);
+});
+
+test('trascinata nella colonna in cui è disegnata, una visita con la principale spenta non cambia operatrice', () => {
+  const d = { ns: 11 * 60, nop: 2, origOp: 2 };   // origOp = weekColOf: la colonna di partenza
+  assert.deepEqual(weekMoveBody({ date: W1[3] }, d, false), { start: isoAtMin(W1[3], 11 * 60) });
 });

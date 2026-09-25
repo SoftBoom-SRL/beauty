@@ -9,7 +9,7 @@ import { Icon, toDateStr, todayStr, parseISO } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, hoverPlacement, isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek,
-  visibleDayRows, restingIds, itemBlocks, HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
+  visibleDayRows, restingIds, hiddenIdsOf, locationOperators, itemBlocks, HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
 } from './lib.js';
 import { useAgendaNav } from './hooks/useAgendaNav.js';
 import { useStoredFlag } from './hooks/useStoredFlag.js';
@@ -116,6 +116,12 @@ export default function AgendaSection() {
   const [hover, setHover] = useState(null);       // { a, x, y, side }
   const [slotMenu, setSlotMenu] = useState(null); // { opId, startMin, x, y, mode?, dur? }
   const [picker, setPicker] = useState(null);     // opId whose colour picker is open
+  /* Cambiando giorno o vista (anche da tastiera: ← → T G S M) il menu dello
+   * slot e la scheda di anteprima appartengono al giorno di prima: il menu
+   * restava aperto con l'esito vecchio e i suoi bottoni scrivevano sul giorno
+   * nuovo; la scheda restava incollata perché il blocco spariva senza
+   * mouseleave. */
+  useEffect(() => { setSlotMenu(null); setHover(null); }, [date, calView]);
 
   const onHover = (a, el) => {
     if (!a) { setHover(null); return; }
@@ -226,10 +232,15 @@ export default function AgendaSection() {
   /* «Solo chi lavora oggi» non nasconde mai la colonna dove cade l'ombra
    * dell'appuntamento aperto nel pannello. */
   const keepOps = ghostAppt ? [...new Set(itemBlocks(ghostAppt).map((b) => b.opId))] : [];
-  const visibleRows = visibleDayRows(allRows, vis, { onlyWorking, keep: keepOps });
-  const resting = onlyWorking && dayData ? restingIds(allRows, vis, keepOps) : [];
-  // in settimana il filtro toglie le sotto-colonne delle spente
-  const hiddenOps = operators.filter((o) => vis[o.id] === false).map((o) => o.id);
+  /* Il filtro elenca e conta le operatrici della sede attiva; spente valgono
+   * solo quelle (hiddenIdsOf): la riga orfana di un'operatrice disattivata
+   * resta sempre, anche se era stata spenta quando c'era ancora. In
+   * settimana le spente non hanno sotto-colonna. */
+  const locOps = locationOperators(operators, locationId);
+  const hiddenOps = hiddenIdsOf(vis, locOps);
+  const visKnown = Object.fromEntries(hiddenOps.map((id) => [id, false]));
+  const visibleRows = visibleDayRows(allRows, visKnown, { onlyWorking, keep: keepOps });
+  const resting = onlyWorking && dayData ? restingIds(allRows, visKnown, keepOps) : [];
 
   // il titolo della barra apre il selettore di mese e data (JumpTitle)
   const jumpProps = { open: jumpOpen, setOpen: setJumpOpen, t, MONTHS, cur, onMonth: jumpToMonth, onDate: jumpToDate };
@@ -266,14 +277,14 @@ export default function AgendaSection() {
             {/* In giorno e in settimana (nel mese c'è il suo filtro). «Solo chi
                 lavora oggi» è del giorno: la settimana non conosce i turni. */}
             {calView === 'day' && (
-              <TeamFilter operators={operators} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
                 onlyWorking={onlyWorking} setOnlyWorking={setOnlyWorking} resting={resting}
                 // mentre la giornata carica non ci sono righe: niente «0/5» di passaggio
-                shown={dayData ? visibleRows.length : null} total={dayData ? allRows.length : operators.length} t={t} />
+                shown={dayData ? visibleRows.length : null} total={dayData ? allRows.length : locOps.length} t={t} />
             )}
             {calView === 'week' && (
-              <TeamFilter operators={operators} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
-                shown={operators.length - hiddenOps.length} total={operators.length} t={t} />
+              <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+                shown={locOps.length - hiddenOps.length} total={locOps.length} t={t} />
             )}
             {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
             {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da

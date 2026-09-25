@@ -19,8 +19,9 @@ export function Avatar({ initials, size = 44, color, ring = false, img }) {
 }
 
 /* ============================== TOGGLE ============================== */
-export function Toggle({ on, onChange }) {
-  return <button className={'swt press' + (on ? ' swt--on' : '')} onClick={() => onChange(!on)} aria-pressed={on} />;
+// `label`: il nome per chi usa un lettore di schermo (il bottone non ha testo)
+export function Toggle({ on, onChange, label }) {
+  return <button className={'swt press' + (on ? ' swt--on' : '')} onClick={() => onChange(!on)} aria-pressed={on} aria-label={label} />;
 }
 
 /* ============================== MISC VIZ ============================== */

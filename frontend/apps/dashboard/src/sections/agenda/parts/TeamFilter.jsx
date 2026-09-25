@@ -1,8 +1,9 @@
-// TeamFilter — quali colonne disegna la vista giorno, dalla barra: un bottone
-// con le facce del team e, aperto, l'elenco da accendere e spegnere,
-// «Solo» per guardare la giornata di una persona sola e «Solo chi lavora oggi».
-// Prima era una riga di chip sotto la barra, sempre aperta: 60 px d'altezza
-// tolti alla griglia per una scelta che si fa una volta ogni tanto.
+// TeamFilter — quali colonne disegnano le viste giorno e settimana, dalla
+// barra: un bottone con le facce del team e, aperto, l'elenco da accendere e
+// spegnere, «Solo» per guardare la giornata di una persona sola e (in giorno)
+// «Solo chi lavora oggi». Prima era una riga di chip sotto la barra, sempre
+// aperta: 60 px d'altezza tolti alla griglia per una scelta che si fa una
+// volta ogni tanto.
 import { useCallback, useRef, useState } from 'react';
 import { Avatar, Icon, Toggle } from '@youty/shared';
 import { useClickAway } from '../../../hooks/useClickAway.js';
@@ -14,7 +15,8 @@ const AWAY = { event: 'pointerdown', capture: true, escape: true };
  *  `onlyWorking` / `setOnlyWorking` = «Solo chi lavora oggi» (senza
  *  `setOnlyWorking`, in settimana, l'interruttore non c'è), `resting` = gli id che nasconde
  *  (restingIds); `shown` / `total` = colonne visibili e colonne del giorno
- *  (`shown` null mentre la giornata carica). */
+ *  (in settimana: le operatrici della sede; `shown` null mentre la giornata
+ *  carica). `operators` = le operatrici della sede attiva. */
 export default function TeamFilter({ operators, vis, toggleVis, setAll, only, colorOf, onlyWorking, setOnlyWorking, resting = [], shown, total, t }) {
   const nResting = resting.length;
   const [open, setOpen] = useState(false);
@@ -31,6 +33,8 @@ export default function TeamFilter({ operators, vis, toggleVis, setAll, only, co
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button type="button" className="dk-agbtn dk-agbtn--icon-narrow" aria-expanded={open} aria-haspopup="dialog"
+        // il nome resta anche quando l'etichetta «Team» sparisce (barra stretta)
+        aria-label={t('Team', 'Team') + ': ' + summary}
         onClick={() => setOpen((o) => !o)} title={summary + (nResting ? ' · ' + t(`${nResting} a riposo oggi`, `${nResting} off today`) : '')}>
         {/* le facce: un'iniziale sul colore dell'operatrice (le due lettere
             dell'Avatar a questa misura non si leggevano) */}
@@ -69,7 +73,7 @@ export default function TeamFilter({ operators, vis, toggleVis, setAll, only, co
                         : o.role_title && <span className="t-sm" style={{ display: 'block', color: 'var(--muted)', fontSize: 11.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.role_title}</span>}
                     </span>
                   </button>
-                  <button type="button" className="only" onClick={() => only(o.id)} title={t(`Mostra solo ${o.first_name}`, `Show only ${o.first_name}`)}>{t('Solo', 'Only')}</button>
+                  <button type="button" className="only" onClick={() => only(o.id)} aria-label={t(`Mostra solo ${o.first_name}`, `Show only ${o.first_name}`)} title={t(`Mostra solo ${o.first_name}`, `Show only ${o.first_name}`)}>{t('Solo', 'Only')}</button>
                 </div>
               );
             })}
@@ -83,7 +87,7 @@ export default function TeamFilter({ operators, vis, toggleVis, setAll, only, co
                   : t('Nasconde chi non ha turno né appuntamenti', 'Hides who has no shift and no bookings')}
               </div>
             </div>
-            <Toggle on={onlyWorking} onChange={setOnlyWorking} />
+            <Toggle on={onlyWorking} onChange={setOnlyWorking} label={t('Solo chi lavora oggi', 'Only who works today')} />
           </div>}
         </div>
       )}

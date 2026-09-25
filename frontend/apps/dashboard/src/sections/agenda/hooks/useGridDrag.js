@@ -28,7 +28,14 @@ export function useGridDrag({ onStop, windowUpRef = null } = {}) {
     return !!(d && e && e.pointerId != null && d.pointerId != null && e.pointerId !== d.pointerId);
   };
 
-  useEffect(() => () => document.body.classList.remove('dk-dragging'), []);
+  /* Smontata a metà gesto (un altro giorno o un'altra vista da tastiera, un
+   * aggiornamento che rimonta la griglia): il gesto finisce anche per chi lo
+   * guardava da fuori, o la striscia dei giorni restava accesa come bersaglio
+   * di un trascinamento che non c'era più. */
+  useEffect(() => () => {
+    document.body.classList.remove('dk-dragging');
+    if (drag.current) { drag.current = null; onStopRef.current?.(false); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /* Esc annulla il drag in corso. `preventDefault` è il contratto di
    * ui/layers.js: quell'Esc è del trascinamento, e il pannello di dettaglio
    * aperto sotto non deve chiudersi insieme a lui. In cattura, così arriva

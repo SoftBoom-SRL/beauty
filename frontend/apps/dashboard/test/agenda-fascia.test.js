@@ -145,6 +145,18 @@ test('vista giorno: sul giorno dopo la griglia resta alla stessa ora', () => {
   assert.equal(scrollEl.scrollTop, (14 * 60 - 9 * 60) * PXM);
 });
 
+test('vista giorno: oggi si apre un\'ora prima di adesso; fuori dalla fascia dall\'inizio', () => {
+  const rows = [
+    { operator: { id: 1, name: 'Anna Neri' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },
+  ];
+  const { scrollEl } = day(rows, { nowMin: 15 * 60 + 20, scrollMemo: { current: null } });
+  assert.equal(scrollEl.scrollTop, (14 * 60 + 20 - 9 * 60) * PXM);
+  // alle 22 la giornata è finita: si guarda dall'inizio, non dal fondo
+  assert.equal(day(rows, { nowMin: 22 * 60, scrollMemo: { current: null } }).scrollEl.scrollTop, 0);
+  // un minuto già ricordato (sfogliando i giorni) vince su adesso
+  assert.equal(day(rows, { nowMin: 15 * 60, scrollMemo: { current: 10 * 60 } }).scrollEl.scrollTop, (10 * 60 - 9 * 60) * PXM);
+});
+
 test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
   const rows = [
     { operator: { id: 1, name: 'Anna Neri' }, windows: [['09:00', '19:00']], appointments: [], pauses: [] },

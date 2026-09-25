@@ -140,6 +140,11 @@ const INIT_SCRIPT = () => {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   window.__smoke = { mutations: 0, toasts: [] };
+  // Il pannello di destra dell'agenda parte chiuso sotto i 1600 px (dal
+  // riordino del 25/09): qui lo si apre come prima, così il giro confronta le
+  // stesse schermate fra una versione e l'altra e «Lista d'attesa» è quella
+  // del pannello. Una versione vecchia ignora la chiave.
+  try { if (localStorage.getItem('dk-agenda-rail') === null) localStorage.setItem('dk-agenda-rail', '1'); } catch { /* niente */ }
   const CSS = `
     *, *::before, *::after {
       animation-delay: 0s !important; animation-duration: 0.001s !important; animation-iteration-count: 1 !important;
@@ -459,6 +464,14 @@ function readOtp(sinceBytes) {
 }
 const logSize = () => { try { return fs.statSync(SERVER_LOG).size; } catch { return 0; } };
 
+/* La vista dell'agenda: i bottoni Giorno/Settimana/Mese, o il menu «Vista»
+ * che li sostituisce quando la barra è stretta (pannello di destra aperto). */
+async function pickView(page, label, value) {
+  const btn = content(page).getByRole('button', { name: label, exact: true });
+  if (await btn.isVisible()) await btn.click();
+  else await content(page).getByRole('combobox', { name: 'Vista' }).selectOption(value);
+}
+
 /* =========================================================== PASSI · dashboard */
 chain('dash', 'accesso', async (app) => {
   await app.page.goto(DASH + '/', { waitUntil: 'domcontentloaded' });
@@ -506,20 +519,28 @@ chain('dash', 'agenda', dashReset, [
     await page.getByRole('button', { name: /Nessuna richiesta · apri|Lista d.attesa/ }).first().click();
     await dlg(page).waitFor();
   }],
+  // Dal 25/09 la prenotazione di gruppo sta nel menu di «Prenota» (la freccia
+  // «Altre creazioni»); prima era il bottone «Gruppo» dell'agenda. Il passo
+  // prende quello che c'è, per confrontare anche le versioni di prima.
   ['dash.agenda.gruppo', async ({ page }) => {
     await closeDialogs(page);
-    await page.getByRole('button', { name: 'Gruppo', exact: true }).click();
+    const old = page.getByRole('button', { name: 'Gruppo', exact: true });
+    if (await old.count()) await old.click();
+    else {
+      await page.getByRole('button', { name: 'Altre creazioni' }).click();
+      await page.getByRole('button', { name: /Prenotazione di gruppo/ }).click();
+    }
     await dlg(page).getByText('Prenotazione di gruppo').waitFor();
   }],
   ['dash.agenda.settimana', async ({ page }) => {
     await closeDialogs(page);
-    await content(page).getByRole('button', { name: 'Settimana', exact: true }).click();
+    await pickView(page, 'Settimana', 'week');
   }],
   ['dash.agenda.mese', async ({ page }) => {
-    await content(page).getByRole('button', { name: 'Mese', exact: true }).click();
+    await pickView(page, 'Mese', 'month');
   }],
   ['dash.agenda.giorno-dopo', async ({ page }) => {
-    await content(page).getByRole('button', { name: 'Giorno', exact: true }).click();
+    await pickView(page, 'Giorno', 'day');
     await content(page).getByRole('button', { name: /^Ven\s*25$/ }).click();
   }],
   ['dash.notifiche', async ({ page }) => {
