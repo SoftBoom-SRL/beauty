@@ -18,7 +18,7 @@ import WeekDayColumn from './grid/WeekDayColumn.jsx';
 import WeekDragBadge from './grid/WeekDragBadge.jsx';
 import {
   PXM, WEEK_HOURS_W, HOVER_CLEAR_WEEK, isoAtMin, gridMarks, weekGridRange, slotStep, openApptIdOf, hoverPlacement,
-  GRID_DAY, firstScrollMin, openingFor,
+  GRID_DAY, firstScrollMin, openingFor, fitColumns,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
 import { retryForced } from './lib/retry.js';
@@ -29,16 +29,18 @@ import {
 } from './lib/week.js';
 import { useWeekData } from './hooks/useWeekData.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
+import { useGridWidth } from './hooks/useGridWidth.js';
 import { useScrollMemo } from './hooks/useScrollMemo.js';
 import { useGridDrag } from './hooks/useGridDrag.js';
 
 /* Larghezze MINIME: i giorni si allargano fino a riempire lo spazio (flex
  * 1 0 in WeekDayHeader e WeekDayColumn). Prima erano fisse, e con quattro
- * operatrici la domenica usciva dallo schermo anche con metà pagina vuota. */
+ * operatrici la domenica usciva dallo schermo anche con metà pagina vuota.
+ * Sono quelle a larghezza 1: lo zoom di lato (widthZoom) le moltiplica. */
 const SUBCOL_W = 44;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 112;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, hiddenOps = [] }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, hiddenOps = [] }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = openApptIdOf(modal);
@@ -84,6 +86,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * gesto si aggancia alla griglia quando c'è (`ready`), anche dopo lo
    * scheletro del cambio di settimana. */
   useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '[data-daycol]', ready });
+  // lo zoom di lato: larghezza dei giorni e delle sotto-colonne (useGridWidth)
+  const { gripProps } = useGridWidth({ scrollRef, width: widthZoom, onWidth: onWidthZoom, gutter: WEEK_HOURS_W, ready });
 
   /* Il trascinamento: Esc lo annulla e, qui, anche pointerup e pointercancel su
    * window: se la cattura non è supportata o il rilascio avviene fuori
@@ -127,6 +131,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const nowMinLive = nowMin != null ? nowMin : nowMinutes();
 
   if (days === null) {
+    if (widthApi) widthApi.current = null;
     return (
       <div style={{ flex: 1, overflow: 'hidden', padding: '16px 26px', display: 'flex', gap: 8 }}>
         {[...Array(7)].map((_, i) => <div key={i} className="skel" style={{ flex: 1, height: 480, borderRadius: 12 }} />)}
@@ -138,7 +143,16 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // l'appuntamento in POST già dove è stato lasciato (vedi weekDays)
   // (le operatrici spente nel filtro «Team» non hanno sotto-colonna: `hiddenOps`)
   const dayData = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'), hiddenOps);
-  const dayWidth = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
+  // larghezza minima di un giorno a larghezza 1, e con lo zoom di lato
+  const dayBase = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
+  const dayWidth = (d) => dayBase(d) * (widthZoom || 1);
+  /* «Tutte in vista»: i sette giorni nello schermo, senza scorrere di lato
+   * (sul giorno più largo, così ci stanno tutti). */
+  function fitWidth() {
+    const el = scrollRef.current;
+    if (el && onWidthZoom) onWidthZoom(fitColumns((el.clientWidth || 0) - WEEK_HOURS_W, dayData.length, Math.max(...dayData.map(dayBase))));
+  }
+  if (widthApi) widthApi.current = { fit: fitWidth };
 
   /* ---- drag & drop: which day column + operator sub-column is under clientX ---- */
   function targetFromX(clientX) {
@@ -344,7 +358,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
         <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, background: 'var(--paper)', zIndex: 10 }} />
         {dayData.map((d, i) => (
           <WeekDayHeader
-            key={i} day={d} index={i} width={dayWidth(d)} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
+            key={i} day={d} index={i} width={dayWidth(d)} last={i === dayData.length - 1}
+            grip={onWidthZoom ? gripProps(dayData.slice(0, i + 1).reduce((s, x) => s + dayBase(x), 0), 0, fitWidth) : null} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
             showRevenue={showRevenue} t={t} lang={lang} onOpenDay={onOpenDay} colorOf={colorOf} opFirsts={opFirsts} setOpTip={setOpTip}
           />
         ))}

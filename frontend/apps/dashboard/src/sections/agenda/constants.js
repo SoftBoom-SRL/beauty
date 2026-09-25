@@ -25,6 +25,18 @@ export const ZOOM_MAX = 2.5;
  *  divide) per tanto. Uguale in giorno e settimana. */
 export const WHEEL_ZOOM_FACTOR = 1.12;
 
+/* ---- Larghezza delle colonne (zoom in orizzontale) --------------------------
+ * Quanto è larga una colonna: in vista giorno quella di un'operatrice (COLW a
+ * 1), in settimana la sotto-colonna (e il giorno). Anche questa è una
+ * preferenza della POSTAZIONE, e ne vale una per vista: con nove operatrici
+ * in giorno le si vuole tutte, in settimana si guarda un giorno per volta.
+ * Più strette = più colonne sullo schermo; più larghe = blocchi che si
+ * leggono. Come la larghezza delle colonne di un foglio di calcolo, e il
+ * «quante colonne per schermata» dei gestionali per saloni. */
+export const WIDTH_STEPS = [0.3, 0.45, 0.6, 0.8, 1, 1.25, 1.6, 2, 2.5, 3];
+export const WIDTH_MIN = 0.25;
+export const WIDTH_MAX = 3;
+
 export const COLW = 158;          // min operator column width
 
 /** Passo dell'agenda quando le Impostazioni non lo dicono (minuti). */

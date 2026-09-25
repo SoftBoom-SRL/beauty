@@ -2,7 +2,7 @@
 // (zoom), fascia oraria, righe delle ore, corsie della settimana.
 // Logica pura: la caricano anche i test con `node --test`.
 import { minutesOfDay, parseISO } from '@youty/shared';
-import { DEFAULT_SLOT_MIN, DK_END, DK_START, ZOOM_MAX, ZOOM_MIN, ZOOM_STEPS } from '../constants.js';
+import { DEFAULT_SLOT_MIN, DK_END, DK_START, WIDTH_MAX, WIDTH_MIN, WIDTH_STEPS, ZOOM_MAX, ZOOM_MIN, ZOOM_STEPS } from '../constants.js';
 import { aStartMin, apptSpan } from './appt.js';
 import { dowIndex, hmToMin } from './calendar.js';
 
@@ -29,6 +29,24 @@ export function zoomStep(current, dir) {
   const z = clampZoom(current);
   if (dir > 0) return clampZoom(ZOOM_STEPS.find((s) => s > z + 0.001) ?? ZOOM_MAX);
   return clampZoom([...ZOOM_STEPS].reverse().find((s) => s < z - 0.001) ?? ZOOM_MIN);
+}
+
+/* Larghezza delle colonne: vedi WIDTH_STEPS in constants.js. */
+export const clampWidth = (w) => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Number(w) || 1));
+/** Passo di larghezza successivo (dir +1, più larghe) o precedente (−1). */
+export function widthStep(current, dir) {
+  const w = clampWidth(current);
+  if (dir > 0) return clampWidth(WIDTH_STEPS.find((s) => s > w + 0.001) ?? WIDTH_MAX);
+  return clampWidth([...WIDTH_STEPS].reverse().find((s) => s < w - 0.001) ?? WIDTH_MIN);
+}
+
+/** La larghezza che fa stare `n` colonne larghe `base` px (a larghezza 1),
+ *  separate da `gap` px, in `avail` px: «tutte in vista», senza scorrere di
+ *  lato. Mai oltre 1: se ci stanno già, le colonne si allargano da sole fino
+ *  a riempire lo spazio. */
+export function fitColumns(avail, n, base, gap = 0) {
+  if (!(n > 0) || !(base > 0) || !(avail > 0)) return 1;
+  return clampWidth(Math.min(1, (avail - gap * (n - 1)) / (n * base)));
 }
 
 /** pack overlapping blocks into side-by-side lanes (week view) — blocks need startMin/endMin */

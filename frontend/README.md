@@ -55,8 +55,8 @@ La sezione **agenda** è la più grande e ha una struttura sua:
 moduli puri di `lib/`: date, griglia, orari, lista d'attesa, trascinamento,
 settimana, testi degli avvisi, «409 → riprova forzando», colonne del filtro
 «Team» in `team.js`, testo leggibile sui colori in `colors.js`), `constants.js`,
-`hooks/` (dati, live, undo, gesti, zoom, scroll, trascinamento comune a giorno e
-settimana), `grid/` e `parts/` (pezzi della griglia e della barra; la barra
+`hooks/` (dati, live, undo, gesti, zoom in altezza e in larghezza, scroll,
+trascinamento comune a giorno e settimana), `grid/` e `parts/` (pezzi della griglia e della barra; la barra
 sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`), `month/`,
 `modals/` (dettaglio appuntamento con `detail/`, nuova prenotazione con
 `newappt/`, `rules.js` con le regole pure dei pannelli).

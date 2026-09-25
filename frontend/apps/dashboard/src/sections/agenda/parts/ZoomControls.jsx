@@ -1,13 +1,17 @@
 // ZoomControls — lo zoom delle viste giorno e settimana nella barra:
-// −, percentuale (torna a 100%), + e «Adatta» (vedi useAgendaZoom). Zoom:
-// quanto è alta un'ora sullo schermo. Sta accanto al selettore di vista
+// −, percentuale (torna a 100%), + e «Adatta» (vedi useAgendaZoom) per
+// l'altezza delle ore; in coda la larghezza delle colonne (WidthControl: un
+// bottone che apre il suo pannellino). Sta accanto al selettore di vista
 // perché è la stessa famiglia di gesti — «quanto ne vedo». Con la barra
 // stretta la percentuale e l'etichetta di «Adatta» lasciano il posto
 // (restano nei suggerimenti e nei tasti + − 0).
 import { Icon } from '@youty/shared';
 import { ZOOM_MAX, ZOOM_MIN, zoomStep } from '../lib.js';
+import WidthControl from './WidthControl.jsx';
 
-export default function ZoomControls({ zoom, setZoom, fitZoom, t }) {
+/** `width`/`setWidth`/`fitWidth`: la larghezza delle colonne della vista a
+ *  video (vedi WidthControl); senza `setWidth` c'è solo l'altezza. */
+export default function ZoomControls({ zoom, setZoom, fitZoom, width = 1, setWidth = null, fitWidth, t }) {
   const pct = Math.round(zoom * 100) + '%';
   return (
     <div className="dk-agseg" role="group" aria-label={t('Zoom', 'Zoom') + ' ' + pct}>
@@ -24,6 +28,7 @@ export default function ZoomControls({ zoom, setZoom, fitZoom, t }) {
         title={t('Adatta: l\'orario di lavoro in una schermata, dall\'inizio', 'Fit: the working hours in one screen, from the start')}>
         <Icon name="fit" size={14} /><span className="dk-ag-lbl">{t('Adatta', 'Fit')}</span>
       </button>
+      {setWidth && <WidthControl width={width} setWidth={setWidth} fitWidth={fitWidth} t={t} />}
     </div>
   );
 }

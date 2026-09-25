@@ -9,8 +9,10 @@ import HexInput from '../../../ui/HexInput.jsx';
 import { COLW, apptRevenue, firstName, fmtMoney, initialsOf, lastName, opDisplay } from '../lib.js';
 
 /** `col`: il colore dell'operatrice; `isTarget`: la colonna d'arrivo del
- *  trascinamento; `picker`: l'operatrice col selettore del colore aperto. */
-export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showRevenue, t, lang, picker, setPicker, setOpColor, opPalette }) {
+ *  trascinamento; `picker`: l'operatrice col selettore del colore aperto;
+ *  `colW`: la larghezza minima della colonna (zoom di lato); `grip`: i
+ *  gestori della maniglia sul bordo destro (useGridWidth), o null. */
+export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showRevenue, t, lang, picker, setPicker, setOpColor, opPalette, colW = COLW, grip = null, last = false }) {
   const o = row.operator;
   const cnt = row.appointments.length;
   const rev = apptRevenue(row.appointments);   // il no-show non entra, come nel mese
@@ -19,14 +21,22 @@ export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showR
    * colore pieno dell'operatrice (indaco, ambra…) il nome si leggeva a
    * fatica e la fila delle testate era la cosa più rumorosa dello schermo. */
   return (
-    <div className="dk-ophead" title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + COLW + 'px', height: 44, boxSizing: 'border-box', padding: '0 6px 0 9px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, borderRadius: '10px 10px 0 0', background: `color-mix(in srgb, ${col} 12%, var(--surface))`, boxShadow: `inset 0 3px 0 ${col}`, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
+    <div className="dk-ophead" title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + colW + 'px', height: 44, boxSizing: 'border-box', padding: '0 6px 0 9px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, borderRadius: '10px 10px 0 0', background: `color-mix(in srgb, ${col} 12%, var(--surface))`, boxShadow: `inset 0 3px 0 ${col}`, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
+      {/* Avatar, nome, numeri e pennello in una riga a sé: è lei che si
+          adatta alla larghezza (.dk-ophead__row in agenda.css) e il suo
+          contenuto non allarga la colonna. Il selettore del colore e la
+          maniglia restano fuori: la riga è un contenitore, e il velo fisso
+          del selettore non deve restarci chiuso dentro. La maniglia sta a
+          cavallo dello spazio fra due colonne; l'ultima dentro la testata,
+          o sporgendo faceva scorrere di lato anche con tutte in vista. */}
+      <div className="dk-ophead__row">
       <div style={{ position: 'relative', flexShrink: 0 }}>
         <Avatar initials={initialsOf(o.name)} size={26} color={col} ring />
         <span title={onShift ? t('In turno', 'On shift') : t('Non in turno', 'Off today')} style={{ position: 'absolute', bottom: -1, right: -1, width: 9, height: 9, borderRadius: 99, background: onShift ? 'var(--ok)' : 'var(--faint)', border: '2px solid var(--surface)' }} />
       </div>
-      <div style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
+      <div className="dk-ophead__text" style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
         <div title={o.name} style={{ fontWeight: 700, fontSize: 14, whiteSpace: 'nowrap', color: 'var(--ink)', letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{opDisplay(firstName(o.name), lastName(o.name), opFirsts)}</div>
-        <div className="tabnum" style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div className="tabnum dk-ophead__meta" style={{ color: 'var(--muted)', fontSize: 11, fontWeight: 500, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {onShift || cnt
             ? `${t(`${cnt} app.`, `${cnt} appt`)}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}`
             : t('Non in turno', 'Off today')}
@@ -35,7 +45,15 @@ export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showR
       <button className="dk-ophead__pal" onClick={() => setPicker(picker === o.id ? null : o.id)} aria-expanded={picker === o.id} title={t('Cambia colore', 'Change colour')} aria-label={t('Cambia colore', 'Change colour')} style={{ width: 24, height: 24, borderRadius: 7, flexShrink: 0, cursor: 'pointer', display: 'grid', placeItems: 'center', border: 'none', background: 'transparent' }}>
         <Icon name="palette" size={14} color="var(--muted)" />
       </button>
+      </div>
       {picker === o.id && <OpColorPicker opId={o.id} col={col} t={t} setOpColor={setOpColor} setPicker={setPicker} opPalette={opPalette} />}
+      {/* il bordo destro si trascina: tutte le colonne più larghe o più
+          strette, come in un foglio di calcolo; doppio clic: tutte in vista */}
+      {grip && (
+        <div className="dk-colgrip" role="separator" aria-orientation="vertical"
+          title={t('Trascina per allargare o stringere le colonne · doppio clic: tutte in vista', 'Drag to widen or narrow the columns · double-click: fit them all')}
+          style={{ right: last ? 0 : -7 }} {...grip} />
+      )}
     </div>
   );
 }

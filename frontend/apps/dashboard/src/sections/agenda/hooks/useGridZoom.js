@@ -50,6 +50,8 @@ export function useGridZoom({ scrollRef, zoom, onZoom, g0, bodySelector, ready =
     if (!ready || !el || !onZoom) return undefined;
     const onWheel = (e) => {
       if (!e.ctrlKey && !e.metaKey) return;
+      // con Maiusc è la larghezza delle colonne (useGridWidth)
+      if (e.shiftKey) return;
       e.preventDefault();
       zoomAnchor.current = { offset: e.clientY - el.getBoundingClientRect().top };
       // valore precedente dallo stato: il pinch manda una raffica di eventi

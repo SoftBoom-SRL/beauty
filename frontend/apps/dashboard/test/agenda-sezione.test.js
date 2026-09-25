@@ -538,3 +538,40 @@ test('sotto i 1180 px il pannello di destra si apre per il momento: non si ricor
   g.render();
   assert.equal(rail(), null, 'Esc lo chiude');
 });
+
+test('larghezza delle colonne: la barra comanda la vista a video, una per vista, e si ricorda', async () => {
+  const storage = {};
+  const g = setup({ storage });
+  await ready(g);
+  const wc = () => find(g.m.tree, (el) => el.type?.name === 'WidthControl');
+  assert.equal(wc().props.width, 1);
+  assert.equal(g.dg().props.widthZoom, 1);
+  // più strette dalla barra: la giornata le riceve e la postazione le ricorda
+  wc().props.setWidth(0.6);
+  g.render();
+  assert.equal(g.dg().props.widthZoom, 0.6);
+  assert.equal(wc().props.width, 0.6);
+  assert.deepEqual(JSON.parse(storage['dk-agenda-width']), { day: 0.6, week: 1 });
+  // la rotella della griglia passa una funzione del valore di prima
+  g.dg().props.onWidthZoom((w) => w * 2);
+  g.render();
+  assert.equal(g.dg().props.widthZoom, 1.2);
+  // «Tutte in vista» lo calcola la vista a video (widthApi)
+  const fit = spy();
+  g.dg().props.widthApi.current = { fit };
+  wc().props.fitWidth();
+  assert.equal(fit.calls.length, 1);
+  // in settimana la sua, non quella del giorno
+  g.button('Settimana').props.onClick();
+  g.render();
+  assert.equal(wc().props.width, 1);
+  assert.equal(g.wv().props.widthZoom, 1);
+  wc().props.setWidth(0.4);
+  g.render();
+  assert.equal(g.wv().props.widthZoom, 0.4);
+  assert.deepEqual(JSON.parse(storage['dk-agenda-width']), { day: 1.2, week: 0.4 });
+  // nel mese lo zoom non c'è
+  g.button('Mese').props.onClick();
+  g.render();
+  assert.equal(wc(), null);
+});

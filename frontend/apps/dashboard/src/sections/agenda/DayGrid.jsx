@@ -18,13 +18,14 @@ import { useEffect, useRef } from 'react';
 import { useDash } from '../../ctx.jsx';
 import {
   PXM, COLW, DAY_HOURS_W, aStartMin, firstName, itemBlocks, explainSlot, gridMarks,
-  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin,
+  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin, fitColumns,
 } from './lib.js';
 import {
   dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, dragReach, resizeStep, dragDy, dropIntent,
   itemPosition, pausePosition, verdictTone,
 } from './lib/drag.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
+import { useGridWidth } from './hooks/useGridWidth.js';
 import { useScrollMemo } from './hooks/useScrollMemo.js';
 import { useGridDrag } from './hooks/useGridDrag.js';
 import OperatorHeaderCell from './grid/OperatorHeaderCell.jsx';
@@ -39,7 +40,7 @@ import DayDragBadge from './grid/DayDragBadge.jsx';
 
 export default function DayGrid({
   rows, allRows, date, nowMin, colorOf, itemColor, pending, canWrite, showRevenue,
-  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom, scrollMemo,
+  picker, setPicker, setOpColor, opPalette, pickMode, ghost, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, scrollMemo,
   onHover, onLeave, onOpenAppt, onSlotMenu, onInvalidDrop, onDropOnDate, onDragChange, onSplitItem,
   onMoveAppt, onResizeItem, onMovePause, onResizePause, onDeletePause,
 }) {
@@ -93,6 +94,18 @@ export default function DayGrid({
 
   // Zoom: cambiando scala lo stesso minuto resta dov'era; ⌘/ctrl + rotella e pinch
   useGridZoom({ scrollRef, zoom, onZoom, g0: G0, bodySelector: '.dk-tl-cols' });
+  /* Larghezza delle colonne (lo zoom di lato: vedi useGridWidth): più
+   * strette per avere tutto il team sullo schermo, più larghe per leggere i
+   * blocchi. «Tutte in vista» (dalla barra, o col doppio clic sul bordo di
+   * una testata) le fa stare tutte senza scorrere di lato. */
+  const colW = COLW * (widthZoom || 1);
+  const { gripProps } = useGridWidth({ scrollRef, width: widthZoom, onWidth: onWidthZoom, gutter: DAY_HOURS_W });
+  function fitWidth() {
+    const el = scrollRef.current;
+    // 4 px di margine a destra e 6 fra una colonna e l'altra (vedi sotto)
+    if (el && onWidthZoom) onWidthZoom(fitColumns((el.clientWidth || 0) - DAY_HOURS_W - 4, rows.length, COLW, 6));
+  }
+  if (widthApi) widthApi.current = { fit: fitWidth };
   /* Sfogliando i giorni la griglia si rimonta (scheletro mentre carica): il
    * minuto in cima si ricorda in `scrollMemo`, che vive nella sezione e
    * sopravvive al rimontaggio, e l'ombra fuori vista si porta in vista. */
@@ -403,9 +416,11 @@ export default function DayGrid({
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', gap: 0, paddingTop: 6, borderBottom: '1px solid var(--hair)' }}>
         <div style={{ width: DAY_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 11, background: 'var(--paper)' }} />
         <div style={{ flex: 1, display: 'flex', gap: 6, paddingRight: 4 }}>
-          {rows.map((row) => (
+          {rows.map((row, i) => (
             <OperatorHeaderCell
               key={row.operator.id} row={row} col={colorOf(row.operator.id)} isTarget={targetOp === row.operator.id}
+              colW={colW} last={i === rows.length - 1}
+              grip={onWidthZoom ? gripProps((i + 1) * COLW, i * 6, fitWidth) : null}
               opFirsts={opFirsts} showRevenue={showRevenue} t={t} lang={lang}
               picker={picker} setPicker={setPicker} setOpColor={setOpColor} opPalette={opPalette}
             />
@@ -440,7 +455,7 @@ export default function DayGrid({
                 key={o.id}
                 className={isTarget ? (tone === 'warn' ? 'dk-col--target-warn' : 'dk-col--target') : ''}
                 onClick={(e) => onColumnClick(e, row)}
-                style={{ flex: '1 0 ' + COLW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: `color-mix(in srgb, ${colorOf(o.id)} 6%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
+                style={{ flex: '1 0 ' + colW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: `color-mix(in srgb, ${colorOf(o.id)} 6%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t} />
                 {/* la traccia dei servizi che si muovono la disegna VisitBlocks,

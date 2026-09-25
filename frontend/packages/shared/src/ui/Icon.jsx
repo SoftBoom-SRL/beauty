@@ -66,6 +66,10 @@ export const ICON_PATHS = {
   tag: '<path d="M4 4.5h7.5L20 13l-7 7-8.5-8.5z"/><circle cx="8.5" cy="9" r="1.3" fill="currentColor" stroke="none"/>',
   // due frecce che si chiudono su una riga: «tutta la giornata in una schermata»
   fit: '<path d="M12 3v6.5M9 6.5l3 3 3-3M12 21v-6.5M9 17.5l3-3 3 3M4 12h16"/>',
+  // la stessa cosa di lato: «tutte le colonne in una schermata»
+  fitw: '<path d="M3 12h6.5M6.5 9l3 3-3 3M21 12h-6.5M17.5 9l-3 3 3 3M12 4v16"/>',
+  // la larghezza delle colonne dell'agenda (lo zoom di lato)
+  width: '<path d="M4 5v14M20 5v14M7.5 12h9M10 9.5 7.5 12l2.5 2.5M14 9.5l2.5 2.5-2.5 2.5"/>',
 };
 
 export function Icon({ name, size = 22, color = 'currentColor', stroke = 1.7, style = {}, className }) {

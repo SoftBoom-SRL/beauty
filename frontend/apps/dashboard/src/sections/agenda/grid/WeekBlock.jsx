@@ -41,7 +41,7 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
   const textZ = { position: 'relative', zIndex: 2 };
   return (
     <div
-      data-appt={a.id}
+      data-appt={a.id} className="dk-wblock"
       onPointerDown={onDown}
       onMouseEnter={(e) => onHover && onHover(a, e.currentTarget)}
       onMouseLeave={() => onLeave && onLeave()}
@@ -84,10 +84,10 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
           {gifts > 0 && <span title={t('Gift card', 'Gift card')} style={{ display: 'grid' }}><Icon name="gift" size={10} color="var(--ink-2)" stroke={2.2} /></span>}
         </div>
       )}
-      <div style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
-      {last && h > 30 && lc < 3 && <div style={{ ...textZ, fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
+      <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
+      {last && h > 30 && lc < 3 && <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
       {h > 44 && (
-        <div className="tabnum" style={{ ...textZ, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div className="tabnum dk-wblock__txt" style={{ ...textZ, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
           <span>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</span>
           {multi && (
             <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
@@ -99,7 +99,7 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
       )}
       {/* blocco troppo basso per la riga dell'orario: il conteggio va comunque detto */}
       {multi && h <= 44 && (
-        <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
+        <span className="dk-wblock__txt" title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
           style={{ position: 'absolute', bottom: 2, right: 3, zIndex: 3, fontWeight: 800, fontSize: 9, color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px', pointerEvents: 'none' }}>
           ×{nServices}
         </span>

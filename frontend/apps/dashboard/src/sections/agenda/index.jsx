@@ -80,7 +80,13 @@ export default function AgendaSection() {
   useClickAway(railRef, railOverlay && overlayOpen, closeOverlay, { event: 'pointerdown' });
 
   /* ---- zoom delle viste giorno/settimana: preferenza della postazione ---- */
-  const { zoom, setZoom, fitZoom } = useAgendaZoom();
+  const { zoom, setZoom, fitZoom, width, setWidth } = useAgendaZoom();
+  /* Larghezza delle colonne, una per vista (useAgendaZoom): i setter stabili
+   * servono alla rotella delle griglie; «Tutte» lo calcola la vista a video,
+   * che sa quante colonne ha (widthApi). */
+  const setDayWidth = useCallback((w) => setWidth('day', w), [setWidth]);
+  const setWeekWidth = useCallback((w) => setWidth('week', w), [setWidth]);
+  const widthApi = useRef(null);
 
   /* ---- real "now" (updated every 30s) ---- */
   const nowMin = useNowMinutes();
@@ -303,7 +309,11 @@ export default function AgendaSection() {
             {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
                 stirare, e il comando sparisce invece di restare lì a non fare
                 niente. */}
-            {calView !== 'month' && <ZoomControls zoom={zoom} setZoom={setZoom} fitZoom={fitZoom} t={t} />}
+            {calView !== 'month' && (
+              <ZoomControls zoom={zoom} setZoom={setZoom} fitZoom={fitZoom} t={t}
+                width={width[calView] ?? 1} setWidth={calView === 'week' ? setWeekWidth : setDayWidth}
+                fitWidth={() => widthApi.current?.fit()} />
+            )}
             <ViewSelector calView={calView} setCalView={setCalView} t={t} />
           </div>
         </div>
@@ -312,7 +322,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} hiddenOps={hiddenOps} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} widthZoom={width.week} onWidthZoom={setWeekWidth} widthApi={widthApi} hiddenOps={hiddenOps} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
@@ -328,6 +338,9 @@ export default function AgendaSection() {
                 scrollMemo={dayScroll}
                 zoom={zoom}
                 onZoom={setZoom}
+                widthZoom={width.day}
+                onWidthZoom={setDayWidth}
+                widthApi={widthApi}
                 allRows={allRows}
                 date={date}
                 pickMode={pickMode}

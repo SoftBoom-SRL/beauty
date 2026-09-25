@@ -5,7 +5,17 @@
 // spaziatura righe e pinch su Vagaro, «quante ore per schermata» su Apple.
 import { useCallback, useEffect, useState } from 'react';
 import { DK_END, DK_START, PXM } from '../constants.js';
-import { clampZoom } from '../lib/grid.js';
+import { clampWidth, clampZoom } from '../lib/grid.js';
+
+const WIDTH_KEY = 'dk-agenda-width';
+/* La larghezza salvata: { day, week }, ognuna ripulita (un valore storto
+ * nella memoria del browser non deve stringere le colonne a caso). */
+function readWidth() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WIDTH_KEY) || '{}') || {};
+    return { day: clampWidth(raw.day ?? 1), week: clampWidth(raw.week ?? 1) };
+  } catch { return { day: 1, week: 1 }; }
+}
 
 export function useAgendaZoom() {
   const [zoom, setZoomRaw] = useState(() => {
@@ -45,5 +55,18 @@ export function useAgendaZoom() {
     const go = () => { el.scrollTop = Math.max(0, top0 + (from - g0) * PXM * z - headH - 8); };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(go); else setTimeout(go, 0);
   }, [setZoom]);
-  return { zoom, setZoom, fitZoom };
+  /* Larghezza delle colonne (lo zoom in orizzontale), una per vista: vedi
+   * WIDTH_STEPS in constants.js. `setWidth(view, z)` accetta anche una
+   * funzione del valore precedente, come setZoom. */
+  const [width, setWidthRaw] = useState(readWidth);
+  const setWidth = useCallback((view, w) => {
+    setWidthRaw((prev) => {
+      const next = clampWidth(typeof w === 'function' ? w(prev[view] ?? 1) : w);
+      return Math.abs(next - (prev[view] ?? 1)) < 1e-9 ? prev : { ...prev, [view]: next };
+    });
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(WIDTH_KEY, JSON.stringify(width)); } catch { /* ignore */ }
+  }, [width]);
+  return { zoom, setZoom, fitZoom, width, setWidth };
 }

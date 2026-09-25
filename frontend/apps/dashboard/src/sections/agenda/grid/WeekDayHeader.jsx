@@ -7,13 +7,17 @@ import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, 
 
 /** `day` = il giorno di weekDays (lib/week.js), `index` = 0 lunedì … 6
  *  domenica; `isTargetDay`: il giorno d'arrivo del trascinamento; `setOpTip`
- *  mostra il nome intero dell'operatrice sopra la sua sotto-colonna. */
-export default function WeekDayHeader({ day, index, width, isToday, isTargetDay, showRevenue, t, lang, onOpenDay, colorOf, opFirsts, setOpTip }) {
+ *  mostra il nome intero dell'operatrice sopra la sua sotto-colonna; `grip`
+ *  = i gestori della maniglia sul bordo destro (useGridWidth), o null. */
+export default function WeekDayHeader({ day, index, width, isToday, isTargetDay, showRevenue, t, lang, onOpenDay, colorOf, opFirsts, setOpTip, grip = null, last = false }) {
   const rev = apptRevenue(day.list);   // il no-show non entra, come nel mese
   const num = parseISO(day.date).getDate();
   const statuses = Object.entries(day.by_status || {});
   return (
-    <div style={{ flex: '1 0 ' + width + 'px', minWidth: 0, borderLeft: WEEK_DAY_BORDER, background: isToday ? WEEK_TODAY_BG : 'transparent', boxShadow: isTargetDay ? 'inset 0 -2px 0 var(--ink)' : 'none', transition: 'box-shadow 100ms' }}>
+    // `contain: inline-size`: i nomi delle sotto-colonne (su una riga sola) non
+    // allargano il giorno; con i giorni stretti la testata restava più larga
+    // del corpo e la settimana non stava nello schermo
+    <div style={{ flex: '1 0 ' + width + 'px', minWidth: 0, contain: 'inline-size', position: 'relative', borderLeft: WEEK_DAY_BORDER, background: isToday ? WEEK_TODAY_BG : 'transparent', boxShadow: isTargetDay ? 'inset 0 -2px 0 var(--ink)' : 'none', transition: 'box-shadow 100ms' }}>
       <button onClick={() => onOpenDay(day.date)} title={t('Apri il giorno', 'Open the day')} style={{ display: 'block', width: '100%', textAlign: 'center', padding: '6px 4px 4px', background: 'transparent', border: 'none', cursor: 'pointer' }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: isToday ? 'var(--clay-ink)' : 'var(--muted)' }}>{t(DOW_IT[index], DOW_EN[index])}</span>
@@ -44,6 +48,13 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
             </div>
           ))}
         </div>
+      )}
+      {/* il bordo destro del giorno si trascina: giorni e sotto-colonne più
+          larghi o più stretti; doppio clic: la settimana intera in vista */}
+      {grip && (
+        <div className="dk-colgrip" role="separator" aria-orientation="vertical"
+          title={t('Trascina per allargare o stringere i giorni · doppio clic: tutta la settimana in vista', 'Drag to widen or narrow the days · double-click: fit the whole week')}
+          style={{ right: last ? 0 : -5, top: 0 }} {...grip} />
       )}
     </div>
   );

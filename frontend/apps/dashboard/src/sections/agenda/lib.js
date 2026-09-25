@@ -7,7 +7,7 @@
 // '@youty/shared' dei test non ce l'ha) né React.
 
 export {
-  DK_START, DK_END, PXM, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, WHEEL_ZOOM_FACTOR, COLW, DAY_HOURS_W, WEEK_HOURS_W,
+  DK_START, DK_END, PXM, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, WHEEL_ZOOM_FACTOR, WIDTH_STEPS, WIDTH_MIN, WIDTH_MAX, COLW, DAY_HOURS_W, WEEK_HOURS_W,
   WEEK_TODAY_BG, WEEK_DAY_BORDER,
   NOW_LINE_COLOR, TONE_BORDER, LAST_START_MIN, AFTERNOON_MIN, BREAK_PRESETS, BREAK_DEFAULT_MIN, HOVER_CLEAR_DAY, HOVER_CLEAR_WEEK,
   MODAL_SWAP_MS, LIVE_DEBOUNCE_DAY_MS, LIVE_DEBOUNCE_MONTH_MS, AGENDA_LIVE_RE,
@@ -24,7 +24,7 @@ export {
 } from './lib/calendar.js';
 
 export {
-  clampZoom, zoomStep, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, GRID_DAY, gridRange, dayGridRange,
+  clampZoom, zoomStep, clampWidth, widthStep, fitColumns, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, GRID_DAY, gridRange, dayGridRange,
   weekGridRange, firstScrollMin, openingFor, gridMarks, visibleMarks, closedIntervals,
 } from './lib/grid.js';
 
