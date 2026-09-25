@@ -6,6 +6,7 @@
 // l'agenda dietro.
 import { useEffect } from 'react';
 import { zoomStep } from '../lib/grid.js';
+import { hasOpenLayer } from '../../../ui/layers.js';
 
 const VIEW_KEYS = { g: 'day', d: 'day', s: 'week', w: 'week', m: 'month' };
 
@@ -23,7 +24,9 @@ export function useAgendaShortcuts({ openNewAppt, date, modal, groupOpen, setZoo
       if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((z) => zoomStep(z, 1)); return; }
       if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom((z) => zoomStep(z, -1)); return; }
       if (e.key === '0') { e.preventDefault(); setZoom(1); return; }
-      if (modal || groupOpen) return;   // il drawer di gruppo non è un modale del registry
+      // il drawer di gruppo non è un modale del registry; hasOpenLayer: ogni
+      // altro pannello o drawer aperto (l'assistente, un drawer di sezione)
+      if (modal || groupOpen || hasOpenLayer()) return;
       // dopo un clic su «Oggi» o su una freccia il fuoco resta sul bottone: le
       // frecce devono funzionare anche lì (i campi sono già esclusi sopra)
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey) {

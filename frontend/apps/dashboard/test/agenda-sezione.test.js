@@ -398,3 +398,17 @@ test('gesto riuscito e ricarico della giornata fallito: resta l\'avviso del gest
   assert.deepEqual(g.calls.put.map((p) => p.url), ['/api/agenda/pauses/5', '/api/agenda/pauses/5', '/api/agenda/appointments/42']);
   assert.deepEqual(g.calls.del.map((p) => p.url), ['/api/agenda/pauses/5']);
 });
+
+test('il filtro «Team» vale anche in settimana, senza l\'interruttore dei turni', async () => {
+  const g = setup();
+  await ready(g);
+  const team = () => find(g.m.tree, (el) => el.type?.name === 'TeamFilter');
+  team().props.toggleVis(1);                         // Anna spenta dalla vista giorno
+  g.render();
+  assert.deepEqual(g.dg().props.rows.map((r) => r.operator.id), [2, 3, 4]);
+  g.button('Settimana').props.onClick();
+  g.render();
+  assert.deepEqual(g.wv().props.hiddenOps, [1], 'la settimana riceve le spente');
+  assert.equal(team().props.setOnlyWorking, undefined, '«Solo chi lavora oggi» è del giorno');
+  assert.equal(team().props.shown, 3);
+});

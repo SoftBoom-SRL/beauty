@@ -37,7 +37,7 @@ import { useGridDrag } from './hooks/useGridDrag.js';
 const SUBCOL_W = 44;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 112;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom }) {
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, hiddenOps = [] }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = openApptIdOf(modal);
@@ -107,7 +107,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   // i giorni da disegnare: sotto-colonne di TUTTE le operatrici della sede, e
   // l'appuntamento in POST già dove è stato lasciato (vedi weekDays)
-  const dayData = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'));
+  // (le operatrici spente nel filtro «Team» non hanno sotto-colonna: `hiddenOps`)
+  const dayData = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'), hiddenOps);
   const dayWidth = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
 
   /* ---- drag & drop: which day column + operator sub-column is under clientX ---- */

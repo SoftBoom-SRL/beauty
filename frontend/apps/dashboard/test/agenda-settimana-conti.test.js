@@ -106,3 +106,18 @@ test('l\'ombra in settimana: i servizi nell\'ordine in cui arrivano, almeno diec
     { key: 1, opId: 1, startMin: 630, dur: 10 },
   ]);
 });
+
+test('filtro «Team» in settimana: niente sotto-colonna né appuntamenti delle spente, e la testata conta il resto', () => {
+  const giulia = { ...sara, id: 43, operator_id: 2, status: 'checked_in', start: '2026-10-01T10:00:00+02:00' };
+  const all = weekDays(payload([giulia]), null, OPS, 1, '');
+  assert.deepEqual(all[3].dayOps.map((o) => o.id), [1, 2]);
+  assert.deepEqual(all[3].list.map((a) => a.id), [42, 43]);
+  const days = weekDays(payload([giulia]), null, OPS, 1, '', [1]);   // Anna spenta
+  assert.deepEqual(days[0].dayOps.map((o) => o.id), [2], 'la sotto-colonna di Anna non c\'è, nemmeno nei giorni liberi');
+  assert.deepEqual(days[3].list.map((a) => a.id), [43], 'la visita di Anna non finisce in una colonna «non più in team»');
+  assert.deepEqual(days[3].dayOps.map((o) => o.id), [2]);
+  assert.equal(days[3].count, 1);
+  assert.deepEqual(days[3].by_status, { checked_in: 1 });
+  // senza filtro conteggi e stati restano quelli del server
+  assert.equal(weekDays(payload([giulia]), null, OPS, 1, '')[3].count, 0);
+});

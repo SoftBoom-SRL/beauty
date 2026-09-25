@@ -31,12 +31,19 @@ export function weekDayOps(operators, locationId, appointments, orphanName) {
  *  appuntamenti con startMin/endMin, `dayOps` = sotto-colonne (weekDayOps).
  *  `pending` = { id, dayIdx, ns, nop } dello spostamento in POST: override
  *  ottimistico, l'appuntamento compare già nel giorno/operatrice/orario di
- *  arrivo. `orphanName` = il nome di chi non è più in team. */
-export function weekDays(days, pending, operators, locationId, orphanName) {
+ *  arrivo. `orphanName` = il nome di chi non è più in team. `hidden` = gli id
+ *  delle operatrici spente nel filtro «Team»: niente sotto-colonna, e i loro
+ *  appuntamenti (in settimana una visita sta nella colonna dell'operatrice
+ *  principale) non si contano nella testata del giorno. Senza filtro con
+ *  cinque operatrici la domenica usciva dallo schermo. */
+export function weekDays(days, pending, operators, locationId, orphanName, hidden = []) {
+  const off = new Set(hidden);
   const pendingSrc = pending ? days.flatMap((d) => d.appointments).find((a) => a.id === pending.id) : null;
   return days.map((d, i) => {
     const src = pending ? d.appointments.filter((a) => a.id !== pending.id) : d.appointments;
-    const list = src.map((a) => { const s = minutesOfDay(a.start); return { ...a, startMin: s, endMin: s + (a.duration_min || 0) }; });
+    const list = src
+      .filter((a) => !off.has(a.operator_id))
+      .map((a) => { const s = minutesOfDay(a.start); return { ...a, startMin: s, endMin: s + (a.duration_min || 0) }; });
     if (pendingSrc && pending.dayIdx === i) {
       list.push({ ...pendingSrc, operator_id: pending.nop, startMin: pending.ns, endMin: pending.ns + (pendingSrc.duration_min || 0) });
     }
@@ -48,8 +55,13 @@ export function weekDays(days, pending, operators, locationId, orphanName) {
     // In coda restano le operatrici non più in elenco (disattivate) che hanno
     // ancora appuntamenti: altrimenti il giorno li CONTA ma non li mostra da
     // nessuna parte, e la cliente si presenta a un orario che in agenda non
-    // esiste. Vedi weekDayOps.
-    return { ...d, list, dayOps: weekDayOps(operators, locationId, list, orphanName) };
+    // esiste. Vedi weekDayOps. Tranne le spente nel filtro «Team».
+    const dayOps = weekDayOps(operators, locationId, list, orphanName).filter((o) => !off.has(o.id));
+    if (!off.size) return { ...d, list, dayOps };
+    // con il filtro la testata del giorno conta quello che si vede
+    const by_status = {};
+    list.forEach((a) => { by_status[a.status] = (by_status[a.status] || 0) + 1; });
+    return { ...d, list, dayOps, count: list.length, by_status };
   });
 }
 

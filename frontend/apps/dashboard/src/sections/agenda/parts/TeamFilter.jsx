@@ -11,7 +11,8 @@ import { opDisplay } from '../lib.js';
 const AWAY = { event: 'pointerdown', capture: true, escape: true };
 
 /** `vis` / `toggleVis` / `setAll` / `only` = useOperatorVisibility;
- *  `onlyWorking` = «Solo chi lavora oggi», `resting` = gli id che nasconde
+ *  `onlyWorking` / `setOnlyWorking` = «Solo chi lavora oggi» (senza
+ *  `setOnlyWorking`, in settimana, l'interruttore non c'è), `resting` = gli id che nasconde
  *  (restingIds); `shown` / `total` = colonne visibili e colonne del giorno
  *  (`shown` null mentre la giornata carica). */
 export default function TeamFilter({ operators, vis, toggleVis, setAll, only, colorOf, onlyWorking, setOnlyWorking, resting = [], shown, total, t }) {
@@ -73,7 +74,7 @@ export default function TeamFilter({ operators, vis, toggleVis, setAll, only, co
               );
             })}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 2px 2px', padding: '10px 8px 6px', borderTop: '1px solid var(--hair)' }}>
+          {setOnlyWorking && <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 2px 2px', padding: '10px 8px 6px', borderTop: '1px solid var(--hair)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{t('Solo chi lavora oggi', 'Only who works today')}</div>
               <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, lineHeight: 1.35 }}>
@@ -83,7 +84,7 @@ export default function TeamFilter({ operators, vis, toggleVis, setAll, only, co
               </div>
             </div>
             <Toggle on={onlyWorking} onChange={setOnlyWorking} />
-          </div>
+          </div>}
         </div>
       )}
     </div>

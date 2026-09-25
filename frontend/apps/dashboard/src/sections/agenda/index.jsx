@@ -228,6 +228,8 @@ export default function AgendaSection() {
   const keepOps = ghostAppt ? [...new Set(itemBlocks(ghostAppt).map((b) => b.opId))] : [];
   const visibleRows = visibleDayRows(allRows, vis, { onlyWorking, keep: keepOps });
   const resting = onlyWorking && dayData ? restingIds(allRows, vis, keepOps) : [];
+  // in settimana il filtro toglie le sotto-colonne delle spente
+  const hiddenOps = operators.filter((o) => vis[o.id] === false).map((o) => o.id);
 
   // il titolo della barra apre il selettore di mese e data (JumpTitle)
   const jumpProps = { open: jumpOpen, setOpen: setJumpOpen, t, MONTHS, cur, onMonth: jumpToMonth, onDate: jumpToDate };
@@ -261,11 +263,17 @@ export default function AgendaSection() {
           <SalonHoursChip settings={settings} date={date} t={t} isOwner={!!session?.is_owner} onOpen={() => { setDeepLink && setDeepLink('hours'); setTab('impostazioni'); }} />
           <div className="dk-agbar__spacer" />
           <div className="dk-agbar__group">
+            {/* In giorno e in settimana (nel mese c'è il suo filtro). «Solo chi
+                lavora oggi» è del giorno: la settimana non conosce i turni. */}
             {calView === 'day' && (
               <TeamFilter operators={operators} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
                 onlyWorking={onlyWorking} setOnlyWorking={setOnlyWorking} resting={resting}
                 // mentre la giornata carica non ci sono righe: niente «0/5» di passaggio
                 shown={dayData ? visibleRows.length : null} total={dayData ? allRows.length : operators.length} t={t} />
+            )}
+            {calView === 'week' && (
+              <TeamFilter operators={operators} vis={vis} toggleVis={toggleVis} setAll={setAll} only={only} colorOf={colorOf}
+                shown={operators.length - hiddenOps.length} total={operators.length} t={t} />
             )}
             {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
             {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
@@ -280,7 +288,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} hiddenOps={hiddenOps} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />
