@@ -144,9 +144,15 @@ export function useGridDrag({ onStop, windowUpRef = null, scrollRef = null, head
     const r = el.getBoundingClientRect();
     const inTop = r.top + (el.clientTop || 0), inLeft = r.left + (el.clientLeft || 0);
     const head = headRef?.current?.getBoundingClientRect?.();
+    const top = head ? Math.max(inTop, head.bottom) : inTop, bottom = inTop + (el.clientHeight ?? r.height);
+    const left = inLeft + gutter, right = inLeft + (el.clientWidth ?? r.width);
+    // Il puntatore deve stare nella griglia su tutti e due gli assi: sopra
+    // l'intestazione vicino al bordo destro le colonne scorrevano di lato, e
+    // sulla colonna delle ore vicino al fondo la griglia scendeva mentre il
+    // blocco era già tornato al suo posto («fuori dalla griglia»).
     const e = edge.current;
-    e.y = edgeSpeed(cy, head ? Math.max(inTop, head.bottom) : inTop, inTop + (el.clientHeight ?? r.height));
-    e.x = x ? edgeSpeed(cx, inLeft + gutter, inLeft + (el.clientWidth ?? r.width)) : 0;
+    e.y = cx >= left && cx <= right ? edgeSpeed(cy, top, bottom) : 0;
+    e.x = x && cy >= top && cy <= bottom ? edgeSpeed(cx, left, right) : 0;
     // uscendo dalla fascia, o passando a un altro bordo, l'attesa ricomincia da capo
     const dir = Math.sign(e.x) + ',' + Math.sign(e.y);
     if (dir !== e.dir) { e.wait = 0; e.dir = dir; }

@@ -232,7 +232,7 @@ test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
 /* La settimana montata: `dates` = i sette giorni (la sposa delle 07:00 il
  * sabato 03/10, se c'è), `scroll` e `querySelector` = quello che serve del
  * contenitore (scorrimento di lato, colonne dei giorni). */
-async function week({ settings = { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, weekStart = '2026-09-28', dates = null, scroll = {}, querySelector = () => null } = {}) {
+async function week({ settings = { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, weekStart = '2026-09-28', dates = null, scroll = {}, querySelector = () => null, props = {} } = {}) {
   installDom();
   let resolveWeek = null;
   globalThis.__api = {
@@ -252,7 +252,7 @@ async function week({ settings = { slot_interval_min: 15, opening_hours_week: WE
   const m = mount(WeekView, {
     weekStart, operators: [{ id: 1, first_name: 'Anna', last_name: 'Neri' }], colorOf: () => '#C9B8F2',
     itemColor: null, nowMin: null, onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy(),
-    pickMode: false, ghost: null, ghostDate: weekStart, zoom: 1, onZoom: null,
+    pickMode: false, ghost: null, ghostDate: weekStart, zoom: 1, onZoom: null, ...props,
   }, { attach: (tree) => { if (tree?.props?.ref) tree.props.ref.current = scrollEl; } });
   const days = dates || ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
   resolveWeek(days.map((date) => ({
@@ -302,6 +302,15 @@ test('vista settimana: la settimana in corso si apre con oggi in vista', async (
   });
   // oggi subito dopo la colonna delle ore
   assert.equal(scrollEl.scrollLeft, idx * 400);
+  // con un appuntamento aperto nel pannello vince il giorno della sua ombra:
+  // è lì che si cerca dove spostarlo (tre giorni più in là di oggi, o prima)
+  const gIdx = (idx + 3) % 7;
+  const withGhost = await week({
+    weekStart: days[0], dates: days, scroll: { scrollLeft: gIdx >= 3 ? 0 : 2400, clientWidth: 1000 },
+    querySelector: (sel) => { const mm = /data-daycol="(\d)"/.exec(sel); return mm ? cols[Number(mm[1])] : null; },
+    props: { ghost: one(7, 1, '10:00', 60, '2026-09-29'), ghostDate: days[gIdx] },
+  });
+  assert.equal(withGhost.scrollEl.scrollLeft, gIdx * 400);
   // un'altra settimana (senza oggi) non si sposta di lato
   const other = await week({
     weekStart: '2020-01-06', dates: ['2020-01-06', '2020-01-07', '2020-01-08', '2020-01-09', '2020-01-10', '2020-01-11', '2020-01-12'],

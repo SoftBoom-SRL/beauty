@@ -103,16 +103,19 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
    * settimana è più larga dello schermo e si apriva sempre dal lunedì: il
    * venerdì bisognava andarlo a cercare scorrendo di lato. Oggi va a
    * sinistra, subito dopo la colonna delle ore; i giorni passati restano a un
-   * colpo di rotella. Solo se oggi non si vede già tutto. */
+   * colpo di rotella. Solo se oggi non si vede già tutto. Con un
+   * appuntamento aperto nel pannello vince il giorno della sua ombra
+   * (`ghostDate`): è lì che si sta cercando dove spostarlo. */
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!ready || !el?.querySelector) return;
-    const idx = (days || []).findIndex((d) => d.date === todayStr());
+    const want = ghost && (days || []).some((d) => d.date === ghostDate) ? ghostDate : todayStr();
+    const idx = (days || []).findIndex((d) => d.date === want);
     const col = idx >= 0 ? el.querySelector(`[data-daycol="${idx}"]`) : null;
     if (!col) return;
     const from = col.offsetLeft - WEEK_HOURS_W, to = col.offsetLeft + col.offsetWidth;
     if (from < el.scrollLeft || to > el.scrollLeft + el.clientWidth) el.scrollLeft = Math.max(0, from);
-  }, [ready, weekStart]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready, weekStart, ghost?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   function onGridScroll() {
     rememberScroll();
     onDragScroll();

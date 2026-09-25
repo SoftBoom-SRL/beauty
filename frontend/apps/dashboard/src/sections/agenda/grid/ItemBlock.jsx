@@ -58,8 +58,9 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
         // contorno spariva sotto il vicino di corsia. Allungandolo, il blocco
         // resta nella sua corsia e passa SOPRA quello che copre (le corsie
-        // cambiano solo al rilascio: vedi VisitBlocks).
-        zIndex: dragging || resizing ? 20 : highlight ? 3 : 2, overflow: 'hidden',
+        // cambiano solo al rilascio: vedi VisitBlocks), ma sotto la spina
+        // della sua visita (4) e la riga dell'ora (8): a 20 le copriva.
+        zIndex: dragging ? 20 : highlight || resizing ? 3 : 2, overflow: 'hidden',
         // I quattro lati uno per uno: con `padding` breve accanto a
         // `paddingLeft`, a ogni cambio d'altezza (zoom, durata) React
         // riscriveva solo il breve e il rientro della spina tornava a 9 px,

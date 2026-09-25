@@ -371,7 +371,8 @@ test('allungando un blocco i vicini restano nella loro corsia e lui passa sopra'
   const sara = g.block(421);
   assert.equal(sara.props.activeMin, 275);
   assert.equal(sara.props.resizing, true);
-  assert.equal(sara.type(sara.props).props.style.zIndex, 20);
+  // sopra i vicini (2), sotto la spina (4) e la riga dell'ora (8): a 20 le copriva
+  assert.equal(sara.type(sara.props).props.style.zIndex, 3);
   g.root().props.onPointerUp(ptr(300, 440 + 245 * PXM));
   assert.deepEqual(g.cb.onResizeItem.calls.map(([a, it, dur]) => [a.id, it.id, dur]), [[42, 421, 275]]);
 });
@@ -510,4 +511,25 @@ test('trascinata in fondo alla giornata, la visita finisce entro la mezzanotte',
   g.root().props.onPointerUp(ptr(300, 890));
   const start = g.cb.onMoveAppt.calls[0]?.[1] ?? g.cb.onInvalidDrop.calls[0]?.[2].newApptStart;
   assert.equal(start, 22 * 60 + 30);
+});
+
+test('lo scorrimento automatico vuole il puntatore dentro la griglia su tutti e due gli assi', () => {
+  const g = setup();
+  g.scrollEl.scrollLeft = 0;
+  const top0 = g.scrollEl.scrollTop;
+  g.block(421).props.onDown(ptr(300, 500));
+  moveAll(g, 300, 560);
+  // sull'intestazione, vicino al bordo destro: le colonne non scorrono di lato
+  moveAll(g, 995, 150);
+  g.win.frames(EDGE_DELAY_FRAMES + 3);
+  assert.equal(g.scrollEl.scrollLeft, 0);
+  // sulla colonna delle ore vicino al fondo: il blocco è «fuori», la griglia non scende
+  moveAll(g, 30, 895);
+  g.win.frames(EDGE_DELAY_FRAMES + 3);
+  assert.equal(g.scrollEl.scrollTop, top0);
+  // dentro la griglia, vicino al bordo destro: sì
+  moveAll(g, 995, 500);
+  g.win.frames(EDGE_DELAY_FRAMES + 3);
+  assert.ok(g.scrollEl.scrollLeft > 0);
+  g.root().props.onPointerUp(ptr(995, 500));
 });
