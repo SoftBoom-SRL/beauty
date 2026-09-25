@@ -134,6 +134,12 @@ class WebhookRouteTests(TestCase):
         resp = self._post(None, raw=b"{nope")
         self.assertEqual(resp.status_code, 400)
 
+    def test_a_body_that_is_not_utf8_is_a_bad_request_not_a_crash(self):
+        # json.loads su byte non UTF-8 solleva UnicodeDecodeError, non
+        # JSONDecodeError: la rotta pubblica rispondeva 500, ripetibile a piacere
+        resp = self._post(None, raw=b'{"organization_id": "org-\xff"}')
+        self.assertEqual(resp.status_code, 400)
+
     def test_non_ascii_signature_is_unauthorized_not_a_crash(self):
         resp = self._post({"type": "event.updated", "organization_id": "org-hook"},
                           signature="sha256=dëadbeef")

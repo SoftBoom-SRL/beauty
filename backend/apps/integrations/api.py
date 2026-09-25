@@ -170,7 +170,10 @@ def webhook(request):
     body = request.body
     try:
         payload = json.loads(body) if body else {}
-    except json.JSONDecodeError:
+    # UnicodeDecodeError: un corpo che non è UTF-8 non arriva nemmeno al parser
+    # JSON, e con il solo JSONDecodeError rispondeva 500 (come nel webhook delle
+    # automazioni, che li prende già tutti e due)
+    except (json.JSONDecodeError, UnicodeDecodeError):
         raise HttpError(400, "Payload non valido")
     # Un corpo JSON che non è un oggetto (una lista, un numero, null) faceva
     # esplodere payload.get con un 500 su rotta pubblica, ripetibile a piacere:
