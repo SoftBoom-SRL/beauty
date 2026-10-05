@@ -7,6 +7,7 @@ export const membersApi = {
   list: () => api.get('/api/auth/members'),
   setRole: (id, body) => api.post(`/api/auth/members/${id}/role`, body),
   remove: (id) => api.del(`/api/auth/members/${id}`),
+  transferOwnership: (id) => api.post(`/api/auth/members/${id}/transfer-ownership`),
 };
 
 export const rolesApi = {

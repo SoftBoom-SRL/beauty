@@ -1,10 +1,11 @@
 // TeamDrawer.jsx — port of TeamManager on the real accounts API.
-// Members: GET /api/auth/members, POST /members/{id}/role, DELETE /members/{id}.
+// Members: GET /api/auth/members, POST /members/{id}/role, DELETE /members/{id},
+// POST /members/{id}/transfer-ownership (owner only).
 // Invitations: GET/POST /api/auth/invitations — delivery is Yourang (phase 2),
 // so the invite token is displayed with a copy button only.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
-import { Icon, Avatar, salonTzOpts, toastApiError } from '@youty/shared';
+import { Icon, Avatar, salonTzOpts, staffAuth, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
@@ -80,6 +81,26 @@ export default function TeamDrawer({ onClose, onRoles }) {
     finally { setRemoving(false); }
   };
 
+  // Chi attiva il salone per conto del cliente ne diventa titolare: qui lo
+  // cede. Dopo, la sessione si rinnova per perdere subito i poteri da titolare.
+  const [confirmTransfer, setConfirmTransfer] = useState(null);
+  const [transferring, setTransferring] = useState(false);
+  const transferOwnership = async () => {
+    const m = confirmTransfer;
+    if (!m || transferring) return;
+    setTransferring(true);
+    try {
+      await membersApi.transferOwnership(m.id);
+      // Niente ricarica della lista: se il ruolo nuovo non ha «team» la GET
+      // risponderebbe 403 e il suo errore coprirebbe la conferma.
+      setMembers((l) => l.map((x) => ({ ...x, is_owner: x.id === m.id })));
+      setConfirmTransfer(null);
+      fireToast({ msg: t('Titolarità ceduta', 'Ownership transferred'), icon: 'check' });
+      await staffAuth.refresh();
+    } catch (err) { toastApiError(err, fireToast, t); }
+    finally { setTransferring(false); }
+  };
+
   const sendInvite = async () => {
     const email = inv.email.trim();
     if (!email || !inv.role_id || sending) return;
@@ -143,6 +164,9 @@ export default function TeamDrawer({ onClose, onRoles }) {
                           </option>
                         ))}
                       </select>
+                      {isOwner && (
+                        <button className="dk-iconbtn" title={t('Cedi la titolarità', 'Transfer ownership')} onClick={() => setConfirmTransfer(m)} style={{ width: 30, height: 30, borderRadius: 8 }}><Icon name="star" size={14} color="var(--clay)" /></button>
+                      )}
                       {m.user.id !== session?.user?.id && (
                         <button className="dk-iconbtn" disabled={!canTouch(m)} title={canTouch(m) ? t('Rimuovi membro', 'Remove member') : t('Solo il titolare può rimuoverla', 'Only the owner can remove them')} onClick={() => canTouch(m) && setConfirmRemove(m)} style={{ width: 30, height: 30, borderRadius: 8, opacity: canTouch(m) ? 1 : 0.4 }}><Icon name="x" size={14} color="var(--danger)" /></button>
                       )}
@@ -232,6 +256,21 @@ export default function TeamDrawer({ onClose, onRoles }) {
         detail={t('Gli appuntamenti e le vendite già registrate restano. Per riammetterla servirà un nuovo invito.',
           'Past appointments and sales stay. Re-admitting them needs a new invitation.')}
         confirmLabel={t('Rimuovi', 'Remove')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
+      <DkConfirm
+        open={!!confirmTransfer}
+        busy={transferring}
+        onClose={() => setConfirmTransfer(null)}
+        onConfirm={transferOwnership}
+        title={t('Cedere la titolarità?', 'Transfer ownership?')}
+        message={t(
+          `${confirmTransfer?.user?.name || confirmTransfer?.user?.email || ''} diventerà titolare del salone, con accesso totale.`,
+          `${confirmTransfer?.user?.name || confirmTransfer?.user?.email || ''} will become the salon owner, with full access.`,
+        )}
+        detail={t('Tu resti nel team come Manager. Per tornare titolare dovrà essere il nuovo titolare a cedertela.',
+          'You stay on the team as Manager. To become owner again, they will have to transfer it back.')}
+        confirmLabel={t('Cedi', 'Transfer')}
         cancelLabel={t('Annulla', 'Cancel')}
       />
     </DkDrawer>

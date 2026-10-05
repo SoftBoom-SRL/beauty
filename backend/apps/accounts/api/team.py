@@ -90,6 +90,49 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
     return member_out(membership)
 
 
+@router.post("/members/{int:member_id}/transfer-ownership", auth=staff_auth, response=MemberOut)
+def transfer_ownership(request, member_id: int):
+    """Il titolare passa la titolarità del salone a un membro del team.
+
+    Il primo che entra con «Accedi con Yourang» diventa titolare: se il salone
+    lo attiva qualcuno di Yourang per conto del cliente, il titolare restava lui
+    e non c'era modo di cederlo senza mettere mano al database. Il vecchio
+    titolare resta nel team: se non aveva un ruolo riceve «Manager», così non
+    si ritrova chiuso fuori.
+    """
+    ctx = request.auth
+    if not ctx.is_owner:
+        raise HttpError(403, "Solo il titolare può cedere la titolarità")
+    target = salon_get(Membership, ctx, member_id)
+    if target.id == ctx.membership.id:
+        raise HttpError(400, "Sei già il titolare")
+    with transaction.atomic():
+        # Riletto sotto lock: due cessioni simultanee non lasciano due titolari.
+        current = (
+            Membership.objects.select_for_update()
+            .filter(pk=ctx.membership.pk, is_owner=True)
+            .first()
+        )
+        if current is None:
+            raise HttpError(403, "Solo il titolare può cedere la titolarità")
+        current.is_owner = False
+        if current.role is None:
+            current.role = Role.objects.filter(
+                salon=ctx.salon, name="Manager", is_system=True
+            ).first()
+        current.save(update_fields=["is_owner", "role"])
+        target.is_owner = True
+        target.save(update_fields=["is_owner"])
+    log_activity(
+        ctx.salon,
+        "team.ownership_transferred",
+        f"Titolarità ceduta a {target.user.get_full_name() or target.user.email}",
+        actor=ctx.user,
+        payload={"from_membership_id": current.id, "to_membership_id": target.id},
+    )
+    return member_out(target)
+
+
 @router.delete("/members/{int:member_id}", auth=staff_auth, response=OkOut)
 def remove_member(request, member_id: int):
     ctx = request.auth

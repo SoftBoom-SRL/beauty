@@ -452,3 +452,46 @@ class SystemRoleTests(_TeamSetup):
         custom = Role.objects.create(salon=self.salon, name="Reception", scopes=["agenda"])
         res = self._put(custom, {"name": "Reception", "scopes": ["agenda", "clients"]}, self.hr)
         self.assertEqual(res.status_code, 200, res.content)
+
+
+class OwnershipTransferTests(_TeamSetup):
+    """Chi attiva il salone per il cliente ne diventa titolare: deve poterlo cedere."""
+
+    def setUp(self):
+        super().setUp()
+        ensure_default_roles(self.salon)
+        self.owner_membership = Membership.objects.get(user=self.owner, salon=self.salon)
+        cliente = User.objects.create_user(email="stefania@parlour.it", password="x-Segreta-1")
+        self.target = Membership.objects.create(user=cliente, salon=self.salon)
+
+    def _transfer(self, membership, auth):
+        return post_json(
+            self.client, f"/api/auth/members/{membership.id}/transfer-ownership", {}, **auth
+        )
+
+    def test_the_owner_hands_the_salon_over(self):
+        res = self._transfer(self.target, self.boss)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.target.refresh_from_db()
+        self.owner_membership.refresh_from_db()
+        self.assertTrue(self.target.is_owner)
+        self.assertFalse(self.owner_membership.is_owner)
+        # Il vecchio titolare resta dentro, con un ruolo.
+        self.assertEqual(self.owner_membership.role.name, "Manager")
+        self.assertEqual(Membership.objects.filter(salon=self.salon, is_owner=True).count(), 1)
+
+    def test_a_team_member_cannot_hand_it_over(self):
+        res = self._transfer(self.target, self.hr)
+        self.assertEqual(res.status_code, 403, res.content)
+        self.target.refresh_from_db()
+        self.assertFalse(self.target.is_owner)
+
+    def test_a_member_of_another_salon_is_not_found(self):
+        altro = Salon.objects.create(name="Altro", slug="altro")
+        estranea = Membership.objects.create(
+            user=User.objects.create_user(email="x@altro.it", password="x-Segreta-1"), salon=altro
+        )
+        res = self._transfer(estranea, self.boss)
+        self.assertEqual(res.status_code, 404, res.content)
+        estranea.refresh_from_db()
+        self.assertFalse(estranea.is_owner)
