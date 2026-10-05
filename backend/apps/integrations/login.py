@@ -14,6 +14,8 @@ Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Youran
        SENZA collegarlo: il collegamento si fa dalle Impostazioni, dal titolare.
   C. altrimenti → provisiona utente (se serve) + salone nuovo, collegato.
 
+Nome del salone nuovo: quello dell'org Yourang (claim `org_name`), se c'è.
+
 Titolare: il primo che entra, finché non entra il titolare dell'org Yourang
 (claim `org_role` = "owner" dell'access token): da lì il titolare è lui. Così
 il salone attivato da un collega di Yourang per conto del cliente passa al
@@ -148,7 +150,9 @@ def _needs_repair(salon: Salon) -> bool:
     )
 
 
-def _enter(org: str, email: str, email_verified: bool, name: str, org_role: str = ""):
+def _enter(
+    org: str, email: str, email_verified: bool, name: str, org_role: str = "", org_name: str = ""
+):
     """Risolve (o provisiona) salone, utente e membership; collega l'org se tocca.
 
     Ritorna (membership, connessione collegata ORA oppure None).
@@ -157,7 +161,9 @@ def _enter(org: str, email: str, email_verified: bool, name: str, org_role: str 
     link = False
     if salon is None:
         user = user or _get_or_create_user(email, name, email_verified)
-        salon = _provision_salon(user, name)
+        # Il nome dell'org Yourang (claim `org_name`), non quello di chi entra:
+        # attivato da un collega per il cliente, il salone si chiamava come lui.
+        salon = _provision_salon(user, org_name or name)
         link = True
     elif user is None:
         # Caso A: org già collegata a questo salone. Chi accede non ridefinisce
@@ -199,7 +205,9 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
     token_resp = yc.exchange_code(code, code_verifier)
     org = yc.org_id_from_access_token(token_resp["access_token"])
     # Assente con un Yourang che non lo emette ancora: si resta alla regola del primo accesso.
-    org_role = str(yc.claims_from_token(token_resp["access_token"]).get("org_role") or "")
+    access_claims = yc.claims_from_token(token_resp["access_token"])
+    org_role = str(access_claims.get("org_role") or "")
+    org_name = str(access_claims.get("org_name") or "").strip()
     if not org:
         # Stesso controllo che fa già il connect (api.py): senza organizzazione
         # non c'è nulla da collegare, e proseguire significava provisionare un
@@ -222,7 +230,7 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
     for attempt in (1, 2):
         try:
             with transaction.atomic():
-                membership, conn = _enter(org, email, email_verified, name, org_role)
+                membership, conn = _enter(org, email, email_verified, name, org_role, org_name)
             break
         except (IntegrityError, OrgConflict):
             if attempt == 2:

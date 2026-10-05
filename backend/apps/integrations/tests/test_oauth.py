@@ -62,11 +62,13 @@ def _jwt(claims):
     return jwt.encode(claims, _JWT_KEY, algorithm="HS256")
 
 
-def _token_resp(org, email="", *, verified=True, name="", org_role=None):
+def _token_resp(org, email="", *, verified=True, name="", org_role=None, org_name=None):
     """Risposta del token endpoint: `org` (e `org_role`) nell'access token, l'identità nell'id_token."""
     access = {"org": org, "sub": email or "u"}
     if org_role:
         access["org_role"] = org_role
+    if org_name:
+        access["org_name"] = org_name
     return {
         "access_token": _jwt(access),
         "id_token": _jwt({"email": email, "email_verified": verified, "name": name}),
@@ -498,17 +500,19 @@ class OrgOwnerTakesOwnershipTests(_FlowCase):
     primo, e il titolare restava lui finché qualcuno non toccava il database.
     """
 
-    def _login(self, org, email, org_role):
+    def _login(self, org, email, org_role, org_name=None):
         from apps.integrations.login import login_with_yourang
 
-        with self.redeem(_token_resp(org, email, name=email, org_role=org_role)), \
+        with self.redeem(_token_resp(org, email, name=email, org_role=org_role, org_name=org_name)), \
                 mock.patch("apps.integrations.sync._run_in_background"), \
                 self.captureOnCommitCallbacks(execute=True):
             return login_with_yourang("code", "verifier")
 
     def test_the_client_takes_over_from_the_colleague_who_activated_it(self):
-        first = self._login("org-elisir", "collega@yourang.it", "admin")
+        first = self._login("org-elisir", "collega@yourang.it", "admin", "Elisir")
         self.assertTrue(first["is_owner"])  # nessun altro, per ora: può configurare
+        # Il salone si chiama come l'org del cliente, non come il collega.
+        self.assertEqual(first["salon"]["name"], "Elisir")
 
         session = self._login("org-elisir", "stefania@elisir.it", "owner")
         self.assertTrue(session["is_owner"])
