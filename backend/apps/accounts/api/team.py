@@ -29,8 +29,10 @@ from ..schemas import (
 )
 from ..sessions import session_payload
 from ..team import (
+    NotOwner,
     can_grant,
     invitation_out,
+    make_owner,
     member_out,
     require_can_touch_role,
     require_grantable,
@@ -96,9 +98,8 @@ def transfer_ownership(request, member_id: int):
 
     Il primo che entra con «Accedi con Yourang» diventa titolare: se il salone
     lo attiva qualcuno di Yourang per conto del cliente, il titolare restava lui
-    e non c'era modo di cederlo senza mettere mano al database. Il vecchio
-    titolare resta nel team: se non aveva un ruolo riceve «Manager», così non
-    si ritrova chiuso fuori.
+    e non c'era modo di cederlo senza mettere mano al database. Le regole del
+    passaggio stanno in `make_owner`.
     """
     ctx = request.auth
     if not ctx.is_owner:
@@ -106,29 +107,16 @@ def transfer_ownership(request, member_id: int):
     target = salon_get(Membership, ctx, member_id)
     if target.id == ctx.membership.id:
         raise HttpError(400, "Sei già il titolare")
-    with transaction.atomic():
-        # Riletto sotto lock: due cessioni simultanee non lasciano due titolari.
-        current = (
-            Membership.objects.select_for_update()
-            .filter(pk=ctx.membership.pk, is_owner=True)
-            .first()
-        )
-        if current is None:
-            raise HttpError(403, "Solo il titolare può cedere la titolarità")
-        current.is_owner = False
-        if current.role is None:
-            current.role = Role.objects.filter(
-                salon=ctx.salon, name="Manager", is_system=True
-            ).first()
-        current.save(update_fields=["is_owner", "role"])
-        target.is_owner = True
-        target.save(update_fields=["is_owner"])
+    try:
+        make_owner(target, from_membership=ctx.membership)
+    except NotOwner:
+        raise HttpError(403, "Solo il titolare può cedere la titolarità")
     log_activity(
         ctx.salon,
         "team.ownership_transferred",
         f"Titolarità ceduta a {target.user.get_full_name() or target.user.email}",
         actor=ctx.user,
-        payload={"from_membership_id": current.id, "to_membership_id": target.id},
+        payload={"from_membership_id": ctx.membership.id, "to_membership_id": target.id},
     )
     return member_out(target)
 

@@ -6,6 +6,7 @@ membri e per gli inviti (un invito è un account con un ruolo). Il titolare ne
 è esente: i permessi sono suoi per definizione.
 """
 
+from django.db import transaction
 from ninja.errors import HttpError
 
 from common.permissions import SCOPES
@@ -83,3 +84,41 @@ def require_can_touch_role(ctx, role) -> None:
 def can_grant(ctx, role) -> bool:
     """Vero se chi chiama potrebbe assegnare `role` (stessa regola di `require_grantable`)."""
     return ctx.is_owner or all(s in ctx.scopes for s in (role.scopes or []))
+
+
+class NotOwner(Exception):
+    """Chi doveva cedere la titolarità non è (più) il titolare."""
+
+
+@transaction.atomic
+def make_owner(target, *, from_membership=None) -> None:
+    """Rende `target` l'unico titolare del suo salone.
+
+    La usano la cessione dalla dashboard e «Accedi con Yourang» (il titolare
+    dell'org Yourang diventa titolare del salone). I titolari attuali vengono
+    letti sotto lock: due passaggi simultanei non lasciano due titolari. Chi
+    smette di esserlo resta nel team; se non aveva un ruolo riceve «Manager»,
+    così non si ritrova chiuso fuori. Con `from_membership` si cede solo se
+    quella membership è ancora titolare (altrimenti NotOwner).
+    """
+    from .models import Membership, Role
+
+    owners = list(
+        Membership.objects.select_for_update().filter(salon_id=target.salon_id, is_owner=True)
+    )
+    if from_membership is not None and from_membership.pk not in {m.pk for m in owners}:
+        raise NotOwner
+    manager = None
+    for m in owners:
+        if m.pk == target.pk:
+            continue
+        m.is_owner = False
+        if m.role_id is None:
+            manager = manager or Role.objects.filter(
+                salon_id=target.salon_id, name="Manager", is_system=True
+            ).first()
+            m.role = manager
+        m.save(update_fields=["is_owner", "role"])
+    if not target.is_owner:
+        target.is_owner = True
+        target.save(update_fields=["is_owner"])
