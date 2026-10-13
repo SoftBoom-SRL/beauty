@@ -358,3 +358,63 @@ class UndoResultOut(Schema):
     # riportato l'appuntamento su un'altra data.
     date: Optional[str] = None
     appointment_ids: list[int] = []
+
+
+# ---- Import da un altro gestionale (visite già mappate lato client, JSON) ----
+
+
+class ImportItemIn(Schema):
+    """Un servizio della visita importata: listino e operatrice sono già quelli del salone.
+
+    Durata e prezzo NON hanno un tetto qui, come le righe dell'import clienti:
+    un solo valore fuori misura farebbe fallire con un 422 l'intero blocco,
+    senza dire quale riga. Li controlla `import_visits`, riga per riga.
+    """
+
+    service_id: int
+    operator_id: int
+    # Quella del file: lo stesso servizio dura di più o di meno da una cliente
+    # all'altra, e il listino ne conosce una sola.
+    duration_min: int
+    price: Optional[Decimal] = None  # None = prezzo di listino
+
+
+class ImportVisitIn(Schema):
+    """Una visita del file: la cliente come è scritta lì, l'orario e i suoi servizi in fila."""
+
+    first_name: str = ""
+    last_name: str = ""
+    phone: str = ""
+    email: str = ""
+    start: dt.datetime
+    note: str = ""
+    items: list[ImportItemIn] = Field(..., min_length=1, max_length=MAX_ITEMS_PER_REQUEST)
+
+    _start_aware = aware_start_validator()
+
+
+# Tetto per richiesta: ogni visita rivalida turni e sovrapposizioni con il lock
+# del salone in mano. La modale del gestionale spezza già l'import in blocchi.
+IMPORT_MAX_VISITS = 500
+
+
+class AppointmentImportIn(Schema):
+    visits: list[ImportVisitIn] = Field(max_length=IMPORT_MAX_VISITS)
+    location_id: Optional[int] = None
+
+
+class ImportRowIssueOut(Schema):
+    row: int  # indice della visita dentro il blocco inviato
+    reason: str
+    client_id: Optional[int] = None  # la scheda coinvolta, quando ce n'è una
+
+
+class AppointmentImportOut(Schema):
+    """Esito dell'import: `duplicates` sono le visite che in agenda c'erano già."""
+
+    created: int
+    duplicates: int
+    skipped: int
+    clients_created: int
+    errors: list[ImportRowIssueOut] = []
+    warnings: list[ImportRowIssueOut] = []

@@ -293,6 +293,12 @@ risposte in `presenters.py`.
   {operator, windows di turno, appointments:[{...items, client{...}}], pauses}.
 - GET `/week?start=YYYY-MM-DD` → per giorno: conteggi + appuntamenti compatti.
 - POST `/appointments` {client_id, items, start, flexible?} (scope agenda) → create_appointment via dashboard.
+- POST `/appointments/import` {visits:[{first_name,last_name,phone,email,start,note?,
+  items:[{service_id,operator_id,duration_min,price?}]}], location_id?} (scope agenda) → visite di un
+  altro gestionale, già abbinate a listino e staff (`services/importer.py`). Cliente per telefono (senza
+  numero: email, poi nome), creata se manca. Durata e prezzo del file; nessuna caparra e nessun evento
+  verso Yourang; fuori turno o sovrapposta entra `forced`. Ritorna {created, duplicates, skipped,
+  clients_created, errors, warnings}; log `appointment.imported`.
 - POST `/appointments/{id}/move` {start, operator_id?} (scope agenda) → rivalida slot,
   sposta (anche items stesso delta), log + emit `appointment.moved` + free_slot_event sul vecchio orario.
   La scadenza di una caparra richiesta si ricalcola sull'orario nuovo (anche con

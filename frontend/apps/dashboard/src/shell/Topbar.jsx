@@ -126,6 +126,10 @@ export default function Topbar() {
                 // e il posto delle creazioni è qui. Il drawer vive con l'agenda
                 // (che resta visibile dietro): ci si arriva con il deepLink.
                 hasScope('agenda') && { icon: 'clients', title: t('Prenotazione di gruppo', 'Group booking'), sub: t('Più clienti insieme, scaglionando gli orari sull\'agenda', 'Several clients at once, staggering times on the agenda'), act: () => { setDeepLink('group-booking'); setTab('agenda'); } },
+                // Si usa quando il salone arriva da un altro gestionale. Nella barra
+                // dell'agenda era una freccia senza nome: qui ha titolo e
+                // spiegazione, come le altre creazioni.
+                hasScope('agenda') && { icon: 'arrowDn', title: t('Importa appuntamenti', 'Import appointments'), sub: t('Da Treatwell o da un altro gestionale, con un file CSV', 'From Treatwell or other software, with a CSV file'), act: () => openModal('importappts') },
               ].filter(Boolean).map((o, i) => (
                 <button key={i} className="dk-row" onClick={() => { setNewMenu(false); o.act(); }} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '11px 11px', borderRadius: 10, textAlign: 'left' }}>
                   <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name={o.icon} size={18} color="var(--clay-ink)" /></div>

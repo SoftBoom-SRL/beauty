@@ -6,6 +6,7 @@ import { lazy } from 'react';
 export const MODALS = {
   newappt: lazy(() => import('../sections/agenda/modals/NewApptModal.jsx')),
   apptdetail: lazy(() => import('../sections/agenda/modals/ApptDetailModal.jsx')),
+  importappts: lazy(() => import('../sections/agenda/modals/ImportApptsModal.jsx')),
   freedslot: lazy(() => import('../sections/agenda/modals/FreedSlotModal.jsx')),
   waitlist: lazy(() => import('../sections/agenda/modals/WaitlistModal.jsx')),
   opportunity: lazy(() => import('../sections/agenda/modals/OpportunityModal.jsx')),
