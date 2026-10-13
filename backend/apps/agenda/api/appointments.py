@@ -6,6 +6,7 @@ stesso percorso risponderebbero 405 al secondo metodo.
 
 from ninja import Router
 
+from apps.core.services import log_activity
 from common.auth import staff_auth
 from common.permissions import require_scope
 from common.utils import salon_get
@@ -14,6 +15,8 @@ from ..models import Appointment
 from ..presenters import _appointment_out
 from ..schemas import (
     AppointmentCreateIn,
+    AppointmentImportIn,
+    AppointmentImportOut,
     AppointmentOut,
     AppointmentUpdateIn,
     CancelIn,
@@ -28,7 +31,7 @@ from ..schemas import (
 # `appointments` è anche il nome dei queryset: il modulo dei servizi si importa
 # col suffisso, come negli altri moduli delle rotte.
 from ..services import appointments as appointment_services
-from ..services import deposit_holds, deposits, margin, refunds, transitions
+from ..services import deposit_holds, deposits, importer, margin, refunds, transitions
 from .params import _get_location
 
 router = Router()
@@ -57,6 +60,32 @@ def create_appointment(request, data: AppointmentCreateIn):
     )
     deposits.send_deposit_link(appointment)
     return _appointment_out(appointment, viewer=ctx)
+
+
+@router.post("/appointments/import", auth=staff_auth, response=AppointmentImportOut)
+def import_appointments(request, data: AppointmentImportIn):
+    """Porta in agenda le visite esportate da un altro gestionale.
+
+    Servizi e operatrici arrivano già abbinati a quelli del salone. Nessuna
+    conferma parte verso le clienti e nessuna caparra viene chiesta: sono
+    appuntamenti che loro hanno già. Ricaricare lo stesso file non li raddoppia.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    location = _get_location(ctx, data.location_id)
+    result = importer.import_visits(
+        ctx.salon, [visit.dict() for visit in data.visits], location=location
+    )
+    log_activity(
+        ctx.salon,
+        "appointment.imported",
+        f"Import appuntamenti: {result['created']} creati, {result['duplicates']} già in agenda, "
+        f"{result['skipped']} saltati",
+        actor=ctx.user,
+        location=location,
+        payload={k: result[k] for k in ("created", "duplicates", "skipped", "clients_created")},
+    )
+    return result
 
 
 @router.post("/appointments/{int:appointment_id}/move", auth=staff_auth, response=AppointmentOut)

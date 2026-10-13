@@ -29,6 +29,8 @@ export const undoGesture = (entryId) => api.post('/api/agenda/undo', entryId ? {
 /* ---- appuntamenti ---- */
 export const getAppointment = (id) => api.get(appt(id));
 export const createAppointment = (body) => api.post('/api/agenda/appointments', body);
+/** Visite di un altro gestionale, a blocchi: { visits, location_id }. */
+export const importAppointments = (body) => api.post('/api/agenda/appointments/import', body);
 export const updateAppointment = (id, body) => api.put(appt(id), body);
 export const moveAppointment = (id, body) => api.post(`${appt(id)}/move`, body);
 export const splitAppointment = (id, body) => api.post(`${appt(id)}/split`, body);
