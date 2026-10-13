@@ -194,6 +194,7 @@ const CASES = [
   [() => membersApi.list(), ['GET', '/api/auth/members']],
   [() => membersApi.setRole(161, { role_id: 2 }), ['POST', '/api/auth/members/161/role', { body: { role_id: 2 } }]],
   [() => membersApi.remove(161), ['DELETE', '/api/auth/members/161']],
+  [() => membersApi.transferOwnership(161), ['POST', '/api/auth/members/161/transfer-ownership']],
   [() => rolesApi.list(), ['GET', '/api/auth/roles']],
   [() => rolesApi.create(B), ['POST', '/api/auth/roles', { body: B }]],
   [() => rolesApi.update(171, B), ['PUT', '/api/auth/roles/171', { body: B }]],

@@ -29,8 +29,10 @@ from ..schemas import (
 )
 from ..sessions import session_payload
 from ..team import (
+    NotOwner,
     can_grant,
     invitation_out,
+    make_owner,
     member_out,
     require_can_touch_role,
     require_grantable,
@@ -88,6 +90,35 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         payload={"membership_id": membership.id, "role_id": role.id if role else None},
     )
     return member_out(membership)
+
+
+@router.post("/members/{int:member_id}/transfer-ownership", auth=staff_auth, response=MemberOut)
+def transfer_ownership(request, member_id: int):
+    """Il titolare passa la titolarità del salone a un membro del team.
+
+    Il primo che entra con «Accedi con Yourang» diventa titolare: se il salone
+    lo attiva qualcuno di Yourang per conto del cliente, il titolare restava lui
+    e non c'era modo di cederlo senza mettere mano al database. Le regole del
+    passaggio stanno in `make_owner`.
+    """
+    ctx = request.auth
+    if not ctx.is_owner:
+        raise HttpError(403, "Solo il titolare può cedere la titolarità")
+    target = salon_get(Membership, ctx, member_id)
+    if target.id == ctx.membership.id:
+        raise HttpError(400, "Sei già il titolare")
+    try:
+        make_owner(target, from_membership=ctx.membership)
+    except NotOwner:
+        raise HttpError(403, "Solo il titolare può cedere la titolarità")
+    log_activity(
+        ctx.salon,
+        "team.ownership_transferred",
+        f"Titolarità ceduta a {target.user.get_full_name() or target.user.email}",
+        actor=ctx.user,
+        payload={"from_membership_id": ctx.membership.id, "to_membership_id": target.id},
+    )
+    return member_out(target)
 
 
 @router.delete("/members/{int:member_id}", auth=staff_auth, response=OkOut)

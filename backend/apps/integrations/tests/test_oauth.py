@@ -62,10 +62,15 @@ def _jwt(claims):
     return jwt.encode(claims, _JWT_KEY, algorithm="HS256")
 
 
-def _token_resp(org, email="", *, verified=True, name=""):
-    """Risposta del token endpoint: `org` nell'access token, l'identità nell'id_token."""
+def _token_resp(org, email="", *, verified=True, name="", org_role=None, org_name=None):
+    """Risposta del token endpoint: `org` (e `org_role`) nell'access token, l'identità nell'id_token."""
+    access = {"org": org, "sub": email or "u"}
+    if org_role:
+        access["org_role"] = org_role
+    if org_name:
+        access["org_name"] = org_name
     return {
-        "access_token": _jwt({"org": org, "sub": email or "u"}),
+        "access_token": _jwt(access),
         "id_token": _jwt({"email": email, "email_verified": verified, "name": name}),
         "refresh_token": f"refresh-{org}",
         "expires_in": 3600,
@@ -486,6 +491,55 @@ class LoginAdoptionTests(_FlowCase):
         # Il resto della fondazione, come prima: una sede predefinita e le impostazioni.
         self.assertEqual(list(salon.locations.values_list("name", "is_default")), [("Nuovo", True)])
         self.assertTrue(hasattr(salon, "settings"))
+
+
+class OrgOwnerTakesOwnershipTests(_FlowCase):
+    """Il titolare dell'org Yourang diventa titolare del salone collegato.
+
+    Caso Elisir: il salone l'aveva attivato un collega di Yourang entrando per
+    primo, e il titolare restava lui finché qualcuno non toccava il database.
+    """
+
+    def _login(self, org, email, org_role, org_name=None):
+        from apps.integrations.login import login_with_yourang
+
+        with self.redeem(_token_resp(org, email, name=email, org_role=org_role, org_name=org_name)), \
+                mock.patch("apps.integrations.sync._run_in_background"), \
+                self.captureOnCommitCallbacks(execute=True):
+            return login_with_yourang("code", "verifier")
+
+    def test_the_client_takes_over_from_the_colleague_who_activated_it(self):
+        first = self._login("org-elisir", "collega@yourang.it", "admin", "Elisir")
+        self.assertTrue(first["is_owner"])  # nessun altro, per ora: può configurare
+        # Il salone si chiama come l'org del cliente, non come il collega.
+        self.assertEqual(first["salon"]["name"], "Elisir")
+
+        session = self._login("org-elisir", "stefania@elisir.it", "owner")
+        self.assertTrue(session["is_owner"])
+        salon = Salon.objects.get(id=session["salon"]["id"])
+        self.assertEqual(Membership.objects.filter(salon=salon, is_owner=True).count(), 1)
+        collega = Membership.objects.get(salon=salon, user__email="collega@yourang.it")
+        self.assertFalse(collega.is_owner)
+        self.assertEqual(collega.role.name, "Manager")  # resta dentro, non chiuso fuori
+
+        # Il collega che rientra non se la riprende.
+        again = self._login("org-elisir", "collega@yourang.it", "admin")
+        self.assertFalse(again["is_owner"])
+
+    def test_a_member_of_the_org_does_not_take_it(self):
+        self._login("org-elisir", "stefania@elisir.it", "owner")
+        session = self._login("org-elisir", "op@elisir.it", "member")
+        self.assertFalse(session["is_owner"])
+
+    def test_owning_another_org_says_nothing_about_this_salon(self):
+        """Un'operatrice titolare della SUA org entra nel salone senza collegarlo:
+        quel ruolo non riguarda questo salone."""
+        salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        _member(salon, "owner@p.it", owner=True)
+        _member(salon, "op@p.it", scopes=["agenda"])
+        session = self._login("org-op", "op@p.it", "owner")
+        self.assertEqual(session["salon"]["id"], salon.id)
+        self.assertFalse(session["is_owner"])
 
 
 class ConcurrentFirstLoginTests(_FlowCase):

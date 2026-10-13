@@ -13,6 +13,13 @@ Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Youran
      - altrimenti (non titolare, o titolare di più d'uno) → entra nel primo
        SENZA collegarlo: il collegamento si fa dalle Impostazioni, dal titolare.
   C. altrimenti → provisiona utente (se serve) + salone nuovo, collegato.
+
+Nome del salone nuovo: quello dell'org Yourang (claim `org_name`), se c'è.
+
+Titolare: il primo che entra, finché non entra il titolare dell'org Yourang
+(claim `org_role` = "owner" dell'access token): da lì il titolare è lui. Così
+il salone attivato da un collega di Yourang per conto del cliente passa al
+cliente al suo primo accesso, senza cessioni a mano.
 """
 
 import logging
@@ -23,6 +30,8 @@ from django.utils.text import slugify
 from apps.accounts.models import Membership, User
 from apps.accounts.provisioning import create_salon_foundation
 from apps.accounts.sessions import session_payload
+from apps.accounts.team import make_owner
+from apps.core.services import log_activity
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
@@ -141,7 +150,9 @@ def _needs_repair(salon: Salon) -> bool:
     )
 
 
-def _enter(org: str, email: str, email_verified: bool, name: str):
+def _enter(
+    org: str, email: str, email_verified: bool, name: str, org_role: str = "", org_name: str = ""
+):
     """Risolve (o provisiona) salone, utente e membership; collega l'org se tocca.
 
     Ritorna (membership, connessione collegata ORA oppure None).
@@ -150,7 +161,9 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
     link = False
     if salon is None:
         user = user or _get_or_create_user(email, name, email_verified)
-        salon = _provision_salon(user, name)
+        # Il nome dell'org Yourang (claim `org_name`), non quello di chi entra:
+        # attivato da un collega per il cliente, il salone si chiamava come lui.
+        salon = _provision_salon(user, org_name or name)
         link = True
     elif user is None:
         # Caso A: org già collegata a questo salone. Chi accede non ridefinisce
@@ -168,12 +181,33 @@ def _enter(org: str, email: str, email_verified: bool, name: str):
         )
 
     conn = link_org(salon, org, user) if link else None
-    return _membership_for(salon, user), conn
+    membership = _membership_for(salon, user)
+    # Solo per il salone collegato a QUESTA org: il ruolo è nell'org, e un
+    # salone senza connessione (caso B, non adottato) non ne dipende.
+    if (
+        org_role == "owner"
+        and not membership.is_owner
+        and YourangConnection.objects.filter(salon=salon, yourang_org_id=org).exists()
+    ):
+        make_owner(membership)
+        log_activity(
+            salon,
+            "team.ownership_transferred",
+            f"Titolarità a {user.get_full_name() or user.email}: titolare dell'org Yourang",
+            actor=user,
+            payload={"to_membership_id": membership.id, "source": "yourang_org_owner"},
+        )
+        membership = _membership_for(salon, user)
+    return membership, conn
 
 
 def login_with_yourang(code: str, code_verifier: str) -> dict:
     token_resp = yc.exchange_code(code, code_verifier)
     org = yc.org_id_from_access_token(token_resp["access_token"])
+    # Assente con un Yourang che non lo emette ancora: si resta alla regola del primo accesso.
+    access_claims = yc.claims_from_token(token_resp["access_token"])
+    org_role = str(access_claims.get("org_role") or "")
+    org_name = str(access_claims.get("org_name") or "").strip()
     if not org:
         # Stesso controllo che fa già il connect (api.py): senza organizzazione
         # non c'è nulla da collegare, e proseguire significava provisionare un
@@ -196,7 +230,7 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
     for attempt in (1, 2):
         try:
             with transaction.atomic():
-                membership, conn = _enter(org, email, email_verified, name)
+                membership, conn = _enter(org, email, email_verified, name, org_role, org_name)
             break
         except (IntegrityError, OrgConflict):
             if attempt == 2:
