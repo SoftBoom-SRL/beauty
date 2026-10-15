@@ -293,9 +293,34 @@ export function buildRows(dataRows, mapping, { dateOrder = 'dmy', lines = null, 
     if (!r.first_name) warn.push('name');
     if (!r.phone) warn.push('nophone');
     if (r.phone) { const k = phoneKey(r.phone); if (seenPhones.has(k)) warn.push('dup:' + seenPhones.get(k)); else seenPhones.set(k, line); }
-    out.push({ ...r, _idx: idx, _line: line, _warn: warn, _skip: !r.first_name || (!r.phone && !r.email) });
+    // Senza telefono la riga entra lo stesso, come scheda senza numero: prima
+    // si saltava, e un salone arrivato da un altro gestionale perdeva tutte le
+    // clienti senza un numero valido. Senza nome no.
+    out.push({ ...r, _idx: idx, _line: line, _warn: warn, _skip: !r.first_name });
   });
-  return out;
+  return withNameIndex(out);
+}
+
+/* Il nome senza ordine, accenti né maiuscole («Rossi Maria» = «maria rossi»),
+ * come lo confronta il server (clients.search.name_key). */
+export const nameKey = (first, last) => String(`${first || ''} ${last || ''}`)
+  .normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[’‘ʼ`´]/g, "'")
+  .toLowerCase().split(/\s+/).filter(Boolean).sort().join(' ');
+
+/** `name_index` delle righe senza telefono: quante righe senza telefono con lo
+ *  stesso nome la precedono nel file. Due Maria Rossi senza numero sono due
+ *  persone, e il file parte a blocchi da 250: è così che il server sa che la
+ *  seconda è la seconda scheda Maria Rossi, al primo import come al secondo,
+ *  invece di scriverla sopra la prima. */
+export function withNameIndex(rows) {
+  const seen = new Map();
+  return rows.map((r) => {
+    if (r._skip || r.phone) return r;
+    const k = nameKey(r.first_name, r.last_name);
+    const n = seen.get(k) || 0;
+    seen.set(k, n + 1);
+    return { ...r, name_index: n };
+  });
 }
 
 /** Riga dell'esito del server (indice dentro il blocco inviato) → riga del
