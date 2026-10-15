@@ -21,30 +21,18 @@ Gli appuntamenti nati dalla divisione hanno un riferimento `appuntamento`
 aperti si rifanno insieme agli altri invece di restare doppi.
 """
 
-import datetime as dt
-
-from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from apps.agenda.models import Appointment, AppointmentService
+from apps.agenda.models import Appointment
 from apps.catalog.models import Service
 from apps.core.importers.areabeauty import SOURCE
+from apps.core.importers.areabeauty.repair import chain_starts, imported_appointment_ids, split_off
 from apps.core.models import ExternalRef, Salon
-from apps.sales.models import Sale
 
 
 class _DryRun(Exception):
     pass
-
-
-def _starts(appointment, items):
-    """{id voce: inizio} come lo calcola l'agenda: in fila dall'inizio, durata più posa."""
-    out, at = {}, appointment.start
-    for item in items:
-        out[item.id] = at
-        at += dt.timedelta(minutes=item.duration_min + item.soak_min)
-    return out
 
 
 def _groups(items):
@@ -87,18 +75,14 @@ class Command(BaseCommand):
             self.stdout.write(f"  {key}: {value}")
 
     def _fix(self, salon, counts):
-        ct = ContentType.objects.get_for_model(Appointment)
-        refs = ExternalRef.objects.filter(salon=salon, source=SOURCE, kind__in=["appuntamento", "annullato"], content_type=ct)
-        ids = set(refs.values_list("object_id", flat=True))
         with_soak = (
-            Appointment.objects.filter(salon=salon, pk__in=ids, items__soak_min__gt=0)
+            Appointment.objects.filter(salon=salon, pk__in=imported_appointment_ids(salon), items__soak_min__gt=0)
             .distinct()
             .order_by("start")
         )
-        new_refs = []
         for appointment in with_soak:
             items = list(appointment.items.order_by("order", "id"))
-            before = _starts(appointment, items)
+            before = chain_starts(appointment, items)
             groups = _groups(items)
             for item in items:
                 if item.soak_min:
@@ -108,45 +92,10 @@ class Command(BaseCommand):
                 counts["pose tolte (fine cliente)"] += 1
                 continue
             counts["visite divise"] += 1
-            sale = Sale.objects.filter(appointment=appointment).first()
-            paid_in = sale.pk if sale else appointment.paid_in_sale_id
-            for n, group in enumerate(groups[1:], start=1):
-                part = Appointment.objects.create(
-                    salon=salon,
-                    location=appointment.location,
-                    client=appointment.client,
-                    operator=group[0].operator,
-                    start=before[group[0].id],
-                    status=appointment.status,
-                    created_via=appointment.created_via,
-                    cancel_reason=appointment.cancel_reason,
-                    cancelled_late=appointment.cancelled_late,
-                    paid_in_sale_id=paid_in,
-                )
-                Appointment.objects.filter(pk=part.pk).update(
-                    created_at=appointment.created_at, updated_at=appointment.updated_at
-                )
-                for order, item in enumerate(group):
-                    AppointmentService.objects.filter(pk=item.pk).update(appointment=part, order=order)
-                new_refs.append(
-                    ExternalRef(salon=salon, source=SOURCE, kind="appuntamento", external_id=f"diviso:{appointment.pk}:{n}", content_type=ct, object_id=part.pk)
-                )
+            for part in split_off(appointment, items, groups, before, "diviso"):
                 counts["appuntamenti nuovi"] += 1
                 if part.status in Appointment.OPEN_STATUSES:
                     counts["di cui futuri"] += 1
-            # Nessun servizio deve aver cambiato orario.
-            after = {}
-            for apt in [appointment] + [Appointment.objects.get(pk=r.object_id) for r in new_refs[-(len(groups) - 1):]]:
-                apt.refresh_from_db()
-                after.update(_starts(apt, list(apt.items.order_by("order", "id"))))
-            first = groups[0]
-            Appointment.objects.filter(pk=appointment.pk).update(operator=first[0].operator)
-            # Gli aggiuntivi (durata 0) non hanno un orario loro: si appoggiano al servizio prima.
-            timed = {item.id for item in items if item.duration_min > 0}
-            moved = [i for i in timed if before[i] != after.get(i)]
-            if moved:
-                raise CommandError(f"visita {appointment.pk}: {len(moved)} servizi cambierebbero orario, niente salvato")
-        ExternalRef.objects.bulk_create(new_refs, ignore_conflicts=True)
 
         service_ids = ExternalRef.objects.filter(salon=salon, source=SOURCE, kind="servizio").values_list("object_id", flat=True)
         counts["servizi del listino senza posa"] = Service.objects.filter(
