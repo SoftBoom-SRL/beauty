@@ -206,7 +206,12 @@ class ItemOut(Schema):
 
 
 class GiftOut(Schema):
-    """Gift card «a trattamento» attiva e pagata che copre un servizio dell'appuntamento."""
+    """Gift card «a trattamento» attiva e pagata che copre un servizio dell'appuntamento.
+
+    `kind`: gift (regalo) | prepaid (già pagato dalla cliente) | package (sedute
+    di un pacchetto, `package_name`). `sessions_left` su `sessions_total` sono
+    le sedute ancora da fare; `session_value` quanto scala la prossima.
+    """
 
     gift_card_id: int
     code: str
@@ -214,6 +219,12 @@ class GiftOut(Schema):
     service_name: str
     balance: Decimal
     from_name: str = ""
+    kind: str = "gift"
+    sessions_total: int = 1
+    sessions_left: int = 1
+    session_value: Decimal = Decimal("0.00")
+    package_name: str = ""
+    expires_at: Optional[dt.datetime] = None
 
 
 class AppointmentOut(Schema):

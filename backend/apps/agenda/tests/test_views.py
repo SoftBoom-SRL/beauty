@@ -318,6 +318,83 @@ class GiftCodesInTheAgendaTests(RealShiftsTestBase):
         self.assertIsNotNone(S.spendable_gift_cards(self.salon, [self.anna.id]).first())
 
 
+# ---- Trattamenti già pagati: regalo, pagato in anticipo, pacchetto -----------------
+
+
+class PaidTreatmentsOnTheVisitTests(RealShiftsTestBase):
+    """`appt.gifts` dice che cosa copre il servizio e quante sedute restano.
+
+    Le chiavi di prima restano identiche (la cassa precompila i pagamenti con
+    quelle); `kind`, sedute, valore di una seduta e pacchetto si aggiungono.
+    """
+
+    LEGACY_KEYS = {"gift_card_id", "code", "service_id", "service_name", "balance", "from_name"}
+
+    def setUp(self):
+        from apps.catalog.models import Package, PackageItem
+
+        self.package = Package.objects.create(
+            salon=self.salon, name="Tagli dell'anno", price=Decimal("100.00"), validity_days=365,
+        )
+        PackageItem.objects.create(package=self.package, service=self.cut30, qty=4)
+        self.visit = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
+        self.auth = self.staff_auth(("agenda", "sales"))
+
+    def _sessions(self, amount):
+        from apps.marketing.credits import create_package_credits
+
+        [card] = create_package_credits(self.salon, package=self.package, client=self.anna, amount=amount)
+        return card
+
+    def _gifts(self):
+        """I regali della visita nella vista giorno e nel dettaglio (devono coincidere)."""
+        day = self.client.get("/api/agenda/day", {"date": self.day.isoformat()}, **self.auth).json()
+        in_day = next(a for row in day for a in row["appointments"] if a["id"] == self.visit.id)["gifts"]
+        detail = self.client.get(f"/api/agenda/appointments/{self.visit.id}", **self.auth).json()["gifts"]
+        self.assertEqual(
+            [{k: str(v) for k, v in g.items()} for g in in_day],
+            [{k: str(v) for k, v in g.items()} for g in detail],
+        )
+        return detail
+
+    def test_package_sessions_say_what_they_are(self):
+        card = self._sessions(Decimal("100.00"))
+        [gift] = self._gifts()
+        self.assertLessEqual(self.LEGACY_KEYS, set(gift))
+        self.assertEqual((gift["gift_card_id"], gift["service_id"]), (card.id, self.cut30.id))
+        self.assertEqual((gift["kind"], gift["sessions_total"], gift["sessions_left"]), ("package", 4, 4))
+        self.assertEqual(Decimal(gift["session_value"]), Decimal("25.00"))
+        self.assertEqual(gift["package_name"], "Tagli dell'anno")
+        # le sedute le ha pagate lei: non è un regalo di nessuno
+        self.assertEqual(gift["from_name"], "")
+        self.assertIsNotNone(gift["expires_at"])
+
+    def test_a_treatment_paid_in_advance_is_not_a_gift(self):
+        from apps.marketing.gift_cards import create_gift_card
+        from apps.marketing.models import GiftCard
+
+        create_gift_card(
+            self.salon, Decimal("60.00"), gift_service=self.cut30, buyer_client=self.anna,
+            recipient_client=self.anna, paid=True, paid_method="cash",
+            kind=GiftCard.Kind.PREPAID, sessions=2,
+        )
+        [gift] = self._gifts()
+        self.assertEqual((gift["kind"], gift["from_name"], gift["package_name"]), ("prepaid", "", ""))
+        self.assertEqual((gift["sessions_total"], Decimal(gift["session_value"])), (2, Decimal("30.00")))
+
+    def test_a_free_package_still_covers_the_visit(self):
+        self._sessions(Decimal("0"))
+        [gift] = self._gifts()
+        self.assertEqual((Decimal(gift["balance"]), gift["sessions_left"]), (Decimal("0.00"), 4))
+
+    def test_used_up_sessions_no_longer_cover_it(self):
+        from apps.marketing.gift_cards import redeem_gift_card
+
+        card = self._sessions(Decimal("100.00"))
+        redeem_gift_card(self.salon, card.code, Decimal("100.00"), sessions=4)
+        self.assertEqual(self._gifts(), [])
+
+
 # ---- «In regalo da…» solo per i regali veri ------------------------------------
 
 

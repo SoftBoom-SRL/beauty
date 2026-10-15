@@ -103,6 +103,11 @@ class PackageItemOut(Schema):
     qty: int
 
 
+# Validità massima delle sedute di un pacchetto: dieci anni. Un numero di giorni
+# battuto con uno zero in più (36500) è un errore da dire, non una scadenza.
+MAX_PACKAGE_VALIDITY_DAYS = 3650
+
+
 class PackageIn(Schema):
     # Nome e prezzo dentro le loro colonne (120 caratteri, numeric(10,2)): fuori,
     # su PostgreSQL erano un 500.
@@ -113,6 +118,15 @@ class PackageIn(Schema):
     # Assente = «non toccare le righe». Con il default a [] un PUT che cambiava
     # solo il prezzo svuotava il pacchetto dei servizi inclusi.
     items: Optional[list[PackageItemIn]] = None
+    # Giorni per usare le sedute dalla vendita; null = senza scadenza. Assente
+    # nel PUT = invariata (come `items`): un modulo che non la conosce non deve
+    # togliere la scadenza a un pacchetto.
+    validity_days: Optional[int] = Field(
+        None,
+        ge=1,
+        le=MAX_PACKAGE_VALIDITY_DAYS,
+        description="Giorni di validità delle sedute dalla vendita; null = senza scadenza",
+    )
 
 
 class PackageOut(Schema):
@@ -121,6 +135,7 @@ class PackageOut(Schema):
     description: str
     price: Decimal
     active: bool
+    validity_days: Optional[int] = None
     items: list[PackageItemOut]
 
 
@@ -162,4 +177,6 @@ class PublicPackageOut(Schema):
     name: str
     description: str
     price: Decimal
+    # Entro quanti giorni dall'acquisto vanno fatte le sedute (null = nessun limite).
+    validity_days: Optional[int] = None
     items: list[PublicPackageItemOut]
