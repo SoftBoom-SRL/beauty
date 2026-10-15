@@ -230,11 +230,14 @@ def get_salon_by_slug(slug: str) -> Salon:
     cercavano ciascuno a mano, in sei copie uguali. Nessun filtro in più: il
     salone demo si trova come gli altri, con una sola query e senza
     `select_related`, come nelle copie.
+
+    Dopo un cambio di slug vale anche quello precedente (`previous_slug`): i
+    link e i QR già dati alle clienti continuano a funzionare.
     """
-    try:
-        return Salon.objects.get(slug=slug)
-    except Salon.DoesNotExist:
+    salon = Salon.objects.filter(slug=slug).first() or Salon.objects.filter(previous_slug=slug).first()
+    if salon is None:
         raise HttpError(404, "Salone non trovato")
+    return salon
 
 
 def default_location(salon):

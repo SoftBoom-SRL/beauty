@@ -12,7 +12,14 @@ class SalonAdmin(ModelAdmin):
     list_display = ("name", "slug", "default_lang", "is_demo")
     prepopulated_fields = {"slug": ("name",)}
     # Lo scrive solo seed_demo: è il permesso di cancellare il salone con --reset.
-    readonly_fields = ("is_demo",)
+    readonly_fields = ("is_demo", "previous_slug")
+
+    def save_model(self, request, obj, form, change):
+        # Slug cambiato: il vecchio resta come alias, o i link già dati alle
+        # clienti risponderebbero «Salone non trovato».
+        if change and "slug" in form.changed_data:
+            obj.previous_slug = form.initial["slug"]
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(Location)
