@@ -1,5 +1,6 @@
-// ServiceStep — il passo 2 del drawer: i servizi (pillole nel colore della
-// loro categoria, filtro oltre dieci) e, per ognuno scelto, chi lo fa
+// ServiceStep — il passo 2 di «Nuova prenotazione» e di ogni cliente della
+// prenotazione di gruppo: i servizi (pillole nel colore del servizio, filtro
+// oltre dieci) e, per ognuno scelto, chi lo fa
 // («Prima disponibile» o un'operatrice abilitata) e il regalo che lo copre.
 // `stepRef` è la ref del passo (la checklist del piede ci porta).
 import { Avatar, Icon, fmtDur, fmtEur } from '@youty/shared';

@@ -2,16 +2,29 @@
 // Right-side live drawer (no dark backdrop): each row = one client + services + a chosen start,
 // so staff can stagger times against the live grid. Submits each row sequentially to
 // POST /api/agenda/appointments, tracks per-row status, and never aborts the batch on one failure.
+// Ogni riga è fatta con gli stessi pezzi di «Nuova prenotazione» (newappt/):
+// guscio, barra della data, passi numerati, servizi, orari, piede. Prima le
+// due prenotazioni mostravano le stesse cose in due modi diversi (15/10).
 import React, { useEffect, useRef, useState } from 'react';
-import { ApiError, apiErrorText, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
+import { ApiError, apiErrorText, toastApiError, Avatar, Icon, addDays, fmtDur, timeLabel, minutesOfDay, todayStr, toDateStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { serviceColor } from '../../../ui/palette.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { initialsOf, fmtMoney } from '../lib.js';
+import { initialsOf, firstName, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import * as agendaApi from '../agendaApi.js';
-import { pillVars } from '../../../ui/colorTools.js';
+import { useGiftCards } from '../hooks/useGiftCards.js';
+import { relativeDateLabel } from './rules.js';
+import BookingShell, { BOOKING_PANEL_W, ReadOnlyNote } from './newappt/BookingShell.jsx';
+import DateBar from './newappt/DateBar.jsx';
+import StepLabel from './newappt/StepLabel.jsx';
+import ServiceStep from './newappt/ServiceStep.jsx';
+import TimeStep from './newappt/TimeStep.jsx';
+
+const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
+const rowPrice = (row, services) => row.items.reduce((sum, it) => sum + Number((services || []).find((s) => s.id === it.service_id)?.price || 0), 0);
+const noop = () => {};
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, fireToast, hasScope, locationId } = useDash();
@@ -44,7 +57,9 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
 
   /* Area di lavoro ristretta e drawer sopra i pannelli aperti prima: col
    * dettaglio di un appuntamento aperto si apriva nascosto dietro (13-19). */
-  const zIndex = usePanelSlot(520);
+  const zIndex = usePanelSlot(BOOKING_PANEL_W);
+  // le schede delle clienti, per portarci dal piede (come i passi di «Nuova prenotazione»)
+  const rowEls = useRef({});
 
   const patchRow = (key, partial) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...(typeof partial === 'function' ? partial(r) : partial) } : r)));
@@ -91,45 +106,21 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
     onCreated?.();
   }
 
-  /* ---- drawer chrome ---- */
+  /* ---- guscio: lo stesso di «Nuova prenotazione» (BookingShell) ---- */
   const shell = (body, footer) => (
-    <div
-      role="dialog"
-      aria-label={t('Prenotazione di gruppo', 'Group booking')}
-      style={{
-        position: 'fixed', top: 'var(--top-h)', right: 0, bottom: 0,
-        width: 520, maxWidth: '94vw', background: 'var(--surface)',
-        borderLeft: '1px solid var(--hair)', boxShadow: 'var(--sh-pop)',
-        zIndex, display: 'flex', flexDirection: 'column',
-        animation: 'dkSlideR 280ms var(--ease-emph)',
-      }}
+    <BookingShell
+      title={t('Prenotazione di gruppo', 'Group booking')} sub={t('Prenota più clienti in una sola sessione', 'Book several clients in one session')}
+      foot={footer} onClose={onClose} closeDisabled={batchRunning} zIndex={zIndex} t={t}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '18px 20px 14px', borderBottom: '1px solid var(--hair)', flexShrink: 0 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="t-title" style={{ fontSize: 19 }}>{t('Prenotazione di gruppo', 'Group booking')}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 2 }}>{t('Prenota più clienti in una sola sessione', 'Book several clients in one session')}</div>
-        </div>
-        {/* come «Annulla» e Esc: a creazione in corso non si esce (13-20) */}
-        <button className="dk-iconbtn" style={{ flexShrink: 0 }} onClick={onClose} disabled={batchRunning} aria-label={t('Chiudi', 'Close')} title="Esc"><Icon name="x" size={18} /></button>
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px 20px' }}>{body}</div>
-      {footer && (
-        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--hair)', background: 'var(--surface-2)', display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
-          {footer}
-        </div>
-      )}
-    </div>
+      {body}
+    </BookingShell>
   );
 
   /* ---- read-only gate ---- */
   if (!canWrite) {
     return shell(
-      <div style={{ textAlign: 'center', padding: '40px 20px', border: '1.5px dashed var(--line-strong)', borderRadius: 14, color: 'var(--muted)' }}>
-        <Icon name="lock" size={26} color="var(--muted-2)" style={{ margin: '0 auto 10px' }} />
-        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--ink)', marginBottom: 4 }}>{t('Sola lettura', 'Read only')}</div>
-        <div className="t-sm">{t('Non hai i permessi per creare prenotazioni.', 'You do not have permission to create bookings.')}</div>
-      </div>,
-      <button className="dk-btn dk-btn--ghost" style={{ marginLeft: 'auto' }} onClick={onClose}>{t('Chiudi', 'Close')}</button>
+      <ReadOnlyNote t={t} />,
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Chiudi', 'Close')}</button></div>
     );
   }
 
@@ -158,14 +149,26 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
           ))}
         </div>
       </React.Fragment>,
-      <React.Fragment>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
         <button className="dk-btn dk-btn--ghost" onClick={resetAll}><Icon name="plus" size={16} />{t('Nuovo gruppo', 'New group')}</button>
-        <button className="dk-btn dk-btn--clay" style={{ marginLeft: 'auto' }} onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>
-      </React.Fragment>
+        <button className="dk-btn dk-btn--clay" style={{ flex: 1 }} onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>
+      </div>
     );
   }
 
   /* ---- normal: list of client rows ---- */
+  const readyPrice = rows.filter(isReady).reduce((sum, r) => sum + rowPrice(r, services), 0);
+  /* Nessuna riga pronta: come in «Nuova prenotazione» il pulsante resta
+   * premibile, dice che cosa manca e porta alla prima scheda da completare. */
+  const create = () => {
+    if (readyCount > 0) { createAll(); return; }
+    const i = rows.findIndex((r) => r.status !== 'done' && !isReady(r));
+    if (i < 0) return;
+    const r = rows[i];
+    const missing = [!r.client && t('cliente', 'client'), !r.items.length && t('servizio', 'service'), r.items.length > 0 && !r.selStart && t('orario', 'time')].filter(Boolean);
+    fireToast({ msg: t(`Cliente ${i + 1} · manca: `, `Client ${i + 1} · missing: `) + missing.join(' · '), icon: 'alert' });
+    rowEls.current[r.key]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
   return shell(
     <React.Fragment>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -178,6 +181,8 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
             busy={batchRunning}
             onPatch={(partial) => patchRow(row.key, partial)}
             onRemove={() => removeRow(row.key)}
+            rowRef={(el) => { rowEls.current[row.key] = el; }}
+            onCloseDrawer={onClose}
           />
         ))}
       </div>
@@ -189,22 +194,34 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
         <Icon name="plus" size={16} color="var(--clay-ink)" />{t('Aggiungi cliente', 'Add client')}
       </button>
     </React.Fragment>,
+    /* Il piede come quello di «Nuova prenotazione» (BookingFoot): sopra chi è
+       pronta e chi no (un clic porta alla sua scheda), sotto «Annulla» e il
+       pulsante che crea, col totale. */
     <React.Fragment>
-      <div style={{ flex: 1, minWidth: 0, color: 'var(--muted)' }}>
-        {doneCount > 0 && (
-          <span className="t-sm" style={{ fontWeight: 700, color: 'var(--ok)' }}>
-            <Icon name="check" size={14} color="var(--ok)" stroke={2.6} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-            {t(`${doneCount} create`, `${doneCount} created`)}
-          </span>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10, fontSize: 12.5, fontWeight: 600, color: 'var(--muted)' }}>
+        {rows.map((r, i) => {
+          const ok = r.status === 'done' || isReady(r);
+          const label = (r.client ? firstName(r.client.full_name) : t(`Cliente ${i + 1}`, `Client ${i + 1}`))
+            + (r.selStart ? ' · ' + timeLabel(minutesOfDay(r.selStart)) : '');
+          return (
+            <button key={r.key} type="button" onClick={() => rowEls.current[r.key]?.scrollIntoView({ behavior: 'smooth', block: 'center' })} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 9px', borderRadius: 99, border: 'none', cursor: 'pointer', background: ok ? 'var(--ok-tint)' : 'var(--surface)', color: ok ? 'var(--ok)' : 'var(--muted)', boxShadow: ok ? 'none' : 'inset 0 0 0 1px var(--hair)' }}>
+              <Icon name={ok ? 'check' : 'clock'} size={12} stroke={2.6} color={ok ? 'var(--ok)' : 'var(--muted-2)'} />{label}
+            </button>
+          );
+        })}
       </div>
-      <button className="dk-btn dk-btn--ghost" onClick={onClose} disabled={batchRunning}>{t('Annulla', 'Cancel')}</button>
-      <button className="dk-btn dk-btn--clay" disabled={batchRunning || readyCount === 0} onClick={createAll}>
-        <Icon name="plus" size={16} color="#fff" />
-        {batchRunning
-          ? t('Creazione…', 'Creating…')
-          : t(`Crea ${readyCount} prenotazion${readyCount === 1 ? 'e' : 'i'}`, `Create ${readyCount} booking${readyCount === 1 ? '' : 's'}`)}
-      </button>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button className="dk-btn dk-btn--ghost" onClick={onClose} disabled={batchRunning}>{t('Annulla', 'Cancel')}</button>
+        <button className="dk-btn dk-btn--clay" style={{ flex: 1 }} disabled={batchRunning} aria-disabled={readyCount === 0} onClick={create}
+          title={readyCount === 0 ? t('Per ogni cliente: chi è, i servizi e l’orario', 'For each client: who, the services and the time') : ''}>
+          <Icon name="plus" size={17} color="#fff" />
+          {batchRunning
+            ? t('Creazione…', 'Creating…')
+            : readyCount === 0
+              ? t('Manca cliente, servizio o orario', 'Missing client, service or time')
+              : t(`Crea ${readyCount} prenotazion${readyCount === 1 ? 'e' : 'i'}`, `Create ${readyCount} booking${readyCount === 1 ? '' : 's'}`) + ' · ' + fmtMoney(readyPrice, lang)}
+        </button>
+      </div>
     </React.Fragment>
   );
 }
@@ -212,28 +229,41 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
 /* ============================================================= *
  *  A single client row: client picker + services + time picker  *
  * ============================================================= */
-function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
-  const { t, lang, services, serviceCategories, operators, fireToast, locationId } = useDash();
+function GroupRow({ row, index, canRemove, busy, onPatch, onRemove, rowRef, onCloseDrawer }) {
+  const { t, lang, services, serviceCategories, operators, fireToast, locationId, setTab } = useDash();
   const itemSeq = useRef(1);
   const locked = busy || row.status === 'creating' || row.status === 'done';
 
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcOf = (id) => (services || []).find((s) => s.id === id);
-  const svcName = (s) => nameIn(s, lang);
   // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
   const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
   const eligibleOps = (serviceId) => (operators || []).filter((o) => (o.service_ids || []).includes(serviceId));
+  // i regali della cliente, accanto ai servizi coperti (come in «Nuova prenotazione»)
+  const giftFor = useGiftCards(row.client?.id);
 
-  /* ---- items ---- */
-  const addItem = (serviceId) => onPatch((r) => ({ items: [...r.items, { key: 'it' + itemSeq.current++, service_id: serviceId, operator_id: null }], selStart: null }));
-  const removeItem = (key) => onPatch((r) => ({ items: r.items.filter((x) => x.key !== key), selStart: null }));
-  const setItemOp = (key, opId) => onPatch((r) => ({ items: r.items.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)), selStart: null }));
+  /* ---- servizi: si scelgono e si tolgono come in «Nuova prenotazione»
+   * (prima ogni clic aggiungeva un'altra copia dello stesso servizio) ---- */
+  const [svcQ, setSvcQ] = useState('');
+  const filteredServices = activeServices.filter((s) => !svcQ || svcName(s, lang).toLowerCase().includes(svcQ.toLowerCase()));
+  const isSelected = (sid) => row.items.some((x) => x.service_id === sid);
+  const setItems = (fn) => onPatch((r) => ({ items: typeof fn === 'function' ? fn(r.items) : fn, selStart: null }));
+  const toggleService = (sid) => setItems((l) => (l.some((x) => x.service_id === sid)
+    ? l.filter((x) => x.service_id !== sid)
+    : [...l, { key: 'it' + itemSeq.current++, service_id: sid, operator_id: null }]));
+  const removeItem = (key) => setItems((l) => l.filter((x) => x.key !== key));
+  const setItemOp = (key, opId) => setItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
 
-  const totalPrice = row.items.reduce((s, it) => s + Number(svcOf(it.service_id)?.price || 0), 0);
+  const totalPrice = rowPrice(row, services);
   // La posa occupa lo slot come il lavoro attivo (come in NewApptModal):
   // senza, colore 45' + 30' di posa si annunciava «45m» e la cliente trovava
   // occupata un'ora e un quarto.
   const totalDur = row.items.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
+
+  /* ---- giorno: le frecce e il calendario di «Nuova prenotazione» (DateBar) ---- */
+  const dateLabel = relativeDateLabel(row.date, lang, t);
+  const setDate = (d) => onPatch({ date: d, selStart: null });
+  const shiftDate = (n) => { const iso = toDateStr(addDays(row.date, n)); if (iso >= todayStr()) setDate(iso); };
 
   /* ---- availability ---- */
   const [slots, setSlots] = useState([]); // null = loading, [] = none
@@ -252,6 +282,18 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
     return () => { alive = false; };
   }, [row.date, itemsKey, row.reloadKey, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ---- orario: gli orari di «Nuova prenotazione» (TimeStep); scelto, resta
+   * la riga dell'orario con «Cambia orario», e le schede restano corte ---- */
+  const [showAll, setShowAll] = useState(false);
+  const pickSlot = (start) => { onPatch({ selStart: start }); setShowAll(false); };
+  const selSlot = (slots || []).find((s) => s.start === row.selStart) || null;
+  const assignedName = (serviceId) => {
+    const a = selSlot?.assignment?.find((x) => x.service_id === serviceId);
+    const o = a && (operators || []).find((op) => op.id === a.operator_id);
+    return o ? o.first_name : null;
+  };
+  const inputCss = { border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 13.5, padding: '9px 11px', fontFamily: 'var(--sans)', background: 'var(--surface)', boxSizing: 'border-box' };
+
   /* ---- row header status ---- */
   const statusBadge = () => {
     if (row.status === 'done') return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700, color: 'var(--ok)', background: 'var(--ok-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="check" size={12} color="var(--ok)" stroke={2.6} />{t('Creata', 'Created')}</span>;
@@ -260,16 +302,14 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
     return null;
   };
 
-  const done = row.status === 'done';
-
   /* ---- done rows collapse to a compact confirmed line ---- */
-  if (done) {
+  if (row.status === 'done') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--ok)', background: 'var(--ok-tint)' }}>
+      <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', borderRadius: 14, border: '1px solid var(--ok)', background: 'var(--ok-tint)' }}>
         <Avatar initials={initialsOf(row.client?.full_name)} size={32} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.client?.full_name}</div>
-          <div className="t-sm" style={{ color: 'var(--muted)' }}>{row.items.map((it) => { const s = svcOf(it.service_id); return s ? svcName(s) : null; }).filter(Boolean).join(' + ')}</div>
+          <div className="t-sm" style={{ color: 'var(--muted)' }}>{row.items.map((it) => { const s = svcOf(it.service_id); return s ? svcName(s, lang) : null; }).filter(Boolean).join(' + ')}</div>
         </div>
         {row.selStart && <span className="t-num" style={{ fontSize: 14, fontWeight: 700 }}>{timeLabel(minutesOfDay(row.selStart))}</span>}
         <Icon name="check" size={17} color="var(--ok)" stroke={2.6} />
@@ -278,20 +318,23 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
   }
 
   return (
-    <div style={{ border: '1px solid ' + (row.status === 'error' ? 'var(--danger)' : 'var(--hair)'), borderRadius: 16, overflow: 'hidden', background: 'var(--surface)', opacity: row.status === 'creating' ? 0.7 : 1 }}>
-      {/* row header */}
+    <div ref={rowRef} style={{ border: '1px solid ' + (row.status === 'error' ? 'var(--danger)' : 'var(--hair)'), borderRadius: 16, overflow: 'hidden', background: 'var(--surface)', opacity: row.status === 'creating' ? 0.7 : 1 }}>
+      {/* row header: chi è, durata e prezzo (in «Nuova prenotazione» stanno nel piede) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--surface-2)', borderBottom: '1px solid var(--hair)' }}>
         <span style={{ width: 22, height: 22, borderRadius: 99, background: 'var(--clay-tint)', color: 'var(--clay-ink)', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{index + 1}</span>
         <span style={{ flex: 1, fontWeight: 700, fontSize: 13.5, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: row.client ? 'var(--ink)' : 'var(--muted)' }}>
-          {row.client ? row.client.full_name : t('Nuovo cliente', 'New client')}
+          {row.client ? row.client.full_name : t(`Cliente ${index + 1}`, `Client ${index + 1}`)}
         </span>
+        {row.items.length > 0 && (
+          <span className="t-sm tabnum" style={{ color: 'var(--muted)', fontWeight: 600, flexShrink: 0 }}>{fmtDur(totalDur, lang)} · {fmtMoney(totalPrice, lang)}</span>
+        )}
         {statusBadge()}
         {canRemove && !locked && (
           <button className="dk-iconbtn" style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }} onClick={onRemove} aria-label={t('Rimuovi riga', 'Remove row')}><Icon name="x" size={14} /></button>
         )}
       </div>
 
-      <div style={{ padding: '13px 14px', pointerEvents: locked ? 'none' : 'auto' }}>
+      <div style={{ padding: '14px 14px 0', pointerEvents: locked ? 'none' : 'auto' }}>
         {/* error message */}
         {row.status === 'error' && row.error && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, padding: '9px 11px', borderRadius: 10, background: 'var(--danger-tint, rgba(220,80,80,0.12))' }}>
@@ -300,95 +343,32 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
           </div>
         )}
 
-        {/* client picker — componente condiviso con il drawer nuova prenotazione */}
-        <div style={{ marginBottom: 12 }}>
+        <DateBar
+          date={row.date} dateLabel={dateLabel} shiftDate={shiftDate} setDate={setDate} choose={noop}
+          req={null} reqOp={null} setReq={noop} setShowAll={setShowAll} setItems={setItems} t={t}
+        />
+
+        {/* 1. cliente — componente condiviso con il drawer nuova prenotazione */}
+        <div style={{ marginBottom: 18 }}>
+          <StepLabel n={1} done={!!row.client} t={t}>{t('Cliente', 'Client')}</StepLabel>
           <ClientPicker value={row.client} onChange={(c) => onPatch({ client: c })} />
         </div>
 
-        {/* services catalogue */}
-        <div className="t-meta" style={{ marginBottom: 7 }}>{t('Servizi', 'Services')}</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: row.items.length ? 12 : 0 }}>
-          {activeServices.map((s) => (
-            <button key={s.id} onClick={() => addItem(s.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--hair)', background: 'var(--surface)', color: 'var(--ink-2)' }}>
-              <span style={{ width: 7, height: 7, borderRadius: 99, background: svcColor(s) }} />
-              {svcName(s)}
-              <Icon name="plus" size={12} color="var(--muted-2)" />
-            </button>
-          ))}
-        </div>
+        {/* 2. servizi e chi li fa */}
+        <ServiceStep
+          items={row.items} activeServices={activeServices} filteredServices={filteredServices} svcQ={svcQ} setSvcQ={setSvcQ}
+          inputCss={inputCss} isSelected={isSelected} toggleService={toggleService} eligibleOps={eligibleOps} svcColor={svcColor}
+          svcOf={svcOf} svcName={svcName} giftFor={giftFor} selSlot={selSlot} assignedName={assignedName} removeItem={removeItem}
+          setItemOp={setItemOp} onClose={onCloseDrawer} setTab={setTab} t={t} lang={lang}
+        />
 
-        {/* item lines */}
+        {/* 3. orario */}
         {row.items.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-            {row.items.map((it) => {
-              const s = svcOf(it.service_id);
-              if (!s) return null;
-              const eligible = eligibleOps(it.service_id);
-              return (
-                <div key={it.key} style={{ border: '1px solid var(--hair)', borderRadius: 12, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${svcColor(s)} 14%, var(--surface))` }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 99, background: svcColor(s), flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcName(s)}</div>
-                      <div className="t-sm" style={{ color: 'var(--muted)' }}><Icon name="clock" size={11} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur((s.duration_min || 0) + (s.soak_min || 0), lang)}{s.soak_min ? ' · ' + t('incl. posa', 'incl. soak') + ' ' + fmtDur(s.soak_min, lang) : ''}</div>
-                    </div>
-                    <span className="t-num" style={{ fontSize: 13.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(s.price), lang)}</span>
-                    <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 8, flexShrink: 0 }} onClick={() => removeItem(it.key)} aria-label={t('Rimuovi servizio', 'Remove service')}><Icon name="x" size={13} /></button>
-                  </div>
-                  {/* compact operator picker */}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '8px 11px' }}>
-                    <button onClick={() => setItemOp(it.key, null)} className={'dk-pill' + (it.operator_id === null ? ' dk-pill--on' : '')} style={{ padding: '4px 10px', fontSize: 12 }}>
-                      <Icon name="sparkle" size={12} color={it.operator_id === null ? '#fff' : 'var(--muted-2)'} />{t('Prima disp.', 'First avail.')}
-                    </button>
-                    {eligible.map((o) => {
-                      const on = o.id === it.operator_id;
-                      return (
-                        <button key={o.id} onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ ...pillVars(o.color || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12 }}>
-                          <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
-                          <span>{o.first_name}</span>
-                          {on && <Icon name="check" size={12} stroke={2.6} />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 4px' }}>
-              <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}><Icon name="clock" size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />{fmtDur(totalDur, lang)}</span>
-              <span className="t-num" style={{ fontWeight: 700 }}>{fmtMoney(totalPrice, lang)}</span>
-            </div>
-          </div>
-        )}
-
-        {/* date + times */}
-        {row.items.length > 0 && (
-          <React.Fragment>
-            <div className="hr" style={{ margin: '4px 0 12px' }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <div className="t-meta" style={{ margin: 0 }}>{t('Data e orario', 'Date & time')}</div>
-              <div style={{ flex: 1 }} />
-              <input type="date" value={row.date} min={todayStr()} onChange={(e) => onPatch({ date: e.target.value || todayStr(), selStart: null })} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
-            </div>
-            {slots === null ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {[...Array(8)].map((_, i) => <div key={i} className="skel" style={{ width: 52, height: 28, borderRadius: 8 }} />)}
-              </div>
-            ) : slots.length ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                {slots.map((sl) => {
-                  const sel = sl.start === row.selStart;
-                  return (
-                    <button key={sl.start} onClick={() => onPatch({ selStart: sl.start })} className={'dk-slot' + (sel ? ' dk-slot--on' : '')}>
-                      {timeLabel(minutesOfDay(sl.start))}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600 }}>{t('Nessuno slot libero — prova un altro giorno o operatrice', 'No free slot — try another day or stylist')}</div>
-            )}
-          </React.Fragment>
+          <TimeStep
+            slots={slots} selStart={row.selStart} pickSlot={pickSlot} reqStatus={null} req={null} reqOp={null}
+            setReq={noop} totalDur={totalDur} showAll={showAll} setShowAll={setShowAll} dateLabel={dateLabel} items={row.items}
+            setItems={setItems} eligibleOps={eligibleOps} shiftDate={shiftDate} operators={operators || []} t={t}
+          />
         )}
       </div>
     </div>

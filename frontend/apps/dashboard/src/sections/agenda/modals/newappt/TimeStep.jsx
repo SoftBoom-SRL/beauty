@@ -1,4 +1,5 @@
-// TimeStep — il passo 3 del drawer: l'esito dell'orario chiesto dall'agenda
+// TimeStep — il passo 3 di «Nuova prenotazione» e della prenotazione di
+// gruppo (lì senza orario chiesto): l'esito dell'orario chiesto dall'agenda
 // (libero, o perché no, con le alternative più vicine: requestStatus), gli
 // orari liberi di mattina e di pomeriggio, e «nessun orario libero» con le
 // strade per trovarne uno. `stepRef` è la ref del passo.
