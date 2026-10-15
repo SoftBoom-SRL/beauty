@@ -43,7 +43,7 @@ log del backend.
 | `app/` | feed live (`liveFeed.js`), cataloghi di base (`useCatalogs.js`), sede attiva, colori delle operatrici, schermate di avvio |
 | `api/<dominio>.js` | una funzione per endpoint (core, staff, catalog, clients, inventory, sales, marketing, automations, insights, team, integrations) |
 | `hooks/` | hook generici: `useResource`, `useLatestRequest`, `useDebounced`, `useClickAway`, `useStoredState`, `useOnModalClosed` |
-| `ui/` | componenti comuni: `DkModal`, `DkDrawer`, `DkPanel`, `DkConfirm`, `DkToast`, `DkSeg`, `DkDrop`, `SubTabs`, `DrawerHead`, `SearchToolbar`, `PaletteGrid`, `HexInput`, …; `layers.js` è lo stack unico del tasto Esc |
+| `ui/` | componenti comuni: `DkModal`, `DkDrawer`, `DkPanel`, `DkConfirm`, `DkToast`, `DkSeg`, `DkDrop`, `SubTabs`, `DrawerHead`, `SearchToolbar`, `PaletteGrid`, `HexInput`, `ColorWheel` (ruota dei colori con la barra chiaro/scuro), …; `colorTools.js` i conti sui colori (testo bianco o scuro sopra un colore, HSL); `layers.js` è lo stack unico del tasto Esc |
 | `shell/` | barra laterale, barra in alto, ritorno a Yourang, ricarica dei chunk |
 | `modals/` | `registry.js` (nome → modale) e `DkModals.jsx` (chi li apre) |
 | `oauth/` | finestre di collegamento a Yourang e Stripe (`popup.js`) |
@@ -54,7 +54,7 @@ La sezione **agenda** è la più grande e ha una struttura sua:
 `agendaApi.js` (tutti i suoi endpoint), `lib.js` (facciata che ri-esporta i
 moduli puri di `lib/`: date, griglia, orari, lista d'attesa, trascinamento,
 settimana, testi degli avvisi, «409 → riprova forzando», colonne del filtro
-«Team» in `team.js`, testo leggibile sui colori in `colors.js`), `constants.js`,
+«Team» in `team.js`, sfondo delle colonne e testo leggibile sui colori in `colors.js`, che riesporta `ui/colorTools.js`), `constants.js`,
 `hooks/` (dati, live, undo, gesti, zoom in altezza e in larghezza, scroll,
 trascinamento comune a giorno e settimana), `grid/` e `parts/` (pezzi della griglia e della barra; la barra
 sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`), `month/`,
@@ -73,6 +73,7 @@ link), `components/`, `screens/` (la prenotazione è divisa per passi in
 `clientAuth.js` (sessioni), `salon.js`, `i18n.jsx`, `format.js` (date nel fuso
 del salone, euro, durate), `labels.js` (`nameIn`, mesi e giorni), `phone.js`,
 `clipboard.js` (`copyText`: copia negli appunti con un ripiego, e dice se è riuscita),
+`brandColor.js` (`onColor`: il testo sopra il colore del brand, per l'app cliente e l'anteprima nella dashboard),
 `ui/` (Icon, NumInput, PhoneInput, primitive, metadati degli stati,
 `useToastHost`), `styles/base.css`. Ogni nome esportato da `index.js` va
 esportato anche dal sostituto dei test (`frontend/test/shared-shim.mjs`), altrimenti

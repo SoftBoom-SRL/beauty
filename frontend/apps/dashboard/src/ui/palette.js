@@ -33,7 +33,7 @@ export const CAT_SWATCHES = ['#FDE2E4', '#DBEAFE', '#DCFCE7', '#FEF3C7', '#FCE7F
  * file: vivaci e scure sature, con le tinte ben distanti fra loro (rosso,
  * arancio, ambra, verde chiaro, verde, petrolio, azzurro, blu, viola, rosa),
  * poi le tenui di prima per chi le preferisce. Sui blocchi scuri il testo
- * diventa bianco da solo (sections/agenda/lib/colors.js). */
+ * diventa bianco da solo (ui/colorTools.js). */
 export const TREATMENT_SWATCHES = [
   { key: 'vivid', it: 'Vivaci', en: 'Vivid', colors: ['#E53935', '#FB8C00', '#F9A825', '#5FA81E', '#16A34A', '#00897B', '#039BE5', '#4F46E5', '#8E24AA', '#D81B60'] },
   { key: 'deep', it: 'Scure', en: 'Deep', colors: ['#B71C1C', '#BF360C', '#7A5200', '#33691E', '#1B5E20', '#00574B', '#01579B', '#1A237E', '#4A148C', '#880E4F'] },

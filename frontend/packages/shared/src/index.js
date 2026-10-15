@@ -7,6 +7,8 @@ export { ApiError, apiErrorText, toastApiError } from './apiErrors.js';
 // Copia negli appunti che dice se è riuscita (logica pura):
 //   fireToast(await copyText(link) ? { msg: 'Copiato', … } : { msg: 'Copia non riuscita', … })
 export { copyText } from './clipboard.js';
+// Il testo sopra il colore del brand, bianco o inchiostro (logica pura).
+export { onColor } from './brandColor.js';
 
 // Auth stores are namespaced (both expose login/logout/getSession/subscribe):
 //   import { staffAuth, clientAuth } from '@youty/shared';

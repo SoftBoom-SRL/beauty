@@ -7,7 +7,9 @@ import { DkModal, DkSeg } from '../../ui/index.js';
 import { FRow, PriceBox, DurationInput, CategoryDot } from './parts.jsx';
 import SwatchRows from '../../ui/SwatchRows.jsx';
 import HexInput from '../../ui/HexInput.jsx';
+import ColorWheel from '../../ui/ColorWheel.jsx';
 import { TREATMENT_SWATCHES } from '../../ui/palette.js';
+import { pillVars } from '../../ui/colorTools.js';
 
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
@@ -166,14 +168,15 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
                   {t('Solo per questo servizio: gli altri di', 'Only for this service: the others in')} “{catName(selCat, lang)}” {t('restano col colore della categoria', 'keep the category colour')}
                 </div>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', border: '1px solid var(--hair)', background: draft.color, flexShrink: 0 }}>
-                    <input type="color" value={draft.color} onChange={(e) => set({ color: e.target.value.toUpperCase() })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-                  </label>
                   <HexInput value={draft.color} onChange={(c) => set({ color: c })} width={64} />
                 </div>
               </div>
               <div style={{ marginTop: 10 }}>
                 <SwatchRows value={draft.color} onChange={(c) => set({ color: c })} t={t} />
+              </div>
+              {/* qualsiasi sfumatura, senza conoscerne il codice */}
+              <div style={{ marginTop: 12 }}>
+                <ColorWheel value={draft.color} onChange={(c) => set({ color: c })} t={t} />
               </div>
             </React.Fragment>
           ) : (
@@ -188,9 +191,6 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
                 </div>
                 {onCatColor && canPricing ? (
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                    <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', border: '1px solid var(--hair)', background: catColor, flexShrink: 0 }}>
-                      <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(catColor) ? catColor : '#E0E7FF'} onChange={(e) => setCatColorLocal(e.target.value)} onBlur={() => commitCatColor(catColor)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-                    </label>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', background: 'var(--surface)' }}>
                       <span style={{ color: 'var(--muted-2)', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5 }}>#</span>
                       <input value={String(catColor || '').replace('#', '').toUpperCase()} maxLength={6} placeholder="E0E7FF"
@@ -207,6 +207,10 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
               {onCatColor && canPricing && (
                 <div style={{ marginTop: 10 }}>
                   <SwatchRows value={catColor} onChange={(c) => { setCatColorLocal(c); commitCatColor(c); }} t={t} />
+                  {/* la ruota salva sulla categoria a gesto finito, non a ogni movimento */}
+                  <div style={{ marginTop: 12 }}>
+                    <ColorWheel value={catColor} onChange={setCatColorLocal} onCommit={commitCatColor} t={t} />
+                  </div>
                 </div>
               )}
             </React.Fragment>
@@ -254,7 +258,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
             return (
               <button
                 key={o.id} type="button" onClick={canTeam ? () => toggleOp(o.id) : undefined} aria-disabled={!canTeam} aria-pressed={on}
-                className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color, padding: '5px 12px 5px 5px' }}
+                className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ ...pillVars(o.color), padding: '5px 12px 5px 5px' }}
               >
                 <Avatar initials={o.initials} size={24} color={o.color} ring={on} />
                 <span>{o.first_name}</span>

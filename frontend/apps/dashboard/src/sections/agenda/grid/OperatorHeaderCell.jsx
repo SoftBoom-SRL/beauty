@@ -6,6 +6,7 @@
 import React from 'react';
 import { Avatar, Icon } from '@youty/shared';
 import HexInput from '../../../ui/HexInput.jsx';
+import ColorWheel from '../../../ui/ColorWheel.jsx';
 import { COLW, apptRevenue, firstName, fmtMoney, initialsOf, lastName, opColumnTint, opDisplay } from '../lib.js';
 
 /** `col`: il colore dell'operatrice; `isTarget`: la colonna d'arrivo del
@@ -58,17 +59,15 @@ export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showR
   );
 }
 
-/* ---- selettore del colore: ruota dei colori, campo esadecimale, tavolozza ---- */
+/* ---- selettore del colore: campo esadecimale, tavolozza e ruota libera ---- */
 function OpColorPicker({ opId, col, t, setOpColor, setPicker, opPalette }) {
   return (
     <React.Fragment>
       <div onClick={() => setPicker(null)} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
-      <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 6, zIndex: 61, padding: 12, boxShadow: 'var(--sh-pop)', width: 250, boxSizing: 'border-box' }}>
+      <div className="dk-card" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 6, zIndex: 61, padding: 12, boxShadow: 'var(--sh-pop)', width: 300, boxSizing: 'border-box' }}>
         <div className="t-meta" style={{ marginBottom: 8 }}>{t('Colore operatrice', 'Stylist colour')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: col }}>
-            <input type="color" value={(col && col[0] === '#') ? col : '#C9B8F2'} onChange={(e) => setOpColor(opId, e.target.value)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-          </label>
+          <span style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, border: '1px solid var(--hair)', background: col }} />
           {/* Il campo completava con zeri e salvava a ogni tasto: scrivendo
               «C9B8F2» passavano C00000, C90000… con un PATCH e un evento
               live per ogni lettera, e il campo si riempiva di zeri sotto
@@ -81,6 +80,10 @@ function OpColorPicker({ opId, col, t, setOpColor, setPicker, opPalette }) {
             const on = (col || '').toLowerCase() === c.toLowerCase();
             return <button key={c} onClick={() => { setOpColor(opId, c); setPicker(null); }} title={c} style={{ width: 19, height: 19, borderRadius: 5, background: c, cursor: 'pointer', border: '1px solid transparent', outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: 1 }} />;
           })}
+        </div>
+        {/* qualsiasi sfumatura; il salvataggio aspetta la mano ferma (useOperatorColors) */}
+        <div style={{ marginTop: 12 }}>
+          <ColorWheel value={(col && col[0] === '#') ? col : null} onChange={(c) => setOpColor(opId, c)} t={t} size={104} />
         </div>
       </div>
     </React.Fragment>

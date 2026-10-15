@@ -6,6 +6,7 @@ import DkModal from '../../../ui/DkModal.jsx';
 import HexInput from '../../../ui/HexInput.jsx';
 import PaletteGrid from '../../../ui/PaletteGrid.jsx';
 import SwatchRows from '../../../ui/SwatchRows.jsx';
+import ColorWheel from '../../../ui/ColorWheel.jsx';
 import { inputCss } from '../lib.jsx';
 
 export default function CatEditModal({ draft, setDraft, cfg, onSave, saving, onDelete, onClose, t }) {
@@ -35,9 +36,7 @@ export default function CatEditModal({ draft, setDraft, cfg, onSave, saving, onD
         <React.Fragment>
           <div className="t-meta" style={{ marginBottom: 10 }}>{t('Colore', 'Colour')}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 48, height: 48, borderRadius: 12, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: draft.color || '#888' }}>
-              <input type="color" value={draft.color || '#888888'} onChange={(e) => setDraft((d) => ({ ...d, color: e.target.value.toUpperCase() }))} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-            </label>
+            <span style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0, border: '1px solid var(--hair)', background: draft.color || '#888' }} />
             <div style={{ flex: 1 }}>
               <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 4 }}>{t('Codice esadecimale', 'Hex code')}</div>
               <HexInput value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />
@@ -48,6 +47,10 @@ export default function CatEditModal({ draft, setDraft, cfg, onSave, saving, onD
           {cfg.treatment
             ? <SwatchRows value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} t={t} />
             : <PaletteGrid value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />}
+          {/* e qualsiasi altro colore, senza conoscerne il codice */}
+          <div style={{ marginTop: 14 }}>
+            <ColorWheel value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} t={t} />
+          </div>
         </React.Fragment>
       )}
     </DkModal>

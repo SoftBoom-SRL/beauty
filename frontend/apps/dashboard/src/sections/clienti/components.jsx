@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
+import { inkOn } from '../../ui/colorTools.js';
 import { relMeta, MONTHS_IT, MONTHS_EN, parseBirthday, birthdayEdit, daysInMonth as daysIn } from './helpers.js';
 
 /* Reliability ring (ported RelRing). */
@@ -31,12 +32,12 @@ export function RelBadge({ score, t, sm }) {
 /* Category label chip (client categories carry a name + color from the API). */
 export function CatChip({ cat, sm, onRemove, removeTitle }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: sm ? 10.5 : 11.5, fontWeight: 700, color: 'var(--ink-2)', background: `color-mix(in srgb, ${cat.color || 'var(--hair)'} 45%, transparent)`, padding: onRemove ? '4px 6px 4px 10px' : (sm ? '2px 8px' : '4px 10px'), borderRadius: 99, whiteSpace: 'nowrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: sm ? 10.5 : 11.5, fontWeight: 700, color: inkOn(cat.color, 0.45).sub, background: `color-mix(in srgb, ${cat.color || 'var(--hair)'} 45%, transparent)`, padding: onRemove ? '4px 6px 4px 10px' : (sm ? '2px 8px' : '4px 10px'), borderRadius: 99, whiteSpace: 'nowrap' }}>
       <span style={{ width: sm ? 7 : 8, height: sm ? 7 : 8, borderRadius: 99, background: cat.color || 'var(--muted-2)', boxShadow: '0 0 0 1px rgba(0,0,0,0.06) inset' }} />
       {cat.name}
       {onRemove && (
         <button onClick={onRemove} title={removeTitle} style={{ width: 16, height: 16, borderRadius: 99, display: 'grid', placeItems: 'center', cursor: 'pointer', background: 'rgba(0,0,0,0.08)', border: 'none' }}>
-          <Icon name="x" size={10} color="var(--ink-2)" stroke={2.6} />
+          <Icon name="x" size={10} color={inkOn(cat.color, 0.45).sub} stroke={2.6} />
         </button>
       )}
     </span>

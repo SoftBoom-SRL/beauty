@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Icon, Toggle, NumInput, nameIn, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../../ui/index.js';
+import ColorWheel from '../../../ui/ColorWheel.jsx';
+import { wantsLightText } from '../../../ui/colorTools.js';
 import { inputCss, numCss, segBtn, pillBtn } from '../formStyles.js';
 import { LOYALTY_TYPES, REWARD_TYPES, ENROLLMENTS, BONUS_KEYS, LOYALTY_COLORS, composeReward, earnFields, earnMetricsFor } from '../meta.js';
 import { loyaltyApi } from '../../../api/marketing.js';
@@ -77,6 +79,10 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
 
   const toggleBonus = (k) => set({ bonus: { ...(draft.bonus || {}), [k]: !(draft.bonus || {})[k] } });
   const unit = draft.type === 'stamps' ? t('timbri', 'stamps') : 'pt';
+  // L'anteprima della tessera scriveva sempre in bianco: su un colore chiaro
+  // (giallo, rosa tenue) nome e premio non si leggevano.
+  const cardLight = wantsLightText(draft.color || LOYALTY_COLORS[0]);
+  const cardInk = cardLight ? '#fff' : 'var(--ink)';
 
   return (
     <DkModal open onClose={onClose} title={isNew ? t('Nuovo programma fedeltà', 'New loyalty program') : t('Modifica programma', 'Edit program')}
@@ -185,9 +191,7 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="t-sm" style={{ fontWeight: 700, color: 'var(--muted)', marginBottom: 7 }}>{t('Colore', 'Colour')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-              <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 34, height: 34, borderRadius: 9, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: draft.color || LOYALTY_COLORS[0] }}>
-                <input type="color" value={draft.color || LOYALTY_COLORS[0]} onChange={(e) => set({ color: e.target.value })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-              </label>
+              <span style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, border: '1px solid var(--hair)', background: draft.color || LOYALTY_COLORS[0] }} />
               <HexInput value={draft.color || LOYALTY_COLORS[0]} onChange={(c) => set({ color: c })} width={70} />
             </div>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', maxWidth: 280 }}>
@@ -197,16 +201,20 @@ export default function LoyaltyEditModal({ draft, setDraft, onClose, onSaved, on
                   style={{ width: 24, height: 24, borderRadius: 6, background: c, cursor: 'pointer', border: '1px solid transparent', outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: 1, flexShrink: 0 }} />;
               })}
             </div>
+            {/* qualsiasi altro colore, senza conoscerne il codice */}
+            <div style={{ marginTop: 12 }}>
+              <ColorWheel value={draft.color || LOYALTY_COLORS[0]} onChange={(c) => set({ color: c })} t={t} size={112} />
+            </div>
           </div>
           <div style={{ width: 210, flexShrink: 0 }}>
             <div className="t-sm" style={{ fontWeight: 700, color: 'var(--muted)', marginBottom: 7 }}>{t('Anteprima', 'Preview')}</div>
-            <div style={{ borderRadius: 14, padding: 16, color: '#fff', background: `linear-gradient(135deg, ${draft.color || LOYALTY_COLORS[0]}, color-mix(in srgb, ${draft.color || LOYALTY_COLORS[0]} 70%, #000))` }}>
+            <div style={{ borderRadius: 14, padding: 16, color: cardInk, background: `linear-gradient(135deg, ${draft.color || LOYALTY_COLORS[0]}, color-mix(in srgb, ${draft.color || LOYALTY_COLORS[0]} 70%, #000))` }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                <Icon name="star" size={20} color="#fff" />
+                <Icon name="star" size={20} color={cardInk} />
                 <span style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draft.name || t('Programma fedeltà', 'Loyalty program')}</span>
               </div>
-              <div style={{ height: 6, borderRadius: 99, background: 'rgba(255,255,255,0.3)', overflow: 'hidden', marginBottom: 8 }}>
-                <div style={{ height: '100%', width: '60%', background: '#fff', borderRadius: 99 }} />
+              <div style={{ height: 6, borderRadius: 99, background: cardLight ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.14)', overflow: 'hidden', marginBottom: 8 }}>
+                <div style={{ height: '100%', width: '60%', background: cardInk, borderRadius: 99 }} />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, opacity: 0.9 }}>
                 <span>{Math.round((Number(draft.threshold) || 100) * 0.6)}/{draft.threshold || 100} {unit}</span>

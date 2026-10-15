@@ -197,8 +197,12 @@ test('pillole e righe dei servizi col colore del servizio: il suo, o quello dell
   // il Taglio (scelto) resta del colore della categoria, il Colore ha il suo
   assert.ok(pill('Taglio').props.style.background.includes('#FDE2E4'), pill('Taglio').props.style.background);
   assert.ok(pill('Colore').props.style.background.includes('#1A237E'), pill('Colore').props.style.background);
+  assert.equal(pill('Colore').props.style.color, 'var(--ink)', 'non scelto: tinta leggera, testo scuro');
   pill('Colore').props.onClick();
   g.render();
+  // scelta, la pillola è quasi piena: sul blu notte il testo diventa bianco
+  assert.equal(pill('Colore').props.style.color, '#FFFFFF');
+  assert.equal(pill('Taglio').props.style.color, 'var(--ink)', 'sul rosa tenue resta scuro');
   const dots = findAll(g.m.tree, (el) => el.type === 'span' && el.props.style?.width === 9 && el.props.style?.borderRadius === 99).map((el) => el.props.style.background);
   assert.deepEqual(dots, ['#FDE2E4', '#1A237E'], 'le righe dei servizi scelti');
 });

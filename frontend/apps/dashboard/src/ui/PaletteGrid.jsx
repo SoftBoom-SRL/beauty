@@ -1,6 +1,7 @@
 // PaletteGrid.jsx — la griglia dei colori (GD_PALETTE) per brand e categorie.
 import { Icon } from '@youty/shared';
 import { GD_PALETTE } from './palette.js';
+import { wantsLightText } from './colorTools.js';
 
 export default function PaletteGrid({ value, onChange, style }) {
   return (
@@ -12,7 +13,8 @@ export default function PaletteGrid({ value, onChange, style }) {
             return (
               <button key={c} onClick={() => onChange(c)} title={c}
                 style={{ width: 22, height: 22, borderRadius: 5, background: c, cursor: 'pointer', border: '1px solid ' + (c.toUpperCase() === '#FFFFFF' ? 'var(--hair)' : 'transparent'), outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: 1, flexShrink: 0, display: 'grid', placeItems: 'center' }}>
-                {on && <Icon name="check" size={12} color={ri === 0 && row.indexOf(c) > 6 ? 'var(--ink)' : '#fff'} stroke={2.6} />}
+                {/* la spunta si legge su ogni casella: sulle chiare era bianca su bianco */}
+                {on && <Icon name="check" size={12} color={wantsLightText(c) ? '#fff' : 'var(--ink)'} stroke={2.6} />}
               </button>
             );
           })}

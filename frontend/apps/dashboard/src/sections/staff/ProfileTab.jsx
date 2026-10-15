@@ -3,6 +3,7 @@
 // `form` della pagina (useOperatorEditor): qui si modifica, «Salva» è in alto.
 import { NumInput } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
+import ColorWheel from '../../ui/ColorWheel.jsx';
 import { GD_PALETTE } from '../../ui/palette.js';
 import { HIDDEN, inputCss } from './lib.js';
 import ServicesAssign from './ServicesAssign.jsx';
@@ -71,9 +72,7 @@ export default function ProfileTab({
         <div className="t-meta" style={{ marginBottom: 6 }}>{t('Colore operatrice', 'Stylist colour')}</div>
         <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12 }}>{t('Identifica questa operatrice nell’agenda e nei report.', 'Identifies this stylist in the calendar and reports.')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 34, height: 34, borderRadius: 9, cursor: canTeam ? 'pointer' : 'default', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: color }}>
-            <input type="color" value={color} disabled={!canTeam} onChange={(e) => setForm((f) => ({ ...f, color: e.target.value }))} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-          </label>
+          <span style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, border: '1px solid var(--hair)', background: color }} />
           <HexInput value={color} onChange={(c) => canTeam && setForm((f) => ({ ...f, color: c }))} width={70} />
         </div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -92,6 +91,10 @@ export default function ProfileTab({
               })}
             </div>
           ))}
+        </div>
+        {/* qualsiasi altra sfumatura, senza conoscerne il codice */}
+        <div style={{ marginTop: 14 }}>
+          <ColorWheel value={color} onChange={(c) => canTeam && setForm((f) => ({ ...f, color: c }))} t={t} disabled={!canTeam} />
         </div>
       </div>
 

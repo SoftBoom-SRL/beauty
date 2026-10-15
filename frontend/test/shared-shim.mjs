@@ -28,6 +28,8 @@ export {
 export { ApiError, apiErrorText, toastApiError } from '../packages/shared/src/apiErrors.js';
 // La copia negli appunti: pura, il browser arriva come argomento (o globalThis).
 export { copyText } from '../packages/shared/src/clipboard.js';
+// Il testo sopra il colore del brand: puro.
+export { onColor } from '../packages/shared/src/brandColor.js';
 
 // `api` finto, come quello dello SHARED di grid-harness.mjs: ogni chiamata va a
 // globalThis.__api, che il test imposta (un registratore). Così i moduli di

@@ -2,7 +2,7 @@
 // scure, tenui: TREATMENT_SWATCHES). Le usano la scheda del servizio e la
 // gestione delle categorie dei servizi.
 import { Icon } from '@youty/shared';
-import { wantsLightText } from '../sections/agenda/lib/colors.js';
+import { wantsLightText } from './colorTools.js';
 import { TREATMENT_SWATCHES } from './palette.js';
 
 /** `value` = il colore scelto, `onChange(hex)`; `size` = il lato di un quadratino. */

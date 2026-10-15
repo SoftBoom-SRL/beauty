@@ -6,6 +6,7 @@ import { Avatar, Icon, fmtDur, fmtEur } from '@youty/shared';
 import { firstName } from '../../lib.js';
 import { usableCode } from '../rules.js';
 import StepLabel from './StepLabel.jsx';
+import { inkOn, pillVars } from '../../../../ui/colorTools.js';
 
 export default function ServiceStep({
   stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, svcColor, svcOf,
@@ -28,18 +29,20 @@ export default function ServiceStep({
           const on = isSelected(s.id);
           const noOps = !eligibleOps(s.id).length;
           const cat = svcColor(s);
+          // scelta, la pillola è quasi piena: sui colori scuri testo e icone bianchi
+          const ink = inkOn(cat, on ? 0.7 : 0.26);
           return (
             <button key={s.id} type="button" onClick={() => toggleService(s.id)} className="dk-pill" title={noOps ? t('Nessuna operatrice abilitata', 'No stylist enabled') : `${fmtDur(s.duration_min, lang)} · ${fmtEur(Number(s.price), lang)}`}
               style={{
-                padding: '5px 11px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1, color: 'var(--ink)',
+                padding: '5px 11px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1, color: ink.ink,
                 borderWidth: 2, fontWeight: on ? 700 : 600,
                 background: on ? `color-mix(in srgb, ${cat} 70%, #FFFFFF)` : `color-mix(in srgb, ${cat} 26%, var(--surface))`,
                 borderColor: on ? `color-mix(in srgb, ${cat} 60%, var(--ink))` : `color-mix(in srgb, ${cat} 50%, transparent)`,
                 boxShadow: on ? `0 0 0 3px color-mix(in srgb, ${cat} 32%, transparent)` : 'none',
               }}>
               {svcName(s, lang)}
-              {giftFor(s.id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da una gift card', 'Covered by a gift card')} />}
-              <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? 'var(--ink)' : 'var(--ink-2)'} />
+              {giftFor(s.id) && <Icon name="gift" size={12} color={ink.ink === '#FFFFFF' ? ink.ink : 'var(--clay-ink)'} title={t('Coperto da una gift card', 'Covered by a gift card')} />}
+              <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? ink.ink : ink.sub} />
             </button>
           );
         })}
@@ -79,7 +82,7 @@ export default function ServiceStep({
                   {eligible.map((o) => {
                     const on = o.id === it.operator_id;
                     return (
-                      <button key={o.id} type="button" onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12 }}>
+                      <button key={o.id} type="button" onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ ...pillVars(o.color || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12 }}>
                         <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
                         <span>{o.first_name}</span>
                         {on && <Icon name="check" size={12} stroke={2.6} />}

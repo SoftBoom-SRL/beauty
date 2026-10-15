@@ -2,6 +2,7 @@
 // prodotto (ProductDrawer).
 import { useEffect, useRef, useState } from 'react';
 import { CAT_SWATCHES } from '../../ui/palette.js';
+import ColorWheel from '../../ui/ColorWheel.jsx';
 
 /* category colour: fallback + pastel presets offered in the picker (CAT_SWATCHES) */
 export const CAT_FALLBACK = '#E0E7FF';
@@ -12,12 +13,13 @@ const HEX6_RE = /^#[0-9a-fA-F]{6}$/;
  * draft of the hex; commits to the parent via onCatColor only on blur / swatch
  * click / colour-picker close — never on every keystroke. Remount via `key`
  * (parent passes key={cat.id}) resets local state when the selection changes.
- * Il selettore nativo emette `onChange` a ogni movimento del cursore: salvare lì
- * voleva dire decine di PUT della categoria e altrettante ricariche di tutto il
- * magazzino, in parallelo, con la categoria che poteva restare su un colore
- * intermedio (15-12). Lì si aggiorna solo l'anteprima; la scrittura parte a mano
- * ferma (400 ms, come il colore operatrice in app/useOperatorColors.js),
- * all'uscita dal campo o se la scheda si chiude prima. */
+ * La ruota dei colori emette `onChange` a ogni movimento (come il selettore
+ * nativo di prima): salvare lì voleva dire decine di PUT della categoria e
+ * altrettante ricariche di tutto il magazzino, in parallelo, con la categoria
+ * che poteva restare su un colore intermedio (15-12). Lì si aggiorna solo
+ * l'anteprima; la scrittura parte a mano ferma (400 ms, come il colore
+ * operatrice in app/useOperatorColors.js), a dito alzato o se la scheda si
+ * chiude prima. */
 export default function CatColorControl({ cat, onCatColor, t }) {
   const current = cat.color || CAT_FALLBACK;
   const [hex, setHex] = useState(current);
@@ -53,8 +55,7 @@ export default function CatColorControl({ cat, onCatColor, t }) {
     <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--hair)', borderRadius: 10, background: 'var(--surface-2)' }}>
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Colore di', 'Colour of')} «{cat.name}»</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <input type="color" value={swatch} onChange={(e) => pick(e.target.value)} onBlur={() => { if (pickPending.current) commit(pickPending.current); }} title={t('Scegli colore', 'Pick colour')}
-          style={{ width: 38, height: 38, padding: 0, border: '1px solid var(--hair)', borderRadius: 9, background: 'var(--surface)', cursor: 'pointer' }} />
+        <span style={{ width: 38, height: 38, flexShrink: 0, border: '1px solid var(--hair)', borderRadius: 9, background: swatch }} />
         <input value={hex} onChange={(e) => setHex(e.target.value)} onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(e.target.value); } }}
           placeholder={CAT_FALLBACK} spellCheck={false} maxLength={7}
@@ -68,6 +69,10 @@ export default function CatColorControl({ cat, onCatColor, t }) {
             );
           })}
         </div>
+      </div>
+      {/* qualsiasi altra sfumatura, senza conoscerne il codice */}
+      <div style={{ marginTop: 12 }}>
+        <ColorWheel value={swatch} onChange={pick} onCommit={commit} t={t} size={112} />
       </div>
       <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 8 }}>{t('Vale per tutti i prodotti di questa categoria · usato anche altrove.', 'Applies to every product in this category · used elsewhere too.')}</div>
     </div>

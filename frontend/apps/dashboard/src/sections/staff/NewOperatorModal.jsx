@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Icon, NumInput, toastApiError } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
+import ColorWheel from '../../ui/ColorWheel.jsx';
 import { useDash } from '../../ctx.jsx';
 import { GD_PALETTE } from '../../ui/palette.js';
 import { inputCss, svcLabel } from './lib.js';
@@ -93,6 +94,10 @@ export default function NewOperatorModal({ onClose, onCreated }) {
                 ))}
               </div>
             ))}
+          </div>
+          {/* qualsiasi altra sfumatura, senza conoscerne il codice */}
+          <div style={{ marginTop: 12 }}>
+            <ColorWheel value={form.color} onChange={(c) => set({ color: c })} t={t} size={112} />
           </div>
         </div>
 

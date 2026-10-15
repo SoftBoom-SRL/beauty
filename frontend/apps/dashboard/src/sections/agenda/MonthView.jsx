@@ -14,6 +14,7 @@ import StatTile from './month/StatTile.jsx';
 import Legend from './month/Legend.jsx';
 import MonthGrid from './month/MonthGrid.jsx';
 import DayPopover, { POP_W } from './month/DayPopover.jsx';
+import { pillVars } from '../../ui/colorTools.js';
 
 const HOVER_CLOSE_MS = 120; // il popover sopravvive al passaggio tra due celle vicine
 
@@ -136,7 +137,7 @@ export default function MonthView({ anchor, onOpenDay }) {
                   key={o.id} type="button" aria-pressed={on} onClick={() => toggleOp(o.id)}
                   title={`${o.first_name} ${o.last_name}`.trim()}
                   className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : (sel.size ? ' dk-pill--muted' : ''))}
-                  style={{ '--pill-c': col, padding: '2px 9px 2px 3px', fontSize: 12, gap: 6 }}
+                  style={{ ...pillVars(col), padding: '2px 9px 2px 3px', fontSize: 12, gap: 6 }}
                 >
                   <Avatar initials={o.initials} size={20} color={col} ring={on} />
                   <span>{opDisplay(o.first_name, o.last_name, opFirsts)}</span>

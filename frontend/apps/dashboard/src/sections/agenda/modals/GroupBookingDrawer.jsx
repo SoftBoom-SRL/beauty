@@ -11,6 +11,7 @@ import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { initialsOf, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import * as agendaApi from '../agendaApi.js';
+import { pillVars } from '../../../ui/colorTools.js';
 
 export default function GroupBookingDrawer({ date, onClose, onCreated }) {
   const { t, lang, services, fireToast, hasScope, locationId } = useDash();
@@ -342,7 +343,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
                     {eligible.map((o) => {
                       const on = o.id === it.operator_id;
                       return (
-                        <button key={o.id} onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12 }}>
+                        <button key={o.id} onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ ...pillVars(o.color || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12 }}>
                           <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
                           <span>{o.first_name}</span>
                           {on && <Icon name="check" size={12} stroke={2.6} />}
