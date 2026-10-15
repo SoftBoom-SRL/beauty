@@ -60,6 +60,8 @@ test('nessuna caparra, o richiesta e non pagata: niente etichetta', () => {
 
 test('conto unico: la visita incassata nel conto dell\'altra non è «non incassato»', () => {
   assert.equal(visitPaidState({ sale: { id: 1 } }, false), 'paid');
+  assert.equal(visitPaidState({ sale: { id: 1, amount_due: '0.00' } }, false), 'paid');
+  assert.equal(visitPaidState({ sale: { id: 1, amount_due: '10.00' } }, false), 'due');
   assert.equal(visitPaidState({ sale: null, covered_by_sale: { id: 1, appointment_id: 7 } }, false), 'shared');
   assert.equal(visitPaidState({ sale: null, covered_by_sale: null }, true), 'expected');
   assert.equal(visitPaidState({ sale: null, covered_by_sale: null }, false), 'unpaid');

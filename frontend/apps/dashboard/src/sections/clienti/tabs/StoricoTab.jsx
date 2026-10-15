@@ -201,8 +201,9 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
               <div className="t-num" style={{ fontSize: 17, fontWeight: 700 }}>{fmtEur(Number(e.sale ? e.sale.total : a.total_price), lang)}</div>
               {/* Conto unico (`covered_by_sale`): l'importo resta quello della
                   visita, non il conto intero dell'altra. */}
-              <div className="t-sm" style={{ color: paidState === 'paid' || paidState === 'shared' ? 'var(--ok)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{{
+              <div className="t-sm" style={{ color: paidState === 'paid' || paidState === 'shared' ? 'var(--ok)' : paidState === 'due' ? 'var(--warn)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{{
                 paid: t('incassato', 'paid'),
+                due: t(`da saldare ${fmtEur(Number(e.sale?.amount_due || 0), lang)}`, `${fmtEur(Number(e.sale?.amount_due || 0), lang)} still due`),
                 shared: t('incassato nel conto unico', 'paid on a shared bill'),
                 expected: t('previsto', 'expected'),
                 unpaid: t('non incassato', 'not paid'),

@@ -200,6 +200,17 @@ function sessionCents(g, left) {
   return left > 1 ? Math.floor(balance / left) : balance;
 }
 
+/** Vero se, finita la modifica della riga `i`, l'ALTRA riga di un pagamento
+ *  diviso in due si può pareggiare da sola sul dovuto (PaymentsPanel). No con
+ *  «Lascia da saldare» (la differenza resta da saldare) e no se l'altra è una
+ *  carta a sedute: il suo importo sono le sue sedute, e abbassando i contanti
+ *  la differenza finiva lì — una seduta da 30 € ne scalava 40 dal pacchetto. */
+export function canBalance(v, i, leaveDue) {
+  if (!v?.rows || v.rows.length !== 2 || leaveDue) return false;
+  const other = v.rows[i === 0 ? 1 : 0];
+  return !(other.method === 'gift_card' && other.sessions);
+}
+
 /** L'etichetta della carta nel riquadro del check-out: la stessa di agenda,
  *  scheda cliente e promozioni (`fedelta/credits.creditLabel`): «Regalo · da
  *  X», «Già pagato», «Pacchetto · 7/10 sedute». Due scritture diverse dello

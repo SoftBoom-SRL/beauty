@@ -9,7 +9,7 @@
 // scritta dell'interruttore («Lascia da saldare» in cassa, «Paga solo una
 // parte» nel saldo di un conto).
 import { Icon } from '@youty/shared';
-import { PAYMENT_TOLERANCE_CENTS, centsToEur, divHalfUp, dueLeftCents, paymentsMatch, toCents } from './money.js';
+import { PAYMENT_TOLERANCE_CENTS, canBalance, centsToEur, divHalfUp, dueLeftCents, paymentsMatch, toCents } from './money.js';
 import { money, payMethods, sanitizeAmtInput } from './lib.js';
 
 export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, dueToggleLabel }) {
@@ -123,8 +123,11 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
                 <div style={{ display: 'flex', gap: 5, flex: 1, minWidth: 0 }}>
                   {methods.map(([k, l]) => methodBtn(r.method === k, k, l, () => setRow(i, { method: k }), true))}
                 </div>
-                {/* con «Lascia da saldare» le righe non si pareggiano da sole: la differenza resta da saldare */}
-                {amountBox(r.amt, (amt) => setRow(i, { amt }), () => { if (v.rows.length === 2 && !leaveDue) balanceRow(i === 0 ? 1 : 0); })}
+                {/* con «Lascia da saldare» le righe non si pareggiano da sole: la differenza resta da saldare.
+                    Nemmeno la riga di una carta a sedute (`sessions`): vale le sue sedute, e
+                    abbassando i contanti la differenza finiva lì — una seduta da 30 € scalava
+                    40 € dal pacchetto, e alle sedute dopo restava meno valore. */}
+                {amountBox(r.amt, (amt) => setRow(i, { amt }), () => { if (canBalance(v, i, leaveDue)) balanceRow(i === 0 ? 1 : 0); })}
                 {v.rows.length > 2 && (
                   <button className="dk-iconbtn" style={{ width: 28, height: 28, flexShrink: 0 }} onClick={() => removeRow(i)} title={t('Rimuovi', 'Remove')}>
                     <Icon name="x" size={13} color="var(--muted-2)" />

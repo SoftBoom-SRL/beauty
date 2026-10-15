@@ -228,3 +228,17 @@ test('le etichette delle carte nel check-out', () => {
   assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 1 }, t), 'Pacchetto · 1/10 sedute');
   assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 7 }, t), 'Pacchetto · 7/10 sedute');
 });
+
+// 15/10: abbassando i contanti di un pagamento diviso, la differenza finiva
+// sulla riga della carta a sedute (una seduta da 30 € ne scalava 40).
+test('pagamento diviso: la riga di una carta a sedute non si pareggia da sola', async () => {
+  const { canBalance } = await import('../src/sections/pos/money.js');
+  const rows = [
+    { method: 'gift_card', amt: '30', code: 'ABC', sessions: 1 },
+    { method: 'cash', amt: '10', code: '' },
+  ];
+  assert.equal(canBalance({ rows }, 1, false), false, 'si è cambiato il contante: la carta resta a 30');
+  assert.equal(canBalance({ rows }, 0, false), true, 'si è cambiata la carta: il contante si pareggia');
+  assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, false), true);
+  assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, true), false, 'con «Lascia da saldare» mai');
+});

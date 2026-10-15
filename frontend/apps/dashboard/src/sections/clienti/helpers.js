@@ -213,11 +213,13 @@ export function timelineDate(iso, lang, today = todayStr()) {
 }
 
 /** Lo stato d'incasso di una visita nello storico: 'paid' (ha la sua vendita),
+ *  'due' (la vendita c'è ma resta qualcosa da saldare, `sale.amount_due`),
  *  'shared' (incassata nel conto unico di un'altra visita della stessa cliente,
  *  `covered_by_sale`), 'expected' (deve ancora venire) o 'unpaid'. La visita
- *  chiusa nel conto dell'altra risultava «non incassato». */
+ *  chiusa nel conto dell'altra risultava «non incassato», e quella con un
+ *  resto da pagare «incassato». */
 export function visitPaidState(entry, upcoming) {
-  if (entry?.sale) return 'paid';
+  if (entry?.sale) return Number(entry.sale.amount_due || 0) > 0 ? 'due' : 'paid';
   if (entry?.covered_by_sale) return 'shared';
   return upcoming ? 'expected' : 'unpaid';
 }
