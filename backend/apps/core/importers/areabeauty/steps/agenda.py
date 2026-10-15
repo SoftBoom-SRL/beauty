@@ -9,9 +9,12 @@ appuntamento è una catena di voci in fila. Per ogni cliente, giorno e stato:
    aggiuntivo (rimozione, scrub, nail art): voce a durata 0 subito dopo il
    servizio che lo ospita, con il suo prezzo. L'agenda resta com'era.
 3. Il resto si mette in fila solo se un servizio comincia quando finisce il
-   precedente. Con un buco, anche di pochi minuti, comincia un altro
-   appuntamento della stessa cliente: in AreaBeauty erano due blocchi, e
-   trasformare il buco in attesa inventava una posa che nessuno aveva messo.
+   precedente E lo fa la stessa operatrice. Con un buco, anche di pochi
+   minuti, o con una collega, comincia un altro appuntamento della stessa
+   cliente: in AreaBeauty erano blocchi separati, ognuno nella colonna della
+   sua operatrice e spostabile da solo. Trasformare il buco in attesa
+   inventava una posa che nessuno aveva messo; unire le colleghe metteva la
+   visita sotto una sola persona in vista settimana (il titolare, 15/10).
    Chi si accavalla (servizi in parallelo con una collega) è un appuntamento
    a sé, segnato `forced` se l'operatrice è la stessa.
 4. Nessuna posa (`soak_min` = 0). La «fine lato cliente» delle righe di
@@ -160,7 +163,7 @@ def _chains(rows):
     for m in sorted(mains, key=lambda m: m.s):
         for ch in chains:
             last = ch[-1]
-            if m.s == last.e:
+            if m.s == last.e and m.op == last.op:
                 ch.append(m)
                 break
         else:

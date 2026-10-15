@@ -87,3 +87,42 @@ class FixPoseTests(TestCase):
         self.assertIn("visite divise: 1", out)
         self.assertEqual(Appointment.objects.count(), 1)
         self.assertEqual(list(visit.items.values_list("soak_min", flat=True)), [30, 0])
+
+    # --- fix_areabeauty_operatrici --------------------------------------------
+    def run_split(self, *extra):
+        out = StringIO()
+        call_command("fix_areabeauty_operatrici", "--salon", "salone", *extra, stdout=out)
+        return out.getvalue()
+
+    def test_colleagues_in_one_visit_become_one_appointment_each(self):
+        start = dt.datetime(2026, 10, 20, 8, tzinfo=UTC)
+        visit = self.visit(
+            start,
+            [(self.mani, self.giulia, 45, 0), (self.scrub, self.giulia, 0, 0), (self.piedi, self.marta, 60, 0), (self.mani, self.giulia, 45, 0)],
+            status="confirmed", ext="r-3",
+        )
+        sale = Sale.objects.create(salon=self.salon, kind="checkout", appointment=visit, client=self.anna, total=Decimal("180"))
+        same = self.visit(start, [(self.mani, self.giulia, 45, 0), (self.piedi, self.giulia, 60, 0)], ext="r-4")
+
+        out = self.run_split()
+        self.assertIn("visite divise: 1", out)
+        self.assertIn("appuntamenti nuovi: 2", out)
+        self.assertEqual([(i.service_id, i.operator_id) for i in visit.items.order_by("order")], [(self.mani.pk, self.giulia.pk), (self.scrub.pk, self.giulia.pk)])
+        parts = list(Appointment.objects.exclude(pk__in=[visit.pk, same.pk]).order_by("start"))
+        self.assertEqual(
+            [(p.start, p.operator_id, p.status, p.paid_in_sale_id) for p in parts],
+            [(start + dt.timedelta(minutes=45), self.marta.pk, "confirmed", sale.pk), (start + dt.timedelta(minutes=105), self.giulia.pk, "confirmed", sale.pk)],
+        )
+        self.assertEqual(
+            sorted(ExternalRef.objects.filter(external_id__startswith="operatrice:").values_list("external_id", flat=True)),
+            [f"operatrice:{visit.pk}:1", f"operatrice:{visit.pk}:2"],
+        )
+        # una sola operatrice: resta com'è; rilanciato non fa più niente
+        self.assertEqual(same.items.count(), 2)
+        self.assertIn("visite divise: 0", self.run_split())
+
+    def test_colleagues_split_dry_run_changes_nothing(self):
+        start = dt.datetime(2026, 10, 20, 8, tzinfo=UTC)
+        self.visit(start, [(self.mani, self.giulia, 45, 0), (self.piedi, self.marta, 60, 0)])
+        self.assertIn("visite divise: 1", self.run_split("--dry-run"))
+        self.assertEqual(Appointment.objects.count(), 1)

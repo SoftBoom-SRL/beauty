@@ -104,6 +104,7 @@ def build_export(root):
         {"Id": "c-2", "Name": "Bea", "Surname": "Rossi", "Phone": "3331112233", "Sesso": 1, "RegistrationDateStr": "2024-01-01T10:00:00"},
         {"Id": "c-3", "Name": "Carl", "Surname": "Smith", "Phone": "12125551234", "Sesso": 2, "RegistrationDateStr": "2024-02-01T10:00:00", "DataNascitaStr": "05/03/1900"},
         {"Id": "c-4", "Name": "Dora", "Surname": "Gialli", "Phone": None, "Sesso": 1, "RegistrationDateStr": "2024-03-01T10:00:00"},
+        {"Id": "c-5", "Name": "Elsa", "Surname": "Neri", "Phone": "+39 333 5556677", "Sesso": 1, "RegistrationDateStr": "2024-04-01T10:00:00"},
     ]})
     write(root, "clienti/gruppi.json", {"dati": [{"Id": "g-1", "Descrizione": "Holiday Voucher"}]})
     write(root, "clienti/dettaglio/0001.json", [{
@@ -139,6 +140,9 @@ def build_export(root):
             planning_row("r-6", "c-3", "op-1", "4", "10.09.2026", "10:00", "10:45", eseguito=False),
             # Dora: passato, pagato e mai venuta → no-show, l'incasso resta.
             planning_row("r-7", "c-4", "op-1", "4", "11.09.2026", "10:00", "10:45", eseguito=False, tx="102", paid=45),
+            # Elsa, 2/10: manicure con Giulia e subito dopo pedicure con Marta.
+            planning_row("r-8", "c-5", "op-1", "4", "02.10.2026", "10:00", "10:45", tx="106", paid=45),
+            planning_row("r-9", "c-5", "op-2", "16", "02.10.2026", "10:45", "11:45", tx="106", paid=70),
             {"eventType": 1, "id_appuntamentoGuid": None, "text": "lista d'attesa"},
         ],
         "Presenze": [{"reason": "Ferie", "unit": 11, "isAllDay": True, "start_date": "20.10.2026 00:00", "end_date": "22.10.2026 00:00"}],
@@ -160,6 +164,9 @@ def build_export(root):
              coupons=[{"IdCoupon": 7, "Prezzo": 45, "TotaleScontato": 45, "Sconto": 0, "Qta": 1, "Assistenti": []}],
              pagamenti=[payment(103, 3, 45, ms(2026, 6, 1, 9))]),
         sale(104, "c-3", "2026-09-15", "11:00", totale=0, saldato=0, servizi=[service_line(4, 45, coupon=7, operazione=1041)]),
+        sale(106, "c-5", "2026-10-02", "12:00", totale=115, saldato=115,
+             servizi=[service_line(4, 45, appt="r-8", operazione=1061), service_line(16, 70, appt="r-9", op="op-2", operazione=1062)],
+             pagamenti=[payment(106, 3, 115, ms(2026, 10, 2, 10))]),
         sale(105, "c-3", "2026-09-16", "11:00", totale=70, saldato=70,
              servizi=[service_line(16, 70, stato=12, operazione=1051)], pagamenti=[payment(105, 1, 70, ms(2026, 9, 16, 9))]),
     ])
@@ -320,6 +327,20 @@ class ImportAreaBeautyTests(TestCase):
         # Niente eventi verso Yourang/WhatsApp, niente registro attività.
         self.assertFalse(OutboxEvent.objects.exists())
         self.assertFalse(ActivityLog.objects.filter(salon=self.salon).exists())
+
+    def test_colleagues_in_a_row_are_separate_appointments(self):
+        # In AreaBeauty erano due blocchi, uno per colonna: restano due
+        # appuntamenti, ognuno della sua operatrice, nello stesso conto.
+        self.run_import()
+        elsa = self.client_of("c-5")
+        first, second = Appointment.objects.filter(client=elsa).order_by("start")
+        self.assertEqual((first.operator.first_name, second.operator.first_name), ("Giulia", "Marta"))
+        self.assertEqual(second.start, first.start + dt.timedelta(minutes=45))
+        self.assertEqual([i.soak_min for i in first.items.all()], [0])
+        self.assertFalse(second.forced)
+        bill = Sale.objects.get(appointment=first)
+        second.refresh_from_db()
+        self.assertEqual(second.paid_in_sale_id, bill.pk)
 
     def test_rerun_adds_nothing_and_redoes_open_appointments(self):
         self.run_import("--purge-test-data")
