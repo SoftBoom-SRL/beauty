@@ -45,3 +45,51 @@ test('senza il permesso sulle clienti il bottone non c\'è', () => {
   const g = picker({ scopes: [] });
   assert.equal(g.newBtn(), null);
 });
+
+// 15/10: il telefono non è più obbligatorio (bambine, regali, schede da un
+// altro gestionale) e un numero già di un'altra cliente propone di usarlo
+// come contatto, come la scheda anagrafica.
+function creating(post) {
+  const g = picker();
+  globalThis.__api.post = post;
+  g.newBtn().props.onClick();
+  g.m.render();
+  const first = find(g.m.tree, (el) => el.type === 'input' && el.props.placeholder === 'Nome *');
+  first.props.onChange({ target: { value: 'Giulia' } });
+  g.m.render();
+  const createBtn = () => find(g.m.tree, (el) => el.type === 'button' && textOf(el).includes('Crea e seleziona'));
+  return { g, createBtn };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+test('una scheda nuova si crea anche solo col nome, senza telefono', async () => {
+  const bodies = [];
+  const { g, createBtn } = creating((url, body) => { bodies.push(body); return Promise.resolve({ id: 9, full_name: 'Giulia', phone: '' }); });
+  createBtn().props.onClick();
+  await flush(); g.m.render();
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].phone, '');
+  assert.equal(bodies[0].contact_client_id, null);
+  assert.equal(g.onChange.calls.length, 1);
+});
+
+test('numero già di un\'altra cliente: «Usa il numero di …» crea la scheda collegata, senza telefono', async () => {
+  const bodies = [];
+  // la stessa classe che il componente riconosce (vedi grid-harness.mjs)
+  const taken = new globalThis.__ApiError(400, 'Telefono già registrato', { detail: 'Telefono già registrato', phone_holder_id: 4, phone_holder_name: 'Laura Rossi', contact_allowed: true });
+  const { g, createBtn } = creating((url, body) => {
+    bodies.push(body);
+    return bodies.length === 1 ? Promise.reject(taken) : Promise.resolve({ id: 10, full_name: 'Giulia', phone: '' });
+  });
+  createBtn().props.onClick();
+  await flush(); g.m.render();
+  const use = find(g.m.tree, (el) => el.type === 'button' && textOf(el).includes('Usa il numero di Laura'));
+  assert.ok(use, 'compare la proposta');
+  use.props.onClick();
+  await flush(); g.m.render();
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].phone, '');
+  assert.equal(bodies[1].contact_client_id, 4);
+  assert.equal(g.onChange.calls.length, 1);
+});

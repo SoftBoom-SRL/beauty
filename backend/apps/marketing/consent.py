@@ -66,6 +66,12 @@ def marketing_consent_changed(client, accepted: bool) -> None:
     """
     if not accepted:
         drop_from_pending_sends(client)
+    # Una scheda senza numero e mai collegata a Yourang là non esiste: un
+    # evento con il telefono vuoto non saprebbe a chi togliere o ridare il
+    # blocco. Se invece il contatto c'era (numero tolto dopo), l'evento parte:
+    # Yourang lo ritrova dal suo id.
+    if not client.phone and not client.yourang_contact_id:
+        return
     emit_event(
         client.salon,
         CONSENT_EVENT,

@@ -388,3 +388,35 @@ class WalletCreditsTests(GiftCardTestBase):
             expires_at=timezone.now() - timedelta(days=1),
         )
         self.assertNotIn(late.id, self._wallet())
+
+
+class ConsentWithoutPhoneTests(TestCase):
+    """Consenso marketing di una scheda senza telefono: a Yourang solo se il contatto esiste."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+
+    def _events(self):
+        from apps.core.models import OutboxEvent
+        from apps.marketing.consent import CONSENT_EVENT
+
+        return OutboxEvent.objects.filter(event_type=CONSENT_EVENT).count()
+
+    def test_no_phone_and_no_yourang_contact_sends_nothing(self):
+        from apps.clients.models import Client
+        from apps.marketing.consent import marketing_consent_changed
+
+        figlia = Client.objects.create(salon=self.salon, first_name="Giulia")
+        marketing_consent_changed(figlia, accepted=False)
+        self.assertEqual(self._events(), 0)
+
+    def test_a_known_yourang_contact_is_still_told(self):
+        from apps.clients.models import Client
+        from apps.marketing.consent import marketing_consent_changed
+
+        ex = Client.objects.create(salon=self.salon, first_name="Bea", yourang_contact_id="yr-1")
+        marketing_consent_changed(ex, accepted=False)
+        self.assertEqual(self._events(), 1)
+        con_numero = _make_client(self.salon, first_name="Anna", phone="+393334445566")
+        marketing_consent_changed(con_numero, accepted=True)
+        self.assertEqual(self._events(), 2)

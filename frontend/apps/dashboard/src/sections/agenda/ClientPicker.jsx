@@ -19,6 +19,7 @@ import { initialsOf } from './lib.js';
 import * as agendaApi from './agendaApi.js';
 import { GenderPicker } from '../../ui/index.js';
 import { BirthdayInput } from '../clienti/components.jsx';
+import { phoneHolderOf } from '../clienti/helpers.js';
 
 // stesse origini proposte dalla scheda anagrafica completa
 const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
@@ -53,6 +54,8 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   // Scheda archiviata con lo stesso numero (409 della creazione, 06-02): si
   // riattiva quella, con storico e punti, invece di un vicolo cieco.
   const [archived, setArchived] = useState(null);   // { id, name }
+  // Numero già di un'altra cliente attiva (madre e figlia, coppie): { id, name, allowed }
+  const [holder, setHolder] = useState(null);
   const inputRef = useRef(null);
   const firstRef = useRef(null);
   const blurTimer = useRef(null);
@@ -72,7 +75,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
     return () => { alive = false; clearTimeout(tm); };
   }, [q, open, value]);
 
-  const pick = (c) => { onChange(c); setQ(''); setOpen(false); setCreating(false); setErr(''); setArchived(null); };
+  const pick = (c) => { onChange(c); setQ(''); setOpen(false); setCreating(false); setErr(''); setArchived(null); setHolder(null); };
 
   const startCreate = () => {
     const raw = q.trim();
@@ -84,19 +87,22 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   };
   const setD = (patch) => setDraft((d) => ({ ...d, ...patch }));
 
-  const create = async () => {
+  /* `contactId`: la scheda nasce senza telefono e si contatta tramite quella
+   * cliente («Usa il numero di … come contatto»). Il telefono non è più
+   * obbligatorio: una bambina o chi riceve un regalo un numero suo non l'ha. */
+  const create = async (contactId = null) => {
     if (saving) return;   // niente doppia creazione da doppio Invio/clic
-    const first = draft.first_name.trim(), last = draft.last_name.trim(), phone = draft.phone.trim();
+    const first = draft.first_name.trim(), last = draft.last_name.trim();
+    const phone = contactId ? '' : draft.phone.trim();
     if (!first) { setErr(t('Il nome è obbligatorio', 'First name is required')); return; }
-    if (!phone) { setErr(t('Il telefono è obbligatorio', 'Phone is required')); return; }
     // Stesso controllo della scheda anagrafica: un numero che nessuno può
     // ricevere nasceva qui e non riceveva mai conferme né codici.
-    if (!isPlausiblePhone(phone)) { setErr(t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')); return; }
-    setSaving(true); setErr(''); setArchived(null);
+    if (phone && !isPlausiblePhone(phone)) { setErr(t('Numero non valido: controlla prefisso e cifre', 'Invalid number: check the prefix and digits')); return; }
+    setSaving(true); setErr(''); setArchived(null); setHolder(null);
     try {
       // stessi campi della scheda anagrafica: ciò che non viene compilato resta vuoto
       const c = await agendaApi.createClient({
-        first_name: first, last_name: last, phone, gender: draft.gender || '',
+        first_name: first, last_name: last, phone, contact_client_id: contactId, gender: draft.gender || '',
         email: draft.email.trim(), lang: draft.lang, category_ids: draft.tags,
         birthday: draft.birthday || null,
         origin: draft.origin.trim() || t('Inserimento manuale', 'Manual entry'),
@@ -114,7 +120,10 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       if (e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
         setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
       }
-      setErr(apiErrorText(e, t));
+      const taken = e instanceof ApiError ? phoneHolderOf(e) : null;
+      setHolder(taken);
+      // l'offerta dice già tutto: niente errore rosso accanto
+      setErr(taken?.allowed ? '' : apiErrorText(e, t));
     } finally { setSaving(false); }
   };
 
@@ -193,7 +202,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
           <input value={draft.last_name} maxLength={MAX.last_name} onChange={(e) => setD({ last_name: e.target.value })} placeholder={t('Cognome', 'Last name')} style={inputCss} onKeyDown={(e) => e.key === 'Enter' && create()} />
         </div>
         <div style={{ marginBottom: 8 }}>
-          <PhoneInput value={draft.phone} onChange={(v) => { setD({ phone: v }); setArchived(null); }} lang={lang} autoFocus={!!draft.first_name} onEnter={create} ariaLabel={t('Telefono', 'Phone')} />
+          <PhoneInput value={draft.phone} onChange={(v) => { setD({ phone: v }); setArchived(null); setHolder(null); }} lang={lang} autoFocus={!!draft.first_name} onEnter={() => create()} ariaLabel={t('Telefono (facoltativo)', 'Phone (optional)')} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: 12 }}>{t('Genere', 'Gender')}</span>
@@ -274,6 +283,17 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
             </button>
           </div>
         )}
+        {holder?.allowed && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+            <Icon name="alert" size={15} color="var(--warn)" />
+            <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
+              {t(`Il numero è già di ${holder.name}. Se lo condividono, la nuova scheda nasce senza telefono e si contatta tramite lei.`, `This number already belongs to ${holder.name}. If they share it, the new profile is created without a phone and is contacted through them.`)}
+            </span>
+            <button type="button" className="dk-btn dk-btn--clay" style={{ height: 30, fontSize: 12, flexShrink: 0 }} disabled={saving} onClick={() => create(holder.id)}>
+              <Icon name="user" size={13} color="#fff" />{t(`Usa il numero di ${holder.name.split(' ')[0] || holder.name}`, `Use ${holder.name.split(' ')[0] || holder.name}’s number`)}
+            </button>
+          </div>
+        )}
         {err && <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: 'var(--danger)', marginBottom: 8 }}><Icon name="alert" size={14} color="var(--danger)" />{err}</div>}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setFull((v) => !v)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', padding: 0 }}>
@@ -283,7 +303,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
           <span className="t-sm" style={{ color: 'var(--muted-2)', flex: 1, minWidth: 90, fontSize: 11.5 }}>
             {full ? t('Tutto quello che c’è in anagrafica.', 'Everything the client profile holds.') : t('Il resto si completa dopo.', 'You can complete it later.')}
           </span>
-          <button type="button" className="dk-btn dk-btn--clay" style={{ height: 36, fontSize: 13 }} onClick={create} disabled={saving}>
+          <button type="button" className="dk-btn dk-btn--clay" style={{ height: 36, fontSize: 13 }} onClick={() => create()} disabled={saving}>
             <Icon name="check" size={15} color="#fff" />{saving ? t('Creazione…', 'Creating…') : t('Crea e seleziona', 'Create & select')}
           </button>
         </div>
@@ -311,7 +331,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
       {/* sempre a vista: quello che si è già scritto precompila la scheda */}
       {canCreate && (
         <button type="button" className="dk-btn dk-btn--ghost" onMouseDown={(e) => e.preventDefault()} onClick={startCreate}
-          title={t('Crea una cliente nuova: nome e telefono, il resto dopo', 'Create a new client: name and phone, the rest later')}
+          title={t('Crea una cliente nuova: il nome basta, il resto dopo', 'Create a new client: a name is enough, the rest later')}
           style={{ height: 40, padding: '0 12px', borderRadius: 12, fontSize: 13, flexShrink: 0, color: 'var(--clay-ink)' }}>
           <Icon name="plus" size={15} color="var(--clay-ink)" stroke={2.4} />{t('Nuovo cliente', 'New client')}
         </button>
@@ -340,7 +360,7 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
               <span style={{ width: 30, height: 30, borderRadius: 99, background: 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="plus" size={15} color="var(--clay-ink)" stroke={2.4} /></span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: 'block', fontWeight: 700, fontSize: 13.5, color: 'var(--clay-ink)' }}>{t('Nuovo cliente', 'New client')}{q.trim() ? ` “${q.trim()}”` : ''}</span>
-                <span className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>{t('Nome e telefono, il resto dopo', 'Name and phone, the rest later')}</span>
+                <span className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>{t('Nome e telefono se c’è, il resto dopo', 'Name and phone if any, the rest later')}</span>
               </span>
               <span className="dk-kbd">↵</span>
             </button>
