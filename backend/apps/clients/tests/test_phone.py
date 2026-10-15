@@ -13,7 +13,6 @@ import io
 from django.apps import apps as django_apps
 from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase
-from ninja.errors import HttpError
 
 from apps.core.models import Salon
 from common.phone import find_client_by_phone, normalize_phone, phone_key
@@ -32,9 +31,8 @@ class PhoneNormalizationTests(ClientsTestCase):
             self.request, ClientIn(first_name="Sofia", last_name="Ricci", phone="+39 333 1234567")
         )
         self.assertEqual(created.phone, "+393331234567")
-        with self.assertRaises(HttpError) as caught:
-            create_client(self.request, ClientIn(first_name="Sofia", last_name="Bis", phone="3331234567"))
-        self.assertEqual(caught.exception.status_code, 400)
+        res = create_client(self.request, ClientIn(first_name="Sofia", last_name="Bis", phone="3331234567"))
+        self.assertEqual(res.status_code, 400)
 
     def test_an_international_number_without_the_plus_is_not_prefixed_again(self):
         """«393331234567» è E.164 scritto senza il «+», non un numero italiano.
@@ -59,9 +57,8 @@ class PhoneNormalizationTests(ClientsTestCase):
         created = create_client(
             self.request, ClientIn(first_name="Sofia", phone="+393331234567")
         )
-        with self.assertRaises(HttpError) as caught:
-            create_client(self.request, ClientIn(first_name="Sofia", phone="393331234567"))
-        self.assertEqual(caught.exception.status_code, 400)
+        res = create_client(self.request, ClientIn(first_name="Sofia", phone="393331234567"))
+        self.assertEqual(res.status_code, 400)
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
         self.assertEqual(created.phone, "+393331234567")
 

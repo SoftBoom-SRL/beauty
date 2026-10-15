@@ -4,12 +4,15 @@
 // Include genere, compleanno con anno facoltativo, origine, "cliente dal",
 // caparra sempre. Alla creazione: nota iniziale + consensi; in modifica i
 // consensi restano nella scheda Consensi (il server ne registra la data).
+// Il telefono è facoltativo. Un numero già di un'altra cliente (madre e
+// figlia, coppie) non è più solo un errore: si propone «Usa il numero di
+// Laura come contatto», e la scheda nasce senza telefono, collegata a lei.
 import React, { useState } from 'react';
 import { ApiError, Icon, PhoneInput, Toggle, isPlausiblePhone, apiErrorText } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { BirthdayInput, Field, GenderPicker } from '../components.jsx';
-import { inputCss, clientChanges } from '../helpers.js';
+import { inputCss, clientChanges, phoneHolderOf } from '../helpers.js';
 import { clientNotesApi, clientsApi } from '../../../api/clients.js';
 
 const ORIGINS = ['Passaparola', 'Instagram', 'Google', 'Facebook', 'TikTok', 'Sito web', 'Passaggio', 'Volantino'];
@@ -39,6 +42,8 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
   const isEdit = !!client?.id;
   const [f, setF] = useState(() => ({
     first: client?.first_name || '', last: client?.last_name || '', phone: client?.phone || '',
+    // «si contatta tramite»: { id, full_name, phone } della scheda col numero
+    contact: client?.contact || null,
     wa: client ? !!client.wa : true, email: client?.email || '',
     gender: client?.gender || '', birthday: client?.birthday || '',
     lang: client?.lang || 'it', origin: client?.origin || '', since: client?.since || '',
@@ -50,8 +55,12 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
   const [err, setErr] = useState('');
   // scheda archiviata che ha già questo numero (POST → 409): si riattiva quella
   const [archived, setArchived] = useState(null);   // { id, name }
-  const set = (k, v) => { setF((o) => ({ ...o, [k]: v })); if (k === 'phone') setArchived(null); };
-  const missing = [!f.first.trim() && t('nome', 'first name'), !f.phone.trim() && t('telefono', 'phone')].filter(Boolean);
+  // scheda attiva che ha già questo numero (400 con chi lo ha): { id, name, allowed }
+  const [holder, setHolder] = useState(null);
+  const set = (k, v) => { setF((o) => ({ ...o, [k]: v })); if (k === 'phone') { setArchived(null); setHolder(null); } };
+  // Il telefono non è obbligatorio: la bambina, chi riceve un regalo, chi
+  // usa il numero della mamma non ne hanno uno loro.
+  const missing = [!f.first.trim() && t('nome', 'first name')].filter(Boolean);
   // Stessa regola del server e dell'app cliente: «333» si salvava come
   // «+39333», una scheda con un numero che non esiste (14-19). In modifica
   // conta solo se il numero è stato toccato: un numero vecchio non blocca la
@@ -98,14 +107,21 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
     } finally { setSaving(false); }
   };
 
-  const save = async () => {
+  /* `over`: valori che prevalgono sul modulo, per salvare subito dopo aver
+   * scelto «Usa il numero di … come contatto» (lo stato del modulo si aggiorna
+   * solo al render dopo). */
+  const save = async (over = {}) => {
     if (saving) return;   // il doppio clic creava due schede: aria-disabled non blocca il click
     if (missing.length) { setErr(t('Manca: ', 'Missing: ') + missing.join(', ')); return; }
-    if (phoneBad) { setErr(phoneBadMsg); return; }
-    setSaving(true); setErr(''); setArchived(null);
+    const phone = (over.phone ?? f.phone).trim();
+    const contact = 'contact' in over ? over.contact : f.contact;
+    if (phone && phoneTouched && !isPlausiblePhone(phone)) { setErr(phoneBadMsg); return; }
+    setSaving(true); setErr(''); setArchived(null); setHolder(null);
     try {
       const common = {
-        first_name: f.first.trim(), last_name: f.last.trim(), phone: f.phone.trim(), wa: f.wa,
+        first_name: f.first.trim(), last_name: f.last.trim(), phone, wa: f.wa,
+        // con un numero suo non passa più da nessuno: il collegamento si toglie
+        contact_client_id: phone ? null : (contact?.id ?? null),
         email: f.email.trim(), lang: f.lang, category_ids: f.tags,
         gender: f.gender, birthday: f.birthday || null, origin: f.origin.trim(),
         since: f.since || null, deposit_always: f.deposit_always, whatsapp_reminders: f.whatsapp,
@@ -138,9 +154,20 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       if (!isEdit && e instanceof ApiError && e.status === 409 && e.data?.archived_client_id) {
         setArchived({ id: e.data.archived_client_id, name: e.data.archived_client_name || '' });
       }
-      const msg = apiErrorText(e, t);
-      setErr(msg);
+      const taken = e instanceof ApiError ? phoneHolderOf(e) : null;
+      setHolder(taken);
+      // l'offerta dice già tutto: niente errore rosso accanto
+      setErr(taken?.allowed ? '' : apiErrorText(e, t));
     } finally { setSaving(false); }
+  };
+
+  /* «Usa il numero di Laura come contatto»: la scheda resta senza telefono e
+   * i messaggi vanno a lei. Si salva subito, come se si fosse premuto Crea. */
+  const linkToHolder = () => {
+    if (!holder?.allowed || saving) return;
+    const contact = { id: holder.id, full_name: holder.name, phone: f.phone.trim() };
+    setF((o) => ({ ...o, phone: '', contact }));
+    save({ phone: '', contact });
   };
 
   return (
@@ -150,7 +177,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
       foot={<React.Fragment>
         {err && <span style={{ marginRight: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--danger)' }}><Icon name="alert" size={14} color="var(--danger)" />{err}</span>}
         <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
-        <button className="dk-btn dk-btn--clay" aria-disabled={!ready} onClick={save} title={missing.length ? t('Manca: ', 'Missing: ') + missing.join(', ') : phoneBad ? phoneBadMsg : ''}>
+        <button className="dk-btn dk-btn--clay" aria-disabled={!ready} onClick={() => save()} title={missing.length ? t('Manca: ', 'Missing: ') + missing.join(', ') : phoneBad ? phoneBadMsg : ''}>
           <Icon name="check" size={17} color="#fff" />
           {saving ? t('Salvo…', 'Saving…') : missing.length ? t('Manca ', 'Missing ') + missing.join(' · ') : isEdit ? t('Salva modifiche', 'Save changes') : t('Crea cliente', 'Create client')}
         </button>
@@ -161,7 +188,7 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
         <Field label={t('Cognome', 'Last name')}><input value={f.last} onChange={(e) => set('last', e.target.value)} style={inputCss} /></Field>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, marginTop: 12, alignItems: 'end' }}>
-        <Field label={t('Telefono', 'Phone') + ' *'}>
+        <Field label={t('Telefono', 'Phone')} hint={t('facoltativo', 'optional')}>
           <PhoneInput value={f.phone} onChange={(v) => set('phone', v)} lang={lang} ariaLabel={t('Telefono', 'Phone')} />
         </Field>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 42 }}>
@@ -171,6 +198,35 @@ export default function NewClientModal({ client, onClose, onSaved, afterSave = '
         </div>
       </div>
       {phoneBad && <div className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, marginTop: 6 }}>{phoneBadMsg}</div>}
+      {!f.phone.trim() && (f.contact ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, padding: '8px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--hair)' }}>
+          <Icon name="user" size={15} color="var(--clay-ink)" />
+          <span style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)' }}>
+            {t('Si contatta tramite ', 'Contacted via ')}<b>{f.contact.full_name}</b>{f.contact.phone ? <span className="tabnum" style={{ color: 'var(--muted)' }}> · {f.contact.phone}</span> : null}
+            <span className="t-sm" style={{ display: 'block', color: 'var(--muted)', fontSize: 11.5 }}>{t('Conferme e promemoria arrivano al suo numero.', 'Confirmations and reminders go to that number.')}</span>
+          </span>
+          <button type="button" onClick={() => set('contact', null)} style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer', background: 'transparent', border: 'none' }}>{t('Scollega', 'Unlink')}</button>
+        </div>
+      ) : (
+        <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6, fontSize: 11.5 }}>
+          {t('Senza numero niente conferme, promemoria né accesso all’app. Se usa il numero di un’altra cliente (la mamma, il marito), scrivilo: potrai collegare la scheda a chi lo ha.', 'With no number there are no confirmations, reminders or app access. If the client uses someone else’s number (a parent, a partner), type it: you can link the profile to whoever has it.')}
+        </div>
+      ))}
+      {holder && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+          <Icon name="alert" size={16} color="var(--warn)" />
+          <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--ink-2)' }}>
+            {holder.allowed
+              ? t(`Il numero è già di ${holder.name}. Se lo condividono, ${isEdit ? 'questa scheda resta' : 'la nuova scheda nasce'} senza telefono e si contatta tramite ${holder.name}.`, `This number already belongs to ${holder.name}. If they share it, ${isEdit ? 'this profile stays' : 'the new profile is created'} without a phone and is contacted via ${holder.name}.`)
+              : t(`Il numero è già di ${holder.name}.`, `This number already belongs to ${holder.name}.`)}
+          </span>
+          {holder.allowed && (
+            <button type="button" className="dk-btn dk-btn--clay" style={{ height: 32, fontSize: 12.5, flexShrink: 0 }} aria-disabled={saving} onClick={linkToHolder}>
+              <Icon name="user" size={14} color="#fff" />{t(`Usa il numero di ${holder.name.split(' ')[0] || holder.name} come contatto`, `Use ${holder.name.split(' ')[0] || holder.name}’s number as contact`)}
+            </button>
+          )}
+        </div>
+      )}
       {archived && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)' }}>
           <Icon name="alert" size={16} color="var(--warn)" />

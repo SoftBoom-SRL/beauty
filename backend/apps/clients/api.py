@@ -6,14 +6,14 @@ GET (lista) e POST (creazione), nessun endpoint di update/delete.
 
 Qui stanno permessi, lettura delle righe del salone (`salon_get`) e scelta
 della risposta; le regole sono nei moduli accanto: `labels` (etichette),
-`search` (ricerca), `fields` e `profiles` (la scheda), `importer` (import
-CSV), `history` (storico), `records` (note, allegati, schede tecniche), `hook`
-(form pubblico). `services` resta il modulo di `client_stats`/`client_facts`
-che leggono le altre app.
+`search` (ricerca), `fields` e `profiles` (la scheda, il telefono e il
+contatto), `presenters` (i campi calcolati di dettaglio ed elenco), `importer`
+(import CSV), `history` (storico), `records` (note, allegati, schede
+tecniche), `hook` (form pubblico). `services` resta il modulo di
+`client_stats`/`client_facts` e dell'affidabilità, che leggono le altre app.
 """
 
 import logging
-from decimal import Decimal
 from typing import Optional
 
 from django.http import JsonResponse
@@ -27,7 +27,7 @@ from apps.agenda.schemas import AppointmentOut
 from apps.core.services import get_salon_by_slug, log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import has_scope, require_scope
+from common.permissions import require_scope
 from common.phone import canonical_phone
 from common.schemas import OkOut
 from common.utils import salon_get
@@ -44,11 +44,14 @@ from .models import (
     ClientNoteAttachment,
     TechnicalSheet,
 )
+from .presenters import attach_amounts_due, client_detail, contact_out
 from .profiles import (
+    DUPLICATE_PHONE,
     archive_profile,
     archived_phone_message,
-    check_phone_unique,
+    contact_allowed,
     create_profile,
+    phone_holder,
     update_profile,
 )
 from .records import (
@@ -60,6 +63,7 @@ from .records import (
     validate_attachment,
 )
 from .schemas import (
+    ClientArchiveOut,
     ClientCategoryIn,
     ClientCategoryOut,
     ClientCountsOut,
@@ -67,6 +71,7 @@ from .schemas import (
     HookLeadOut,
     ClientDetailOut,
     ClientIn,
+    ClientListOut,
     ClientOut,
     ClientUpdateIn,
     ImportIn,
@@ -78,10 +83,60 @@ from .schemas import (
     TechnicalSheetOut,
 )
 from .search import search_filter
-from .services import client_stats
 
 logger = logging.getLogger("youty.clients")
 router = Router(tags=["clients"])
+
+
+class ClientPagination(LimitOffsetPagination):
+    """La paginazione dell'elenco, con il debito delle clienti della pagina.
+
+    Una query in più per pagina (`sales.dues.amounts_due_by_client` sulle sole
+    righe mostrate), non una per riga.
+    """
+
+    def paginate_queryset(self, queryset, pagination, request, **params):
+        page = super().paginate_queryset(queryset, pagination, request, **params)
+        page[self.items_attribute] = attach_amounts_due(request.auth, list(page[self.items_attribute]))
+        return page
+
+
+def _phone_taken(holder: Client, *, client: Optional[Client] = None):
+    """Risposta per un numero che è già di un'altra scheda (`client` None = creazione).
+
+    - Scheda archiviata, alla creazione: 409 con il suo id. È la cliente
+      archiviata che richiama per prenotare: la ricerca della dashboard
+      mostra solo le attive e la creazione rispondeva «già registrato» senza
+      dire da chi — un vicolo cieco (06-02). Non la si riattiva da qui: il
+      numero può essere passato a un'altra persona, che entrerebbe nello
+      storico di chi non è più cliente; la riattivazione resta una scelta
+      dello staff (PUT {"is_active": true}). In modifica: 400 col suo nome.
+    - Scheda attiva: 400 con chi ha il numero (`phone_holder_id`,
+      `phone_holder_name`) e se può fare da contatto (`contact_allowed`).
+      Madre e figlia, coppie: lo stesso numero è di due persone, e invece del
+      solo rifiuto la dashboard propone «Usa il numero di Laura come
+      contatto» — la nuova scheda senza telefono, collegata a lei.
+    """
+    if not holder.is_active:
+        if client is not None:
+            raise HttpError(400, archived_phone_message(holder, creating=False))
+        return JsonResponse(
+            {
+                "detail": archived_phone_message(holder),
+                "archived_client_id": holder.id,
+                "archived_client_name": holder.full_name,
+            },
+            status=409,
+        )
+    return JsonResponse(
+        {
+            "detail": DUPLICATE_PHONE,
+            "phone_holder_id": holder.id,
+            "phone_holder_name": holder.full_name,
+            "contact_allowed": contact_allowed(holder, client),
+        },
+        status=400,
+    )
 
 
 # ---- Etichette (ClientCategory) ---------------------------------------------
@@ -121,8 +176,8 @@ def delete_category(request, category_id: int):
 # ---- Cliente ------------------------------------------------------------------
 
 
-@router.get("/", auth=staff_auth, response=list[ClientOut])
-@paginate(LimitOffsetPagination)
+@router.get("/", auth=staff_auth, response=list[ClientListOut])
+@paginate(ClientPagination)
 def list_clients(
     request,
     q: str = "",
@@ -131,8 +186,15 @@ def list_clients(
     reliability_max: Optional[int] = None,
     is_active: Optional[bool] = None,
 ):
+    """Elenco paginato. Ogni riga ha `contact` (si contatta tramite) e
+    `amount_due` (da saldare; null senza il permesso «vendite»). La ricerca per
+    numero trova anche chi, senza un telefono suo, passa da quel numero."""
     ctx = request.auth
-    qs = Client.objects.filter(salon=ctx.salon).prefetch_related("categories")
+    qs = (
+        Client.objects.filter(salon=ctx.salon)
+        .select_related("contact_client")
+        .prefetch_related("categories")
+    )
     if q:
         qs = qs.filter(search_filter(q))
     if category_id is not None:
@@ -160,51 +222,29 @@ def client_counts(request):
 
 @router.post("/", auth=staff_auth, response=ClientOut)
 def create_client(request, data: ClientIn):
+    """Crea la scheda. Il telefono è facoltativo; con `contact_client_id` la
+    cliente si contatta tramite un'altra scheda (vedi `ClientIn`). Un numero
+    già in rubrica: 409 se è di una scheda archiviata (`archived_client_id`),
+    400 se è di una attiva (`phone_holder_id`, `phone_holder_name`,
+    `contact_allowed`)."""
     ctx = request.auth
     require_scope(ctx, "clients")
     payload, category_ids = client_payload(data)
-    phone = payload["phone"]
-    archived = check_phone_unique(ctx, phone)
-    if archived is not None:
-        # Cliente archiviata che richiama per prenotare: la ricerca della
-        # dashboard mostra solo le attive e la creazione rispondeva «già
-        # registrato» senza dire da chi — un vicolo cieco (06-02). Non la si
-        # riattiva da qui: il numero può essere passato a un'altra persona, che
-        # entrerebbe nello storico di chi non è più cliente. Si indica la
-        # scheda (409 con il suo id) e la riattivazione resta una scelta dello
-        # staff: PUT {"is_active": true}.
-        return JsonResponse(
-            {
-                "detail": archived_phone_message(archived),
-                "archived_client_id": archived.id,
-                "archived_client_name": archived.full_name,
-            },
-            status=409,
-        )
+    holder = phone_holder(ctx, payload["phone"])
+    if holder is not None:
+        return _phone_taken(holder)
     return create_profile(ctx, payload, category_ids)
 
 
 @router.get("/{int:client_id}", auth=staff_auth, response=ClientDetailOut)
 def get_client(request, client_id: int):
+    """La scheda con visite (giorni), spesa, ultima visita e debito (`amount_due`)
+    — dati di cassa, a zero/null con `stats_hidden` senza il permesso «vendite» —,
+    le schede che si contattano tramite lei (`dependents`) e l'affidabilità
+    ricalcolata con i suoi conteggi (`reliability_basis`)."""
     ctx = request.auth
-    client = salon_get(Client, ctx, client_id)
-    # Spesa totale, numero di visite e ultima visita sono dati di cassa: li
-    # vede solo chi ha il permesso «vendite», come sulla lista degli incassi.
-    # A chi non ce l'ha la scheda arriva completa, con i contatori a zero.
-    may_see = has_scope(ctx, "sales")
-    if may_see:
-        stats = client_stats(client)
-    else:
-        stats = {"visits": 0, "total_spent": Decimal("0"), "last_visit": None}
-    client.visits = stats["visits"]
-    client.total_spent = stats["total_spent"]
-    client.last_visit = stats["last_visit"]
-    # Senza questo flag l'interfaccia mostrava «0 visite · 0 € spesi» a chi non
-    # ha il permesso vendite: una cliente storica sembrava alla prima visita, e
-    # l'operatrice rischiava di trattarla come tale (caparra compresa). Zero e
-    # «non visibile» devono restare distinguibili.
-    client.stats_hidden = not may_see
-    return client
+    client = salon_get(Client.objects.select_related("contact_client"), ctx, client_id)
+    return client_detail(ctx, client)
 
 
 @router.put("/{int:client_id}", auth=staff_auth, response=ClientOut)
@@ -223,19 +263,22 @@ def update_client(request, client_id: int, data: ClientUpdateIn):
     payload, category_ids = client_payload(data, partial=True)
     phone = payload.get("phone")
     if phone and phone != client.phone:
-        archived = check_phone_unique(ctx, phone, exclude_id=client.id)
-        if archived is not None:
-            raise HttpError(400, archived_phone_message(archived, creating=False))
+        holder = phone_holder(ctx, phone, exclude_id=client.id)
+        if holder is not None:
+            return _phone_taken(holder, client=client)
     return update_profile(ctx, client, payload, category_ids)
 
 
-@router.delete("/{int:client_id}", auth=staff_auth, response=OkOut)
+@router.delete("/{int:client_id}", auth=staff_auth, response=ClientArchiveOut)
 def delete_client(request, client_id: int):
+    """Archivia la scheda (soft delete). Le schede che si contattavano tramite
+    lei perdono il collegamento: tornano in `unlinked_dependents`, da dire a chi
+    archivia (restano senza numero di contatto)."""
     ctx = request.auth
     require_scope(ctx, "clients")
     client = salon_get(Client, ctx, client_id)
-    archive_profile(ctx, client)
-    return OkOut()
+    unlinked = archive_profile(ctx, client)
+    return {"ok": True, "unlinked_dependents": [contact_out(d) for d in unlinked]}
 
 
 @router.post("/import", auth=staff_auth, response=ImportOut)
@@ -288,7 +331,9 @@ def client_history(request, client_id: int):
     tecniche collegate), `sale` (vendita al banco senza appuntamento), `note`
     e `sheet` non legate a una visita. Gli appuntamenti futuri hanno
     `upcoming: true`. `sales_hidden` dice se gli incassi sono stati omessi
-    perché chi legge non ha il permesso «vendite».
+    perché chi legge non ha il permesso «vendite». `counts.visits` sono i
+    giorni con una visita chiusa o un passaggio al banco, come nella scheda
+    (senza «vendite», le sole visite chiuse).
     """
     ctx = request.auth
     # Storico, note e schede sono i dati più sensibili che il gestionale

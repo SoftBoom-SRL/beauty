@@ -113,12 +113,13 @@ def stamped_consents(stored, incoming: dict) -> dict:
     return consents
 
 
-# Campi del PUT per cui `null` significa «svuota»: i testi facoltativi e le
-# due date (per `category_ids` vuol dire «lascia le etichette come sono»).
+# Campi del PUT per cui `null` significa «svuota»: i testi facoltativi (ora
+# anche il telefono) e le due date; per `contact_client_id` toglie il
+# collegamento, per `category_ids` vuol dire «lascia le etichette come sono».
 # Sugli altri un null non ha un significato e finirebbe a 500 sulla colonna
 # NOT NULL (o, peggio, in archivio come valore che nessuno legge).
-_NULL_MEANS_EMPTY = {"last_name": "", "email": "", "origin": "", "gender": ""}
-_NULLABLE = {"birthday", "since", "category_ids"}
+_NULL_MEANS_EMPTY = {"last_name": "", "email": "", "origin": "", "gender": "", "phone": ""}
+_NULLABLE = {"birthday", "since", "category_ids", "contact_client_id"}
 
 
 def client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Optional[list[int]]]:
@@ -130,8 +131,13 @@ def client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Opti
     cancellava i consensi (con la prova del consenso privacy), riportava
     l'affidabilità a 100 e riattivava una scheda disattivata. Il chiamante che
     non manda un campo non lo sta svuotando: non lo sta toccando.
+
+    Il telefono può restare vuoto (la scheda senza numero, o che si contatta
+    tramite `contact_client_id`, controllato poi da profiles.resolve_contact).
+    L'affidabilità non è un campo scrivibile: la calcola clients.services.
     """
     payload = data.dict(exclude_unset=True) if partial else data.dict()
+    payload.pop("reliability", None)  # calcolata: un valore mandato a mano si ignora
     for name, value in list(payload.items()):
         if value is not None or name in _NULLABLE:
             continue
@@ -141,10 +147,9 @@ def client_payload(data: ClientIn, *, partial: bool = False) -> tuple[dict, Opti
     category_ids = payload.pop("category_ids", None)  # None = lasciare le etichette come sono
     if "phone" in payload:
         # Salvato in E.164 quando riconoscibile: login OTP, import e sync Yourang
-        # confrontano lo stesso numero, comunque sia stato digitato.
+        # confrontano lo stesso numero, comunque sia stato digitato. Vuoto è
+        # ammesso: è la scheda senza numero.
         payload["phone"] = canonical_phone(payload["phone"])
-        if not payload["phone"]:
-            raise HttpError(400, "Il telefono è obbligatorio")
     if "gender" in payload:
         payload["gender"] = normalize_gender(payload.get("gender") or "")
     if "birthday" in payload:

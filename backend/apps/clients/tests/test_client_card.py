@@ -37,11 +37,14 @@ class ClientCrudTests(ClientsTestCase):
         self.assertEqual(updated.last_name, "Verdi")
 
     def test_duplicate_phone_rejected_on_create(self):
-        self.make_client(phone="+393339990000")
+        holder = self.make_client(phone="+393339990000")
         data = ClientIn(first_name="Altra", last_name="Persona", phone="+393339990000")
-        with self.assertRaises(HttpError) as exc:
-            create_client(self.request, data)
-        self.assertEqual(exc.exception.status_code, 400)
+        res = create_client(self.request, data)
+        self.assertEqual(res.status_code, 400)
+        # Chi ha il numero, per proporre «Usa il numero di Sofia come contatto».
+        body = json.loads(res.content)
+        self.assertEqual((body["phone_holder_id"], body["contact_allowed"]), (holder.id, True))
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
 
     def test_since_is_filled_at_creation(self):
         """Senza `since` il KPI «nuovi clienti» resta a zero per sempre."""
@@ -125,11 +128,20 @@ class ClientPartialUpdateTests(ClientsTestCase):
         update_client(
             self.request,
             client.id,
-            ClientIn(first_name="Sofia", phone="+393332224444", reliability=30, is_active=False),
+            ClientIn(first_name="Sofia", last_name="Neri", phone="+393332224444", is_active=False),
         )
         client.refresh_from_db()
-        self.assertEqual(client.reliability, 30)
+        self.assertEqual(client.last_name, "Neri")
         self.assertFalse(client.is_active)
+
+    def test_reliability_in_the_body_is_ignored(self):
+        """L'affidabilità la calcola il gestionale: un valore mandato a mano
+        (da una dashboard vecchia) si ignora, senza errore."""
+        client = self.make_client(phone="+393332224444")
+        data = ClientUpdateIn.model_validate({"reliability": 30, "last_name": "Neri"})
+        update_client(self.request, client.id, data)
+        client.refresh_from_db()
+        self.assertEqual((client.last_name, client.reliability), ("Neri", 100))
 
     def test_categories_are_left_alone_when_the_body_omits_them(self):
         client = self.make_client(phone="+393332225555")
@@ -252,9 +264,12 @@ class InputValidationApiTests(TestCase):
         res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "lang": "italiano"})
         self.assertEqual(res.status_code, 422, res.content)
 
-    def test_reliability_out_of_range_is_refused(self):
+    def test_reliability_is_not_writable_at_all(self):
+        """Prima 5000 era un 422 e 30 entrava in archivio: ora l'affidabilità è
+        calcolata, e qualunque valore nel corpo si ignora."""
         res = self._json("post", "/api/clients/", {"first_name": "X", "phone": "+393334445555", "reliability": 5000})
-        self.assertEqual(res.status_code, 422, res.content)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["reliability"], 100)
 
     def test_category_name_and_color_are_bounded(self):
         self.assertEqual(self._json("post", "/api/clients/categories", {"name": "A" * 61}).status_code, 422)
@@ -346,7 +361,12 @@ class PartialPutOverHttpTests(_Base):
         client.refresh_from_db()
         self.assertEqual(client.email, "")
         self.assertIsNone(client.birthday)
-        for body in ({"first_name": None}, {"phone": None}, {"is_active": None}, {"consents": None}):
+        # Il telefono è facoltativo: null lo svuota (con la sua chiave).
+        res = self.put(client, {"phone": None})
+        self.assertEqual(res.status_code, 200, res.content)
+        client.refresh_from_db()
+        self.assertEqual((client.phone, client.phone_key), ("", ""))
+        for body in ({"first_name": None}, {"is_active": None}, {"consents": None}):
             with self.subTest(body=body):
                 self.assertEqual(self.put(client, body).status_code, 400)
 
@@ -495,10 +515,12 @@ class ArchivedPhoneTests(_Base):
         self.assertEqual(Client.objects.filter(salon=self.salon).count(), 1)
 
     def test_an_active_duplicate_is_still_a_400(self):
-        self.card()
-        with self.assertRaises(HttpError) as caught:
-            create_client(self.request, ClientIn(first_name="Altra", phone="3331234567"))
-        self.assertEqual(caught.exception.status_code, 400)
+        holder = self.card()
+        res = create_client(self.request, ClientIn(first_name="Altra", phone="3331234567"))
+        self.assertEqual(res.status_code, 400)
+        body = json.loads(res.content)
+        self.assertEqual(body["phone_holder_id"], holder.id)
+        self.assertEqual(body["phone_holder_name"], "Sofia Ricci")
 
     def test_moving_a_card_onto_an_archived_number_says_whose_it_is(self):
         self.card(first_name="Anna", last_name="Verdi", is_active=False)

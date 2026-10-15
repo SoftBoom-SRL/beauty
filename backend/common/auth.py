@@ -136,9 +136,14 @@ class ClientAuth(HttpBearer):
             return None
         from apps.clients.models import Client  # lazy
 
+        # Senza un numero suo la cliente non ha accesso all'app (l'OTP va al
+        # telefono): una sessione aperta prima che lo staff togliesse il numero
+        # dalla scheda — quello era della mamma, e la scheda è la figlia che si
+        # contatta tramite lei — non resta valida fino alla scadenza del token.
         client = (
             Client.objects.select_related("salon")
             .filter(id=payload["sub"], is_active=True)
+            .exclude(phone="")
             .first()
         )
         if client is None:

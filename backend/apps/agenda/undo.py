@@ -568,6 +568,19 @@ def _renew_links_for_restored_amount(appointments, after_snapshots) -> None:
         )
 
 
+def _refresh_reliability(appointments, actor=None) -> None:
+    """Dopo aver annullato un no-show o un annullamento: l'affidabilità si ricalcola.
+
+    Il no-show segnato per sbaglio toglieva 25 punti alla cliente, e «Indietro»
+    rimetteva la visita in agenda lasciandole il punteggio da cliente
+    inaffidabile — con la caparra chiesta alla prossima prenotazione.
+    """
+    from apps.clients.services import recompute_reliability  # lazy: è dell'anagrafica
+
+    for client in {a.client_id: a.client for a in appointments}.values():
+        recompute_reliability(client, actor=actor)
+
+
 def _reschedule_deposit_holds(appointments, after_snapshots) -> None:
     """Dopo aver annullato un gesto che aveva azzerato la caparra: una scadenza nuova.
 
@@ -669,6 +682,7 @@ def perform(entry: UndoEntry, *, actor=None) -> dict:
             _restore_pause({**snap, "salon_id": salon.id})
         if entry.kind in (UndoEntry.Kind.CANCEL, UndoEntry.Kind.NO_SHOW):
             _reissue_deposit_links(touched)
+            _refresh_reliability(touched, actor)
         else:
             _renew_links_for_restored_amount(touched, entry.after.get("appointments", []))
         _reschedule_deposit_holds(touched, entry.after.get("appointments", []))

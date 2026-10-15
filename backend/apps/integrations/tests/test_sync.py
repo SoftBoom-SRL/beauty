@@ -155,6 +155,45 @@ class ContactPushTests(TestCase):
         self.assertTrue(any("pagina già vista" in e for e in report.errors))
 
 
+class ClientsWithoutPhoneTests(TestCase):
+    """Schede senza un numero loro: la bambina, chi passa dal numero della mamma.
+
+    Su Yourang il contatto È il numero: non si spingono, e non devono far
+    fallire la sync. E una prenotazione col numero della mamma e il nome della
+    figlia va sulla scheda della figlia.
+    """
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="Test Salon", slug="test-salon-nophone")
+        self.conn = YourangConnection.objects.create(salon=self.salon, yourang_org_id="org-nophone")
+        self.laura = Client.objects.create(salon=self.salon, first_name="Laura", last_name="Rossi", phone="+393331112233")
+        self.giulia = Client.objects.create(
+            salon=self.salon, first_name="Giulia", last_name="Rossi", contact_client=self.laura
+        )
+        Client.objects.create(salon=self.salon, first_name="Sola")
+
+    def test_only_cards_with_their_own_number_are_pushed(self):
+        with patch("apps.integrations.client.YourangClient.list_contacts", return_value=[]), \
+             patch("apps.integrations.client.YourangClient.create_or_get_contact",
+                   return_value={"id": "c-laura"}) as pushed:
+            report = sync.sync_clients(self.conn)
+        self.assertEqual([c.args[0] for c in pushed.call_args_list], ["+393331112233"])
+        self.assertEqual((report.pushed, report.errors), (1, []))
+
+    def test_the_mother_number_with_the_daughter_name_is_the_daughter(self):
+        def client_for(name):
+            return sync._client_for_event(
+                self.salon, {"client_full_name": name, "client_phone_number": "+39 333 111 2233"}
+            )
+
+        self.assertEqual(client_for("Giulia Rossi"), self.giulia)
+        self.assertEqual(client_for("rossi giulia"), self.giulia)
+        self.assertEqual(client_for("Laura Rossi"), self.laura)
+        # un nome che in rubrica non c'è resta a chi ha il numero, come prima
+        self.assertEqual(client_for("Marco Bianchi"), self.laura)
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 3)
+
+
 @override_settings(**API_SETTINGS)
 class PooledClientTests(TestCase):
     """11-12: un giro di sync riusa un solo client httpx."""

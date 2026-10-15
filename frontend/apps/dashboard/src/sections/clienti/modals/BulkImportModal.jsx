@@ -71,6 +71,8 @@ export default function BulkImportModal({ onClose }) {
   );
   const ready = rows.filter((r) => !r._skip);
   const mappedKeys = new Set(effMapping);
+  // Il telefono non serve più (le righe senza entrano senza numero): serve il nome.
+  const hasNameColumn = ['first_name', 'full_name', 'full_name_rev'].some((k) => mappedKeys.has(k));
   const mojibake = looksMojibake(text);
 
   /* `fresh`: file nuovo, colonne da rilevare di nuovo. Lo stesso file riletto
@@ -95,13 +97,15 @@ export default function BulkImportModal({ onClose }) {
     const payload = ready.map(({ _idx, _line, _warn, _skip, ...r }) => r);
     setBusy(true); setProgress(Math.round((startAt / Math.max(1, payload.length)) * 100)); setResult(null);
     const total = before
-      ? { created: before.created, updated: before.updated, skipped: before.skipped, errors: [...before.errors], warnings: [...before.warnings] }
-      : { created: 0, updated: 0, skipped: 0, errors: [], warnings: [] };
+      ? { created: before.created, updated: before.updated, skipped: before.skipped, linked: before.linked || 0, errors: [...before.errors], warnings: [...before.warnings] }
+      : { created: 0, updated: 0, skipped: 0, linked: 0, errors: [], warnings: [] };
     let i = startAt;
     try {
       for (; i < payload.length; i += CHUNK) {
         const res = await clientsApi.importRows({ rows: payload.slice(i, i + CHUNK), update_existing: updateExisting });
         total.created += res.created; total.updated += res.updated; total.skipped += res.skipped || 0;
+        // schede senza telefono collegate a chi ha già quel numero (madre e figlia)
+        total.linked += res.linked || 0;
         // Il server numera le righe dentro il blocco inviato, che salta le
         // righe scartate: chi corregge il file cerca la riga del FILE, la
         // stessa numerata nell'anteprima del passo 3.
@@ -132,12 +136,12 @@ export default function BulkImportModal({ onClose }) {
     const k = cut < 0 ? w : w.slice(0, cut);
     const v = cut < 0 ? '' : w.slice(cut + 1);
     return ({
-      name: t('nome mancante', 'missing name'), nophone: t('senza telefono: verrà cercato per email', 'no phone: matched by email only'), phone: t('telefono non valido', 'invalid phone'),
+      name: t('nome mancante', 'missing name'), nophone: t('senza telefono: entra senza numero (o aggiorna chi ha la stessa email)', 'no phone: imported without a number (or updates the client with the same email)'), phone: t('telefono non valido: entra senza numero', 'invalid phone: imported without a number'),
       badphone: t(`telefono da controllare: “${v}” (entra così com’è)`, `phone to check: “${v}” (imported as is)`),
       phonesci: t(`numero rovinato da Excel: “${v}” — esporta la colonna come testo`, `number mangled by Excel: “${v}” — export the column as text`),
       gender: t(`genere non riconosciuto: “${v}”`, `unrecognised gender: “${v}”`), birthday: t(`data non valida: “${v}”`, `invalid date: “${v}”`), email: t(`email non valida: “${v}”`, `invalid email: “${v}”`),
       since: t(`«cliente dal» non valido: “${v}” (serve una data con l’anno, non futura)`, `invalid “client since”: “${v}” (needs a full, non-future date)`),
-      dup: t(`stesso telefono della riga ${v}`, `same phone as row ${v}`),
+      dup: t(`stesso telefono della riga ${v}: con un altro nome entra senza numero, collegata a chi lo ha`, `same phone as row ${v}: with another name it is imported without a number, linked to whoever has it`),
     })[k] || w;
   };
 
@@ -165,6 +169,14 @@ export default function BulkImportModal({ onClose }) {
             </div>
           ))}
         </div>
+        {result.linked > 0 && (
+          <div className="t-sm" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', color: 'var(--ink-2)', margin: '-4px 0 12px', lineHeight: 1.45 }}>
+            <Icon name="user" size={14} color="var(--clay-ink)" style={{ marginTop: 2, flexShrink: 0 }} />
+            <span>{result.linked === 1
+              ? t('1 scheda condivide il numero di un’altra cliente: resta senza telefono e si contatta tramite chi lo ha.', '1 profile shares another client’s number: it has no phone of its own and is contacted via whoever has it.')
+              : t(`${result.linked} schede condividono il numero di un’altra cliente: restano senza telefono e si contattano tramite chi lo ha.`, `${result.linked} profiles share another client’s number: they have no phone of their own and are contacted via whoever has it.`)}</span>
+          </div>
+        )}
         {result.errors.length > 0 && (
           <div>
             <div className="t-meta" style={{ marginBottom: 6 }}>{t('Righe non importate', 'Rows not imported')} · {result.errors.length}</div>
@@ -194,7 +206,7 @@ export default function BulkImportModal({ onClose }) {
         {step > 1 && <button className="dk-btn dk-btn--ghost" onClick={() => setStep(step - 1)} disabled={busy}><Icon name="chevL" size={15} />{t('Indietro', 'Back')}</button>}
         <button className="dk-btn dk-btn--ghost" onClick={onClose} disabled={busy}>{t('Annulla', 'Cancel')}</button>
         {step < 3 ? (
-          <button className="dk-btn dk-btn--clay" aria-disabled={!table.length} onClick={() => { if (!table.length) { fireToast({ msg: t('Carica un file o incolla i dati', 'Upload a file or paste data'), icon: 'alert' }); return; } if (step === 2 && !mappedKeys.has('phone') && !mappedKeys.has('email')) { fireToast({ msg: t('Serve almeno la colonna Telefono (o Email)', 'Map at least the Phone (or Email) column'), icon: 'alert' }); return; } setStep(step + 1); }}>
+          <button className="dk-btn dk-btn--clay" aria-disabled={!table.length} onClick={() => { if (!table.length) { fireToast({ msg: t('Carica un file o incolla i dati', 'Upload a file or paste data'), icon: 'alert' }); return; } if (step === 2 && !hasNameColumn) { fireToast({ msg: t('Serve almeno la colonna del nome', 'Map at least the name column'), icon: 'alert' }); return; } setStep(step + 1); }}>
             {t('Avanti', 'Next')}<Icon name="chevR" size={15} color="#fff" />
           </button>
         ) : (
@@ -277,7 +289,7 @@ export default function BulkImportModal({ onClose }) {
               <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('Accettati anche 15/03 senza anno, 2024-03-15, “15 marzo 1990”.', 'Also accepted: 15/03 without year, 2024-03-15, “15 March 1990”.')}</span>
             </div>
           )}
-          {!mappedKeys.has('phone') && <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', color: 'var(--warn)', fontSize: 12.5, fontWeight: 600 }}><Icon name="alert" size={14} color="var(--warn)" />{t('Nessuna colonna Telefono: i nuovi clienti non possono essere creati senza numero (gli esistenti si aggiornano per email).', 'No Phone column: new clients cannot be created without a number (existing ones update by email).')}</div>}
+          {!mappedKeys.has('phone') && <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', color: 'var(--warn)', fontSize: 12.5, fontWeight: 600 }}><Icon name="alert" size={14} color="var(--warn)" />{t('Nessuna colonna Telefono: le clienti nuove entrano senza numero (niente conferme, promemoria né accesso all’app); quelle già in rubrica si ritrovano per email o per nome.', 'No Phone column: new clients are imported without a number (no confirmations, reminders or app access); existing ones are matched by email or name.')}</div>}
         </div>
       )}
 
@@ -287,7 +299,7 @@ export default function BulkImportModal({ onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
               <Toggle on={updateExisting} onChange={setUpdateExisting} />
-              <span>{t('Aggiorna i clienti già in rubrica', 'Update clients already on file')} <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 500 }}>· {t('stesso telefono o email; i campi vuoti nel file non cancellano nulla', 'same phone or email; blank cells never erase data')}</span></span>
+              <span>{t('Aggiorna i clienti già in rubrica', 'Update clients already on file')} <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 500 }}>· {t('stesso telefono e nome, o stessa email; senza numero, stesso nome; i campi vuoti nel file non cancellano nulla', 'same phone and name, or same email; without a number, same name; blank cells never erase data')}</span></span>
             </label>
             <div style={{ flex: 1 }} />
             {encodingPicker}
@@ -316,7 +328,7 @@ export default function BulkImportModal({ onClose }) {
             {rows.length > 200 && <div className="t-sm" style={{ padding: '8px 12px', color: 'var(--muted-2)' }}>{t(`… e altre ${rows.length - 200} righe`, `… and ${rows.length - 200} more rows`)}</div>}
           </div>
           <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 8 }}>
-            {t(`${ready.length} righe verranno importate`, `${ready.length} rows will be imported`)}{rows.length - ready.length > 0 ? t(` · ${rows.length - ready.length} saltate (senza nome o senza telefono/email)`, ` · ${rows.length - ready.length} skipped (no name or no phone/email)`) : ''}. {t('Le etichette non ancora esistenti vengono create; le note diventano note private sulla scheda.', 'Labels that do not exist yet are created; notes become private notes on the profile.')}
+            {t(`${ready.length} righe verranno importate`, `${ready.length} rows will be imported`)}{rows.length - ready.length > 0 ? t(` · ${rows.length - ready.length} saltate (senza nome)`, ` · ${rows.length - ready.length} skipped (no name)`) : ''}. {t('Le etichette non ancora esistenti vengono create; le note diventano note private sulla scheda.', 'Labels that do not exist yet are created; notes become private notes on the profile.')}
           </div>
         </div>
       )}

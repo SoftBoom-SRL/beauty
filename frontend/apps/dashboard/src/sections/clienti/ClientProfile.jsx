@@ -4,10 +4,11 @@
 // I dati (caricamento, ricarico dal vivo, modifiche in coda) stanno in
 // useClientDetail.js, i pezzi della pagina in ProfileHeader, ProfileLabels e
 // ProfileCards.
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { ConfirmModal } from './components.jsx';
+import { dependentsNotice } from './helpers.js';
 import { useClientDetail } from './useClientDetail.js';
 import ProfileHeader from './ProfileHeader.jsx';
 import ProfileLabels from './ProfileLabels.jsx';
@@ -20,7 +21,7 @@ import ConsensiTab from './tabs/ConsensiTab.jsx';
 import { clientsApi } from '../../api/clients.js';
 
 export default function ClientProfile({ clientId, onChanged, onDeleted }) {
-  const { t, lang, fireToast, hasScope, clientCategories, openModal, live } = useDash();
+  const { t, lang, fireToast, hasScope, clientCategories, openModal, live, setSelClient } = useDash();
   const canWrite = hasScope('clients');
 
   const { c, setC, failed, onWaitlist, updateClient, toastErr } = useClientDetail(clientId, onChanged);
@@ -31,8 +32,16 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   const doDelete = async () => {
     setDeleting(true);
     try {
-      await clientsApi.remove(clientId);
-      fireToast({ msg: t(`Cliente ${c.full_name} archiviato`, `Client ${c.full_name} archived`), icon: 'check' });
+      const res = await clientsApi.remove(clientId);
+      // Chi si contattava tramite lei perde il collegamento (il server lo dice):
+      // da qui in poi quelle schede non ricevono più conferme né promemoria.
+      const names = (res?.unlinked_dependents || []).map((d) => d.full_name).join(', ');
+      fireToast({
+        msg: names
+          ? t(`Cliente ${c.full_name} archiviato · senza più un numero di contatto: ${names}`, `Client ${c.full_name} archived · no contact number any more: ${names}`)
+          : t(`Cliente ${c.full_name} archiviato`, `Client ${c.full_name} archived`),
+        icon: 'check',
+      });
       setConfirmDel(false);
       onDeleted && onDeleted();
     } catch (err) { toastErr(err); } finally { setDeleting(false); }
@@ -83,7 +92,8 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
   return (
     <div style={{ padding: '26px 30px 40px', maxWidth: 880 }}>
       <ProfileHeader c={c} onWaitlist={onWaitlist} canWrite={canWrite} archived={archived}
-        openEdit={openEdit} onArchive={() => setConfirmDel(true)} t={t} fireToast={fireToast} />
+        openEdit={openEdit} onArchive={() => setConfirmDel(true)} onOpenClient={setSelClient}
+        t={t} lang={lang} fireToast={fireToast} />
 
       {archived && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'var(--paper-2)', border: '1px solid var(--hair)', borderRadius: 12, margin: '-6px 0 18px' }}>
@@ -102,7 +112,7 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
         updateClient={updateClient} openModal={openModal} t={t} />
 
       <ProfileKpis c={c} t={t} lang={lang} />
-      <ProfileDetails c={c} canWrite={canWrite} openEdit={openEdit} t={t} lang={lang} />
+      <ProfileDetails c={c} canWrite={canWrite} openEdit={openEdit} onOpenClient={setSelClient} t={t} lang={lang} />
       {c.deposit_always && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', background: 'var(--warn-tint)', borderRadius: 12, marginBottom: 14 }}>
           <Icon name="coupon" size={18} color="var(--warn)" />
@@ -132,7 +142,12 @@ export default function ClientProfile({ clientId, onChanged, onDeleted }) {
         <ConfirmModal t={t}
           title={t('Archiviare il cliente?', 'Archive this client?')}
           sub={c.full_name}
-          body={t('Il cliente viene disattivato (soft delete): sparisce dalle liste ma lo storico resta. Potrà essere riattivato in seguito.', 'The client is deactivated (soft delete): removed from the lists, history is kept. It can be reactivated later.')}
+          body={<Fragment>
+            {t('Il cliente viene disattivato (soft delete): sparisce dalle liste ma lo storico resta. Potrà essere riattivato in seguito.', 'The client is deactivated (soft delete): removed from the lists, history is kept. It can be reactivated later.')}
+            {dependentsNotice(c.dependents, t) && (
+              <span style={{ display: 'block', marginTop: 8, fontWeight: 600 }}>{dependentsNotice(c.dependents, t)}</span>
+            )}
+          </Fragment>}
           confirmLabel={t('Archivia', 'Archive')}
           busy={deleting}
           onConfirm={doDelete}
