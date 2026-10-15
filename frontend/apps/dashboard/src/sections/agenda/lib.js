@@ -7,7 +7,7 @@
 // '@youty/shared' dei test non ce l'ha) né React.
 
 export {
-  DK_START, DK_END, PXM, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, WHEEL_ZOOM_FACTOR, WIDTH_STEPS, WIDTH_MIN, WIDTH_MAX, COLW, DAY_HOURS_W, WEEK_HOURS_W,
+  DK_START, DK_END, PXM, OP_COLUMN_TINT, ZOOM_STEPS, ZOOM_MIN, ZOOM_MAX, WHEEL_ZOOM_FACTOR, WIDTH_STEPS, WIDTH_MIN, WIDTH_MAX, COLW, DAY_HOURS_W, WEEK_HOURS_W,
   WEEK_TODAY_BG, WEEK_DAY_BORDER,
   NOW_LINE_COLOR, TONE_BORDER, LAST_START_MIN, AFTERNOON_MIN, BREAK_PRESETS, BREAK_DEFAULT_MIN, HOVER_CLEAR_DAY, HOVER_CLEAR_WEEK,
   MODAL_SWAP_MS, LIVE_DEBOUNCE_DAY_MS, LIVE_DEBOUNCE_MONTH_MS, AGENDA_LIVE_RE,
@@ -38,7 +38,7 @@ export { weekDayOps } from './lib/week.js';
 
 export { workingOperatorIds, visibleDayRows, restingIds, hiddenIdsOf, parseHiddenIds, locationOperators } from './lib/team.js';
 
-export { wantsLightText, inkOn } from './lib/colors.js';
+export { wantsLightText, inkOn, opColumnTint } from './lib/colors.js';
 
 /** "YYYY-MM-DD" + minuti → ISO8601 dell'istante, nel fuso del SALONE.
  *  Riesportato da @youty/shared: costruirlo con lo scarto del dispositivo

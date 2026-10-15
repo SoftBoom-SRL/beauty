@@ -3,7 +3,7 @@
 // le testate delle sotto-colonne delle operatrici, con la stessa tinta dei
 // blocchi. Senza hook: nei test fa parte di WeekView.
 import { parseISO, statusMeta } from '@youty/shared';
-import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, opDisplay } from '../lib.js';
+import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, opColumnTint, opDisplay } from '../lib.js';
 
 /** `day` = il giorno di weekDays (lib/week.js), `index` = 0 lunedì … 6
  *  domenica; `isTargetDay`: il giorno d'arrivo del trascinamento; `setOpTip`
@@ -43,7 +43,7 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
       {day.dayOps.length > 0 && (
         <div style={{ display: 'flex' }}>
           {day.dayOps.map((o) => (
-            <div key={o.id} title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: 1, minWidth: 0, padding: '3px 2px 4px', textAlign: 'center', borderLeft: '1px solid var(--hair-2)', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: `color-mix(in srgb, ${colorOf(o.id)} 14%, var(--paper))` }}>
+            <div key={o.id} title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: 1, minWidth: 0, padding: '3px 2px 4px', textAlign: 'center', borderLeft: '1px solid var(--hair-2)', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)') }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
             </div>
           ))}

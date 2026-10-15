@@ -18,7 +18,7 @@ import { useEffect, useRef } from 'react';
 import { useDash } from '../../ctx.jsx';
 import {
   PXM, COLW, DAY_HOURS_W, aStartMin, firstName, itemBlocks, explainSlot, gridMarks,
-  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin, fitColumns,
+  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin, fitColumns, opColumnTint,
 } from './lib.js';
 import {
   dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, dragReach, resizeStep, dragDy, dropIntent,
@@ -455,7 +455,7 @@ export default function DayGrid({
                 key={o.id}
                 className={isTarget ? (tone === 'warn' ? 'dk-col--target-warn' : 'dk-col--target') : ''}
                 onClick={(e) => onColumnClick(e, row)}
-                style={{ flex: '1 0 ' + colW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: `color-mix(in srgb, ${colorOf(o.id)} 6%, #FFFFFF)`, cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
+                style={{ flex: '1 0 ' + colW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: opColumnTint(colorOf(o.id)), cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
                 <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t} />
                 {/* la traccia dei servizi che si muovono la disegna VisitBlocks,

@@ -39,6 +39,12 @@ export const WIDTH_MAX = 3;
 
 export const COLW = 158;          // min operator column width
 
+/** Quanto colore dell'operatrice c'è nello sfondo della sua colonna (giorno) e
+ *  delle sue sotto-colonne (settimana), in %. Era il 6% in giorno e niente in
+ *  settimana: le colonne sembravano tutte uguali, e il colore si vedeva solo
+ *  nella testata. */
+export const OP_COLUMN_TINT = 16;
+
 /** Passo dell'agenda quando le Impostazioni non lo dicono (minuti). */
 export const DEFAULT_SLOT_MIN = 15;
 

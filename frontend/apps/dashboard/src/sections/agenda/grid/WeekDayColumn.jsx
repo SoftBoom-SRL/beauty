@@ -5,7 +5,7 @@
 // Clic e trascinamenti restano a WeekView, che passa i gestori. Senza hook:
 // nei test fa parte di WeekView.
 import { timeLabel } from '@youty/shared';
-import { WEEK_DAY_BORDER, WEEK_TODAY_BG, weekLayout } from '../lib.js';
+import { WEEK_DAY_BORDER, WEEK_TODAY_BG, opColumnTint, weekLayout } from '../lib.js';
 import { weekColOf } from '../lib/week.js';
 import ClosedHours from './ClosedHours.jsx';
 import GridLines from './GridLines.jsx';
@@ -48,7 +48,9 @@ export default function WeekDayColumn({
             data-op={o.id}
             className={isTarget ? 'dk-col--target' : ''}
             onClick={(e) => onEmptyClick(e, o.id, day.date)}
-            style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
+            // il colore dell'operatrice, come in vista giorno; su trasparente,
+            // perché sotto resti la tinta di oggi
+            style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', background: opColumnTint(colorOf(o.id), 'transparent'), cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
           >
             {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
                 che si sta guardando: dove finirebbe, alla sua ora. Non

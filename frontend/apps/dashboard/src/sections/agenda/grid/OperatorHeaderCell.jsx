@@ -6,7 +6,7 @@
 import React from 'react';
 import { Avatar, Icon } from '@youty/shared';
 import HexInput from '../../../ui/HexInput.jsx';
-import { COLW, apptRevenue, firstName, fmtMoney, initialsOf, lastName, opDisplay } from '../lib.js';
+import { COLW, apptRevenue, firstName, fmtMoney, initialsOf, lastName, opColumnTint, opDisplay } from '../lib.js';
 
 /** `col`: il colore dell'operatrice; `isTarget`: la colonna d'arrivo del
  *  trascinamento; `picker`: l'operatrice col selettore del colore aperto;
@@ -21,7 +21,7 @@ export default function OperatorHeaderCell({ row, col, isTarget, opFirsts, showR
    * colore pieno dell'operatrice (indaco, ambra…) il nome si leggeva a
    * fatica e la fila delle testate era la cosa più rumorosa dello schermo. */
   return (
-    <div className="dk-ophead" title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + colW + 'px', height: 44, boxSizing: 'border-box', padding: '0 6px 0 9px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, borderRadius: '10px 10px 0 0', background: `color-mix(in srgb, ${col} 12%, var(--surface))`, boxShadow: `inset 0 3px 0 ${col}`, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
+    <div className="dk-ophead" title={o.name + (onShift ? ' · ' + t('turno', 'shift') + ' ' + (row.windows || []).map(([a, b]) => `${a}–${b}`).join(', ') : ' · ' + t('non in turno', 'not on shift'))} style={{ flex: '1 0 ' + colW + 'px', height: 44, boxSizing: 'border-box', padding: '0 6px 0 9px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, borderRadius: '10px 10px 0 0', background: opColumnTint(col, 'var(--surface)'), boxShadow: `inset 0 3px 0 ${col}`, position: 'relative', outline: isTarget ? '2px solid var(--ink)' : 'none', outlineOffset: -2, transition: 'outline 100ms', opacity: onShift ? 1 : 0.7 }}>
       {/* Avatar, nome, numeri e pennello in una riga a sé: è lei che si
           adatta alla larghezza (.dk-ophead__row in agenda.css) e il suo
           contenuto non allarga la colonna. Il selettore del colore e la
