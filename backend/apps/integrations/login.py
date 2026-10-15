@@ -46,7 +46,7 @@ logger = logging.getLogger("youty.integrations")
 def _unique_salon_slug(seed: str) -> str:
     base = slugify(seed)[:40] or "salone"
     slug, i = base, 1
-    while Salon.objects.filter(slug=slug).exists():
+    while Salon.slug_taken(slug):
         i += 1
         slug = f"{base}-{i}"[:50]
     return slug

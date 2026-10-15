@@ -61,8 +61,8 @@ class Command(BaseCommand):
                 f"Slug non valido: '{slug}'. Usa lettere minuscole senza accenti, cifre, "
                 "- e _ (inizia con una lettera o una cifra, max 50 caratteri)."
             )
-        if Salon.objects.filter(slug=slug).exists():
-            raise CommandError(f"Esiste già un salone con slug '{slug}'.")
+        if Salon.slug_taken(slug):
+            raise CommandError(f"Esiste già un salone con slug '{slug}' (anche come slug precedente).")
         email = o["owner_email"].strip().lower()
         try:
             validate_email(email)
