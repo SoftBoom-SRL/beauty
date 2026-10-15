@@ -15,7 +15,7 @@ const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sec
   // i pezzi senza hook del dettaglio, che per i test fanno parte del pannello
   expand: [
     'DetailFooter', 'ClientMetaBar', 'WhoWhenCard', 'DepositCard', 'NoteEditor', 'MarginSection', 'ServicesReadOnly', 'ServicesEditor',
-    'ReasonPicker', 'WhoCancels',
+    'ReasonPicker', 'WhoCancels', 'DepositEntry', 'AddDepositCard',
   ],
 });
 
@@ -361,4 +361,45 @@ test('check-in e inizio trattamento in un passo: la scorciatoia accanto al check
   assert.equal(find(g3.panel().props.foot, (el) => el.type === 'button' && textOf(el).trim() === 'Check-in'), null);
   const starts = findAll(g3.panel().props.foot, (el) => el.type === 'button' && textOf(el).includes('inizia'));
   assert.equal(starts.length, 1, 'nessuna scorciatoia a parte');
+});
+
+test('caparra versata fuori da beauty su una visita che non la chiedeva: importo e metodo', async () => {
+  const g = setup();
+  g.state.onPost = () => Promise.resolve({ ...g.state.server, deposit_status: 'paid', deposit_amount: '25.00' });
+  await settle(g);
+  assert.equal(g.button('Incassata: '), null, 'chiuso è un pulsante solo');
+  g.button('Registra caparra versata').props.onClick();
+  g.render();
+  const field = () => find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra');
+  // vuoto o oltre il totale della visita (95 €): i pulsanti non registrano
+  assert.equal(g.button('Incassata: bonifico / Nexi').props.disabled, true);
+  field().props.onChange({ target: { value: '120' } });
+  g.render();
+  assert.equal(g.button('Incassata: bonifico / Nexi').props.disabled, true);
+  assert.ok(textOf(g.m.tree).includes('Più del totale della visita'));
+  field().props.onChange({ target: { value: '25' } });
+  g.render();
+  g.button('Incassata: bonifico / Nexi').props.onClick();
+  await settle(g);
+  assert.deepEqual(g.calls.post.at(-1), { url: '/api/agenda/appointments/41/deposit-cashed', body: { method: 'transfer', amount: '25.00' } });
+  assert.deepEqual(g.lastToast(), { msg: 'Caparra incassata e registrata in cassa', icon: 'check' });
+});
+
+test('caparra chiesta dalle regole ma versata una cifra diversa: parte l\'importo vero', async () => {
+  const g = setup(visit({ deposit_status: 'required', deposit_amount: '20.00' }));
+  g.state.onPost = () => Promise.resolve({ ...g.state.server, deposit_status: 'paid' });
+  await settle(g);
+  const field = find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra');
+  assert.equal(field.props.value, '20,00', 'si parte da quella chiesta');
+  field.props.onChange({ target: { value: '30,5' } });
+  g.render();
+  g.button('Incassata: POS').props.onClick();
+  await settle(g);
+  assert.deepEqual(g.calls.post.at(-1), { url: '/api/agenda/appointments/41/deposit-cashed', body: { method: 'card', amount: '30.50' } });
+});
+
+test('senza il permesso della cassa non si registra nessuna caparra', async () => {
+  const g = setup(visit(), { hasScope: (s) => s !== 'sales' });
+  await settle(g);
+  assert.equal(g.button('Registra caparra versata'), null);
 });

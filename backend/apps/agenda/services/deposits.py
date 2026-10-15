@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from ninja.errors import HttpError
 
 from apps.core.models import DepositRule
 from apps.core.services import log_activity
@@ -112,6 +113,34 @@ def gift_covered_amount(salon, client, lines) -> Decimal:
         else:
             covered += min(price, Decimal(str(card.balance)))
     return covered
+
+
+# Come può arrivare una caparra registrata dallo staff: contanti o POS al banco,
+# bonifico o link di pagamento di un'altra banca (Nexi), altro.
+MANUAL_DEPOSIT_METHODS = ("cash", "card", "transfer", "other")
+
+
+def manual_deposit_method(method: str) -> str:
+    if method not in MANUAL_DEPOSIT_METHODS:
+        raise HttpError(400, "Metodo di pagamento della caparra non valido")
+    return method
+
+
+def manual_deposit_amount(amount, visit_total) -> Decimal:
+    """Importo di una caparra scritta dallo staff: positivo, al centesimo, non oltre la visita.
+
+    Le caparre versate fuori da beauty (bonifico, link Nexi, contanti alla
+    prenotazione) non le decide nessuna regola: le scrive chi prende
+    l'appuntamento. Oltre il totale della visita il conto non si chiuderebbe:
+    al checkout la cassa dovrebbe restituire la differenza.
+    """
+    amount = Decimal(str(amount)).quantize(CENT)
+    visit_total = Decimal(str(visit_total or 0)).quantize(CENT)
+    if amount <= 0:
+        raise HttpError(400, "L'importo della caparra deve essere maggiore di zero")
+    if amount > visit_total:
+        raise HttpError(400, f"La caparra ({amount} €) supera il totale della visita ({visit_total} €)")
+    return amount
 
 
 def compute_deposit(salon, client, total_price) -> Decimal:

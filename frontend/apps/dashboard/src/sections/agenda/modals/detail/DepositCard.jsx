@@ -1,13 +1,16 @@
 // DepositCard — la caparra nel dettaglio: stato, importo (e rimborsato, e
 // ancora in cassa), scadenza sull'orologio del salone; con la caparra da
-// versare, link di pagamento, sollecito, copia e incasso al banco; da
+// versare, link di pagamento, sollecito, copia e incasso (contanti, POS,
+// bonifico / Nexi, con l'importo versato davvero: DepositEntry); da
 // rimborsare, «Segna rimborsata». `dm` = depositMeta dello stato.
 import { Icon, fmtEur } from '@youty/shared';
 import { depositDueLabel } from '../rules.js';
+import { depositToField } from '../../lib/deposit.js';
+import DepositEntry, { visitMaxCents } from './DepositEntry.jsx';
 
 export default function DepositCard({
   appt, dm, t, lang, terminal, hasScope, busy, linkBusy, linkCopyFailed,
-  sendDepositLink, copyDepositLink, cashDeposit, onMarkRefunded,
+  sendDepositLink, copyDepositLink, cashDeposit, onMarkRefunded, depositDraft, setDepositDraft,
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 14px', borderRadius: 12, background: appt.deposit_status === 'paid' ? 'var(--ok-tint)' : 'var(--warn-tint)', border: '1px solid color-mix(in srgb, ' + dm.color + ' 28%, transparent)' }}>
@@ -54,24 +57,18 @@ export default function DepositCard({
               <input readOnly value={appt.deposit_payment_link} onFocus={(e) => e.currentTarget.select()} aria-label={t('Link di pagamento', 'Payment link')}
                 style={{ flexBasis: '100%', minWidth: 0, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', fontSize: 12, fontFamily: 'var(--mono, monospace)', background: 'var(--surface)', color: 'var(--ink)', outline: 'none' }} />
             )}
-            {/* Il salone che non incassa online non aveva nessun modo di
-                registrare la caparra pagata al banco: il termine scadeva
-                e lo slot si liberava sotto gli occhi dell'operatrice. */}
-            <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('cash')}
-              title={t('Segna la caparra incassata in contanti al banco: il posto non si libera più e l’incasso entra in cassa', 'Mark the deposit as cashed at the counter: the slot is no longer freed and the money is recorded in the till')}>
-              <Icon name="wallet" size={13} />{t('Incassata: contanti', 'Cashed: cash')}
-            </button>
-            <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('card')}
-              title={t('Segna la caparra incassata con il POS del salone', 'Mark the deposit as cashed on the salon card terminal')}>
-              <Icon name="wallet" size={13} />{t('Incassata: POS', 'Cashed: card')}
-            </button>
-            {/* Caparre versate con bonifico o con il link di un'altra banca
-                (Nexi): arrivano sul conto, non al banco né su Stripe. */}
-            <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('transfer')}
-              title={t('Segna la caparra arrivata con un bonifico o un link di pagamento della banca', 'Mark the deposit as received by bank transfer or a bank payment link')}>
-              <Icon name="wallet" size={13} />{t('Incassata: bonifico', 'Cashed: transfer')}
-            </button>
           </div>
+        )}
+        {/* Il salone che non incassa online non aveva nessun modo di
+            registrare la caparra pagata al banco, con bonifico o col link
+            di un'altra banca (Nexi): il termine scadeva e lo slot si
+            liberava sotto gli occhi dell'operatrice. L'importo si corregge
+            se la cliente ha versato una cifra diversa da quella chiesta. */}
+        {appt.deposit_status === 'required' && !terminal && hasScope('sales') && (
+          <DepositEntry
+            amount={depositDraft ?? depositToField(appt.deposit_amount, lang)} setAmount={setDepositDraft}
+            maxCents={visitMaxCents(appt)} busy={linkBusy} onCash={cashDeposit} t={t} lang={lang}
+          />
         )}
       </div>
       {appt.deposit_status === 'refund_due' && hasScope('sales') && (

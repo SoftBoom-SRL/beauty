@@ -16,7 +16,7 @@ from ninja.errors import HttpError
 from apps.core.services import emit_event, log_activity
 
 from ..models import Appointment
-from .deposits import close_deposit_link_after_commit
+from .deposits import close_deposit_link_after_commit, manual_deposit_amount, manual_deposit_method
 from .freed_slots import _appointment_spans, _sync_freed_slots, emit_with_freed_slots
 from .locking import _lock_and_reload, _lock_row, lock_salon
 from .messages import _event_payload, _withdraw_deposit_messages, appointment_event_key, deposit_paid_payload, emit_appointment_event
@@ -121,24 +121,43 @@ def realign_deposit_due(appointment: Appointment) -> bool:
 
 
 @transaction.atomic
-def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor=None) -> Appointment:
-    """La caparra è stata incassata in salone (contanti o POS al banco).
+def mark_deposit_cashed(appointment: Appointment, *, method: str = "cash", actor=None, amount=None) -> Appointment:
+    """La caparra è stata incassata (contanti o POS al banco, bonifico, link Nexi).
 
     Era l'anello mancante: l'unico punto che scriveva «pagata» era il webhook
     Stripe, quindi chi incassa al banco vedeva comunque scadere il termine e il
     posto liberarsi. Qui la caparra diventa pagata, la scadenza sparisce e
     l'incasso entra in cassa (lo registra `sales`, che sa di scontrini e metodi
     di pagamento) — così il denaro non resta fuori dai conti di giornata.
+
+    `amount` è quanto la cliente ha versato davvero, se diverso da quanto
+    chiedeva la regola. Serve anche su un appuntamento SENZA caparra richiesta:
+    molti saloni le caparre le prendono fuori da beauty (bonifico, link di
+    un'altra banca, contanti alla prenotazione) e prima non c'era modo di
+    scriverle. Il link di pagamento eventualmente inviato si chiude, così la
+    cliente non paga due volte.
     """
     _lock_and_reload(appointment)
-    if appointment.deposit_status != Appointment.DepositStatus.REQUIRED:
+    method = manual_deposit_method(method)
+    status = appointment.deposit_status
+    if status == Appointment.DepositStatus.NONE:
+        if appointment.status not in Appointment.OPEN_STATUSES:
+            raise HttpError(400, "La caparra si registra su un appuntamento ancora aperto")
+        if amount is None:
+            raise HttpError(400, "Indica quanto ha versato la cliente")
+    elif status != Appointment.DepositStatus.REQUIRED:
         raise HttpError(400, "La caparra di questo appuntamento non è in attesa di pagamento")
+    if amount is not None:
+        appointment.deposit_amount = manual_deposit_amount(amount, appointment.total_price)
     if Decimal(str(appointment.deposit_amount or 0)) <= 0:
         raise HttpError(400, "Nessuna caparra da incassare su questo appuntamento")
 
     appointment.deposit_status = Appointment.DepositStatus.PAID
-    appointment.save(update_fields=["deposit_status", "updated_at"])
+    appointment.save(update_fields=["deposit_status", "deposit_amount", "updated_at"])
     clear_deposit_hold(appointment)
+    # Il link già inviato (e il messaggio ancora in coda) non servono più.
+    _withdraw_deposit_messages(appointment)
+    close_deposit_link_after_commit(appointment)
 
     from apps.sales.services import record_deposit_cashed  # lazy
 

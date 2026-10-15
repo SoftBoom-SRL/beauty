@@ -28,6 +28,9 @@ import ManualTime from './newappt/ManualTime.jsx';
 import BookingFoot from './newappt/BookingFoot.jsx';
 import BookingShell, { BOOKING_PANEL_W, ReadOnlyNote } from './newappt/BookingShell.jsx';
 import NoteFlexible from './newappt/NoteFlexible.jsx';
+import DepositPaid from './newappt/DepositPaid.jsx';
+import { toCents } from '../../pos/money.js';
+import { depositIssue, depositToApi } from '../lib/deposit.js';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -177,12 +180,19 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const [note, setNote] = useState('');
   const [flexible, setFlexible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const clientRef = useRef(null), svcRef = useRef(null), timeRef = useRef(null);
+  const clientRef = useRef(null), svcRef = useRef(null), timeRef = useRef(null), depositRef = useRef(null);
+
+  /* ---- caparra già versata (bonifico / Nexi, contanti, POS): DepositPaid ----
+   * La registra chi può incassare: entra in cassa come «Incassata» nel dettaglio. */
+  const canCash = hasScope('sales');
+  const [deposit, setDeposit] = useState(null);
+  const maxDepositCents = toCents(totalPrice);
 
   const missing = [
     !client && { key: 'client', label: t('cliente', 'client'), ref: clientRef },
     !items.length && { key: 'svc', label: t('servizio', 'service'), ref: svcRef },
     items.length > 0 && !selStart && { key: 'time', label: t('orario', 'time'), ref: timeRef },
+    canCash && deposit && depositIssue(deposit.amount, maxDepositCents) && { key: 'deposit', label: t('importo della caparra', 'deposit amount'), ref: depositRef },
   ].filter(Boolean);
   const ready = canWrite && !missing.length && !saving;
 
@@ -214,6 +224,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       client_id: client.id,
       items: items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
       start: selStart, note, flexible, location_id: locationId,
+      ...(canCash && deposit ? { deposit_paid: { amount: depositToApi(deposit.amount), method: deposit.method } } : {}),
     };
     try {
       // Sempre prima senza forzare (13-12): un orario a mano libero ma fuori
@@ -242,7 +253,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
       const link = res?.deposit_status === 'required' ? res.deposit_payment_link : null;
       fireToast({
         msg: t(`${timeLabel(minutesOfDay(res.start))} · appuntamento creato per ${firstName(client.full_name)}`, `${timeLabel(minutesOfDay(res.start))} · appointment created for ${firstName(client.full_name)}`)
-          + (res?.deposit_status === 'required' ? t(' · caparra da versare', ' · deposit due') : ''),
+          + (res?.deposit_status === 'required' ? t(' · caparra da versare', ' · deposit due') : '')
+          + (res?.deposit_status === 'paid' ? t(' · caparra registrata', ' · deposit recorded') : ''),
         icon: 'check',
         // unica cosa che si perdeva chiudendo subito: il link della caparra
         undo: link ? t('Copia link caparra', 'Copy deposit link') : undefined,
@@ -335,6 +347,11 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
 
         {/* ── nota + flessibile (anche in ogni cliente del gruppo) ── */}
         <NoteFlexible note={note} setNote={setNote} flexible={flexible} setFlexible={setFlexible} inputCss={inputCss} t={t} />
+
+        {/* ── caparra già versata fuori da beauty ── */}
+        {canCash && items.length > 0 && (
+          <DepositPaid deposit={deposit} setDeposit={setDeposit} maxCents={maxDepositCents} stepRef={depositRef} t={t} lang={lang} />
+        )}
       </div>
     ),
   });

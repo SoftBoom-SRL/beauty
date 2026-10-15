@@ -69,6 +69,13 @@ class ItemEditIn(Schema):
     soak_min: Optional[int] = Field(None, ge=0, le=12 * 60)
 
 
+class DepositPaidIn(Schema):
+    """Caparra già versata quando si prende l'appuntamento (bonifico o link Nexi, contanti, POS)."""
+
+    amount: Decimal = Field(..., gt=0, max_digits=10, decimal_places=2)
+    method: str = Field("transfer", max_length=20)
+
+
 class AppointmentCreateIn(Schema):
     client_id: int
     items: list[ItemIn] = Field(..., max_length=MAX_ITEMS_PER_REQUEST)
@@ -79,6 +86,9 @@ class AppointmentCreateIn(Schema):
     # Solo staff: inserisce anche fuori turno/orario o sopra un'altra prenotazione
     # (straordinario, "ci incastriamo"). L'appuntamento resta marcato `forced`.
     force: bool = False
+    # La cliente ha già versato la caparra (vedi DepositPaidIn): l'appuntamento
+    # nasce con la caparra pagata e non parte nessun link di pagamento.
+    deposit_paid: Optional[DepositPaidIn] = None
 
     _start_aware = aware_start_validator()
 
@@ -142,9 +152,15 @@ class CancelIn(ReasonIn):
 
 
 class DepositCashedIn(Schema):
-    """Caparra incassata al banco: come è stata pagata (contanti, POS, …)."""
+    """Caparra incassata: come è stata pagata (contanti, POS, bonifico) e, se serve, quanto.
+
+    `amount` vuoto = la caparra chiesta dalle regole. Con un importo si registra
+    quanto la cliente ha versato davvero, anche su un appuntamento che una
+    caparra non la chiedeva.
+    """
 
     method: str = Field("cash", max_length=20)
+    amount: Optional[Decimal] = Field(None, gt=0, max_digits=10, decimal_places=2)
 
 
 class AppointmentUpdateIn(Schema):
