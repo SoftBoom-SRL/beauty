@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ApiError, apiErrorText, toastApiError, nameIn, Avatar, Icon, fmtEur, fmtDur, timeLabel, minutesOfDay, todayStr } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
+import { serviceColor } from '../../../ui/palette.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { initialsOf, fmtMoney } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
@@ -218,7 +219,8 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcOf = (id) => (services || []).find((s) => s.id === id);
   const svcName = (s) => nameIn(s, lang);
-  const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
+  // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
+  const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
   const eligibleOps = (serviceId) => (operators || []).filter((o) => (o.service_ids || []).includes(serviceId));
 
   /* ---- items ---- */
@@ -307,7 +309,7 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: row.items.length ? 12 : 0 }}>
           {activeServices.map((s) => (
             <button key={s.id} onClick={() => addItem(s.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--hair)', background: 'var(--surface)', color: 'var(--ink-2)' }}>
-              <span style={{ width: 7, height: 7, borderRadius: 99, background: catColor(s.category_id) }} />
+              <span style={{ width: 7, height: 7, borderRadius: 99, background: svcColor(s) }} />
               {svcName(s)}
               <Icon name="plus" size={12} color="var(--muted-2)" />
             </button>
@@ -323,8 +325,8 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
               const eligible = eligibleOps(it.service_id);
               return (
                 <div key={it.key} style={{ border: '1px solid var(--hair)', borderRadius: 12, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${catColor(s.category_id)} 14%, var(--surface))` }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 99, background: catColor(s.category_id), flexShrink: 0 }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${svcColor(s)} 14%, var(--surface))` }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 99, background: svcColor(s), flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcName(s)}</div>
                       <div className="t-sm" style={{ color: 'var(--muted)' }}><Icon name="clock" size={11} style={{ verticalAlign: '-2px', marginRight: 3 }} />{fmtDur((s.duration_min || 0) + (s.soak_min || 0), lang)}{s.soak_min ? ' · ' + t('incl. posa', 'incl. soak') + ' ' + fmtDur(s.soak_min, lang) : ''}</div>

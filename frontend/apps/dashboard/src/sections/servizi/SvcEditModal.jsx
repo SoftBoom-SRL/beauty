@@ -3,9 +3,11 @@
 // toggling a stylist = PUT /api/staff/{operator_id} with updated service_ids.
 import React, { useState, useEffect } from 'react';
 import { Icon, Avatar, Toggle, fmtEur, NumInput, nameIn } from '@youty/shared';
-import { DkModal } from '../../ui/index.js';
+import { DkModal, DkSeg } from '../../ui/index.js';
 import { FRow, PriceBox, DurationInput, CategoryDot } from './parts.jsx';
 import SwatchRows from '../../ui/SwatchRows.jsx';
+import HexInput from '../../ui/HexInput.jsx';
+import { TREATMENT_SWATCHES } from '../../ui/palette.js';
 
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
@@ -25,6 +27,8 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     supplier_cost: service?.supplier_cost != null ? String(service.supplier_cost) : '0',
     active: service?.active ?? true,
     order: service?.order ?? 0,
+    // "" = il colore della categoria; "#RRGGBB" = uno solo di questo servizio
+    color: service?.color || '',
   }));
   // operators currently enabled for this service (existing services only until saved)
   const [opIds, setOpIds] = useState(() =>
@@ -40,6 +44,14 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     setCatColorLocal(c?.color || '#E0E7FF');
   }, [draft.category_id, categories]);
   const commitCatColor = (hex) => { if (onCatColor && canPricing && selCat && hex && hex !== selCat.color) onCatColor(selCat.id, hex); };
+  // Colore suo o della categoria. Passando a «Personalizzato» si parte dal
+  // colore della categoria, così il blocco non cambia finché non se ne sceglie
+  // un altro; tornando a «Della categoria» il colore suo si toglie.
+  const ownColor = !!draft.color;
+  const pickColorMode = (mode) => {
+    if (mode === 'category') return set({ color: '' });
+    if (!ownColor) set({ color: /^#[0-9a-fA-F]{6}$/.test(catColor) ? catColor.toUpperCase() : TREATMENT_SWATCHES[0].colors[0] });
+  };
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const toggleOp = (id) => setOpIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
@@ -64,6 +76,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
           supplier_cost: Number(draft.supplier_cost || 0).toFixed(2),
           active: draft.active,
           order: draft.order,
+          color: draft.color,
         },
         opIds,
       );
@@ -78,7 +91,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     <DkModal
       open onClose={onClose}
       title={isNew ? t('Nuovo servizio', 'New service') : t('Modifica servizio', 'Edit service')}
-      sub={t('Nome, categoria, durata, prezzo e operatrici', 'Name, category, duration, price and stylists')}
+      sub={t('Nome, categoria, colore, durata, prezzo e operatrici', 'Name, category, colour, duration, price and stylists')}
       width={580}
       foot={(
         <React.Fragment>
@@ -134,39 +147,69 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
         </div>
       </div>
 
-      {/* colore della categoria — configurabile qui invece che in Impostazioni */}
+      {/* Il colore in agenda: quello della categoria (configurabile qui
+          invece che in Impostazioni, vale per tutti i suoi servizi) o uno solo
+          di questo servizio. 15/10: dentro la stessa categoria i servizi erano
+          tutti dello stesso colore e in agenda non si distinguevano. */}
       {selCat && (
         <div style={{ marginBottom: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <CategoryDot color={catColor} size={16} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="t-ui" style={{ fontWeight: 600 }}>{t('Colore categoria', 'Category colour')}</div>
-              <div className="t-sm" style={{ color: 'var(--muted-2)' }}>
-                {t('Vale per tutti i servizi di', 'Applies to all services in')} “{catName(selCat, lang)}” · {t('anche nei blocchi agenda', 'agenda blocks too')}
-              </div>
-            </div>
-            {onCatColor && canPricing ? (
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', border: '1px solid var(--hair)', background: catColor, flexShrink: 0 }}>
-                  <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(catColor) ? catColor : '#E0E7FF'} onChange={(e) => setCatColorLocal(e.target.value)} onBlur={() => commitCatColor(catColor)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-                </label>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', background: 'var(--surface)' }}>
-                  <span style={{ color: 'var(--muted-2)', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5 }}>#</span>
-                  <input value={String(catColor || '').replace('#', '').toUpperCase()} maxLength={6} placeholder="E0E7FF"
-                    onChange={(e) => setCatColorLocal('#' + e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6))}
-                    onBlur={() => commitCatColor('#' + String(catColor).replace('#', '').padEnd(6, '0').slice(0, 6))}
-                    style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5, width: 64, letterSpacing: '0.05em' }} />
-                </span>
-              </div>
-            ) : (
-              <span className="t-sm" style={{ color: 'var(--muted-2)', flexShrink: 0 }}>{t('richiede permesso prezzi', 'requires pricing permission')}</span>
-            )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div className="t-ui" style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{t('Colore in agenda', 'Colour in the agenda')}</div>
+            <DkSeg value={ownColor ? 'own' : 'category'} onChange={pickColorMode}
+              options={[{ value: 'category', label: t('Della categoria', 'Category colour') }, { value: 'own', label: t('Personalizzato', 'Custom') }]} />
           </div>
-          {/* vivaci, scure e tenui: le sole pastello si confondevano in agenda */}
-          {onCatColor && canPricing && (
-            <div style={{ marginTop: 10 }}>
-              <SwatchRows value={catColor} onChange={(c) => { setCatColorLocal(c); commitCatColor(c); }} t={t} />
-            </div>
+          {ownColor ? (
+            <React.Fragment>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <CategoryDot color={draft.color} size={16} />
+                <div className="t-sm" style={{ flex: 1, minWidth: 0, color: 'var(--muted-2)' }}>
+                  {t('Solo per questo servizio: gli altri di', 'Only for this service: the others in')} “{catName(selCat, lang)}” {t('restano col colore della categoria', 'keep the category colour')}
+                </div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', border: '1px solid var(--hair)', background: draft.color, flexShrink: 0 }}>
+                    <input type="color" value={draft.color} onChange={(e) => set({ color: e.target.value.toUpperCase() })} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+                  </label>
+                  <HexInput value={draft.color} onChange={(c) => set({ color: c })} width={64} />
+                </div>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <SwatchRows value={draft.color} onChange={(c) => set({ color: c })} t={t} />
+              </div>
+            </React.Fragment>
+          ) : (
+            <React.Fragment>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <CategoryDot color={catColor} size={16} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="t-ui" style={{ fontWeight: 600 }}>{t('Colore categoria', 'Category colour')}</div>
+                  <div className="t-sm" style={{ color: 'var(--muted-2)' }}>
+                    {t('Vale per tutti i servizi di', 'Applies to all services in')} “{catName(selCat, lang)}” · {t('anche nei blocchi agenda', 'agenda blocks too')}
+                  </div>
+                </div>
+                {onCatColor && canPricing ? (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 30, height: 30, borderRadius: 8, overflow: 'hidden', cursor: 'pointer', border: '1px solid var(--hair)', background: catColor, flexShrink: 0 }}>
+                      <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(catColor) ? catColor : '#E0E7FF'} onChange={(e) => setCatColorLocal(e.target.value)} onBlur={() => commitCatColor(catColor)} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
+                    </label>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 8px', background: 'var(--surface)' }}>
+                      <span style={{ color: 'var(--muted-2)', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5 }}>#</span>
+                      <input value={String(catColor || '').replace('#', '').toUpperCase()} maxLength={6} placeholder="E0E7FF"
+                        onChange={(e) => setCatColorLocal('#' + e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6))}
+                        onBlur={() => commitCatColor('#' + String(catColor).replace('#', '').padEnd(6, '0').slice(0, 6))}
+                        style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 12.5, width: 64, letterSpacing: '0.05em' }} />
+                    </span>
+                  </div>
+                ) : (
+                  <span className="t-sm" style={{ color: 'var(--muted-2)', flexShrink: 0 }}>{t('richiede permesso prezzi', 'requires pricing permission')}</span>
+                )}
+              </div>
+              {/* vivaci, scure e tenui: le sole pastello si confondevano in agenda */}
+              {onCatColor && canPricing && (
+                <div style={{ marginTop: 10 }}>
+                  <SwatchRows value={catColor} onChange={(c) => { setCatColorLocal(c); commitCatColor(c); }} t={t} />
+                </div>
+              )}
+            </React.Fragment>
           )}
         </div>
       )}

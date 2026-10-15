@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { Icon, Toggle, fmtEur, fmtDur, EmptyState, nameIn } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import SearchToolbar from '../../ui/SearchToolbar.jsx';
+import { serviceColor } from '../../ui/palette.js';
 import { CategoryDot, OperatorAvatarStack } from './parts.jsx';
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
@@ -122,6 +123,10 @@ export default function ServiziSub({ services, loading, categories, operators, c
                       style={{ display: 'grid', gridTemplateColumns: COLS, gap: 12, alignItems: 'center', minWidth: 660, padding: '8px 16px', minHeight: 46, borderTop: '1px solid var(--hair-2)', opacity: s.active ? 1 : 0.55, cursor: canEdit ? 'pointer' : 'default' }}
                     >
                       <div style={{ minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                        {/* il colore con cui il servizio va in agenda: il suo, o della categoria */}
+                        <span title={s.color ? t('Colore personalizzato', 'Custom colour') : t('Colore della categoria', 'Category colour')} style={{ alignSelf: 'center', display: 'inline-flex' }}>
+                          <CategoryDot color={serviceColor(s, [cat])} size={9} />
+                        </span>
                         <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{svcName(s, lang)}</span>
                         {alt && <span className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{alt}</span>}
                       </div>

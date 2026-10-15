@@ -42,6 +42,11 @@ class Service(models.Model):
     # l'operatrice NO (es. colore che sviluppa). 0 = servizio interamente attivo.
     soak_min = models.PositiveIntegerField(default=0)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    # Il colore del servizio in agenda e nelle prenotazioni. Vuoto = quello
+    # della sua categoria (il caso di sempre); "#RRGGBB" = uno suo, diverso:
+    # dentro la stessa categoria (Colore, Piega, Taglio…) i blocchi erano
+    # tutti uguali e non si distinguevano a colpo d'occhio.
+    color = models.CharField(max_length=7, blank=True, default="", db_default="")
     # per stima margine (vedi agenda GET /appointments/{id}/margin)
     product_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     supplier_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)

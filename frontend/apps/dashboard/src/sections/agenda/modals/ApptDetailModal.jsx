@@ -12,6 +12,7 @@ import { ApiError, toastApiError, nameIn, Icon, timeLabel, fmtDateIt, toDateStr,
 import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
+import { serviceColor } from '../../../ui/palette.js';
 import { aStartMin, aEndMin, wlMatches, noShowSteps, cancelSteps, lateCancel, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
 import {
   itemsSig, joinReason, MAX_ITEM_MIN, handoverOps, otherOpNames, itemSpans, gapNotes, TERMINAL,
@@ -153,7 +154,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   };
   const svcOf = (id) => (services || []).find((s) => s.id === id);
   const activeServices = (services || []).filter((s) => s.active !== false);
-  const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
+  // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
+  const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
   const eligibleOps = (serviceId) => operators.filter((op) => (op.service_ids || []).includes(serviceId));
   const svcDisplayName = (it) => { const s = svcOf(it.service_id); return s ? nameIn(s, lang) : (it.name || it.service_name || ''); };
   const itemsDirty = itemsSig(editItems) !== itemsSig(appt.items);
@@ -514,7 +516,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
               appt={appt} editItems={editItems} spans={spans} gaps={gaps} startMin={startMin} justAdded={justAdded} addedRef={addedRef}
               addingSvc={addingSvc} setAddingSvc={setAddingSvc} editTotal={editTotal} itemsDirty={itemsDirty}
               operators={operators} opColors={opColors} t={t} lang={lang}
-              catalog={{ svcOf, catColor, eligibleOps, svcDisplayName, catalogSoak, activeServices }}
+              catalog={{ svcOf, svcColor, eligibleOps, svcDisplayName, catalogSoak, activeServices }}
               rows={{
                 draftOf, setDraft, commitItemStart, commitItemEnd, setItemDuration, clampItemDuration, setItemOperator, setItemGap,
                 removeServiceItem, addServiceItem,

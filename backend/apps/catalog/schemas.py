@@ -56,6 +56,10 @@ class ServiceOut(Schema):
     supplier_cost: Decimal
     active: bool
     order: int
+    # "" = il colore della categoria; "#RRGGBB" = un colore suo, personalizzato.
+    color: str = Field(
+        "", description="Colore del servizio (#RRGGBB); vuoto = quello della categoria"
+    )
 
 
 class ServiceIn(Schema):
@@ -76,6 +80,13 @@ class ServiceIn(Schema):
     supplier_cost: Decimal = Field(Decimal("0"), ge=0, le=MAX_MONEY)
     active: bool = True
     order: int = Field(0, ge=0, le=MAX_POSITIVE_INT)
+    # Assente = «non toccare il colore» (come per le categorie): riattivare un
+    # servizio dalla lista manda il servizio senza colore, e non deve togliere
+    # quello scelto a mano. "" = torna al colore della categoria.
+    color: Optional[str] = Field(
+        None,
+        description="Colore del servizio (#RRGGBB); \"\" = quello della categoria; assente = invariato",
+    )
 
 
 # ---- Pacchetti ------------------------------------------------------------------

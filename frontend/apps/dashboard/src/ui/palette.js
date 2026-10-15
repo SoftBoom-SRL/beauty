@@ -2,6 +2,7 @@
 //   GD_PALETTE   griglia «alla Google Docs» (brand, categorie, operatrici)
 //   CAT_SWATCHES dieci tinte chiare per le categorie di servizi e prodotti
 //   TREATMENT_SWATCHES le tinte dei trattamenti in tre file: vivaci, scure, tenui
+//   serviceColor  il colore di un servizio: il suo, o quello della categoria
 
 /* ---- Google-Docs-style colour palette (port of prototype GD_PALETTE) ---- */
 export function gdHexFromHSL(h, s, l) {
@@ -46,4 +47,15 @@ export function nextTreatmentColor(list) {
   const used = new Set((list || []).map((c) => String(c.color || '').toLowerCase()));
   const vivid = TREATMENT_SWATCHES[0].colors;
   return vivid.find((c) => !used.has(c.toLowerCase())) ?? vivid[(list || []).length % vivid.length];
+}
+
+/** Il colore di un servizio: il suo, se ne ha uno personalizzato, altrimenti
+ *  quello della sua categoria (`categories`); null se non c'è nessuno dei due.
+ *  Un posto solo per agenda, prenotazioni e listino: dentro la stessa
+ *  categoria i servizi erano tutti dello stesso colore. */
+export function serviceColor(service, categories) {
+  if (!service) return null;
+  if (service.color) return service.color;
+  const cat = (categories || []).find((c) => c.id === service.category_id);
+  return cat?.color || null;
 }

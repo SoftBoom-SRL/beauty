@@ -5,6 +5,8 @@ registro attività, la posa, la descrizione.
 Caccia del 22/09:
 - 18-07: modificare un servizio o un pacchetto non riscrive `yourang_item_id`
   scritto nel frattempo dalla sincronizzazione.
+
+15/10: ogni servizio può avere un colore suo, o prendere quello della categoria.
 """
 
 import json
@@ -357,3 +359,50 @@ class YourangLinkSurvivesEditsTests(_CatalogSetup):
         package.refresh_from_db()
         self.assertEqual(package.price, Decimal("85"))
         self.assertEqual(package.yourang_item_id, "yr-456")
+
+
+class ServiceColorTests(_CatalogSetup):
+    """15/10: il colore del servizio è quello della categoria (vuoto) o uno suo.
+    Dentro la stessa categoria i blocchi in agenda erano tutti uguali."""
+
+    BODY = {"name_it": "Piega", "duration_min": 30, "price": "25.00"}
+
+    def _send(self, method, url, **body):
+        return getattr(self.client, method)(
+            url, data=json.dumps({"category_id": self.cat.id, **self.BODY, **body}),
+            content_type="application/json", **self.auth,
+        )
+
+    def test_new_service_takes_the_category_colour_unless_given_its_own(self):
+        res = self._send("post", "/api/catalog/services")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["color"], "")
+        res = self._send("post", "/api/catalog/services", color=" #1a237e ")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["color"], "#1A237E")
+        self.assertEqual(Service.objects.get(id=res.json()["id"]).color, "#1A237E")
+        listed = {s["id"]: s["color"] for s in self.client.get("/api/catalog/services", **self.auth).json()}
+        self.assertEqual(listed[res.json()["id"]], "#1A237E")
+
+    def test_editing_without_colour_keeps_it_and_empty_goes_back_to_the_category(self):
+        Service.objects.filter(id=self.color.id).update(color="#B71C1C")
+        url = f"/api/catalog/services/{self.color.id}"
+        # la riattivazione dalla lista manda il servizio senza colore
+        res = self._send("put", url)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.color, "#B71C1C")
+        res = self._send("put", url, color="")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.color, "")
+
+    def test_a_colour_that_is_not_hex_is_refused(self):
+        Service.objects.filter(id=self.color.id).update(color="#B71C1C")
+        for bad in ("rosso", "#12345", "#1234567", "#GGGGGG"):
+            res = self._send("put", f"/api/catalog/services/{self.color.id}", color=bad)
+            self.assertEqual(res.status_code, 400, bad)
+            self.assertIn("Colore non valido", res.json()["detail"])
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.color, "#B71C1C")
+        self.assertEqual(self._send("post", "/api/catalog/services", color="blu").status_code, 400)

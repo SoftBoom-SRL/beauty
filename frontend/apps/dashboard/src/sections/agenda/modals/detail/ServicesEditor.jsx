@@ -19,7 +19,7 @@ export default function ServicesEditor({
   appt, editItems, spans, gaps, startMin, justAdded, addedRef, addingSvc, setAddingSvc, editTotal, itemsDirty,
   operators, opColors, t, lang, catalog, rows,
 }) {
-  const { svcOf, catColor, eligibleOps, svcDisplayName, catalogSoak, activeServices } = catalog;
+  const { svcOf, svcColor, eligibleOps, svcDisplayName, catalogSoak, activeServices } = catalog;
   const {
     draftOf, setDraft, commitItemStart, commitItemEnd, setItemDuration, clampItemDuration, setItemOperator, setItemGap,
     removeServiceItem, addServiceItem,
@@ -40,7 +40,7 @@ export default function ServicesEditor({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {editItems.map((it, i) => {
           const s = svcOf(it.service_id);
-          const color = catColor(s?.category_id);
+          const color = svcColor(s);
           const isNew = it.id == null;
           // L'operatrice si sceglie su OGNI riga, non solo su quelle
           // nuove: era l'unico modo per sapere su chi finiva un servizio
@@ -178,11 +178,11 @@ export default function ServicesEditor({
             {activeServices.length ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {/* stesso codice colore dei blocchi in agenda: la
-                    pillola è tinta della sua categoria, non solo un
+                    pillola è tinta del colore del servizio, non solo un
                     pallino accanto al nome */}
                 {activeServices.map((s) => (
                   <button key={s.id} onClick={() => { addServiceItem(s.id); setAddingSvc(false); }}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `2px solid color-mix(in srgb, ${catColor(s.category_id)} 50%, transparent)`, background: `color-mix(in srgb, ${catColor(s.category_id)} 26%, var(--surface))`, color: 'var(--ink)' }}>
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `2px solid color-mix(in srgb, ${svcColor(s)} 50%, transparent)`, background: `color-mix(in srgb, ${svcColor(s)} 26%, var(--surface))`, color: 'var(--ink)' }}>
                     {nameIn(s, lang)}
                     <Icon name="plus" size={12} color="var(--ink-2)" />
                   </button>

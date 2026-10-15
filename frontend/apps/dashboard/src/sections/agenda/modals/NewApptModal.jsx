@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { toastApiError, Icon, Toggle, addDays, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
+import { serviceColor } from '../../../ui/palette.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
 import { firstName, isoAtMin, hmToMin, slotStep } from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
@@ -69,7 +70,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const [svcQ, setSvcQ] = useState('');
   const activeServices = (services || []).filter((s) => s.active !== false);
   const svcOf = (id) => (services || []).find((s) => s.id === id);
-  const catColor = (catId) => (serviceCategories || []).find((c) => c.id === catId)?.color || 'var(--clay)';
+  // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
+  const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
   const isSelected = (sid) => items.some((x) => x.service_id === sid);
   const toggleService = (sid) => {
     if (isSelected(sid)) setItems((l) => l.filter((x) => x.service_id !== sid));
@@ -298,7 +300,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
         {/* ── 2. servizi ── */}
         <ServiceStep
           stepRef={svcRef} items={items} activeServices={activeServices} filteredServices={filteredServices} svcQ={svcQ} setSvcQ={setSvcQ}
-          inputCss={inputCss} isSelected={isSelected} toggleService={toggleService} eligibleOps={eligibleOps} catColor={catColor}
+          inputCss={inputCss} isSelected={isSelected} toggleService={toggleService} eligibleOps={eligibleOps} svcColor={svcColor}
           svcOf={svcOf} svcName={svcName} giftFor={giftFor} selSlot={selSlot} assignedName={assignedName} removeItem={removeItem}
           setItemOp={setItemOp} onClose={onClose} setTab={setTab} t={t} lang={lang}
         />

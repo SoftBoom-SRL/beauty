@@ -18,7 +18,7 @@ from common.auth import staff_auth
 from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
-from common.validation import MAX_POSITIVE_INT, validate_category_in
+from common.validation import MAX_POSITIVE_INT, require_hex_color, validate_category_in
 
 from .models import Package, Service, ServiceCategory
 from .schemas import (
@@ -141,6 +141,14 @@ def reorder_categories(request, data: ReorderIn):
 # ---- Servizi ------------------------------------------------------------------
 
 
+def _service_color(color: str) -> str:
+    """Il colore del servizio da salvare: "" (quello della categoria) o #RRGGBB."""
+    color = (color or "").strip().upper()
+    if color:
+        require_hex_color(color)
+    return color
+
+
 @router.get("/services", auth=staff_auth, response=list[ServiceOut])
 def list_services(request, category_id: Optional[int] = None, active: Optional[bool] = None):
     ctx = request.auth
@@ -158,6 +166,7 @@ def create_service(request, data: ServiceIn):
     require_scope(ctx, "pricing")
     payload = data.dict()
     category = salon_get(ServiceCategory, ctx, payload.pop("category_id"))
+    payload["color"] = _service_color(payload["color"])
     service = Service.objects.create(salon=ctx.salon, category=category, **payload)
     log_activity(
         ctx.salon,
@@ -177,6 +186,10 @@ def update_service(request, service_id: int, data: ServiceIn):
     old_price = service.price
     payload = data.dict()
     service.category = salon_get(ServiceCategory, ctx, payload.pop("category_id"))
+    if payload["color"] is None:
+        del payload["color"]  # assente: resta quello di prima
+    else:
+        payload["color"] = _service_color(payload["color"])
     for name, value in payload.items():
         setattr(service, name, value)
     # Solo le colonne del modulo: il save() completo riscriveva anche

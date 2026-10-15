@@ -8,7 +8,7 @@ import { usableCode } from '../rules.js';
 import StepLabel from './StepLabel.jsx';
 
 export default function ServiceStep({
-  stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, catColor, svcOf,
+  stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, svcColor, svcOf,
   svcName, giftFor, selSlot, assignedName, removeItem, setItemOp, onClose, setTab, t, lang,
 }) {
   return (
@@ -20,13 +20,14 @@ export default function ServiceStep({
         )}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {/* La pillola prende il colore della sua categoria, piena: è lo
-            stesso codice colore dei blocchi in agenda, e con il solo
-            pallino il servizio si leggeva solo parola per parola. */}
+        {/* La pillola prende il colore del servizio (il suo, o della
+            categoria), pieno: è lo stesso codice colore dei blocchi in
+            agenda, e con il solo pallino il servizio si leggeva solo
+            parola per parola. */}
         {filteredServices.map((s) => {
           const on = isSelected(s.id);
           const noOps = !eligibleOps(s.id).length;
-          const cat = catColor(s.category_id);
+          const cat = svcColor(s);
           return (
             <button key={s.id} type="button" onClick={() => toggleService(s.id)} className="dk-pill" title={noOps ? t('Nessuna operatrice abilitata', 'No stylist enabled') : `${fmtDur(s.duration_min, lang)} · ${fmtEur(Number(s.price), lang)}`}
               style={{
@@ -54,8 +55,8 @@ export default function ServiceStep({
             const assigned = it.operator_id === null && selSlot ? assignedName(it.service_id) : null;
             return (
               <div key={it.key} style={{ border: '1px solid var(--hair)', borderRadius: 12, overflow: 'hidden', background: 'var(--surface)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${catColor(s.category_id)} 16%, var(--surface))`, borderBottom: '1px solid var(--hair)' }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 99, background: catColor(s.category_id), flexShrink: 0 }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${svcColor(s)} 16%, var(--surface))`, borderBottom: '1px solid var(--hair)' }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 99, background: svcColor(s), flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 13.5, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svcName(s, lang)}</div>
                     <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>

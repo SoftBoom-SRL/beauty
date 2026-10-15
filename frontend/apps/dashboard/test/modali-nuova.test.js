@@ -5,7 +5,8 @@
 // non è libero (si forza, deciso), quello libero preso nel frattempo (ci si
 // ferma), l'orario a mano, la caparra da versare, ciò che manca. Bug sospetti
 // del 24/09/2026: n. 52 (i pulsanti degli orari si rimontavano) e, trovato
-// correggendolo, il «selezionato» del pannello verde.
+// correggendolo, il «selezionato» del pannello verde. 15/10: i servizi col
+// colore loro (o della categoria) anche qui, come in agenda.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
@@ -185,4 +186,19 @@ test('scelto un altro orario da «Altri orari», il pannello verde non dice «se
   g.render();
   // si prenota alle 10:30: le 10:00 restano libere, ma non sono più quelle scelte
   assert.equal(esito(), 'Disponibile');
+});
+
+test('pillole e righe dei servizi col colore del servizio: il suo, o quello della categoria', async () => {
+  const g = setup();
+  g.dash.serviceCategories = [{ id: 1, name_it: 'Capelli', color: '#FDE2E4' }];
+  g.dash.services = [SERVICES[0], { ...SERVICES[1], color: '#1A237E' }];
+  await settle(g);
+  const pill = (name) => find(g.m.tree, (el) => el.type === 'button' && el.props.className === 'dk-pill' && textOf(el).startsWith(name));
+  // il Taglio (scelto) resta del colore della categoria, il Colore ha il suo
+  assert.ok(pill('Taglio').props.style.background.includes('#FDE2E4'), pill('Taglio').props.style.background);
+  assert.ok(pill('Colore').props.style.background.includes('#1A237E'), pill('Colore').props.style.background);
+  pill('Colore').props.onClick();
+  g.render();
+  const dots = findAll(g.m.tree, (el) => el.type === 'span' && el.props.style?.width === 9 && el.props.style?.borderRadius === 99).map((el) => el.props.style.background);
+  assert.deepEqual(dots, ['#FDE2E4', '#1A237E'], 'le righe dei servizi scelti');
 });
