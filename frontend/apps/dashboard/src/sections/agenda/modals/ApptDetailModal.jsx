@@ -30,6 +30,7 @@ import DetailFooter from './detail/DetailFooter.jsx';
 import ClientMetaBar from './detail/ClientMetaBar.jsx';
 import WhoWhenCard from './detail/WhoWhenCard.jsx';
 import DepositCard from './detail/DepositCard.jsx';
+import AddDepositCard from './detail/AddDepositCard.jsx';
 import NoteEditor from './detail/NoteEditor.jsx';
 import MarginSection from './detail/MarginSection.jsx';
 import ServicesReadOnly from './detail/ServicesReadOnly.jsx';
@@ -69,7 +70,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const [addonFor, setAddonFor] = useState(null);   // servizio con la scelta degli aggiuntivi aperta
 
   // caparra: link di pagamento, incasso al banco, copia del link
-  const { linkBusy, linkCopyFailed, sendDepositLink, cashDeposit, copyDepositLink } = useDepositActions({ apptRef, alive, adopt, t, fireToast, onMutate });
+  const { linkBusy, linkCopyFailed, sendDepositLink, cashDeposit, copyDepositLink, depositDraft, setDepositDraft } = useDepositActions({ apptRef, alive, adopt, t, fireToast, onMutate });
+  // l'importo che si stava scrivendo è di questa visita, non della prossima
+  useEffect(() => { setDepositDraft(null); }, [appt.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
   const [matchCount, setMatchCount] = useState(null);
@@ -522,8 +525,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             <DepositCard
               appt={appt} dm={dm} t={t} lang={lang} terminal={terminal} hasScope={hasScope} busy={busy} linkBusy={linkBusy}
               linkCopyFailed={linkCopyFailed} sendDepositLink={sendDepositLink} copyDepositLink={copyDepositLink}
-              cashDeposit={cashDeposit} onMarkRefunded={markRefunded}
+              cashDeposit={cashDeposit} onMarkRefunded={markRefunded} depositDraft={depositDraft} setDepositDraft={setDepositDraft}
             />
+          )}
+          {/* nessuna caparra chiesta, ma la cliente l'ha versata fuori da beauty */}
+          {!dm && !terminal && hasScope('sales') && Number(appt.total_price) > 0 && (
+            <AddDepositCard appt={appt} draft={depositDraft} setDraft={setDepositDraft} busy={linkBusy} cashDeposit={cashDeposit} t={t} lang={lang} />
           )}
 
           {/* note edit → PUT /appointments/{id} (vedi NoteEditor) */}

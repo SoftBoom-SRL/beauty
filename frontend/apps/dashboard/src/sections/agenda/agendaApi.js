@@ -41,7 +41,8 @@ export const getMargin = (id) => api.get(`${appt(id)}/margin`);
 
 /* ---- caparra ---- */
 export const sendDepositLink = (id) => api.post(`/api/sales/appointments/${id}/deposit-link`, {});
-export const cashDeposit = (id, method) => api.post(`${appt(id)}/deposit-cashed`, { method });
+// `amount` solo se diverso dalla caparra chiesta, o se la visita non ne chiedeva
+export const cashDeposit = (id, method, amount) => api.post(`${appt(id)}/deposit-cashed`, amount ? { method, amount } : { method });
 export const markDepositRefunded = (id) => api.post(`${appt(id)}/deposit-refunded`, {});
 
 /* ---- pause ---- */

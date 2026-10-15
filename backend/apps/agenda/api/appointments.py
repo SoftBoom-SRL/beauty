@@ -41,6 +41,9 @@ router = Router()
 def create_appointment(request, data: AppointmentCreateIn):
     ctx = request.auth
     require_scope(ctx, "agenda")
+    if data.deposit_paid is not None:
+        # Una caparra già versata entra in cassa: come «Incassata» nel dettaglio.
+        require_scope(ctx, "sales")
 
     from apps.clients.models import Client  # lazy
 
@@ -57,6 +60,7 @@ def create_appointment(request, data: AppointmentCreateIn):
         location=_get_location(ctx, data.location_id),
         force=data.force,
         client_overlap_ok=True,
+        deposit_paid=data.deposit_paid,
     )
     deposits.send_deposit_link(appointment)
     return _appointment_out(appointment, viewer=ctx)
@@ -250,17 +254,18 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
 
 @router.post("/appointments/{int:appointment_id}/deposit-cashed", auth=staff_auth, response=AppointmentOut)
 def deposit_cashed(request, appointment_id: int, data: DepositCashedIn):
-    """La caparra è stata incassata in salone (contanti o POS al banco).
+    """La caparra è stata incassata: contanti o POS al banco, bonifico o link Nexi.
 
     Senza questa via l'unico modo di registrarla era il pagamento online: dove
     Stripe non è configurato — o quando la cliente paga al banco — il termine
-    scadeva lo stesso e il posto si liberava da solo.
+    scadeva lo stesso e il posto si liberava da solo. Con `amount` si registra
+    quanto ha versato davvero, anche dove le regole una caparra non la chiedevano.
     """
     ctx = request.auth
     require_scope(ctx, "sales")
     appointment = salon_get(Appointment, ctx, appointment_id)
     return _appointment_out(
-        deposit_holds.mark_deposit_cashed(appointment, method=data.method, actor=ctx.user),
+        deposit_holds.mark_deposit_cashed(appointment, method=data.method, amount=data.amount, actor=ctx.user),
         viewer=ctx,
     )
 

@@ -16,7 +16,7 @@ import { find, findAll, installDom, loadComponent, mount, spy, textOf } from './
 const { default: NewApptModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/NewApptModal.jsx', {
   stubs: ['ClientPicker.jsx'],
   // i pezzi senza hook del drawer, che per i test fanno parte del drawer
-  expand: ['BookingShell', 'BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
+  expand: ['BookingShell', 'BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime', 'DepositPaid'],
 });
 
 const TODAY = todayStr();
@@ -205,4 +205,55 @@ test('pillole e righe dei servizi col colore del servizio: il suo, o quello dell
   assert.equal(pill('Taglio').props.style.color, 'var(--ink)', 'sul rosa tenue resta scuro');
   const dots = findAll(g.m.tree, (el) => el.type === 'span' && el.props.style?.width === 9 && el.props.style?.borderRadius === 99).map((el) => el.props.style.background);
   assert.deepEqual(dots, ['#FDE2E4', '#1A237E'], 'le righe dei servizi scelti');
+});
+
+test('caparra già versata: parte con la prenotazione e l\'avviso lo dice', async () => {
+  const g = setup();
+  g.state.onPost = (b) => Promise.resolve({ id: 99, start: b.start, deposit_status: 'paid' });
+  await settle(g);
+  g.button('Caparra già versata').props.onClick();
+  g.render();
+  const field = () => find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra');
+  // aperta e vuota: il pulsante dice che manca l'importo, e non parte niente
+  const btn = g.button('Manca');
+  assert.match(textOf(btn), /Manca importo della caparra/);
+  btn.props.onClick();
+  await settle(g);
+  assert.equal(g.creates().length, 0);
+  assert.equal(g.lastToast().msg, 'Manca: importo della caparra');
+  field().props.onChange({ target: { value: '20,00' } });
+  g.render();
+  g.button('contanti').props.onClick();
+  g.render();
+  g.button('Crea prenotazione').props.onClick();
+  await settle(g);
+  assert.deepEqual(g.creates().map((p) => p.body), [{ ...body(at(600), false), deposit_paid: { amount: '20.00', method: 'cash' } }]);
+  assert.equal(g.lastToast().msg, '10:00 · appuntamento creato per Maria · caparra registrata');
+});
+
+test('caparra oltre il totale della visita: non parte, e si dice perché', async () => {
+  const g = setup();
+  await settle(g);
+  g.button('Caparra già versata').props.onClick();
+  g.render();
+  find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra').props.onChange({ target: { value: '40' } });
+  g.render();
+  assert.ok(textOf(g.m.tree).includes('Più del totale della visita'));
+  g.button('Manca importo della caparra').props.onClick();
+  await settle(g);
+  assert.equal(g.creates().length, 0);
+  // tolta, si prenota senza caparra
+  find(g.m.tree, (el) => el.type === 'button' && el.props['aria-label'] === 'Togli la caparra').props.onClick();
+  g.render();
+  g.button('Crea prenotazione').props.onClick();
+  await settle(g);
+  assert.deepEqual(g.creates().map((p) => p.body), [body(at(600), false)]);
+});
+
+test('senza il permesso della cassa la caparra già versata non compare', async () => {
+  const g = setup();
+  g.dash.hasScope = (s) => s !== 'sales';
+  g.render();
+  await settle(g);
+  assert.equal(g.button('Caparra già versata'), null);
 });

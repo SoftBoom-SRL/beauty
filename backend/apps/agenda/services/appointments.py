@@ -19,7 +19,13 @@ from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, UndoEntry
 from .addons import ADDON_SPLIT_MESSAGE, is_timeless, with_addons
 from .deposit_holds import realign_deposit_due, schedule_deposit_hold
-from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_total
+from .deposits import (
+    compute_deposit,
+    gift_covered_amount,
+    manual_deposit_amount,
+    manual_deposit_method,
+    shrink_deposit_to_total,
+)
 from .freed_slots import _appointment_spans, _chain_spans, _spans_union, emit_with_freed_slots
 from .locking import _lock_and_reload, lock_salon
 from .messages import _event_payload, emit_appointment_event
@@ -67,8 +73,14 @@ def create_appointment(
     force: bool = False,
     client_overlap_ok: bool = False,
     allow_soak: bool = True,
+    deposit_paid=None,
 ) -> Appointment:
     """Crea l'appuntamento rivalidando che lo slot sia libero (altrimenti 409).
+
+    `deposit_paid` (solo staff, `.amount` e `.method`): la cliente ha già
+    versato la caparra fuori da beauty — bonifico o link Nexi, contanti o POS
+    alla prenotazione. L'appuntamento nasce con la caparra pagata, la caparra
+    entra in cassa e non parte nessun link di pagamento.
 
     allow_past=False (app cliente): un orario già trascorso è rifiutato con 400.
     Lo staff può invece registrare a posteriori un appuntamento già avvenuto.
@@ -108,7 +120,13 @@ def create_appointment(
         forced = True
 
     total_price = sum((row.price for row in resolved), start=Decimal("0"))
-    if start <= now:
+    paid_method = None
+    if deposit_paid is not None:
+        # Caparra già versata fuori da beauty (bonifico, link Nexi, contanti):
+        # la scrive chi prenota, e vale al posto di quella delle regole.
+        paid_method = manual_deposit_method(deposit_paid.method)
+        deposit = manual_deposit_amount(deposit_paid.amount, total_price)
+    elif start <= now:
         deposit = Decimal("0.00")
     else:
         covered = gift_covered_amount(
@@ -128,13 +146,28 @@ def create_appointment(
         forced=forced,
         deposit_amount=deposit,
         deposit_status=(
-            Appointment.DepositStatus.REQUIRED
+            Appointment.DepositStatus.PAID
+            if paid_method
+            else Appointment.DepositStatus.REQUIRED
             if deposit > 0
             else Appointment.DepositStatus.NONE
         ),
     )
     _write_items(appointment, resolved)
     schedule_deposit_hold(appointment)
+    if paid_method:
+        # Entra in cassa oggi, il giorno in cui la si registra; al conto si detrae.
+        from apps.sales.services import record_deposit_cashed  # lazy: sales dipende da agenda
+
+        record_deposit_cashed(salon, appointment, method=paid_method, actor=actor)
+        log_activity(
+            salon,
+            "deposit.cashed",
+            f"Caparra già versata registrata alla prenotazione — {client.full_name}",
+            actor=actor,
+            location=location,
+            payload={"appointment_id": appointment.id, "amount": str(deposit), "method": paid_method},
+        )
 
     log_activity(
         salon,
