@@ -1,16 +1,18 @@
 // AddDepositCard — «Registra caparra versata» su una visita che non la
 // chiedeva: la cliente l'ha pagata fuori da beauty (bonifico o link Nexi,
 // contanti o POS) e chi la riceve la scrive qui. Chiuso è un pulsante solo,
-// per non ingombrare il dettaglio; aperto, importo e metodo (DepositEntry).
+// per non ingombrare il dettaglio; aperto, importo (proposta: metà del
+// totale) e metodo (DepositEntry).
 // Senza hook: `draft` (null = chiuso) lo tiene useDepositActions.
 import { Icon } from '@youty/shared';
+import { halfDeposit } from '../../lib/deposit.js';
 import DepositEntry, { visitMaxCents } from './DepositEntry.jsx';
 
 export default function AddDepositCard({ appt, draft, setDraft, busy, cashDeposit, t, lang }) {
   if (draft == null) {
     return (
       <div>
-        <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12 }} onClick={() => setDraft('')}
+        <button className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12 }} onClick={() => setDraft(halfDeposit(visitMaxCents(appt), lang))}
           title={t('La cliente ha già versato una caparra (bonifico, Nexi, contanti, POS): registrala qui', 'The client already paid a deposit (transfer, Nexi, cash, card): record it here')}>
           <Icon name="wallet" size={13} />{t('Registra caparra versata', 'Record a paid deposit')}
         </button>

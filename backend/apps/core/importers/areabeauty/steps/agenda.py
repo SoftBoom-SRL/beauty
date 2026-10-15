@@ -8,10 +8,15 @@ appuntamento è una catena di voci in fila. Per ogni cliente, giorno e stato:
 2. Un servizio della stessa operatrice tutto dentro un servizio più lungo è un
    aggiuntivo (rimozione, scrub, nail art): voce a durata 0 subito dopo il
    servizio che lo ospita, con il suo prezzo. L'agenda resta com'era.
-3. Il resto si mette in fila: un buco fino a un'ora diventa l'attesa
-   (`soak_min`) della voce prima, oltre comincia un altro appuntamento; chi si
-   accavalla (servizi in parallelo con una collega) è un appuntamento a sé,
-   segnato `forced` se l'operatrice è la stessa.
+3. Il resto si mette in fila solo se un servizio comincia quando finisce il
+   precedente. Con un buco, anche di pochi minuti, comincia un altro
+   appuntamento della stessa cliente: in AreaBeauty erano due blocchi, e
+   trasformare il buco in attesa inventava una posa che nessuno aveva messo.
+   Chi si accavalla (servizi in parallelo con una collega) è un appuntamento
+   a sé, segnato `forced` se l'operatrice è la stessa.
+4. Nessuna posa (`soak_min` = 0). La «fine lato cliente» delle righe di
+   AreaBeauty non è una posa: è il blocco della cliente allungato a mano, a
+   volte di ore (il titolare, 15/10: «nessuno ha messo attese o pose»).
 
 Stato di ogni riga:
 - eseguita → `closed` (anche oggi);
@@ -40,7 +45,6 @@ from ..source import PSEUDO_SERVICE_IDS, local_dt, money, ms_dt
 from ..util import clip, norm
 from .staff import fallback_operator
 
-GAP_MAX = dt.timedelta(minutes=60)
 S = Appointment.Status
 NO_SHOW_MOTIVE_ID = 3
 
@@ -53,7 +57,6 @@ class Row:
     service: str
     s: dt.datetime
     e: dt.datetime
-    ec: dt.datetime
     price: Decimal
     status: str
     note: str = ""
@@ -112,7 +115,6 @@ def _row(ctx, raw, guid, list_prices):
         ctx.warn(f"riga {guid}: orari illeggibili, saltata")
         return None
     e = max(e, s)
-    ec = local_dt(raw.get("end_date_customer")) or e
     sold = bool(str(raw.get("id_transazione") or "").strip())
     done = bool(raw.get("eseguito"))
     if done:
@@ -132,7 +134,6 @@ def _row(ctx, raw, guid, list_prices):
         service=str(raw.get("id_articolo")),
         s=s,
         e=e,
-        ec=ec,
         price=price,
         status=status,
         note=(raw.get("nota") or "").strip(),
@@ -159,7 +160,7 @@ def _chains(rows):
     for m in sorted(mains, key=lambda m: m.s):
         for ch in chains:
             last = ch[-1]
-            if m.s >= last.e and m.s - last.e <= GAP_MAX:
+            if m.s == last.e:
                 ch.append(m)
                 break
         else:
@@ -191,10 +192,8 @@ def _create(ctx, plans):
             continue
         items = []
         order = 0
-        for i, m in enumerate(chain):
-            nxt = chain[i + 1] if i + 1 < len(chain) else None
-            soak = (nxt.s - m.e) if nxt else max(dt.timedelta(0), m.ec - m.e)
-            for r, duration, soak_min in [(m, m.e - m.s, soak)] + [(a, dt.timedelta(0), dt.timedelta(0)) for a in m.addons]:
+        for m in chain:
+            for r, duration in [(m, m.e - m.s)] + [(a, dt.timedelta(0)) for a in m.addons]:
                 service_pk = services.get(r.service)
                 if not service_pk:
                     ctx.warn(f"servizio {r.service} sconosciuto: voce {r.guid} saltata")
@@ -208,7 +207,7 @@ def _create(ctx, plans):
                         service_id=service_pk,
                         operator_id=op_pk,
                         duration_min=int(duration.total_seconds() // 60),
-                        soak_min=int(soak_min.total_seconds() // 60),
+                        soak_min=0,
                         price=r.price,
                         order=order,
                     )
@@ -294,7 +293,6 @@ def _cancellations(ctx):
             op_pk = fallback.pk
             ctx.count("annullati senza operatrice (ripiego)")
         end = end if end and end >= start else start
-        client_end = ms_dt(c.get("DataOraFineCliente")) or end
         motive = c.get("Motivazione") or {}
         motive_text = (motive.get("Descrizione") or "").strip()
         no_show = motive.get("Id") == NO_SHOW_MOTIVE_ID or "non si e presentat" in norm(motive_text)
@@ -318,7 +316,7 @@ def _cancellations(ctx):
                 service_id=service_pk,
                 operator_id=op_pk,
                 duration_min=int((end - start).total_seconds() // 60),
-                soak_min=max(0, int((client_end - end).total_seconds() // 60)),
+                soak_min=0,
                 price=money(c.get("Prezzo")),
             )
         ])

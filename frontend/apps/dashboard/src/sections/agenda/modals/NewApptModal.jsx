@@ -30,7 +30,7 @@ import BookingShell, { BOOKING_PANEL_W, ReadOnlyNote } from './newappt/BookingSh
 import NoteFlexible from './newappt/NoteFlexible.jsx';
 import DepositPaid from './newappt/DepositPaid.jsx';
 import { toCents } from '../../pos/money.js';
-import { depositIssue, depositToApi } from '../lib/deposit.js';
+import { depositIssue, depositToApi, halfDeposit } from '../lib/deposit.js';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -187,6 +187,10 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const canCash = hasScope('sales');
   const [deposit, setDeposit] = useState(null);
   const maxDepositCents = toCents(totalPrice);
+  // la metà proposta segue i servizi scelti, finché nessuno scrive un importo
+  useEffect(() => {
+    setDeposit((d) => (d?.auto ? { ...d, amount: halfDeposit(maxDepositCents, lang) } : d));
+  }, [maxDepositCents, lang]);
 
   const missing = [
     !client && { key: 'client', label: t('cliente', 'client'), ref: clientRef },

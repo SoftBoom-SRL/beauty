@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { cleanAmount, depositIssue, depositToApi, depositToField, sameAmount } from '../src/sections/agenda/lib/deposit.js';
+import { cleanAmount, depositIssue, depositToApi, depositToField, halfDeposit, sameAmount } from '../src/sections/agenda/lib/deposit.js';
 
 test('l\'importo digitato: solo cifre e un separatore', () => {
   assert.equal(cleanAmount('€ 30,5'), '30,5');
@@ -26,4 +26,11 @@ test('vuoto, zero o oltre il totale della visita non va', () => {
   assert.equal(depositIssue('95,01', 9500), 'over');
   assert.equal(depositIssue('95', 9500), null);
   assert.equal(depositIssue('30', null), null);
+});
+
+test('la caparra proposta è metà del totale, al centesimo', () => {
+  assert.equal(halfDeposit(9500, 'it'), '47,50');
+  assert.equal(halfDeposit(2801, 'it'), '14,01');
+  assert.equal(halfDeposit(2800, 'en'), '14.00');
+  assert.equal(halfDeposit(0, 'it'), '0,00');
 });

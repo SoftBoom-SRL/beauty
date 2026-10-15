@@ -3,18 +3,19 @@
 // banca come Nexi, contanti o POS al momento della prenotazione) e chi prende
 // l'appuntamento lo scrive qui. L'appuntamento nasce con la caparra pagata,
 // l'incasso entra in cassa oggi, al conto si detrae, e alla cliente non parte
-// nessun link di pagamento. Chiuso è un pulsante solo. Senza hook: `deposit`
-// ({ amount, method } o null) lo tiene il drawer.
+// nessun link di pagamento. Chiuso è un pulsante solo; aperto propone metà del
+// totale, che segue i servizi finché nessuno scrive un importo (`auto`).
+// Senza hook: `deposit` ({ amount, method, auto } o null) lo tiene il drawer.
 import { Icon, fmtEur } from '@youty/shared';
 import { centsToEur } from '../../../pos/money.js';
-import { DEPOSIT_METHODS, cleanAmount, depositIssue } from '../../lib/deposit.js';
+import { DEPOSIT_METHODS, cleanAmount, depositIssue, halfDeposit } from '../../lib/deposit.js';
 
 export default function DepositPaid({ deposit, setDeposit, maxCents, stepRef, t, lang }) {
   if (!deposit) {
     return (
       <div ref={stepRef} style={{ marginTop: 12 }}>
         <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 32, fontSize: 12.5 }}
-          onClick={() => setDeposit({ amount: '', method: 'transfer' })}>
+          onClick={() => setDeposit({ amount: halfDeposit(maxCents, lang), method: 'transfer', auto: true })}>
           <Icon name="wallet" size={14} />{t('Caparra già versata', 'Deposit already paid')}
         </button>
       </div>
@@ -38,8 +39,8 @@ export default function DepositPaid({ deposit, setDeposit, maxCents, stepRef, t,
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid ' + (issue === 'over' ? 'var(--danger)' : 'var(--hair)'), borderRadius: 9, padding: '6px 9px', background: 'var(--surface)', width: 96, boxSizing: 'border-box' }}>
           <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-          <input type="text" inputMode="decimal" value={deposit.amount} placeholder="0,00" autoFocus aria-label={t('Importo della caparra', 'Deposit amount')}
-            onChange={(e) => setDeposit({ ...deposit, amount: cleanAmount(e.target.value) })}
+          <input type="text" inputMode="decimal" value={deposit.amount} placeholder="0,00" aria-label={t('Importo della caparra', 'Deposit amount')}
+            onChange={(e) => setDeposit({ ...deposit, amount: cleanAmount(e.target.value), auto: false })}
             style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13.5, width: '100%' }} />
         </div>
         {DEPOSIT_METHODS.map((m) => (

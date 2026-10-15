@@ -225,7 +225,8 @@ class ImportAreaBeautyTests(TestCase):
         self.assertTrue(self.scrub.is_addon)
         pedicure = Service.objects.get(salon=self.salon, name_it="CLASSIC PEDICURE")
         self.assertFalse(pedicure.active)
-        self.assertEqual((pedicure.duration_min, pedicure.soak_min), (60, 10))
+        # niente posa: i «minuti cliente» di AreaBeauty non lo sono
+        self.assertEqual((pedicure.duration_min, pedicure.soak_min), (60, 0))
         self.assertFalse(Package.objects.get(salon=self.salon).active)
         # Operatrici: Giulia collegata, Marta creata disattivata.
         self.assertEqual(Operator.objects.filter(salon=self.salon, active=True).count(), 1)
@@ -244,16 +245,22 @@ class ImportAreaBeautyTests(TestCase):
         self.assertEqual(anna.categories.get().name, "Holiday Voucher")
         self.assertEqual(anna.notes.get().text, "Allergica al lattice")
 
-        # Agenda: una catena con aggiuntivo a durata 0 e attesa di mezz'ora.
-        visit = Appointment.objects.get(client=anna, status=Appointment.Status.CLOSED)
+        # Agenda: manicure con l'aggiuntivo a durata 0; dopo mezz'ora di buco la
+        # pedicure è un appuntamento a sé, nessuna attesa inventata.
+        visit, later = Appointment.objects.filter(client=anna, status=Appointment.Status.CLOSED).order_by("start")
         items = list(visit.items.order_by("order"))
         self.assertEqual(
             [(i.service_id, i.duration_min, i.soak_min, i.price) for i in items],
-            [(self.manicure.pk, 45, 30, Decimal("45")), (self.scrub.pk, 0, 0, Decimal("20")), (pedicure.pk, 60, 0, Decimal("70"))],
+            [(self.manicure.pk, 45, 0, Decimal("45")), (self.scrub.pk, 0, 0, Decimal("20"))],
         )
         self.assertEqual(visit.operator_id, self.giulia.pk)
-        self.assertEqual(items[2].operator_id, marta.pk)
         self.assertEqual(visit.start, dt.datetime(2026, 10, 1, 8, 0, tzinfo=UTC))
+        self.assertEqual(
+            [(i.service_id, i.operator_id, i.duration_min, i.soak_min) for i in later.items.all()],
+            [(pedicure.pk, marta.pk, 60, 0)],
+        )
+        self.assertEqual(later.start, dt.datetime(2026, 10, 1, 9, 15, tzinfo=UTC))
+        self.assertFalse(later.forced)
         self.assertEqual(Appointment.objects.get(client=bea).status, Appointment.Status.CONFIRMED)
         self.assertEqual(Appointment.objects.get(client=carl).status, Appointment.Status.CANCELLED)
         self.assertEqual(Appointment.objects.get(client=dora).status, Appointment.Status.NO_SHOW)
@@ -262,10 +269,11 @@ class ImportAreaBeautyTests(TestCase):
         self.assertEqual(cancelled.operator.last_name, "non indicata")
 
         # Scheda tecnica agganciata alla visita del giorno.
+        # (quella del servizio più lungo: la pedicure)
         sheet = TechnicalSheet.objects.get(client=anna)
-        self.assertEqual(sheet.appointment_id, visit.pk)
+        self.assertEqual(sheet.appointment_id, later.pk)
         self.assertEqual((sheet.products, sheet.protocol, sheet.params), ("Rosso 12", "Tutto bene", {"stato unghie": "fragili"}))
-        self.assertEqual(sheet.created_at, visit.start)
+        self.assertEqual(sheet.created_at, later.start)
 
         # Vendite: caparra del 20/9 sul conto del 1/10, resto da saldare.
         bill = Sale.objects.get(appointment=visit)
@@ -277,6 +285,9 @@ class ImportAreaBeautyTests(TestCase):
         visit.refresh_from_db()
         self.assertEqual(visit.deposit_status, Appointment.DepositStatus.PAID)
         self.assertEqual(bill.lines.get(line_type=SaleLine.LineType.SERVICE, service=pedicure).operator_id, marta.pk)
+        # la pedicure è nello stesso conto: «incassata nel conto unico»
+        later.refresh_from_db()
+        self.assertEqual(later.paid_in_sale_id, bill.pk)
         self.assertFalse(Sale.objects.filter(salon=self.salon, total=0, lines__isnull=True).exists())
         # Il no-show resta incassato e agganciato alla visita mancata; il prepagato futuro no.
         self.assertEqual(Sale.objects.get(appointment__client=dora).total, Decimal("45"))
