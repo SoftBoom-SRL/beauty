@@ -175,6 +175,9 @@ def agenda_week(request, start: str, location_id: int = None):
                         "start": a.start,
                         "client_name": a.client.full_name,
                         "client_phone": a.client.phone,
+                        # la «permanenza» (stessi giorno e cliente, uno dopo
+                        # l'altro) si riconosce in settimana dall'id
+                        "client_id": a.client_id,
                         "operator_id": a.operator_id,
                         "status": a.status,
                         "duration_min": a.total_duration_min,

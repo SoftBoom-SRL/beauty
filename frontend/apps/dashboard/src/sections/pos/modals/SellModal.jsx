@@ -5,10 +5,11 @@
 // deposit is deducted from the amount due (the API enforces Σ payments == total − deposit ±0.01,
 // else 422; with «Lascia da saldare» the payments may be less and the rest stays due).
 // Conto unico: the client's other open visits of the same day (GET …/other-visits) can be ticked
-// into the same bill — their lines join the blocks of their stylists (visits.js).
+// into the same bill — their lines join the blocks of their stylists (visits.js). Those of the
+// same «permanenza» (one after the other: agenda/lib/stay.js) arrive already ticked.
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
@@ -32,6 +33,7 @@ import {
 } from '../lines.js';
 import { blockOperatorIds, checkoutState, depositCentsOf, visitGifts } from '../visits.js';
 import useProductCatalog from '../useProductCatalog.js';
+import { stayMateIds } from '../../agenda/lib/stay.js';
 import { salesApi } from '../../../api/sales.js';
 import { useResource } from '../../../hooks/useResource.js';
 import {
@@ -70,12 +72,29 @@ export default function SellModal({ appointment, onDone, onClose }) {
    * pagamento ripartono da capo (checkoutState), le righe aggiunte al banco
    * restano. */
   const toggleVisit = (visit) => {
+    picked.current = true;
     const nextIds = included.includes(visit.id) ? included.filter((id) => id !== visit.id) : [...included, visit.id];
     const next = checkoutState(lines, [appt, ...(otherVisits || []).filter((v) => nextIds.includes(v.id))]);
     setIncluded(nextIds);
     setLines(next.lines);
     setPay(next.pay);
   };
+
+  /* Le visite della stessa permanenza (mani alle 10 con Sole, piedi alle 11
+   * con Mara) arrivano già nel conto: è una visita sola per la cliente, e
+   * prima si chiudeva soltanto quella su cui si era cliccato (il titolare,
+   * 15/10). Una volta sola, all'arrivo della lista, e solo se nessuno ha
+   * ancora toccato le spunte; le altre visite del giorno restano da spuntare. */
+  const stayIds = appt ? stayMateIds(appt, otherVisits) : [];
+  const picked = useRef(false);
+  useEffect(() => {
+    if (picked.current || !appt || !stayIds.length) return;
+    picked.current = true;
+    const next = checkoutState(lines, [appt, ...(otherVisits || []).filter((v) => stayIds.includes(v.id))]);
+    setIncluded(stayIds);
+    setLines(next.lines);
+    setPay(next.pay);
+  }, [otherVisits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- UI state ---- */
   const [pick, setPick] = useState(null);       // { opId, type: 'product' | 'service' }
@@ -268,7 +287,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 22, alignItems: 'start' }}>
         {/* LEFT — sale grouped by operator */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <OtherVisits visits={otherVisits} included={included} onToggle={toggleVisit} clientName={appt.client?.full_name} t={t} lang={lang} />
+          <OtherVisits visits={otherVisits} included={included} stayIds={stayIds} onToggle={toggleVisit} clientName={appt.client?.full_name} t={t} lang={lang} />
           {blockIds.map((oid) => (
             <OperatorBlock key={oid} lines={linesOf(oid)} subtotal={opSubtotal(oid)} color={opColor(oid)} initials={opInitials(oid)} label={opLabel(oid)}
               onPatch={patchLine} onRemove={removeLine} t={t} lang={lang}>

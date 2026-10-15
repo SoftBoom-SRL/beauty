@@ -64,6 +64,13 @@ export default function ApptHoverCard({ hover, t, lang, operators, colorOf, hint
             <span className="tabnum" style={{ fontSize: 13.5 }}>{a.client.phone}</span>
           </div>
         )}
+        {/* la permanenza: gli altri appuntamenti attaccati (lib/stay.js) */}
+        {a.stay_mates?.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 11px', background: 'color-mix(in srgb, var(--clay) 9%, transparent)', borderRadius: 10 }}>
+            <Icon name="link" size={15} color="var(--clay-ink)" style={{ marginTop: 1, flexShrink: 0 }} />
+            <span className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.4 }}>{t('Insieme a', 'Together with')}: {a.stay_mates.join(' · ')}</span>
+          </div>
+        )}
         {a.note && (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 2, padding: '9px 11px', background: 'var(--warn-tint)', borderRadius: 10 }}>
             <Icon name="info" size={15} color="var(--warn)" style={{ marginTop: 1, flexShrink: 0 }} />

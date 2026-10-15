@@ -10,6 +10,7 @@ import { canMarkNoShow } from '../rules.js';
 export default function DetailFooter({
   appt, t, itemsEditable, dirty, itemsDirty, noteDirty, savingItems, editItems, terminal, canWrite, busy,
   saveChanges, checkIn, startAppt, checkout, startReschedule, onDiscard, onNoShow, onCancel, oneStepCheckIn = false,
+  stayToCash = 0,
 }) {
   return (
     <React.Fragment>
@@ -62,7 +63,10 @@ export default function DetailFooter({
           )}
           <div style={{ display: 'flex', gap: 8 }}>
             <button className={'dk-btn ' + (appt.status === 'in_progress' ? 'dk-btn--clay' : 'dk-btn--soft')} style={{ flex: 1, height: 42 }} onClick={checkout}>
-              <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />{t('Incassa', 'Check out')}
+              <Icon name="wallet" size={17} color={appt.status === 'in_progress' ? '#fff' : undefined} />
+              {/* con altri appuntamenti della stessa permanenza da incassare, la
+                  cassa li mette già nel conto unico: lo si dice qui */}
+              {stayToCash > 0 ? t(`Incassa tutto · ${stayToCash + 1} visite`, `Check out all · ${stayToCash + 1} visits`) : t('Incassa', 'Check out')}
             </button>
             <button className="dk-btn dk-btn--soft" style={{ flex: 1, height: 42 }} onClick={startReschedule}
               title={t('Cerca un orario libero o sposta a un altro giorno (per l’ora e la persona di oggi bastano i comandi qui sopra)', 'Find a free time or move to another day (for today’s time and stylist use the controls above)')}>

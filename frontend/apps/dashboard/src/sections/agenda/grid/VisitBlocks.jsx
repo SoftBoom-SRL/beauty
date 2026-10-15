@@ -14,7 +14,7 @@ import ItemBlock from './ItemBlock.jsx';
  *  `restPos(b)` = dove sta fermo (server, o spostamento in salvataggio). */
 export default function VisitBlocks({
   opId, blocks, itemPos, restPos = itemPos, g0, pxm, t, lang, canWrite, dragging, openApptId, itemColor, colorOf, soakLabel,
-  onItemDown, onItemResizeDown, onHover, onLeave, onSlotMenuAt,
+  onItemDown, onItemResizeDown, onHover, onLeave, onSlotMenuAt, stays = null, linked = null,
 }) {
   /* Le corsie si calcolano sulle posizioni FERME, non su quelle del
    * trascinamento. Contando il blocco trascinato i vicini cambiavano corsia a
@@ -88,6 +88,7 @@ export default function VisitBlocks({
           lane={lane} laneCount={laneCount} resizing={!!now.resizing}
           dragging={false} tone="" t={t} lang={lang} canWrite={canWrite}
           highlight={b.apptId === openApptId}
+          stay={stays?.get(b.apptId)} linked={!!linked?.has(b.apptId) && b.apptId !== openApptId}
           color={itemColor ? itemColor(b.item) : colorOf(b.opId)}
           soakLabel={soakLabel(b.item)} pxm={pxm}
           onDown={(e) => onItemDown(e, b)}

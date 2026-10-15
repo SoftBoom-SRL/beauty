@@ -31,7 +31,7 @@ from ..schemas import (
 # `appointments` è anche il nome dei queryset: il modulo dei servizi si importa
 # col suffisso, come negli altri moduli delle rotte.
 from ..services import appointments as appointment_services
-from ..services import deposit_holds, deposits, importer, margin, refunds, transitions
+from ..services import deposit_holds, deposits, importer, margin, refunds, stay, transitions
 from .params import _get_location
 
 router = Router()
@@ -277,6 +277,34 @@ def deposit_refunded(request, appointment_id: int):
     require_scope(ctx, "sales")
     appointment = salon_get(Appointment, ctx, appointment_id)
     return _appointment_out(refunds.mark_deposit_refunded(appointment, actor=ctx.user), viewer=ctx)
+
+
+@router.get("/appointments/{int:appointment_id}/stay", auth=staff_auth)
+def appointment_stay(request, appointment_id: int):
+    """La permanenza della cliente intorno a questa visita (services.stay): i suoi
+    appuntamenti del giorno uno dopo l'altro, questa compresa. Il dettaglio li
+    mostra («Stessa permanenza») e da lì si incassa tutto insieme; `bill_id`
+    dice quali sono già stati incassati, e in quale conto.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    appointment = salon_get(Appointment, ctx, appointment_id)
+    return [
+        {
+            "id": a.id,
+            "start": a.start,
+            "end": a.end,
+            "status": a.status,
+            "operator_id": a.operator_id,
+            "total_price": a.total_price,
+            "bill_id": stay.bill_id(a),
+            "items": [
+                {"service_name": it.service.name_it, "operator_id": it.operator_id, "operator_name": it.operator.full_name, "duration_min": it.duration_min}
+                for it in a.items.all()
+            ],
+        }
+        for a in stay.stay_of(appointment)
+    ]
 
 
 @router.get("/appointments/{int:appointment_id}/margin", auth=staff_auth, response=MarginOut)

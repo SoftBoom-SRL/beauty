@@ -37,6 +37,8 @@ import ServicesReadOnly from './detail/ServicesReadOnly.jsx';
 import ServicesEditor from './detail/ServicesEditor.jsx';
 import ReasonPicker from './detail/ReasonPicker.jsx';
 import WhoCancels from './detail/WhoCancels.jsx';
+import StayCard from './detail/StayCard.jsx';
+import { useResource } from '../../../hooks/useResource.js';
 
 // Motivazioni predefinite: il titolare può sostituirle dalle Impostazioni
 // (settings.no_show_reasons / cancel_reasons); qui restano come fallback.
@@ -73,6 +75,19 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const { linkBusy, linkCopyFailed, sendDepositLink, cashDeposit, copyDepositLink, depositDraft, setDepositDraft } = useDepositActions({ apptRef, alive, adopt, t, fireToast, onMutate });
   // l'importo che si stava scrivendo è di questa visita, non della prossima
   useEffect(() => { setDepositDraft(null); }, [appt.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* La permanenza: gli altri appuntamenti della cliente attaccati a questo
+   * (mani con Sole, piedi con Mara). Si mostrano qui («Stessa permanenza»,
+   * apribili) e l'incasso diventa «Incassa tutto»: la cassa li mette già nel
+   * conto unico. */
+  const { data: stay } = useResource(() => agendaApi.getStay(appt.id), [appt.id, appt.updated_at, appt.status], { fallback: [] });
+  const stayToCash = (stay || []).filter((v) => v.id !== appt.id && v.bill_id == null && ['confirmed', 'checked_in', 'in_progress'].includes(v.status)).length;
+  const openMate = async (id) => {
+    try {
+      const full = await agendaApi.getAppointment(id);
+      openModal('apptdetail', { appointment: full, onMutate, onShowDate });
+    } catch (err) { toastApiError(err, fireToast, t); }
+  };
 
   /* conteggio lista d'attesa compatibile per il passo ④ della timeline (anteprima) */
   const [matchCount, setMatchCount] = useState(null);
@@ -500,6 +515,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           appt={appt} t={t} itemsEditable={itemsEditable} dirty={dirty} itemsDirty={itemsDirty} noteDirty={noteDirty}
           savingItems={savingItems} editItems={editItems} terminal={terminal} canWrite={canWrite} busy={busy}
           saveChanges={saveChanges} checkIn={checkIn} startAppt={startAppt} oneStepCheckIn={!!settings?.checkin_starts_treatment} checkout={checkout} startReschedule={startReschedule}
+          stayToCash={stayToCash}
           onDiscard={discardDraft} onNoShow={openNoShow} onCancel={openCancel}
         />
       )}>
@@ -528,6 +544,9 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
               cashDeposit={cashDeposit} onMarkRefunded={markRefunded} depositDraft={depositDraft} setDepositDraft={setDepositDraft}
             />
           )}
+          {/* gli altri appuntamenti della stessa permanenza (StayCard) */}
+          <StayCard appt={appt} stay={stay} t={t} lang={lang} onOpen={openMate} />
+
           {/* nessuna caparra chiesta, ma la cliente l'ha versata fuori da beauty */}
           {!dm && !terminal && hasScope('sales') && Number(appt.total_price) > 0 && (
             <AddDepositCard appt={appt} draft={depositDraft} setDraft={setDepositDraft} busy={linkBusy} cashDeposit={cashDeposit} t={t} lang={lang} />

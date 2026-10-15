@@ -32,6 +32,7 @@ import {
 } from './lib/week.js';
 
 import { useWeekData } from './hooks/useWeekData.js';
+import { dayStays, linkedIds, stayMatesLabels } from './lib/stay.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
 import { useGridWidth } from './hooks/useGridWidth.js';
 import { useScrollMemo } from './hooks/useScrollMemo.js';
@@ -378,10 +379,21 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
   const movingObj = dragging ? movingBlock(dg) : null;
 
+  /* La permanenza (lib/stay.js), giorno per giorno: gli appuntamenti della
+   * stessa cliente uno dopo l'altro portano il segno del collegamento, si
+   * evidenziano insieme a quello aperto o indicato, e l'anteprima dice
+   * «Insieme a…». */
+  const weekVisits = dayData.flatMap((d) => d.visits || d.list);
+  const stays = new Map();
+  dayData.forEach((d) => dayStays(d.visits || d.list).forEach((v, id) => stays.set(id, v)));
+  const opNameOf = (id) => operators.find((o) => o.id === id)?.first_name || '';
+  const linked = linkedIds(stays, openApptId, hover?.a?.id);
+
   // anteprima al passaggio del mouse, con la scheda della vista giorno (hoverShape)
   const openHover = (a, el) => {
     if (!hoverOk()) return;
-    setHover({ a: hoverShape(a), ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });
+    const shaped = { ...hoverShape(a), stay_mates: stayMatesLabels(stays, weekVisits, a.id, opNameOf) };
+    setHover({ a: shaped, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });
   };
   const closeHover = () => setHover(null);
 
@@ -424,7 +436,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
               dragging={dragging} dg={dg} movingObj={movingObj} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
               opening={hoursSet ? openingFor(settings, d.date) : null}
               ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
-              colorOf={colorOf} itemColor={itemColor}
+              colorOf={colorOf} itemColor={itemColor} stays={stays} linked={linked}
               onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onHover={openHover} onLeave={closeHover}
             />
           );

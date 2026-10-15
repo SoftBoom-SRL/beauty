@@ -8,7 +8,7 @@ import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
 import { creditIcon, creditTitle } from '../../fedelta/credits.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
-export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, resizing = false, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
+export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, resizing = false, tone, color, highlight = false, stay = null, linked = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
   const { item, appt, isFirst, index } = block;
   const active = activeMin ?? block.activeMin ?? 0;
   const soak = soakMin ?? block.soakMin ?? 0;
@@ -69,14 +69,16 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // leggibile sopra gli altri.
         ...(dragging ? { left: 4, right: 4 } : laneCss(lane, laneCount)),
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
-        boxShadow: dragging || resizing ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : '0 1px 3px rgba(17,24,39,0.12)',
+        // `linked`: un altro appuntamento della stessa permanenza di quello
+        // aperto o indicato (lib/stay.js): si vede l'insieme
+        boxShadow: dragging || resizing ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : linked ? '0 0 0 2px var(--clay), 0 4px 12px rgba(17,24,39,0.14)' : '0 1px 3px rgba(17,24,39,0.12)',
         // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
         // contorno spariva sotto il vicino di corsia. Allungandolo, il blocco
         // resta nella sua corsia e passa SOPRA quello che copre (le corsie
         // cambiano solo al rilascio: vedi VisitBlocks), ma sotto la spina
         // della sua visita (4) e la riga dell'ora (8): a 20 le copriva.
-        zIndex: dragging ? 20 : highlight || resizing ? 3 : 2, overflow: 'hidden',
+        zIndex: dragging ? 20 : highlight || resizing || linked ? 3 : 2, overflow: 'hidden',
         // I quattro lati uno per uno: con `padding` breve accanto a
         // `paddingLeft`, a ogni cambio d'altezza (zoom, durata) React
         // riscriveva solo il breve e il rientro della spina tornava a 9 px,
@@ -111,6 +113,13 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
       <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>
         {/* arrivata / in corso: il pallino accanto al nome, visibile in ogni altezza */}
         {showStatusDot && <span title={sm.label} style={{ display: 'inline-block', verticalAlign: 'middle', width: 7, height: 7, borderRadius: 99, background: sm.color, marginRight: 5, marginTop: -2, boxShadow: '0 0 0 1.5px rgba(255,255,255,0.8)' }} />}
+        {/* la permanenza: altri appuntamenti della cliente attaccati a questo */}
+        {stay && isFirst && (
+          <span title={t(`Stessa permanenza: ${stay.size} appuntamenti di fila della cliente`, `Same stay: ${stay.size} back-to-back appointments of this client`)}
+            style={{ display: 'inline-grid', verticalAlign: 'middle', marginRight: 4, marginTop: -2 }}>
+            <Icon name="link" size={12} color={ink.ink} stroke={2.2} />
+          </span>
+        )}
         {!client && giftMark}
         {client || item.service_name}
       </div>

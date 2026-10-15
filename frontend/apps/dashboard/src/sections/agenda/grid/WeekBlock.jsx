@@ -16,7 +16,7 @@ import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
  * sinistra e nell'intestazione della sotto-colonna. Indicatori caparra dovuta /
  * gift come nella vista giorno.
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onHover, onLeave }) {
+export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, moving = false, highlight = false, stay = null, linked = false, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * pxm;
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
@@ -65,7 +65,8 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
         borderRadius: 6, overflow: 'hidden', padding: '3px 5px 3px 8px',
         background: svcTint((a.items || [])[0]),
         border: moving ? '2px solid var(--ink)' : 'none',
-        boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : '0 1px 2px rgba(17,24,39,0.1)',
+        // `linked`: della stessa permanenza di quello aperto o indicato (lib/stay.js)
+        boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : linked ? '0 0 0 2px var(--clay)' : '0 1px 2px rgba(17,24,39,0.1)',
         // niente ingrandimento sulla copia trascinata: spostava i bordi rispetto
         // all'orario d'arrivo (come in vista giorno)
         transition: moving ? 'none' : 'box-shadow 150ms',
@@ -109,7 +110,16 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
           {gifts > 0 && <span title={creditsTitle(a.gifts, t, null, { code: false })} style={{ display: 'grid' }}><Icon name={creditIcon(a.gifts[0])} size={10} color={ink.sub} stroke={2.2} /></span>}
         </div>
       )}
-      <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
+      <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>
+        {/* la permanenza: altri appuntamenti della cliente attaccati a questo */}
+        {stay && (
+          <span title={t(`Stessa permanenza: ${stay.size} appuntamenti di fila`, `Same stay: ${stay.size} back-to-back appointments`)}
+            style={{ display: 'inline-grid', verticalAlign: 'middle', marginRight: 2, marginTop: -2, pointerEvents: 'auto' }}>
+            <Icon name="link" size={10} color={ink.ink} stroke={2.4} />
+          </span>
+        )}
+        {first}
+      </div>
       {last && h > 30 && lc < 3 && <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10, fontWeight: 600, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
       {h > 44 && (
         <div className="tabnum dk-wblock__txt" style={{ ...textZ, fontSize: 9.5, color: ink.sub, marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>

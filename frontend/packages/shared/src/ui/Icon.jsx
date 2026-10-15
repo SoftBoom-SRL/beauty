@@ -52,6 +52,8 @@ export const ICON_PATHS = {
   filter: '<path d="M3.5 5.5h17l-6.5 8v5l-4 2v-7z"/>',
   drag: '<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>',
   ext: '<path d="M14 4.5h5.5V10M19 5l-8 8M16 13v6.5H4.5V8H11"/>',
+  // due anelli di catena: appuntamenti legati (la «permanenza» di una cliente)
+  link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
   wand: '<path d="M5 19 15 9M17 7l1.5-1.5M14 4l.5-2M19 9l2-.5M17.5 11.5 19 13M11.5 6.5 13 8"/>',
   bulb: '<path d="M9 17.5h6M9.5 20.5h5"/><path d="M12 3.5A6 6 0 006 9.5c0 2.4 1.5 3.7 2.5 5h7c1-1.3 2.5-2.6 2.5-5a6 6 0 00-6-6z"/>',
   refresh: '<path d="M20 11a8 8 0 10-1 4"/><path d="M20 5v6h-6"/>',
