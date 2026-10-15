@@ -5,6 +5,7 @@
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
 import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
+import { creditIcon, creditTitle } from '../../fedelta/credits.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
 export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, resizing = false, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
@@ -29,6 +30,16 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
   const textZ = { position: 'relative', zIndex: 2 };
+  // Servizio già pagato (regalo, pagato in anticipo, seduta di un pacchetto):
+  // un segno piccolo davanti al nome del servizio, del suo tipo. La
+  // descrizione intera — sedute rimaste, pacchetto — sta nella scheda al
+  // passaggio del mouse, non in un tooltip in più sulla griglia.
+  const gift = (appt.gifts || []).find((g) => g.service_id === item.service_id);
+  const giftMark = gift ? (
+    <span role="img" aria-label={creditTitle(gift, t, lang, { code: false })} style={{ display: 'inline-flex', verticalAlign: '-1px', marginRight: 4 }}>
+      <Icon name={creditIcon(gift)} size={11} color={ink.ink} stroke={2} />
+    </span>
+  ) : null;
   return (
     <div
       data-appt={appt.id}
@@ -95,11 +106,12 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
       <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>
         {/* arrivata / in corso: il pallino accanto al nome, visibile in ogni altezza */}
         {showStatusDot && <span title={sm.label} style={{ display: 'inline-block', verticalAlign: 'middle', width: 7, height: 7, borderRadius: 99, background: sm.color, marginRight: 5, marginTop: -2, boxShadow: '0 0 0 1.5px rgba(255,255,255,0.8)' }} />}
+        {!client && giftMark}
         {client || item.service_name}
       </div>
       {client && (
         <div style={{ ...textZ, fontSize: 11.5, fontWeight: 500, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, marginTop: compact ? 0 : 1 }}>
-          {item.service_name}
+          {giftMark}{item.service_name}
         </div>
       )}
       {showTime && <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 2, flexShrink: 0 }}>

@@ -7,6 +7,7 @@ import React from 'react';
 import { Avatar, Icon, NumInput, fmtEur, nameIn } from '@youty/shared';
 import { fmtMoney, initialsOf } from '../../lib.js';
 import { MAX_ITEM_MIN } from '../rules.js';
+import { creditIcon, creditTitle } from '../../../fedelta/credits.js';
 
 /* campo orario di una riga servizio: stretto, tabellare, come gli altri numeri */
 const timeCellCss = {
@@ -54,6 +55,10 @@ export default function ServicesEditor({
             ? { id: it.operator_id, name: operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name || '—', active: operators.some((x) => x.id === it.operator_id) }
             : null;
           const span = spans[i];
+          // il trattamento già pagato che copre la riga (regalo, pagato in
+          // anticipo, seduta di un pacchetto): icona del suo tipo, e la
+          // descrizione intera al passaggio del mouse
+          const gift = (appt.gifts || []).find((g) => g.service_id === it.service_id);
           return (
             <div key={it.key} ref={it.key === justAdded ? addedRef : undefined}
               style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: it.key === justAdded ? '8px' : 0, margin: it.key === justAdded ? '-8px' : 0, borderRadius: 10, background: it.key === justAdded ? 'var(--clay-tint)' : 'transparent', transition: 'background 400ms' }}>
@@ -61,7 +66,7 @@ export default function ServicesEditor({
                 <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {svcDisplayName(it)}
-                  {(appt.gifts || []).some((g) => g.service_id === it.service_id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
+                  {gift && <span title={creditTitle(gift, t, lang)} style={{ display: 'inline-flex', marginLeft: 6, verticalAlign: '-2px' }}><Icon name={creditIcon(gift)} size={12} color="var(--clay-ink)" /></span>}
                 </span>
                 <span className="t-num" style={{ fontSize: 13.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(it.price), lang)}</span>
                 <button className="dk-iconbtn" title={t('Rimuovi servizio', 'Remove service')} onClick={() => removeServiceItem(it.key)} style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }}>

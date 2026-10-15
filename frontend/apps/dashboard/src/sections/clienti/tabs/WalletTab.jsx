@@ -1,8 +1,12 @@
-// WalletTab.jsx — staff view of the client's wallet: coupons, loyalty points,
-// gift cards. Tutto si filtra lato server per `client_id`, anche il conto
-// fedeltà: scorrere le pagine dell'elenco iscritte ordinato per punti (a pari
-// merito in ordine non garantito su PostgreSQL) poteva non trovarla mai, e la
-// cliente a 9 timbri su 10 risultava «non iscritta» (14-06, 07-06).
+// WalletTab.jsx — staff view of the client's wallet: trattamenti già pagati,
+// coupons, loyalty points, gift cards. Tutto si filtra lato server per
+// `client_id`, anche il conto fedeltà: scorrere le pagine dell'elenco iscritte
+// ordinato per punti (a pari merito in ordine non garantito su PostgreSQL)
+// poteva non trovarla mai, e la cliente a 9 timbri su 10 risultava «non
+// iscritta» (14-06, 07-06).
+// I trattamenti che la cliente ha già pagato e deve ancora fare (regali,
+// pagamenti in anticipo, sedute dei pacchetti) stanno in cima: è la prima cosa
+// da sapere quando chiama o arriva.
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon, ProgressBar, fmtEurNoFree } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
@@ -10,6 +14,8 @@ import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
 import { dateLabel, rewardLabel } from '../helpers.js';
 import { couponsApi, giftCardsApi, loyaltyApi } from '../../../api/marketing.js';
+import { creditIcon, creditKind, creditOrigin, giverName, ownsCredit, sessionsLabel, sessionsLeftText, splitClientCredits } from '../../fedelta/credits.js';
+import { effectiveStatus } from '../../fedelta/meta.js';
 
 /* Caricamento fallito: non è «nessun coupon». Prima un errore di rete si
  * leggeva come elenco vuoto, e alla cliente si diceva che non aveva buoni. */
@@ -20,6 +26,82 @@ async function loyaltyPointsOf(programId, clientId) {
   const res = await loyaltyApi.accounts(programId, { client_id: clientId });
   const mine = (res.items || []).find((a) => a.client_id === clientId);
   return { points: mine ? mine.points : null };
+}
+
+/** Un trattamento già pagato della cliente: servizio, da dove viene (regalo
+ *  da…, pagato in anticipo, pacchetto «…»), scadenza, sedute rimaste su
+ *  totali e valore residuo. Esaurito o scaduto: sbiadito, con lo stato. */
+function CreditRow({ g, clientId, closed, onOpen, t, lang }) {
+  const total = Math.max(1, Number(g.sessions_total) || 1);
+  const left = Math.max(0, Number(g.sessions_left ?? total) || 0);
+  const status = effectiveStatus(g);
+  const expiry = g.expires_at
+    ? (status === 'expired' ? t(`Scaduto il ${dateLabel(g.expires_at, lang)}`, `Expired ${dateLabel(g.expires_at, lang)}`)
+      : t(`Scade il ${dateLabel(g.expires_at, lang)}`, `Expires ${dateLabel(g.expires_at, lang)}`))
+    : t('Nessuna scadenza', 'No expiry');
+  return (
+    <div className="dk-card dk-row" onClick={() => onOpen(g)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 16px', boxShadow: 'none', border: '1px solid var(--hair)', borderLeft: '3px solid ' + (closed ? 'var(--faint)' : 'var(--clay)'), opacity: closed ? 0.62 : 1, cursor: 'pointer' }}>
+      <div style={{ width: 40, height: 40, borderRadius: 11, background: closed ? 'var(--paper-2)' : 'var(--clay-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+        <Icon name={creditIcon(g)} size={20} color={closed ? 'var(--muted-2)' : 'var(--clay-ink)'} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>{g.gift_service_name || '—'}</span>
+          {g.payment_status === 'unpaid' && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>{t('Da pagare', 'Unpaid')}</span>}
+        </div>
+        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Icon name={creditIcon(g)} size={13} color="var(--muted-2)" />{creditOrigin(g, t, { from: giverName(g, clientId) })}
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Icon name="calendar" size={13} color="var(--muted-2)" />{expiry}
+          </span>
+        </div>
+      </div>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <div className="t-num" style={{ fontSize: 19, color: closed ? 'var(--muted-2)' : 'var(--clay-ink)' }}>{left}/{total}</div>
+        <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, fontWeight: 600 }}>
+          {closed
+            ? (status === 'expired' ? t('Scaduto', 'Expired') : t('Esaurito', 'Used up'))
+            : [total === 1 ? t('seduta', 'session') : t('sedute', 'sessions'), t('residuo', 'left') + ' ' + fmtEurNoFree(g.balance, lang)].join(' · ')}
+        </div>
+      </div>
+      <Icon name="chevR" size={16} color="var(--faint)" />
+    </div>
+  );
+}
+
+/** «Trattamenti già pagati»: quelli ancora da fare in vista, gli esauriti e
+ *  gli scaduti a parte, dietro un clic. */
+function PaidTreatments({ open, closed, clientId, onOpen, t, lang }) {
+  const [showClosed, setShowClosed] = useState(false);
+  return (
+    <div style={{ marginBottom: 26, paddingBottom: 20, borderBottom: '1px solid var(--hair)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <Icon name="wallet" size={15} color="var(--clay-ink)" />
+        <span className="t-meta">{t('Trattamenti già pagati', 'Prepaid treatments')}</span>
+        {open.length > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '2px 8px', borderRadius: 99 }}>{open.length} {t('da fare', 'to do')}</span>}
+      </div>
+      {open.length ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {open.map((g) => <CreditRow key={g.id} g={g} clientId={clientId} onOpen={onOpen} t={t} lang={lang} />)}
+        </div>
+      ) : (
+        <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '2px 2px' }}>{t('Nessun trattamento da fare: quelli pagati sono già stati fatti o sono scaduti.', 'No treatment to do: the paid ones are used up or expired.')}</div>
+      )}
+      {closed.length > 0 && (
+        <button type="button" onClick={() => setShowClosed((v) => !v)} style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={showClosed ? 'chevU' : 'chevD'} size={13} color="var(--clay-ink)" />
+          {showClosed ? t('Nascondi esauriti e scaduti', 'Hide used up and expired') : t(`Esauriti e scaduti (${closed.length})`, `Used up and expired (${closed.length})`)}
+        </button>
+      )}
+      {showClosed && closed.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+          {closed.map((g) => <CreditRow key={g.id} g={g} clientId={clientId} closed onOpen={onOpen} t={t} lang={lang} />)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function LoadFailed({ msg, onRetry, t }) {
@@ -85,10 +167,21 @@ export default function WalletTab({ c }) {
   const couponList = Array.isArray(coupons) ? coupons : [];
   const available = couponList.filter((x) => x.status === 'active').length;
   const used = couponList.length - available;
-  const activeGifts = (Array.isArray(gifts) ? gifts : []).filter((g) => g.status === 'active').length;
+  // I trattamenti già pagati della cliente in una sezione loro, in cima; fra
+  // le gift card resta il resto (carte a importo, regali comprati per altri).
+  const credits = splitClientCredits(Array.isArray(gifts) ? gifts : [], c.id);
+  const hasCredits = credits.open.length + credits.closed.length > 0;
+  const activeGifts = credits.others.filter((g) => g.status === 'active').length;
+  const viewKind = giftView ? creditKind(giftView) : 'gift';
+  const viewTreatment = !!giftView && giftView.gift_service_id != null;
 
   return (
     <div style={{ maxWidth: 660 }}>
+      {/* —— 0 · TRATTAMENTI GIÀ PAGATI —— la prima cosa da sapere */}
+      {hasCredits && (
+        <PaidTreatments open={credits.open} closed={credits.closed} clientId={c.id} onOpen={setGiftView} t={t} lang={lang} />
+      )}
+
       {/* —— 1 · COUPON —— */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <Icon name="coupon" size={15} color="var(--clay-ink)" />
@@ -202,9 +295,9 @@ export default function WalletTab({ c }) {
       </div>
       {gifts == null ? <div className="skel" style={{ height: 76, borderRadius: 12 }} /> : gifts === FAILED ? (
         <LoadFailed t={t} onRetry={retry} msg={t('Gift card non caricate: non è detto che non ce ne siano.', 'Gift cards not loaded: there may be some.')} />
-      ) : gifts.length ? (
+      ) : credits.others.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {gifts.map((g) => {
+          {credits.others.map((g) => {
             const spent = g.status !== 'active';
             const isBuyer = g.buyer_client_id === c.id;
             return (
@@ -215,6 +308,8 @@ export default function WalletTab({ c }) {
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{isBuyer ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')}</span>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6 }}>{g.code}</span>
                     {g.payment_status === 'unpaid' && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>{t('Da pagare', 'Unpaid')}</span>}
+                    {/* un trattamento comprato per un'altra persona: quale, e quante sedute */}
+                    {g.gift_service_name && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '2px 8px', borderRadius: 99 }}><Icon name={creditIcon(g)} size={11} color="var(--clay-ink)" />{[g.gift_service_name, sessionsLabel(g, t)].filter(Boolean).join(' · ')}</span>}
                   </div>
                   <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 4, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -239,11 +334,15 @@ export default function WalletTab({ c }) {
           })}
         </div>
       ) : (
-        <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '6px 2px 2px' }}>{t('Nessuna gift card collegata a questo cliente.', 'No gift cards linked to this client.')}</div>
+        <div className="t-sm" style={{ color: 'var(--muted-2)', padding: '6px 2px 2px' }}>
+          {hasCredits
+            ? t('Nessun’altra gift card collegata a questo cliente.', 'No other gift cards linked to this client.')
+            : t('Nessuna gift card collegata a questo cliente.', 'No gift cards linked to this client.')}
+        </div>
       )}
 
       {giftView && (
-        <DkModal open onClose={() => setGiftView(null)} title="Gift card" sub={giftView.code} width={420}
+        <DkModal open onClose={() => setGiftView(null)} title={viewTreatment && viewKind !== 'gift' ? creditOrigin(giftView, t) : 'Gift card'} sub={giftView.code} width={420}
           foot={<React.Fragment>
             <button className="dk-btn dk-btn--ghost" onClick={() => setGiftView(null)}>{t('Chiudi', 'Close')}</button>
             {giftView.status === 'active' && <button className="dk-btn dk-btn--clay" onClick={() => fireToast({ msg: t('QR pronto per la stampa', 'QR ready to print'), icon: 'check' })}><Icon name="barcode" size={16} color="#fff" />{t('Stampa QR', 'Print QR')}</button>}
@@ -254,13 +353,22 @@ export default function WalletTab({ c }) {
             <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{fmtEurNoFree(giftView.balance, lang)}</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 99, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)', background: giftView.status === 'active' ? 'var(--ok-tint)' : 'var(--paper-2)' }}>
               <Icon name={giftView.status === 'active' ? 'clock' : 'check'} size={13} color={giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)'} />
-              {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : t('Esaurita', 'Spent')}
+              {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : effectiveStatus(giftView) === 'expired' ? t('Scaduta', 'Expired') : t('Esaurita', 'Spent')}
             </span>
           </div>
           <div style={{ borderTop: '1px solid var(--hair)' }}>
             {[
-              [t('Tipo', 'Type'), giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
-              [giftView.buyer_client_id === c.id ? t('Destinataria', 'For') : t('Regalata da', 'From'), (giftView.buyer_client_id === c.id ? giftView.recipient_name : giftView.buyer_name) || '—'],
+              // un trattamento suo: da dove viene, quale, quante sedute restano
+              ...(viewTreatment && ownsCredit(giftView, c.id) ? [
+                [t('Tipo', 'Type'), creditOrigin(giftView, t, { from: giverName(giftView, c.id) })],
+                [t('Trattamento', 'Treatment'), giftView.gift_service_name || '—'],
+                [t('Sedute', 'Sessions'), sessionsLeftText(giftView, t)],
+                ...(Number(giftView.sessions_total) > 1 ? [[t('Una seduta', 'One session'), fmtEurNoFree(giftView.session_value, lang)]] : []),
+              ] : [
+                [t('Tipo', 'Type'), giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
+                [giftView.buyer_client_id === c.id ? t('Destinataria', 'For') : t('Regalata da', 'From'), (giftView.buyer_client_id === c.id ? giftView.recipient_name : giftView.buyer_name) || '—'],
+                ...(viewTreatment ? [[t('Trattamento', 'Treatment'), [giftView.gift_service_name, sessionsLabel(giftView, t)].filter(Boolean).join(' · ')]] : []),
+              ]),
               [t('Valore iniziale', 'Initial value'), fmtEurNoFree(giftView.initial_value, lang)],
               [t('Saldo', 'Balance'), fmtEurNoFree(giftView.balance, lang)],
               [t('Pagamento', 'Payment'), giftView.payment_status === 'unpaid' ? t('Da pagare', 'Unpaid') : t('Pagata', 'Paid')],

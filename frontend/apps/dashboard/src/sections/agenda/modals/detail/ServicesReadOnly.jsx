@@ -1,8 +1,9 @@
 // ServicesReadOnly — i servizi di una visita chiusa (o senza il permesso
-// agenda): chi li fa, durata, prezzo, regalo, e il totale.
+// agenda): chi li fa, durata, prezzo, il trattamento già pagato che lo copre
+// (regalo, pagato in anticipo, pacchetto), e il totale.
 import { Icon, fmtDur, fmtEur } from '@youty/shared';
 import { fmtMoney } from '../../lib.js';
-import { usableCode } from '../rules.js';
+import { creditIcon, creditLabel, creditTitle } from '../../../fedelta/credits.js';
 
 export default function ServicesReadOnly({ appt, operators, t, lang }) {
   return (
@@ -11,7 +12,7 @@ export default function ServicesReadOnly({ appt, operators, t, lang }) {
         const gift = (appt.gifts || []).find((g) => g.service_id === it.service_id);
         return (
           <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-            <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={[t('Gift card', 'Gift card'), usableCode(gift.code)].filter(Boolean).join(' ')} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name="gift" size={10} color="var(--clay-ink)" />{t('Regalo', 'Gift')}</span>}</span>
+            <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={creditTitle(gift, t, lang)} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name={creditIcon(gift)} size={10} color="var(--clay-ink)" />{creditLabel(gift, t, { withFrom: false })}</span>}</span>
             <span className="t-sm" style={{ color: 'var(--muted)' }}>{[operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name, fmtDur(it.duration_min, lang), fmtEur(Number(it.price), lang)].filter(Boolean).join(' · ')}</span>
           </div>
         );

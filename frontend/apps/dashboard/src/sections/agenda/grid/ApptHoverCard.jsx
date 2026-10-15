@@ -3,6 +3,7 @@
 // La mostra la vista che la chiede, con la posizione di hoverPlacement.
 import { Avatar, Icon, fmtDur, timeLabel } from '@youty/shared';
 import { aEndMin, aStartMin, initialsOf, svcLabel } from '../lib.js';
+import { creditIcon, creditLabel } from '../../fedelta/credits.js';
 
 /* ---------- appointment hover card ---------- */
 export default function ApptHoverCard({ hover, t, lang, operators, colorOf, hints = 'day' }) {
@@ -26,6 +27,16 @@ export default function ApptHoverCard({ hover, t, lang, operators, colorOf, hint
           <Icon name="scissors" size={15} color="var(--muted-2)" style={{ marginTop: 1, flexShrink: 0 }} />
           <span style={{ fontSize: 13.5, fontWeight: 600 }}>{svcLabel(a)}</span>
         </div>
+        {/* Il servizio è già pagato (regalo, pagato in anticipo, seduta di
+            un pacchetto): al banco va saputo prima di aprire la visita. */}
+        {(a.gifts || []).map((g) => (
+          <div key={g.gift_card_id ?? g.code} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+            <Icon name={creditIcon(g)} size={15} color="var(--clay-ink)" style={{ marginTop: 1, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--clay-ink)' }}>
+              {g.service_name ? g.service_name + ' · ' : ''}{creditLabel(g, t)}
+            </span>
+          </div>
+        ))}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <Icon name="clock" size={15} color="var(--muted-2)" style={{ flexShrink: 0 }} />
           <span className="tabnum" style={{ fontSize: 13.5 }}>{timeLabel(startMin)}–{timeLabel(endMin)}</span>
