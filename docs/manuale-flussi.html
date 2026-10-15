@@ -75,7 +75,7 @@
 <h3>3.1 Agenda</h3>
 <ul>
   <li><b>Barra in una riga</b>: <b>Oggi</b>, frecce, mese (apre il <b>date picker</b> con salto mese/anno), i sette giorni della settimana (oggi col pallino; durante un trascinamento sono il bersaglio per spostare a un altro giorno), orari del centro, filtro <b>Team</b>, <b>Indietro</b>, zoom (− / + / Adatta, più il bottone della <b>larghezza delle colonne</b>) e vista. Sugli schermi stretti le etichette lasciano il posto alle icone, con il nome nel suggerimento; la griglia comincia subito sotto.</li>
-  <li><b>Viste</b> Giorno / Settimana / Mese. In Giorno: colonne per operatrice, con testata bassa (nome, appuntamenti e incasso del giorno; il colore si cambia dal pennello che compare al passaggio). In Settimana: sotto-colonne per operatrice, i giorni si allargano fino a riempire lo spazio (con molte operatrici si scorre di lato), giorno corrente evidenziato; la settimana in corso si apre con oggi in vista. Le griglie coprono tutte le <b>24 ore</b>, con il fuori turno (in Settimana il fuori orario del centro) tratteggiato: si scorre sempre, anche nei giorni vuoti, e si può prenotare o trascinare a qualsiasi ora. Aprendo l'agenda oggi la griglia parte un'ora prima di adesso, gli altri giorni mezz'ora prima dell'inizio della giornata di lavoro; <b>Adatta</b> mette l'orario di lavoro in una schermata.</li>
+  <li><b>Viste</b> Giorno / Settimana / Mese. In Giorno: colonne per operatrice, ognuna con lo sfondo tinto del colore dell'operatrice, con testata bassa (nome, appuntamenti e incasso del giorno; il colore si cambia dal pennello che compare al passaggio). In Settimana: sotto-colonne per operatrice, anche loro col suo colore, i giorni si allargano fino a riempire lo spazio (con molte operatrici si scorre di lato), giorno corrente evidenziato; la settimana in corso si apre con oggi in vista. Le griglie coprono tutte le <b>24 ore</b>, con il fuori turno (in Settimana il fuori orario del centro) tratteggiato: si scorre sempre, anche nei giorni vuoti, e si può prenotare o trascinare a qualsiasi ora. Aprendo l'agenda oggi la griglia parte un'ora prima di adesso, gli altri giorni mezz'ora prima dell'inizio della giornata di lavoro; <b>Adatta</b> mette l'orario di lavoro in una schermata.</li>
   <li><b>Larghezza delle colonne</b> (Giorno e Settimana, una per vista, resta sulla postazione): dal bottone accanto allo zoom (cursore, − / +, <b>Tutte in vista</b> per avere tutte le colonne nello schermo senza scorrere di lato, Normale); trascinando il bordo destro di una testata, come in un foglio di calcolo (doppio clic: tutte in vista); con ⌘/Ctrl + Maiusc e la rotella sopra la griglia, fermo sul punto sotto il puntatore. Con le colonne strette le testate tengono l'avatar e i blocchi della settimana solo il colore (il resto nella scheda al passaggio).</li>
   <li><b>Trascinamento</b>: il blocco viaggia sopra la griglia senza spostare gli altri (le corsie cambiano solo al rilascio) e lascia una traccia dove partiva; la spina scura sposta la visita intera e la segue. Portandolo vicino a un bordo la griglia scorre da sola (dopo un attimo, così attraversare il bordo non la sposta); il badge accanto al puntatore dice orario d'arrivo ed esito, e resta dentro la finestra. Niente finisce oltre la mezzanotte. Dopo il rilascio la scheda dell'appuntamento non compare da sola: torna muovendo il mouse.</li>
   <li><b>Filtro Team</b> (viste Giorno e Settimana): quali colonne vedere, «Solo» per la giornata di una persona. In Settimana le spente non hanno sotto-colonna e la testata del giorno conta solo quello che si vede; una visita resta visibile finché una delle sue operatrici è accesa. Solo nel Giorno c'è <b>Solo chi lavora oggi</b> (acceso di partenza: nasconde chi non ha turno, pause né appuntamenti e lo segna «a riposo»; nei giorni in cui nessuno ha turni non nasconde niente). Le operatrici disattivate con appuntamenti restano sempre visibili. La scelta resta sulla postazione.</li>
@@ -87,13 +87,14 @@
     <ul>
       <li>Prima riga con dati cliente + "Apri scheda cliente" + tasto <b>Yourang</b> (contatto).</li>
       <li>Colonna sinistra: operatrice in evidenza (avatar/colore), caparra, banner <b>conferma prenotazione</b> WhatsApp, anteprima <b>scheda tecnica</b>.</li>
-      <li>Azioni in sequenza: <b>Check-in</b> (arrivo) → <b>Check-out · incasso e vendita</b> (un unico passaggio). Secondarie: Note, Sposta, Modifica trattamento. Distruttive (No-show, Cancella) declassate.</li>
+      <li>Azioni in sequenza: <b>Check-in</b> (arrivo), con accanto <b>e inizia</b> per far partire subito anche il trattamento → <b>Check-out · incasso e vendita</b> (un unico passaggio). Nei centri che non distinguono l'arrivo dall'inizio del lavoro (Impostazioni → Ottimizzazione agenda, <b>Un passaggio</b>) c'è un bottone solo, <b>Check-in e inizia trattamento</b>; il check-in resta registrato e «Torna indietro» riporta a confermato. Secondarie: Note, Sposta, Modifica trattamento. Distruttive (No-show, Cancella) declassate.</li>
       <li><b>Sposta</b> possibile fino a 48h prima; <b>Cancella</b>/<b>No-show</b> chiedono una motivazione (opzioni rapide + nota) e, per cancellazione tardiva/no-show, mostrano l'addebito dell'intero importo (carta salvata su Stripe) prima della conferma.</li>
       <li><b>Stima margine</b> (dato gestionale interno, riga di sintesi espandibile): costo fornitori, costo prodotti (uso vs vendita), costo dipendente, totale costi vs incasso, margine € e %.</li>
     </ul>
   </li>
   <li><b>Pannello destro:</b> box <b>Vendite totali di oggi</b> (checkout servizi+prodotti + vendite del Punto Vendita) — cliccabile, porta al <b>Registro attività</b> filtrato su oggi; <b>Opportunità di oggi</b>; <b>Lista d'attesa</b>. La sidebar destra e quella sinistra sono collassabili; sugli schermi sotto i 1600 px (destra) e i 1366 px (sinistra) partono chiuse finché non le si apre. Chiuso, il pannello destro mostra i numeri che chiedono un'azione (slot liberati da richiamare, lista d'attesa); sotto i 1180 px, aperto, si mette sopra l'agenda.</li>
   <li><b>Prenotazione di gruppo</b>: dal menu della freccia accanto a <b>Prenota</b> (in alto), insieme a «Nuovo cliente».</li>
+  <li><b>Nuova prenotazione</b> e prenotazione di gruppo: accanto alla ricerca della cliente c'è sempre <b>Nuovo cliente</b>, anche prima di cercare; quello che si è scritto nella ricerca precompila nome e cognome della scheda veloce.</li>
 </ul>
 
 <h3>3.2 Check-out, incasso e vendita (un unico step)</h3>
@@ -130,7 +131,7 @@
 <ul>
   <li>Sotto-tab <b>Servizi</b> e <b>Pacchetti</b>.</li>
   <li>Il <b>tempo del servizio dipende solo dal servizio</b>, non dall'operatrice (nessun doppio tempo per operatrice).</li>
-  <li>Categorie con colori pastello (Unghie, Colore & capelli, Viso & cura, Extra) — riordinabili via drag & drop; l'ordine si riflette nelle card della pagina Clienti.</li>
+  <li>Categorie con un colore ciascuna (Unghie, Colore & capelli, Viso & cura, Extra), scelto da tre file di tinte: <b>Vivaci</b>, <b>Scure</b> e <b>Tenui</b> (le pastello di prima); una categoria nuova parte dalla prima tinta vivace che le altre non hanno, così in agenda si distinguono a colpo d'occhio. Sui blocchi scuri il testo diventa bianco. Riordinabili via drag & drop; l'ordine si riflette nelle card della pagina Clienti.</li>
   <li>Pacchetti: costruttore con chip dei servizi inclusi + ricerca per aggiungerne altri.</li>
 </ul>
 
@@ -180,6 +181,7 @@
 <h3>3.11 Impostazioni → Ottimizzazione agenda / Riempimento intelligente</h3>
 <ul>
   <li><b>Riempimento del calendario:</b> Libero / Massimo incasso (regola lo scoring degli slot proposti online).</li>
+  <li><b>Check-in e inizio trattamento:</b> Due passaggi (di partenza) / Un passaggio, per i centri che non separano l'arrivo dall'inizio del lavoro.</li>
   <li><b>Se si libera un posto:</b> Avvisa / Esegui (livello di autonomia della cascata di recupero: lista d'attesa → clienti in scadenza di ciclo → offerta last-minute).</li>
   <li><b>Sconti last-minute:</b> tetto Mai / 10 / 20 / 30% con budget mensile.</li>
   <li><b>Clienti flessibili:</b> chiedi in prenotazione chi accetta di spostarsi (finestra ± editabile, es. 30 min); se spostata, la cliente riceve un coupon (sconto editabile, es. 10%).</li>
@@ -218,7 +220,7 @@
 
 <div class="flow"><b>Flusso 1 — Prenotazione online.</b> La cliente prenota in app (3 passi, solo slot liberi) → l'appuntamento compare in <b>Agenda</b> nella colonna dell'operatrice → Yourang invia la <b>conferma</b> WhatsApp nella lingua preferita → in dashboard è possibile inviare una conferma puntuale dal popup.</div>
 
-<div class="flow"><b>Flusso 2 — Check-in → Check-out.</b> All'arrivo lo staff registra il <b>Check-in</b> (blocca il sollecito di ritardo). A fine trattamento il <b>Check-out</b> apre incasso + vendita (per operatrice, con omaggi/sconti), detrae la caparra e incassa il saldo (contanti/carta/misto). Al check-out si genera la <b>scheda tecnica</b>.</div>
+<div class="flow"><b>Flusso 2 — Check-in → Check-out.</b> All'arrivo lo staff registra il <b>Check-in</b> (blocca il sollecito di ritardo), da solo o insieme all'inizio del trattamento. A fine trattamento il <b>Check-out</b> apre incasso + vendita (per operatrice, con omaggi/sconti), detrae la caparra e incassa il saldo (contanti/carta/misto). Al check-out si genera la <b>scheda tecnica</b>.</div>
 
 <div class="flow"><b>Flusso 3 — Deposito / caparra.</b> Le regole deposito (per etichetta/affidabilità) sono in Impostazioni. Alla prenotazione la cliente versa il deposito (mostrato in app come "versato"); in agenda il blocco riporta l'icona quando la caparra è <b>incassata</b>; al checkout è detratta dal totale.</div>
 
