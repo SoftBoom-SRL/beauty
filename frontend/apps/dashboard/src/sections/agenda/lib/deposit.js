@@ -38,5 +38,9 @@ export const depositToField = (amount, lang) => {
   return lang === 'en' ? s : s.replace('.', ',');
 };
 
+/** La caparra proposta quando la si apre: metà del totale della visita (il
+ *  titolare, 15/10), al centesimo come il server. Si cambia scrivendoci sopra. */
+export const halfDeposit = (maxCents, lang) => depositToField(centsToApi(Math.round((Number(maxCents) || 0) / 2)), lang);
+
 /** L'importo è cambiato rispetto a quello chiesto? Solo allora lo si manda. */
 export const sameAmount = (a, b) => toCents(a) === toCents(b);

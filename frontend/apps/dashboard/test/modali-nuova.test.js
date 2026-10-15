@@ -214,7 +214,11 @@ test('caparra già versata: parte con la prenotazione e l\'avviso lo dice', asyn
   g.button('Caparra già versata').props.onClick();
   g.render();
   const field = () => find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra');
-  // aperta e vuota: il pulsante dice che manca l'importo, e non parte niente
+  // si apre con la metà del totale (35 €), che segue i servizi finché nessuno la tocca
+  assert.equal(field().props.value, '17,50');
+  // svuotata: il pulsante dice che manca l'importo, e non parte niente
+  field().props.onChange({ target: { value: '' } });
+  g.render();
   const btn = g.button('Manca');
   assert.match(textOf(btn), /Manca importo della caparra/);
   btn.props.onClick();

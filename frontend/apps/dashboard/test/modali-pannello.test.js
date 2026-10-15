@@ -371,7 +371,12 @@ test('caparra versata fuori da beauty su una visita che non la chiedeva: importo
   g.button('Registra caparra versata').props.onClick();
   g.render();
   const field = () => find(g.m.tree, (el) => el.type === 'input' && el.props['aria-label'] === 'Importo della caparra');
-  // vuoto o oltre il totale della visita (95 €): i pulsanti non registrano
+  // si apre con la metà del totale della visita (95 €)
+  assert.equal(field().props.value, '47,50');
+  assert.equal(g.button('Incassata: bonifico / Nexi').props.disabled, false);
+  // vuoto o oltre il totale: i pulsanti non registrano
+  field().props.onChange({ target: { value: '' } });
+  g.render();
   assert.equal(g.button('Incassata: bonifico / Nexi').props.disabled, true);
   field().props.onChange({ target: { value: '120' } });
   g.render();
