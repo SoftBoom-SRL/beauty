@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -17,6 +18,12 @@ class Salon(TimeStampedModel):
 
     name = models.CharField(max_length=120)
     slug = models.SlugField(unique=True)
+    # Lo slug prima dell'ultimo cambio. Un salone attivato da una collega per
+    # la cliente nasceva con lo slug della collega («maria-carbone»), e i link
+    # dell'app cliente (`/<slug>`, `/<slug>/hook`) e i QR già dati alle clienti
+    # si sarebbero rotti cambiandolo: così continuano a trovare il salone
+    # (get_salon_by_slug). Lo scrive l'admin quando cambia lo slug.
+    previous_slug = models.SlugField(unique=True, null=True, blank=True, editable=False)
     default_lang = models.CharField(max_length=2, choices=Lang.choices, default=Lang.IT)
     currency = models.CharField(max_length=3, default="EUR")
     # Salone creato da `seed_demo`: è l'unico che `seed_demo --reset` può
@@ -36,6 +43,19 @@ class Salon(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        # Lo slug vecchio di un altro salone porterebbe qui le sue clienti:
+        # get_salon_by_slug preferisce lo slug attuale all'alias.
+        if Salon.objects.exclude(pk=self.pk).filter(previous_slug=self.slug).exists():
+            raise ValidationError(
+                {"slug": "È lo slug precedente di un altro salone: i suoi link vecchi porterebbero qui."}
+            )
+
+    @staticmethod
+    def slug_taken(slug):
+        """Lo slug è già di un salone, come slug attuale o come alias dei link vecchi."""
+        return Salon.objects.filter(models.Q(slug=slug) | models.Q(previous_slug=slug)).exists()
 
 
 class Location(TimeStampedModel):
