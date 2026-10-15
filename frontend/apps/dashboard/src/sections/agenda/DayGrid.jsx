@@ -14,7 +14,7 @@
 // destinazione evidenziata, badge con orario di arrivo. Niente indicatore al
 // passaggio del mouse: chi lavora in salone conosce i propri orari, e la
 // striscia sotto il cursore era solo rumore su una griglia già piena.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDash } from '../../ctx.jsx';
 import {
   PXM, COLW, DAY_HOURS_W, aStartMin, firstName, itemBlocks, explainSlot, gridMarks,
@@ -35,6 +35,7 @@ import NowLine from './grid/NowLine.jsx';
 import ClosedHours from './grid/ClosedHours.jsx';
 import GhostBlocks from './grid/GhostBlocks.jsx';
 import VisitBlocks from './grid/VisitBlocks.jsx';
+import { dayStays, linkedIds, stayMatesLabels } from './lib/stay.js';
 import PauseBlock from './grid/PauseBlock.jsx';
 import DayDragBadge from './grid/DayDragBadge.jsx';
 
@@ -126,7 +127,20 @@ export default function DayGrid({
   const {
     drag, justDragged, force, otherPointer, endDrag, onCancel, markDropped, startGesture, followEdge, hoverOk, pointerMoved,
   } = useGridDrag({ onStop: onDragChange, windowUpRef: onUpRef, scrollRef, headRef, gutter: DAY_HOURS_W });
-  const hoverIfOk = (a, el) => { if (onHover && hoverOk()) onHover(a, el); };
+  /* La permanenza (lib/stay.js): gli appuntamenti della stessa cliente uno
+   * dopo l'altro (mani con Sole, piedi con Mara) si evidenziano insieme quando
+   * se ne apre o se ne indica uno, portano il segno del collegamento, e
+   * l'anteprima dice «Insieme a…». Prima sembravano visite estranee. */
+  const dayAppts = dataRows.flatMap((r) => r.appointments || []);
+  const stays = dayStays(dayAppts);
+  const [hoverId, setHoverId] = useState(null);
+  const hoverIfOk = (a, el) => {
+    if (!onHover || !hoverOk()) return;
+    setHoverId(a.id);
+    onHover({ ...a, stay_mates: stayMatesLabels(stays, dayAppts, a.id) }, el);
+  };
+  const leave = () => { setHoverId(null); onLeave && onLeave(); };
+  const linked = linkedIds(stays, openApptId, hoverId);
 
   /* Aprendo il dettaglio, il suo blocco viene portato in vista: può stare a
    * un'ora che in quel momento non è sullo schermo, e il contesto serviva
@@ -197,7 +211,7 @@ export default function DayGrid({
     startGesture();
     // la scheda di anteprima si chiude appena si preme: allungando un blocco
     // restava aperta sopra la griglia, con la durata di prima
-    onLeave && onLeave();
+    leave();
     drag.current = { ...d, cx: e.clientX, cy: e.clientY, pointerId: e.pointerId, startScroll: scrollRef.current?.scrollTop || 0 };
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
     return true;
@@ -271,7 +285,7 @@ export default function DayGrid({
   }
   function startedMoving() {
     document.body.classList.add('dk-dragging');
-    onLeave && onLeave();
+    leave();
     onDragChange && onDragChange(true);
   }
 
@@ -329,7 +343,7 @@ export default function DayGrid({
     if (!d.moved) {
       // click semplice: apre il dettaglio (il click nativo è soppresso per non
       // aprirlo anche dopo un vero trascinamento)
-      if (d.kind === 'item') { onLeave && onLeave(); onOpenAppt(d.block.appt); }
+      if (d.kind === 'item') { leave(); onOpenAppt(d.block.appt); }
       return;
     }
     markDropped();   // il click nativo che segue non apre niente
@@ -471,7 +485,8 @@ export default function DayGrid({
                 <VisitBlocks
                   opId={o.id} blocks={allBlocks} itemPos={itemPos} restPos={restPos} g0={G0} pxm={pxm} t={t} lang={lang} canWrite={canWrite}
                   dragging={dragging} openApptId={openApptId} itemColor={itemColor} colorOf={colorOf} soakLabel={soakLabel}
-                  onItemDown={onItemDown} onItemResizeDown={onItemResizeDown} onHover={hoverIfOk} onLeave={onLeave}
+                  onItemDown={onItemDown} onItemResizeDown={onItemResizeDown} onHover={hoverIfOk} onLeave={leave}
+                  stays={stays} linked={linked}
                   onSlotMenuAt={(startMin, x, y) => onSlotMenu(o.id, startMin, x, y, explainSlot(row, startMin, step, { nowMin, t, rows: dataRows }))}
                 />
                 {/* pauses */}

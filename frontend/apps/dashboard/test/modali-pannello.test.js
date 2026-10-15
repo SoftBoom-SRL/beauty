@@ -15,7 +15,7 @@ const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sec
   // i pezzi senza hook del dettaglio, che per i test fanno parte del pannello
   expand: [
     'DetailFooter', 'ClientMetaBar', 'WhoWhenCard', 'DepositCard', 'NoteEditor', 'MarginSection', 'ServicesReadOnly', 'ServicesEditor',
-    'ReasonPicker', 'WhoCancels', 'DepositEntry', 'AddDepositCard',
+    'ReasonPicker', 'WhoCancels', 'DepositEntry', 'AddDepositCard', 'StayCard',
   ],
 });
 
@@ -40,6 +40,9 @@ const visit = (extra = {}) => ({
   ...extra,
 });
 
+// la permanenza restituita da GET …/41/stay: si imposta prima di montare il pannello
+let stayFixture = null;
+
 function setup(appt = visit(), dash = {}) {
   installDom();
   const ApiError = globalThis.__ApiError;
@@ -52,6 +55,8 @@ function setup(appt = visit(), dash = {}) {
     get: (url, opts) => {
       calls.get.push({ url, opts });
       if (url === '/api/agenda/appointments/41') return Promise.resolve(state.server);
+      if (url === '/api/agenda/appointments/41/stay') return Promise.resolve(stayFixture || []);
+      if (url === '/api/agenda/appointments/77') return Promise.resolve({ ...state.server, id: 77 });
       if (url === '/api/agenda/undo') return Promise.resolve(state.undo);
       if (url === '/api/agenda/waitlist') return Promise.resolve(state.waitlist);
       if (url === '/api/agenda/availability') return Promise.resolve(state.slots);
@@ -96,7 +101,7 @@ const conflict = (g) => new g.ApiError(409, 'Orario non più disponibile', { det
 // ogni pannello montato si smonta a fine test, anche se un'asserzione fallisce:
 // i timer del pannello (l'orologio del no-show) non devono tenere vivo il file
 const mounted = [];
-afterEach(() => { while (mounted.length) mounted.pop().unmount(); });
+afterEach(() => { while (mounted.length) mounted.pop().unmount(); stayFixture = null; });
 
 test('«Passa a Bea»: rilegge la visita, sposta con from_operator_id e dice a chi è passata', async () => {
   const g = setup();
@@ -407,4 +412,33 @@ test('senza il permesso della cassa non si registra nessuna caparra', async () =
   const g = setup(visit(), { hasScope: (s) => s !== 'sales' });
   await settle(g);
   assert.equal(g.button('Registra caparra versata'), null);
+});
+
+test('stessa permanenza: le altre visite attaccate si vedono, si aprono, e l\'incasso diventa «Incassa tutto»', async () => {
+  stayFixture = [
+    { id: 41, start: isoAtMin(DAY, 600), end: isoAtMin(DAY, 690), status: 'confirmed', total_price: '95.00', bill_id: null, items: [] },
+    { id: 77, start: isoAtMin(DAY, 690), end: isoAtMin(DAY, 730), status: 'confirmed', total_price: '40.00', bill_id: null,
+      items: [{ service_name: 'Piega', operator_name: 'Bea Rossi', operator_id: 4, duration_min: 40 }] },
+  ];
+  const g = setup();
+  await settle(g);
+  assert.ok(textOf(g.m.tree).includes('Stessa permanenza'));
+  assert.ok(textOf(g.m.tree).includes('Piega · Bea'));
+  assert.ok(g.footButton('Incassa tutto · 2 visite'), 'il pulsante dice che si incassa tutto');
+  g.button('Piega · Bea').props.onClick();
+  await settle(g);
+  const call = g.dash.openModal.calls.at(-1);
+  assert.equal(call[0], 'apptdetail');
+  assert.equal(call[1].appointment.id, 77);
+});
+
+test('stessa permanenza già incassata insieme: lo si legge, e niente «Incassa tutto»', async () => {
+  stayFixture = [
+    { id: 41, start: isoAtMin(DAY, 600), end: isoAtMin(DAY, 690), status: 'confirmed', total_price: '95.00', bill_id: 900, items: [] },
+    { id: 77, start: isoAtMin(DAY, 690), end: isoAtMin(DAY, 730), status: 'closed', total_price: '40.00', bill_id: 900, items: [{ service_name: 'Piega' }] },
+  ];
+  const g = setup();
+  await settle(g);
+  assert.ok(textOf(g.m.tree).includes('Incassata insieme a'));
+  assert.equal(g.footButton('Incassa tutto'), null);
 });

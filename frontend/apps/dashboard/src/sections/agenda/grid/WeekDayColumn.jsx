@@ -21,7 +21,7 @@ import WeekBlock from './WeekBlock.jsx';
  *  null se il salone non li ha impostati. */
 export default function WeekDayColumn({
   day, index, width, isToday, isTargetDay, looseTarget, dragging, dg, movingObj, marks, g0, g1, pxm, nowMin, opening = null,
-  ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor,
+  ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null,
   onDayAreaClick, onEmptyClick, onBlockDown, onHover, onLeave,
 }) {
   return (
@@ -80,6 +80,7 @@ export default function WeekDayColumn({
               return (
                 <WeekBlock pxm={pxm} g0={g0}
                   key={key} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
+                  stay={stays?.get(a.id)} linked={!!linked?.has(a.id) && a.id !== openApptId}
                   left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
                   onDown={(e, opts) => onBlockDown(e, a, index, opts)}
                   onHover={onHover} onLeave={onLeave}

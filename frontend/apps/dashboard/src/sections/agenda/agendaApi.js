@@ -28,6 +28,8 @@ export const undoGesture = (entryId) => api.post('/api/agenda/undo', entryId ? {
 
 /* ---- appuntamenti ---- */
 export const getAppointment = (id) => api.get(appt(id));
+// la permanenza: gli appuntamenti della cliente attaccati a questo (services/stay.py)
+export const getStay = (id) => api.get(`${appt(id)}/stay`);
 export const createAppointment = (body) => api.post('/api/agenda/appointments', body);
 /** Visite di un altro gestionale, a blocchi: { visits, location_id }. */
 export const importAppointments = (body) => api.post('/api/agenda/appointments/import', body);
