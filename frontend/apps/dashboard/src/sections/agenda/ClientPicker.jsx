@@ -5,7 +5,10 @@
 // Usato dal drawer "nuova prenotazione" e dalla prenotazione di gruppo: un solo
 // componente, stessa UX. Tastiera: ↑/↓ scorrono, Invio seleziona, Esc chiude.
 // "Nuovo cliente" apre un mini-form (nome, cognome, telefono) precompilato con
-// quanto digitato: si crea e si seleziona senza uscire dalla prenotazione.
+// quanto digitato: si crea e si seleziona senza uscire dalla prenotazione. Il
+// bottone sta sempre accanto al campo di ricerca, non solo fra i risultati:
+// per una cliente nuova bisognava prima scrivere qualcosa e aspettare che la
+// ricerca non trovasse niente.
 // «Scheda completa» espande lo STESSO riquadro con tutto ciò che c'è in
 // anagrafica (email, compleanno, lingua, etichette, origine, nota, consensi):
 // chi prenota al telefono raccoglie i dati mentre parla, senza aprire Clienti.
@@ -292,7 +295,8 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
   const list = results || [];
   return (
     <div style={{ position: 'relative' }}>
-      <div className="dk-search" style={{ width: '100%', height: 40, borderRadius: 12, borderColor: open ? 'var(--line-strong)' : undefined }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="dk-search" style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 12, borderColor: open ? 'var(--line-strong)' : undefined }}>
         <Icon name="search" size={16} color="var(--muted-2)" />
         <input
           ref={inputRef} value={q} onChange={(e) => { setQ(e.target.value); setOpen(e.target.value.trim().length >= MIN_Q); }}
@@ -303,6 +307,15 @@ export default function ClientPicker({ value, onChange, autoFocus = false, place
           aria-expanded={open} aria-autocomplete="list" role="combobox"
         />
         {q && <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { setQ(''); inputRef.current?.focus(); }} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} color="var(--muted-2)" /></button>}
+      </div>
+      {/* sempre a vista: quello che si è già scritto precompila la scheda */}
+      {canCreate && (
+        <button type="button" className="dk-btn dk-btn--ghost" onMouseDown={(e) => e.preventDefault()} onClick={startCreate}
+          title={t('Crea una cliente nuova: nome e telefono, il resto dopo', 'Create a new client: name and phone, the rest later')}
+          style={{ height: 40, padding: '0 12px', borderRadius: 12, fontSize: 13, flexShrink: 0, color: 'var(--clay-ink)' }}>
+          <Icon name="plus" size={15} color="var(--clay-ink)" stroke={2.4} />{t('Nuovo cliente', 'New client')}
+        </button>
+      )}
       </div>
       {open && (
         <div className="dk-card" role="listbox" onMouseDown={(e) => e.preventDefault()} style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, padding: 6, boxShadow: 'var(--sh-pop)', maxHeight: 320, overflowY: 'auto' }}>

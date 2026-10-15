@@ -93,7 +93,10 @@ export const Avatar = () => null;
 export const EmptyState = () => null;
 export const Icon = () => null;
 export const NumInput = () => null;
+export const PhoneInput = () => null;
 export const Toggle = () => null;
+// il controllo vero del numero (il selettore cliente lo usa creando una scheda)
+export { isPlausiblePhone } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'phone.js'))};
 export const statusMeta = (s) => ({ label: String(s || ''), color: '#999' });
 export { depositMeta } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'ui', 'meta.js'))};
 // ApiError, apiErrorText e toastApiError sono quelli veri di apiErrors.js, con
