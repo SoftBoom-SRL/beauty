@@ -80,6 +80,9 @@ def create_package_credits(
                 gift_service=item.service,
                 buyer_client=client,
                 recipient_client=client,
+                # Il nome come per le carte intestate dalla maschera: senza,
+                # l'elenco di Promozioni scriveva le sedute «a —».
+                recipient_name=client.full_name[:120],
                 paid=True,
                 paid_method=paid_method,
                 sold_by=actor,

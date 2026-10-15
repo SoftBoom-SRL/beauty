@@ -1,9 +1,12 @@
 // PkgEditModal.jsx — create / edit a package (POST/PUT /api/catalog/packages).
 // items = [{service_id, qty}] picked from the service catalog; savings preview.
+// La quantità di un servizio sono le sue sedute; `validity_days` i giorni per
+// usarle dalla vendita (vuoto = senza scadenza).
 import React, { useState } from 'react';
-import { Icon, Toggle, fmtEur, EmptyState, nameIn } from '@youty/shared';
+import { Icon, NumInput, Toggle, fmtEur, EmptyState, nameIn } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { FRow, PriceBox } from './parts.jsx';
+import { MAX_VALIDITY_DAYS, sessionsText, validityDaysPayload } from './packages.js';
 
 const svcName = nameIn;
 
@@ -14,6 +17,7 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
     description: pkg?.description || '',
     price: pkg?.price != null ? String(pkg.price) : '0',
     active: pkg?.active ?? true,
+    validity: pkg?.validity_days ?? '',   // '' = senza scadenza
     items: (pkg?.items || []).map((it) => ({ service_id: it.service_id, qty: it.qty || 1 })),
   }));
   const [svcQ, setSvcQ] = useState('');
@@ -54,6 +58,7 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
         description: draft.description.trim(),
         price: price.toFixed(2),
         active: draft.active,
+        validity_days: validityDaysPayload(draft.validity),
         items: draft.items,
       });
     } finally {
@@ -93,7 +98,7 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
         <div className="t-meta" style={{ marginBottom: 6 }}>{t('Descrizione', 'Description')}</div>
         <textarea
           value={draft.description} onChange={(e) => set({ description: e.target.value })} rows={2}
-          placeholder={t('Occasione, periodo di validità, note…', 'Occasion, validity period, notes…')}
+          placeholder={t('Occasione, note…', 'Occasion, notes…')}
           style={{ ...inputCss, resize: 'none', lineHeight: 1.45 }}
         />
       </div>
@@ -110,9 +115,9 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
                 <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 13.5 }}>{s ? svcName(s, lang) : t('Servizio rimosso', 'Removed service')}</span>
                 {s && <span className="t-num" style={{ fontSize: 13, color: 'var(--muted)' }}>{fmtEur(Number(s.price) * it.qty, lang)}</span>}
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 7, fontSize: 14 }} onClick={() => setQty(it.service_id, it.qty - 1)}>−</button>
-                  <span style={{ minWidth: 26, textAlign: 'center', fontWeight: 700, fontSize: 13.5 }}>×{it.qty}</span>
-                  <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 7, fontSize: 14 }} onClick={() => setQty(it.service_id, it.qty + 1)}>+</button>
+                  <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 7, fontSize: 14 }} onClick={() => setQty(it.service_id, it.qty - 1)} aria-label={t('Una seduta in meno', 'One session less')}>−</button>
+                  <span style={{ minWidth: 62, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>{sessionsText(it.qty, t)}</span>
+                  <button className="dk-iconbtn" style={{ width: 26, height: 26, borderRadius: 7, fontSize: 14 }} onClick={() => setQty(it.service_id, it.qty + 1)} aria-label={t('Una seduta in più', 'One more session')}>+</button>
                 </div>
                 <button className="press" onClick={() => setQty(it.service_id, 0)} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}>
                   <Icon name="x" size={14} color="var(--muted-2)" />
@@ -165,7 +170,7 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
         )}
       </div>
       <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 14, marginTop: -8 }}>
-        {t('Clicca di nuovo un servizio per ripeterlo (es. 5× manicure).', 'Click a service again to repeat it (e.g. 5× manicure).')}
+        {t('Clicca di nuovo un servizio per aggiungere una seduta (es. 5 manicure).', 'Click a service again to add a session (e.g. 5 manicures).')}
       </div>
 
       {/* price + savings preview */}
@@ -185,6 +190,19 @@ export default function PkgEditModal({ pkg, services, onSave, onDelete, onClose,
           )}
         </div>
       </div>
+
+      {/* Le sedute vendute scadono N giorni dopo la vendita: in agenda, in
+          cassa e nell'app della cliente si vede fino a quando valgono. */}
+      <FRow label={t('Validità delle sedute', 'Sessions valid for')}
+        hint={draft.validity ? t('Dal giorno della vendita', 'From the day of the sale') : t('Vuoto = senza scadenza', 'Empty = no expiry')}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('Valido per', 'Valid for')}</span>
+          <NumInput integer min={1} max={MAX_VALIDITY_DAYS} value={draft.validity} emptyValue="" placeholder="—"
+            onChange={(v) => set({ validity: v })} aria-label={t('Giorni di validità dalla vendita', 'Days of validity from the sale')}
+            style={{ width: 64, textAlign: 'center', border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 6px', fontSize: 14, fontWeight: 700, background: 'var(--surface)' }} />
+          <span className="t-sm" style={{ color: 'var(--muted)' }}>{t('giorni dalla vendita', 'days from the sale')}</span>
+        </div>
+      </FRow>
 
       <FRow label={t('Pacchetto attivo', 'Package active')} hint={draft.active ? t('Visibile e vendibile', 'Visible and sellable') : t('Nascosto', 'Hidden')}>
         <Toggle on={draft.active} onChange={(v) => set({ active: v })} />

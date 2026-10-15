@@ -227,8 +227,10 @@ finestre lavorabili in minuti per quella data = turno del weekday
   `is_addon` = aggiuntivo: si fa DURANTE un altro servizio (nail art durante la manicure,
   massaggio ai piedi durante la pedicure). In agenda aggiunge il prezzo, non il tempo
   (vedi §7, «Aggiuntivi»); `duration_min` resta la durata indicativa di listino (≥ 1).
-- `Package`: salon FK, name, description blank, price Decimal, active bool default True.
-- `PackageItem`: package FK related_name="items", service FK, qty int default 1.
+- `Package`: salon FK, name, description blank, price Decimal, active bool default True,
+  validity_days int null (giorni per usare le sedute dalla vendita; null = senza scadenza).
+- `PackageItem`: package FK related_name="items", service FK, qty int default 1
+  (= sedute di quel servizio nel pacchetto).
 
 **Endpoint** (/api/catalog)
 - GET `/categories` + CRUD (scope pricing) + POST `/categories/reorder` {ids:[...]}.
@@ -236,13 +238,18 @@ finestre lavorabili in minuti per quella data = turno del weekday
   Su cambio prezzo → log `service.price_changed` con {old, new}. `is_addon` nel PUT:
   assente = invariato (come `color`), nel POST assente = falso.
 - GET `/packages` + CRUD (scope pricing) — items nested nel payload
-  {items:[{service_id, qty}]}, ricreati a ogni update.
+  {items:[{service_id, qty}]}, ricreati a ogni update; `validity_days` 1–3650 o null.
+  Nel PUT `items` e `validity_days` assenti = invariati (null = senza scadenza).
 - Pubblici (no auth, per la web app prima del login): GET `/public/services?salon=slug`
   → categorie ordinate con servizi attivi {id, name_it, name_en, duration_min, soak_min,
-  price, is_addon}; GET `/public/packages?salon=slug`. L'app cliente non prenota un
-  aggiuntivo da solo: lo offre come «Aggiungi» dopo il servizio principale.
+  price, is_addon}; GET `/public/packages?salon=slug` → {id, name, description, price,
+  validity_days, items:[{service_id, name_it, name_en, soak_min, qty}]}. L'app cliente
+  non prenota un aggiuntivo da solo: lo offre come «Aggiungi» dopo il servizio principale.
+- Un pacchetto venduto in cassa diventa una gift card a sedute per servizio
+  (`marketing.credits.create_package_credits`, vedi §10), che scade dopo
+  `validity_days` dalla vendita.
 
-**Tests**: reorder, package con items, endpoint pubblico.
+**Tests**: reorder, package con items, validità delle sedute, endpoint pubblico.
 
 ---
 
@@ -523,6 +530,11 @@ per fornitore; receive con discrepanza → partial.
   buyer_client FK null/blank, recipient_client FK null/blank, recipient_name blank,
   payment_status paid/unpaid, paid_at null, paid_method blank,
   delivery_date null/blank, expires_at null/blank, status active/redeemed/expired, created_at.
+  Trattamenti già pagati: gift_service FK null (carta «a trattamento»), kind
+  gift (regalo) / prepaid (già pagato dalla cliente stessa) / package (sedute di un
+  pacchetto: package FK, package_line FK alla SaleLine), sessions_total e
+  sessions_left (1/1 per le carte a importo); `session_value` = saldo ÷ sedute
+  rimaste per difetto, l'ultima seduta prende il resto.
 - `LoyaltyProgram`: salon FK, name, type points/stamps/tiers/membership,
   earn_metric per_euro/per_visit/per_service, earn_ratio Decimal default 1,
   reward_type coupon_amount/discount_pct/free_service/free_product/gift_card,
@@ -538,13 +550,25 @@ per fornitore; receive con discrepanza → partial.
   scheduled_at null, sent_at null, created_at.
 
 **Servizi**
-Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loyalty.py`,
-`communications.py`, `consent.py`, `wallet.py`.
-- `gift_cards.create_gift_card(salon, value, *, buyer_client=None, recipient_name="", paid=False,
-  paid_method="", sold_by=None, sale=None)` → GiftCard (usata anche da sales).
-- `gift_cards.redeem_gift_card(salon, code, amount)`: select_for_update; attiva, non scaduta,
-  balance ≥ amount (altrimenti HttpError 422 con messaggio); scala balance,
-  status redeemed se 0; ritorna la card. Log `giftcard.redeemed`.
+Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `credits.py`
+(sedute dei pacchetti), `loyalty.py`, `communications.py`, `consent.py`, `wallet.py`.
+- `gift_cards.create_gift_card(salon, value, *, gift_service=None, buyer_client=None,
+  recipient_client=None, recipient_name="", paid=False, paid_method="", sold_by=None,
+  sale=None, cash_in=True, kind="gift", sessions=1, package=None, package_line=None,
+  expires_at=None)` → GiftCard (usata anche da sales). Valore fra 0 e MAX_MONEY (zero solo
+  per un trattamento), sedute 1–100 e solo con `gift_service`.
+- `gift_cards.redeem_gift_card(salon, code, amount, sessions=1)`: select_for_update; attiva,
+  non scaduta, pagata, balance ≥ amount (altrimenti HttpError 422 con messaggio); scala
+  balance, status redeemed se 0. Sulle carte a più sedute toglie `sessions` sedute e
+  all'ultima azzera saldo e carta. Ritorna la card. Log `giftcard.redeemed`.
+- `gift_cards.sell_gift_card(...)`: la vendita dallo staff (kind gift o prepaid; con
+  `gift_service` valore = prezzo × sedute; prepaid = acquirente e destinataria la stessa
+  cliente). `has_remaining_q()`: carte con saldo o con sedute di un trattamento ancora da
+  fare — la regola di agenda (`spendable_gift_cards`), caparra e portafoglio.
+- `credits.create_package_credits(salon, *, package, client, amount, sale=None, line=None,
+  paid_method="", actor=None, expires_at=None)`: una carta kind=package per servizio del
+  pacchetto (sedute = qty), importo diviso in proporzione al listino, scadenza
+  `validity_days` dalla vendita. La chiama la cassa per le righe «package».
 - `loyalty.accrue_loyalty(sale)`: se sale.client None → no-op. Per ogni programma attivo:
   account esistente o auto-creato se enrollment=auto; accrue per earn_metric
   (per_euro: floor(total×ratio); per_visit: ratio; per_service: ratio×n righe servizio);
@@ -559,11 +583,23 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loy
   Un coupon intestato si lega solo a una vendita della stessa cliente: su quella
   di un'altra, o senza cliente, 422 «Coupon riservato a un altro cliente:
   intestalo alla vendita» (come in cassa).
-- GET `/gift-cards` + KPI {sold_total, redeemed_total, outstanding};
-  POST `/gift-cards` (creazione/vendita manuale: se paid → log incasso);
+- GET `/gift-cards?status=&payment_status=&kind=&q=&client_id=` + KPI {sold_total,
+  redeemed_total, outstanding} sulle carte filtrate; `q` cerca anche trattamento e
+  pacchetto. Ogni carta porta kind, sessions_total, sessions_left, session_value,
+  package_id, package_name.
+  POST `/gift-cards` (creazione/vendita manuale: se paid → vendita in cassa e log
+  incasso) con `kind` gift | prepaid e `sessions` (1–100, solo con gift_service_id: il
+  valore diventa prezzo × sedute). prepaid = acquirente e destinataria la stessa
+  cliente (422 senza cliente o con due clienti diverse); package → 422 (nasce solo
+  dalla vendita del pacchetto in cassa).
   POST `/gift-cards/{id}/mark-paid` {method}. `paid_method`/`method` è uno dei metodi
   della cassa (`cash`, `card`, `other`, `gift_card`; "" = non indicato), al massimo
   20 caratteri; altrimenti 422 «Metodo di pagamento non valido».
+- In agenda (`appt.gifts`, `agenda.presenters._gifts_out`) ogni trattamento già pagato
+  che copre un servizio della visita: {gift_card_id, code, service_id, service_name,
+  balance, from_name, kind, sessions_total, sessions_left, session_value, package_name,
+  expires_at}. La caparra si calcola al netto: una carta a sedute copre una riga per
+  seduta rimasta, per intero; una carta a una seduta fino al suo saldo.
 - CRUD `/loyalty-programs`; GET `/loyalty-programs/{id}/accounts` (paginate).
 - CRUD `/communications`; POST `/communications/{id}/send` → risolve audience in
   client ids (labels → clienti con quelle categorie; consents.marketing True) →
@@ -582,13 +618,16 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loy
   cliente anche dagli invii che ha già in mano.
 
 **Endpoint cliente**
-- GET `/client/wallet` → {gift_cards (recipient o buyer, attive, con balance),
-  coupons (attivi del cliente), loyalty:[{program, points, threshold, progress_pct}]}.
+- GET `/client/wallet` → {gift_cards (recipient o buyer, attive, non scadute; con
+  `spendable`, `received`, `from_name` e, per i trattamenti già pagati, kind,
+  sessions_total, sessions_left, session_value, package_name), coupons (attivi del
+  cliente), loyalty:[{program, points, threshold, progress_pct}]}.
 - POST `/client/gift-cards` {value, recipient_name?} → gift card unpaid
   (pagamento in salone; Stripe checkout in fase 2) → response con code.
 
 **Tests**: redeem_gift_card (scala e blocca oltre saldo), accrue_loyalty soglia → coupon
-origin=loyalty, validate_coupon scaduto, send communication → outbox event.
+origin=loyalty, validate_coupon scaduto, send communication → outbox event; carte a
+sedute, pacchetti venduti, già pagato dallo staff, KPI e portafoglio (`test_credits`).
 
 ---
 

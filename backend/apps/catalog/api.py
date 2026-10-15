@@ -276,6 +276,11 @@ def update_package(request, package_id: int, data: PackageIn):
     package = salon_get(Package, ctx, package_id)
     payload = data.dict()
     items = payload.pop("items")
+    # `validity_days` assente = invariata; null = senza scadenza. Il null da
+    # solo non distingue i due casi: un modulo che non conosce il campo
+    # toglierebbe la scadenza al pacchetto a ogni salvataggio.
+    if "validity_days" not in data.dict(exclude_unset=True):
+        payload.pop("validity_days")
     # `items` assente = righe invariate. Prima il default era la lista vuota:
     # un PUT che cambiava solo nome o prezzo cancellava i servizi del pacchetto,
     # e il pacchetto continuava a essere venduto senza contenere più nulla.

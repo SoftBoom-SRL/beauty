@@ -244,14 +244,16 @@ export const usableCode = (code) => (code && !String(code).includes('•') ? Str
  *  scadute, a saldo zero o regalate a «Giulia» senza scheda: il servizio
  *  compariva barrato «Regalo» e in cassa il regalo non c'era (13-09, 17-09,
  *  07-07). Con status=active il server esclude già le scadute (C21): il
- *  controllo resta qui per un server che non lo fa ancora. */
+ *  controllo resta qui per un server che non lo fa ancora.
+ *  «Saldo > 0» vale anche come «sedute ancora da fare» (`has_remaining_q` del
+ *  server): un pacchetto in omaggio ha saldo zero e cinque sedute. */
 export function usableGiftCards(cards, clientId, now = Date.now()) {
   if (clientId == null) return [];
   return (cards || []).filter((g) => g
     && g.gift_service_id != null
     && g.payment_status === 'paid'
     && g.status === 'active'
-    && Number(g.balance) > 0
+    && (Number(g.balance) > 0 || Number(g.sessions_left) > 0)
     && (!g.expires_at || Date.parse(g.expires_at) >= now)
     && (g.recipient_client_id === clientId
       || (g.recipient_client_id == null && !g.recipient_name && g.buyer_client_id === clientId)));

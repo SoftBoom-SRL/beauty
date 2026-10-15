@@ -45,16 +45,21 @@ def _rule_matches(rule, facts) -> bool:
 def spendable_gift_cards(salon, client_ids):
     """Gift card «a trattamento» che quelle clienti possono spendere adesso in salone.
 
-    Attiva, pagata, non scaduta, con saldo, e della cliente: ne è la
-    destinataria, oppure l'ha comprata lei senza indicare nessun destinatario
-    (regalo a sé stessa). «Nessun destinatario» significa né scheda collegata né
+    Attiva, pagata, non scaduta, con qualcosa da dare — saldo, oppure sedute
+    ancora da fare (`marketing.gift_cards.has_remaining_q`) — e della cliente:
+    ne è la destinataria, oppure l'ha comprata lei senza indicare nessun
+    destinatario (regalo a sé stessa, trattamento pagato in anticipo, sedute
+    del suo pacchetto). «Nessun destinatario» significa né scheda collegata né
     nome scritto a mano: una carta intestata a "Maria" resta di Maria anche se
     la sua scheda non esiste ancora, e non è un regalo di chi l'ha pagata.
     Lo stato EXPIRED lo scrive solo chi prova a riscattare: una carta scaduta da
     mesi resta «attiva» a database, quindi la scadenza si verifica qui.
+    Con il solo «saldo > 0» un pacchetto in omaggio (saldo zero, cinque sedute)
+    non compariva sulla visita e la caparra si chiedeva lo stesso.
     È la regola unica dell'agenda: la usano `presenters.gift_index` (i regali
     mostrati sulla visita) e la caparra (`gift_covered_amount`).
     """
+    from apps.marketing.gift_cards import has_remaining_q  # lazy: regola del marketing
     from apps.marketing.models import GiftCard  # lazy
 
     ids = {cid for cid in client_ids if cid}
@@ -67,8 +72,8 @@ def spendable_gift_cards(salon, client_ids):
             status=GiftCard.Status.ACTIVE,
             payment_status=GiftCard.PaymentStatus.PAID,
             gift_service__isnull=False,
-            balance__gt=0,
         )
+        .filter(has_remaining_q())
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gte=now))
         .filter(
             Q(recipient_client_id__in=ids)
@@ -80,21 +85,32 @@ def spendable_gift_cards(salon, client_ids):
 def gift_covered_amount(salon, client, lines) -> Decimal:
     """Quanto del conto pagano già le gift card «a trattamento» della cliente.
 
-    `lines` = [(service, price), ...]. Ogni carta copre un solo servizio del suo
-    tipo, fino al suo saldo: è quello che la cassa scalerà al checkout. Il
-    resto la cliente lo paga in salone, ed è su quello che si calcola la
-    caparra: chiederla su un taglio regalato voleva dire far pagare in anticipo
-    un trattamento già pagato (e, con la scadenza, liberarle il posto se non lo
-    faceva) mentre l'app le diceva «in salone non pagherai questa parte».
+    `lines` = [(service, price), ...]. Una carta a una seduta copre un solo
+    servizio del suo tipo, fino al suo saldo: è quello che la cassa scalerà al
+    checkout. Una carta a sedute (pacchetto, trattamenti pagati in anticipo)
+    copre una riga per ogni seduta rimasta, e per intero: la seduta è pagata
+    anche quando il saldo diviso le sedute vale meno del listino (il pacchetto
+    costa meno dei singoli) o zero (pacchetto in omaggio); lo stesso vale per
+    una seduta singola in omaggio, a saldo zero. Il resto la cliente lo paga in
+    salone, ed è su quello che si calcola la caparra: chiederla su un taglio
+    regalato voleva dire far pagare in anticipo un trattamento già pagato (e,
+    con la scadenza, liberarle il posto se non lo faceva) mentre l'app le
+    diceva «in salone non pagherai questa parte».
     """
     cards = list(spendable_gift_cards(salon, [getattr(client, "id", None)]))
+    # Righe che ogni carta può ancora coprire in questa visita.
+    room = {card.id: card.sessions_left if card.sessions_total > 1 else 1 for card in cards}
     covered = Decimal("0.00")
     for service, price in lines:
-        card = next((c for c in cards if c.gift_service_id == service.id), None)
+        card = next((c for c in cards if c.gift_service_id == service.id and room[c.id] > 0), None)
         if card is None:
             continue
-        cards.remove(card)
-        covered += min(Decimal(str(price or 0)), Decimal(str(card.balance or 0)))
+        room[card.id] -= 1
+        price = Decimal(str(price or 0))
+        if card.sessions_total > 1 or card.balance <= 0:
+            covered += price
+        else:
+            covered += min(price, Decimal(str(card.balance)))
     return covered
 
 

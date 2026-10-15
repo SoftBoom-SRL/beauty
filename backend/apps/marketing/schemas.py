@@ -52,6 +52,14 @@ class CouponRedeemIn(Schema):
 
 
 class GiftCardIn(Schema):
+    """Carta venduta dallo staff.
+
+    `kind`: «gift» (regalo) o «prepaid» (trattamento già pagato dalla cliente,
+    che ne è acquirente e destinataria). Le sedute dei pacchetti nascono solo
+    dalla vendita del pacchetto in cassa. Con `gift_service_id` il valore è il
+    prezzo del servizio per `sessions` sedute, e `value` si ignora.
+    """
+
     value: Decimal
     gift_service_id: Optional[int] = None
     buyer_client_id: Optional[int] = None
@@ -64,6 +72,10 @@ class GiftCardIn(Schema):
     paid_method: str = Field("", max_length=20)
     delivery_date: Optional[date] = None
     expires_at: Optional[datetime] = None
+    kind: str = "gift"
+    # Da 1 a 100, solo con `gift_service_id` (lo controlla `gift_cards`, con
+    # un messaggio che dice cosa correggere).
+    sessions: int = 1
 
 
 class GiftCardOut(Schema):
@@ -84,6 +96,15 @@ class GiftCardOut(Schema):
     expires_at: Optional[datetime] = None
     status: str
     created_at: datetime
+    # gift (regalo) | prepaid (già pagato dalla cliente) | package (sedute di un pacchetto)
+    kind: str = "gift"
+    # Sedute del trattamento: rimaste su totali. Le carte a importo sono 1/1.
+    sessions_total: int = 1
+    sessions_left: int = 1
+    # Quanto scala dal saldo la prossima seduta (l'ultima prende il resto).
+    session_value: Decimal = Decimal("0.00")
+    package_id: Optional[int] = None
+    package_name: Optional[str] = None
 
     @staticmethod
     def resolve_code(obj, context):
@@ -100,6 +121,14 @@ class GiftCardOut(Schema):
     @staticmethod
     def resolve_gift_service_name(obj):
         return obj.gift_service.name_it if obj.gift_service else None
+
+    @staticmethod
+    def resolve_session_value(obj):
+        return obj.session_value
+
+    @staticmethod
+    def resolve_package_name(obj):
+        return obj.package.name if obj.package_id else None
 
 
 class GiftCardKpiOut(Schema):
@@ -236,6 +265,18 @@ class WalletGiftCardOut(Schema):
     # regola di `gift_index` dell'agenda. L'app sommava nel credito anche le
     # carte da pagare e quelle comprate per un'altra persona.
     spendable: bool = False
+    # Chi gliel'ha regalata: vuoto se l'ha comprata lei (un trattamento già
+    # pagato, le sedute del suo pacchetto). È la regola di `from_name`
+    # dell'agenda: con il solo `buyer_name` l'app scriveva «Regalo di» lei stessa.
+    from_name: str = ""
+    # Trattamenti già pagati: tipo, sedute rimaste su totali, valore di una
+    # seduta, pacchetto da cui vengono (vedi GiftCardOut).
+    kind: str = "gift"
+    sessions_total: int = 1
+    sessions_left: int = 1
+    session_value: Decimal = Decimal("0.00")
+    package_id: Optional[int] = None
+    package_name: Optional[str] = None
 
     @staticmethod
     def resolve_gift_service_name(obj):
@@ -244,6 +285,18 @@ class WalletGiftCardOut(Schema):
     @staticmethod
     def resolve_buyer_name(obj):
         return obj.buyer_client.full_name if obj.buyer_client_id else None
+
+    @staticmethod
+    def resolve_from_name(obj):
+        return getattr(obj, "_from_name", "")
+
+    @staticmethod
+    def resolve_session_value(obj):
+        return obj.session_value
+
+    @staticmethod
+    def resolve_package_name(obj):
+        return obj.package.name if obj.package_id else None
 
     @staticmethod
     def resolve_received(obj):

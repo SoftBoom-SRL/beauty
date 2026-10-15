@@ -9,6 +9,7 @@ import React from 'react';
 import { Avatar, Icon, NumInput, fmtEur, nameIn } from '@youty/shared';
 import { addonGroups, fmtMoney, initialsOf, isAddonRow, nextTimedIndex, timedItems } from '../../lib.js';
 import { MAX_ITEM_MIN } from '../rules.js';
+import { creditIcon, creditTitle } from '../../../fedelta/credits.js';
 
 /* campo orario di una riga servizio: stretto, tabellare, come gli altri numeri */
 const timeCellCss = {
@@ -34,6 +35,17 @@ export default function ServicesEditor({
     background: key === justAdded ? 'var(--clay-tint)' : 'transparent', transition: 'background 400ms',
   });
   const opName = (id) => operators.find((x) => x.id === id)?.first_name || '';
+  // Il trattamento già pagato che copre una riga (regalo, pagato in anticipo,
+  // seduta di un pacchetto): icona del suo tipo, e la descrizione intera al
+  // passaggio del mouse. Sul servizio e sui suoi aggiuntivi.
+  const creditMark = (serviceId, size) => {
+    const gift = (appt.gifts || []).find((g) => g.service_id === serviceId);
+    return gift ? (
+      <span title={creditTitle(gift, t, lang)} style={{ display: 'inline-flex', marginLeft: 6, verticalAlign: '-2px' }}>
+        <Icon name={creditIcon(gift)} size={size} color="var(--clay-ink)" />
+      </span>
+    ) : null;
+  };
   return (
     <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
       {/* Con più servizi la visita è una sola cosa in agenda: va detto
@@ -76,7 +88,7 @@ export default function ServicesEditor({
                   <span style={{ width: 8, height: 8, borderRadius: 99, background: color, flexShrink: 0 }} />
                   <span style={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {svcDisplayName(it)}
-                    {(appt.gifts || []).some((g) => g.service_id === it.service_id) && <Icon name="gift" size={12} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
+                    {creditMark(it.service_id, 12)}
                   </span>
                   <span className="t-num" style={{ fontSize: 13.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(it.price), lang)}</span>
                   <button className="dk-iconbtn" title={addons.length ? t('Rimuovi servizio (e i suoi aggiuntivi)', 'Remove service (and its add-ons)') : t('Rimuovi servizio', 'Remove service')} onClick={() => removeServiceItem(it.key)} style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }}>
@@ -183,7 +195,7 @@ export default function ServicesEditor({
                   <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={t('Aggiuntivo: si fa durante il servizio, aggiunge il prezzo e non il tempo', 'Add-on: done during the service, adds the price and not the time')}>
                     + {svcDisplayName(x)}
-                    {(appt.gifts || []).some((g) => g.service_id === x.service_id) && <Icon name="gift" size={11} color="var(--clay-ink)" title={t('Coperto da gift card', 'Covered by a gift card')} style={{ marginLeft: 6, verticalAlign: '-2px' }} />}
+                    {creditMark(x.service_id, 11)}
                     {x.operator_id != null && x.operator_id !== it.operator_id && opName(x.operator_id) && (
                       <span className="t-sm" style={{ marginLeft: 6, color: 'var(--muted)', fontWeight: 500 }}>{t('con', 'by')} {opName(x.operator_id)}</span>
                     )}

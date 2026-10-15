@@ -5,6 +5,10 @@ l'incasso della carta comprata dall'app — con la vendita che porta il denaro
 in cassa — e le regole dei KPI stavano dentro gli endpoint di api.py.
 `create_gift_card` e `redeem_gift_card` li chiama anche la cassa
 (apps.sales.services, import pigro): le firme NON vanno cambiate.
+
+Una carta può essere un regalo, un trattamento già pagato dalla cliente o le
+sedute di un pacchetto (`GiftCard.kind`); `has_remaining_q` dice quali hanno
+ancora qualcosa da dare, saldo o sedute (agenda, caparra, portafoglio).
 """
 
 from decimal import Decimal
@@ -17,6 +21,7 @@ from ninja.errors import HttpError
 
 from apps.core.services import log_activity
 from apps.sales.models import Payment
+from common.money import MAX_MONEY
 
 from .codes import GIFT_CARD_CODE_LENGTH, mark_expired_if_past, not_expired_q, unique_code
 from .models import GiftCard
@@ -87,8 +92,10 @@ def create_gift_card(
     registro attività non compare un incasso che non c'è stato."""
     value = Decimal(value)
     # Zero solo per un trattamento (pacchetto o seduta in omaggio): una carta a
-    # importo da zero euro non serve a niente.
-    if value < 0 or (value == 0 and gift_service is None):
+    # importo da zero euro non serve a niente. Oltre MAX_MONEY il valore non
+    # entra nella colonna: la carta venduta dallo staff non aveva tetto, e un
+    # miliardo diventava un 500 di PostgreSQL invece di un errore.
+    if value < 0 or value > MAX_MONEY or (value == 0 and gift_service is None):
         raise HttpError(422, "Valore della gift card non valido")
     if kind not in GiftCard.Kind.values:
         raise HttpError(422, "Tipo di gift card non valido")
@@ -123,7 +130,7 @@ def create_gift_card(
     log_activity(
         salon,
         "giftcard.created",
-        f"Gift card {card.code} da €{card.initial_value}",
+        _created_summary(card),
         actor=sold_by,
         payload={
             "gift_card_id": card.id,
@@ -131,6 +138,8 @@ def create_gift_card(
             "value": str(card.initial_value),
             "paid": paid,
             "sale_id": sale.id if sale else None,
+            "kind": card.kind,
+            "sessions": card.sessions_total,
         },
     )
     if paid and cash_in:
@@ -142,6 +151,41 @@ def create_gift_card(
             payload={"gift_card_id": card.id, "amount": str(card.initial_value), "method": paid_method},
         )
     return card
+
+
+def _created_summary(card) -> str:
+    """La riga del registro attività per una carta appena creata, secondo il tipo.
+
+    Una carta di sedute di un pacchetto o un trattamento pagato in anticipo
+    scritti «Gift card … da €…» si confondevano nel registro con i regali.
+    """
+    what = f"€{card.initial_value}"
+    if card.gift_service_id:
+        sessions = f" ×{card.sessions_total}" if card.sessions_total > 1 else ""
+        what = f"{card.gift_service.name_it}{sessions} (€{card.initial_value})"
+    if card.kind == GiftCard.Kind.PACKAGE:
+        name = f" «{card.package.name}»" if card.package_id else ""
+        return f"Pacchetto{name} {card.code}: {what}"
+    if card.kind == GiftCard.Kind.PREPAID:
+        return f"Già pagato {card.code}: {what}"
+    return f"Gift card {card.code} da €{card.initial_value}"
+
+
+def has_remaining_q() -> Q:
+    """Carte che hanno ancora qualcosa da dare: saldo, oppure sedute di un trattamento.
+
+    Un pacchetto in omaggio ha saldo zero dall'inizio, e una carta a sedute di
+    cui la cassa ha già scalato tutto il saldo ha ancora le sedute pagate: con
+    il solo «saldo > 0» sparivano dall'agenda e dal portafoglio, e la caparra
+    si chiedeva su trattamenti che la cliente non pagherà. Lo stato (attiva,
+    pagata, non scaduta) lo filtra chi chiama.
+    """
+    return Q(balance__gt=0) | Q(gift_service__isnull=False, sessions_left__gt=0)
+
+
+def has_remaining(card) -> bool:
+    """La stessa regola di `has_remaining_q`, su una carta già letta."""
+    return card.balance > 0 or bool(card.gift_service_id and card.sessions_left > 0)
 
 
 def _counts_sessions(card) -> bool:
@@ -260,6 +304,37 @@ def gift_card_kpis(qs) -> dict:
     )
 
 
+def _staff_sessions(sessions, gift_service) -> int:
+    """Le sedute chieste dallo staff: un intero fra 1 e MAX_SESSIONS, e solo per un trattamento.
+
+    `create_gift_card` legge 0 come «una seduta» (lo usa la cassa, che non le
+    indica): dalla maschera uno 0 è un errore da dire, non una seduta in regalo.
+    """
+    if isinstance(sessions, bool) or not isinstance(sessions, int):
+        raise HttpError(422, "Numero di sedute non valido")
+    if not 1 <= sessions <= MAX_SESSIONS:
+        raise HttpError(422, f"Le sedute vanno da 1 a {MAX_SESSIONS}")
+    if sessions > 1 and gift_service is None:
+        raise HttpError(422, "Le sedute si indicano solo per un trattamento")
+    return sessions
+
+
+def _prepaid_owner(buyer, recipient):
+    """(acquirente, destinataria, nome) di un trattamento già pagato: la stessa cliente.
+
+    «Già pagato» è il trattamento che la cliente paga oggi e farà più avanti:
+    non c'è nessuno che regala. Con due schede diverse sarebbe un regalo
+    dall'una all'altra, e per quello c'è «Regalo»: in agenda e in cassa i due
+    casi si leggono diversi. Basta indicarne una delle due.
+    """
+    owner = recipient or buyer
+    if owner is None:
+        raise HttpError(422, "Un trattamento già pagato va intestato a una cliente")
+    if buyer is not None and recipient is not None and buyer.pk != recipient.pk:
+        raise HttpError(422, "Già pagato: chi paga e chi fa il trattamento sono la stessa cliente")
+    return owner, owner, owner.full_name[:120]
+
+
 def sell_gift_card(
     salon,
     value,
@@ -273,8 +348,29 @@ def sell_gift_card(
     delivery_date=None,
     expires_at=None,
     actor=None,
+    kind=GiftCard.Kind.GIFT,
+    sessions=1,
 ) -> GiftCard:
-    """Carta venduta dallo staff: pagata subito (con la sua vendita in cassa) o da pagare."""
+    """Carta venduta dallo staff: pagata subito (con la sua vendita in cassa) o da pagare.
+
+    `kind` è «gift» (un regalo) o «prepaid» (un trattamento che la cliente paga
+    oggi e farà più avanti: acquirente e destinataria sono lei). Le sedute di un
+    pacchetto nascono solo vendendo il pacchetto in cassa (`credits`), con la
+    sua riga di vendita: qui si rifiutano.
+
+    Con `gift_service` il valore è il prezzo di listino per `sessions` sedute
+    (tre pieghe da 25 € = 75 €) e quello inviato si ignora: la carta vale
+    esattamente i trattamenti che promette.
+    """
+    if kind == GiftCard.Kind.PACKAGE:
+        raise HttpError(422, "Le sedute di un pacchetto nascono vendendo il pacchetto in cassa")
+    if kind not in GiftCard.Kind.values:
+        raise HttpError(422, "Tipo di gift card non valido")
+    sessions = _staff_sessions(sessions, gift_service)
+    if gift_service is not None:
+        value = Decimal(gift_service.price) * sessions
+    if kind == GiftCard.Kind.PREPAID:
+        buyer, recipient, recipient_name = _prepaid_owner(buyer, recipient)
     if paid:
         _require_payment_method(paid_method)
     # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
@@ -290,6 +386,8 @@ def sell_gift_card(
             paid=paid,
             paid_method=paid_method,
             sold_by=actor,
+            kind=kind,
+            sessions=sessions,
         )
         extra = []
         if delivery_date:

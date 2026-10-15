@@ -7,6 +7,7 @@ import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
 import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
+import { creditIcon, creditKind, creditOrigin, sessionsLabel } from './credits.js';
 import { giftCardsApi } from '../../api/marketing.js';
 import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
@@ -39,6 +40,7 @@ export default function GiftSub() {
   const [query, setQuery] = useState('');
   const [statusF, setStatusF] = useState('all');
   const [payF, setPayF] = useState('all');
+  const [kindF, setKindF] = useState('all');   // regali, già pagati, sedute dei pacchetti
   const [offset, setOffset] = useState(0);
 
   const [items, setItems] = useState([]);
@@ -67,6 +69,7 @@ export default function GiftSub() {
     giftCardsApi.list({
       status: statusF === 'all' ? undefined : statusF,
       payment_status: payF === 'all' ? undefined : payF,
+      kind: kindF === 'all' ? undefined : kindF,
       q: query || undefined,
       limit: LIMIT, offset,
     }).then((res) => {
@@ -79,7 +82,7 @@ export default function GiftSub() {
       setItems([]); setTotal(0); setKpi(null);
       toastApiError(err, fireToast, t);
     }).finally(() => { if (req.isLatest(seq)) setLoading(false); });
-  }, [statusF, payF, query, offset, fireToast, t, req]);
+  }, [statusF, payF, kindF, query, offset, fireToast, t, req]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -112,6 +115,7 @@ export default function GiftSub() {
     <React.Fragment>
       <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 16 }}>
         {t('Valore prepagato: il centro incassa subito e onora la card quando viene riscattata. Monitora qui il saldo ancora da onorare.', 'Prepaid value: the salon collects up front and honours the card when redeemed. Track the outstanding balance here.')}
+        {' '}{t('Qui ci sono anche i trattamenti già pagati dalle clienti e le sedute dei pacchetti venduti in cassa.', 'Prepaid treatments and the sessions of packages sold at the till are here too.')}
       </div>
 
       {/* KPI header — sold / redeemed / outstanding from the API `kpi` envelope */}
@@ -146,12 +150,13 @@ export default function GiftSub() {
         <div className="dk-search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
           <Icon name="search" size={18} color="var(--muted-2)" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={canCreate
-            ? t('Cerca per codice, acquirente o destinataria…', 'Search by code, buyer or recipient…')
+            ? t('Cerca per codice, cliente, trattamento o pacchetto…', 'Search by code, client, treatment or package…')
             // codici mascherati (C21): il server non cerca per codice
-            : t('Cerca per acquirente o destinataria…', 'Search by buyer or recipient…')} />
+            : t('Cerca per cliente, trattamento o pacchetto…', 'Search by client, treatment or package…')} />
           {q && <button onClick={() => setQ('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
         </div>
         <GroupedFilterMenu t={t} groups={[
+          { label: t('Tipo', 'Type'), value: kindF, set: setFilter(setKindF), opts: [['all', t('Tutte', 'All')], ['gift', t('Regali', 'Gifts')], ['prepaid', t('Già pagati', 'Prepaid')], ['package', t('Pacchetti', 'Packages')]] },
           { label: t('Stato', 'Status'), value: statusF, set: setFilter(setStatusF), opts: [['all', t('Tutte', 'All')], ['active', t('Attive', 'Active')], ['redeemed', t('Esaurite', 'Redeemed')], ['expired', t('Scadute', 'Expired')]] },
           { label: t('Pagamento', 'Payment'), value: payF, set: setFilter(setPayF), opts: [['all', t('Tutti', 'All')], ['paid', t('Pagate', 'Paid')], ['unpaid', t('Da pagare', 'Unpaid')]] },
         ]} />
@@ -174,6 +179,10 @@ export default function GiftSub() {
             const balance = Number(g.balance);
             const used = value - balance;
             const methodLabel = PAY_METHOD_LABELS[g.paid_method] ? PAY_METHOD_LABELS[g.paid_method][lang] : g.paid_method;
+            // regalo, già pagato dalla cliente, sedute di un pacchetto: le
+            // ultime due sono di una cliente sola (chi paga è chi riceve)
+            const kind = creditKind(g);
+            const sessions = sessionsLabel(g, t, { always: kind === 'package' });
             return (
               <div key={g.id} className="dk-card" style={{ padding: 18, opacity: status === 'redeemed' || status === 'expired' ? 0.72 : 1, borderLeft: '3px solid ' + (due ? 'var(--warn)' : status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
                 <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
@@ -193,20 +202,32 @@ export default function GiftSub() {
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6, display: 'inline-block', marginTop: 5 }}>{g.code}</span>
                     {g.gift_service_name && (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '2px 9px', borderRadius: 99, marginTop: 5, marginLeft: 6 }}>
-                        <Icon name="gift" size={12} color="var(--clay-ink)" />{t('Trattamento', 'Treatment')}: {g.gift_service_name}
+                        <Icon name={creditIcon(g)} size={12} color="var(--clay-ink)" />{t('Trattamento', 'Treatment')}: {g.gift_service_name}{sessions ? ' · ' + sessions : ''}
                       </span>
                     )}
-                    <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, color: 'var(--ink-2)', flexWrap: 'wrap' }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    {kind !== 'gift' && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: 'var(--surface-2)', padding: '2px 9px', borderRadius: 99, marginTop: 5, marginLeft: 6 }}>
+                        {!g.gift_service_name && <Icon name={creditIcon(g)} size={12} color="var(--ink-2)" />}{creditOrigin(g, t)}
+                      </span>
+                    )}
+                    {kind === 'gift' ? (
+                      <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, color: 'var(--ink-2)', flexWrap: 'wrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="user" size={13} color="var(--muted-2)" />
+                          <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('da', 'from')}</span> <strong>{g.buyer_name || '—'}</strong>
+                        </span>
+                        <Icon name="chevR" size={12} color="var(--muted-2)" />
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="gift" size={13} color="var(--muted-2)" />
+                          <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('a', 'to')}</span> <strong>{g.recipient_name || '—'}</strong>
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 9, color: 'var(--ink-2)' }}>
                         <Icon name="user" size={13} color="var(--muted-2)" />
-                        <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('da', 'from')}</span> <strong>{g.buyer_name || '—'}</strong>
-                      </span>
-                      <Icon name="chevR" size={12} color="var(--muted-2)" />
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Icon name="gift" size={13} color="var(--muted-2)" />
-                        <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('a', 'to')}</span> <strong>{g.recipient_name || '—'}</strong>
-                      </span>
-                    </div>
+                        <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('cliente', 'client')}</span> <strong>{g.recipient_name || g.buyer_name || '—'}</strong>
+                      </div>
+                    )}
                   </div>
                   <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 99, background: st.bg, color: st.color }}>{st[lang]}</span>
                 </div>
@@ -221,7 +242,8 @@ export default function GiftSub() {
                       <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />{t('Pagata', 'Paid')}{g.paid_at ? ' · ' + dateLabel(g.paid_at, lang) : ''}{methodLabel ? ' · ' + methodLabel : ''}
                     </span>
                   )}
-                  {g.delivery_date ? (
+                  {/* la consegna è di un regalo: già pagato e pacchetto restano alla cliente */}
+                  {kind !== 'gift' ? null : g.delivery_date ? (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', background: 'var(--surface-2)', padding: '5px 11px', borderRadius: 99 }}>
                       <Icon name="send" size={13} color="var(--muted)" />{t('Consegna', 'Delivery')} · {dateLabel(g.delivery_date, lang)}
                     </span>

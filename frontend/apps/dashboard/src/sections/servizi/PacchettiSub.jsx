@@ -1,8 +1,10 @@
-// PacchettiSub.jsx — package cards: included services (qty), savings vs single prices.
+// PacchettiSub.jsx — package cards: included services (sedute), validità delle
+// sedute dalla vendita, savings vs single prices.
 import React, { useState } from 'react';
 import { Icon, fmtEur, EmptyState, nameIn } from '@youty/shared';
 import { FilterMenu } from '../../ui/index.js';
 import SearchToolbar from '../../ui/SearchToolbar.jsx';
+import { sessionsText, validityLabel } from './packages.js';
 
 const svcName = nameIn;
 
@@ -72,6 +74,9 @@ export default function PacchettiSub({ packages, loading, services, canEdit, onE
                       {off > 0 && <span style={{ fontSize: 11.5, fontWeight: 800, color: '#fff', background: 'var(--clay)', padding: '2px 8px', borderRadius: 99 }}>-{off}%</span>}
                     </div>
                     {p.description && <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 6, lineHeight: 1.45 }}>{p.description}</div>}
+                    <div className="t-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--muted)', marginTop: 6 }}>
+                      <Icon name="calendar" size={13} color="var(--muted-2)" />{validityLabel(p.validity_days, t)}
+                    </div>
                   </div>
                   {canEdit && <Icon name="edit" size={16} color="var(--muted-2)" />}
                 </div>
@@ -83,7 +88,8 @@ export default function PacchettiSub({ packages, loading, services, canEdit, onE
                       <div key={it.id ?? `${it.service_id}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <Icon name="check" size={13} color="var(--ok)" stroke={2.4} />
                         <span className="t-sm" style={{ color: 'var(--ink-2)', flex: 1, minWidth: 0 }}>
-                          {s ? svcName(s, lang) : t('Servizio rimosso', 'Removed service')}{it.qty > 1 ? ` ×${it.qty}` : ''}
+                          {s ? svcName(s, lang) : t('Servizio rimosso', 'Removed service')}
+                          <span style={{ color: 'var(--muted)', fontWeight: 600 }}> · {sessionsText(it.qty, t)}</span>
                         </span>
                         {s && <span className="t-num" style={{ fontSize: 12.5, color: 'var(--muted-2)' }}>{fmtEur(Number(s.price) * (it.qty || 1), lang)}</span>}
                       </div>

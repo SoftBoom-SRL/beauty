@@ -1,9 +1,10 @@
 // ClientMetaBar — in cima al dettaglio: la cliente con lo stato della visita,
-// «Forzato», il regalo, le categorie e lo storico (se c'è), il telefono e il
+// «Forzato», i trattamenti già pagati (regalo, pagato in anticipo, pacchetto
+// con le sedute), le categorie e lo storico (se c'è), il telefono e il
 // bottone per aprirne la scheda.
 import { Avatar, Icon } from '@youty/shared';
 import { fmtMoney, initialsOf } from '../../lib.js';
-import { usableCode } from '../rules.js';
+import { creditIcon, creditLabel, creditTitle } from '../../../fedelta/credits.js';
 
 export default function ClientMetaBar({ appt, sm, clientDetail, t, lang, openClient }) {
   return (
@@ -13,7 +14,9 @@ export default function ClientMetaBar({ appt, sm, clientDetail, t, lang, openCli
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11.5, fontWeight: 700, color: sm.color, background: sm.tint, padding: '3px 9px', borderRadius: 99 }}>{sm.label}</span>
           {appt.forced && <span title={t('Inserito o spostato forzando le regole (fuori turno o sovrapposizione)', 'Inserted or moved overriding the rules (off shift or overlap)')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="alert" size={11} color="var(--warn)" />{t('Forzato', 'Forced')}</span>}
-          {(appt.gifts || []).length > 0 && <span title={(appt.gifts || []).map((g) => [g.service_name, usableCode(g.code), g.from_name ? t('da', 'from') + ' ' + g.from_name : ''].filter(Boolean).join(' · ')).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name="gift" size={11} color="var(--clay-ink)" />{t('Regalo', 'Gift')}{(appt.gifts || [])[0]?.from_name ? ' · ' + t('da', 'from') + ' ' + appt.gifts[0].from_name : ''}</span>}
+          {(appt.gifts || []).map((g) => (
+            <span key={g.gift_card_id ?? g.code} title={creditTitle(g, t, lang)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name={creditIcon(g)} size={11} color="var(--clay-ink)" />{creditLabel(g, t)}</span>
+          ))}
           {(clientDetail?.categories || []).slice(0, 2).map((c) => (
             <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
           ))}
