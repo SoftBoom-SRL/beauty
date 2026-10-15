@@ -137,7 +137,7 @@ def split_appointment(request, appointment_id: int, data: SplitIn):
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
     original, created = appointment_services.split_appointment(
         appointment, data.item_id, data.start, operator=operator, actor=ctx.user, force=data.force,
-        client_overlap_ok=True,
+        client_overlap_ok=True, item_ids=data.item_ids,
     )
     return {
         "original": _appointment_out(original, viewer=ctx),
