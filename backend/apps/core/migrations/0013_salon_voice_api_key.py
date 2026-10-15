@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('core', '0011_caccia22_core_outbox_scadenza'),
+        ('core', '0012_salon_previous_slug'),
     ]
 
     operations = [
