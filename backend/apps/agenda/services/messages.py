@@ -50,7 +50,7 @@ def _event_payload(appointment: Appointment) -> dict:
         "appointment_id": appointment.id,
         "client_id": client.id,
         "client_name": client.full_name,
-        "phone": client.phone,
+        "phone": client.contact_phone,
         "lang": client.lang,
         "whatsapp_reminders": client.whatsapp_reminders,
         "wa": client.wa,

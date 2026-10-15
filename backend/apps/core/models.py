@@ -279,3 +279,37 @@ class RateLimitCounter(models.Model):
 
     def __str__(self):
         return f"{self.key} = {self.count}"
+
+
+class ExternalRef(models.Model):
+    """Id di un record in un altro gestionale (AreaBeauty, Treatwell…) → record di beauty.
+
+    Serve agli import: rifare l'import non crea doppioni, e vendite, coupon e
+    schede del vecchio gestionale si ricollegano a clienti e appuntamenti già
+    portati. Una tabella sola per tutti i modelli (`content_type` + `object_id`)
+    invece di un campo su ognuno. Le funzioni sono in `core.external_refs`.
+    """
+
+    salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="+")
+    # Il gestionale d'origine ("areabeauty") e il tipo di record là ("cliente",
+    # "appuntamento", "vendita"…): lo stesso id può esistere in tipi diversi.
+    source = models.CharField(max_length=40)
+    kind = models.CharField(max_length=40)
+    external_id = models.CharField(max_length=120)
+    content_type = models.ForeignKey(
+        "contenttypes.ContentType", on_delete=models.CASCADE, related_name="+"
+    )
+    object_id = models.PositiveBigIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["salon", "source", "kind", "external_id"],
+                name="uniq_external_ref",
+            ),
+        ]
+        indexes = [models.Index(fields=["content_type", "object_id"])]
+
+    def __str__(self):
+        return f"{self.source}/{self.kind}/{self.external_id} → {self.content_type_id}:{self.object_id}"

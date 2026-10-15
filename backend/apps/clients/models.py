@@ -61,7 +61,23 @@ class Client(models.Model):
     salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="clients")
     first_name = models.CharField(max_length=80)
     last_name = models.CharField(max_length=80, blank=True)
-    phone = models.CharField(max_length=32)
+    # Vuoto = la cliente un numero suo non l'ha (una bambina, chi riceve un
+    # regalo, una scheda arrivata da un altro gestionale senza telefono). Senza
+    # numero niente accesso all'app (l'OTP va al telefono) e i messaggi vanno a
+    # `contact_client`, se c'è (vedi `contact_phone`).
+    phone = models.CharField(max_length=32, blank=True, default="")
+    # Chi si contatta per lei: la mamma della bambina, la persona con cui
+    # condivide il numero. Due schede non possono avere lo stesso telefono (il
+    # numero è l'identità per l'accesso all'app), quindi la seconda lo lascia
+    # vuoto e punta qui: conferme e promemoria arrivano al numero di chi la
+    # rappresenta.
+    contact_client = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dependents",
+    )
     email = models.EmailField(blank=True)
     wa = models.BooleanField(default=True)  # il cliente ha/usa WhatsApp
     lang = models.CharField(max_length=2, choices=Lang.choices, default=Lang.IT)
@@ -115,7 +131,12 @@ class Client(models.Model):
     class Meta:
         ordering = ["first_name", "last_name", "id"]
         constraints = [
-            models.UniqueConstraint(fields=["salon", "phone"], name="uniq_client_salon_phone"),
+            # Parziale: più schede senza numero (phone="") devono poter convivere.
+            models.UniqueConstraint(
+                fields=["salon", "phone"],
+                condition=~models.Q(phone=""),
+                name="uniq_client_salon_phone",
+            ),
             # L'identità della cliente è la chiave normalizzata, non la stringa
             # digitata: «348 221 0094» e «+39 348 2210094» sono la stessa
             # persona ma superavano il vincolo qui sopra. Parziale perché
@@ -141,6 +162,19 @@ class Client(models.Model):
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
+
+    @property
+    def contact_phone(self) -> str:
+        """Il numero a cui scrivere: il suo, altrimenti quello di `contact_client`.
+
+        Un livello solo: chi rappresenta qualcun altro deve avere un numero
+        suo, e una catena di rimandi non si segue. "" se non c'è nessun numero.
+        """
+        if self.phone:
+            return self.phone
+        if self.contact_client_id and self.contact_client is not None:
+            return self.contact_client.phone or ""
+        return ""
 
     @property
     def age(self):

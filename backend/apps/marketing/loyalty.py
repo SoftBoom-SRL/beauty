@@ -284,7 +284,7 @@ def accrue_loyalty(sale):
                     {
                         "client_id": client.id,
                         "client_name": client.full_name,
-                        "phone": client.phone,
+                        "phone": client.contact_phone,
                         "lang": client.lang,
                         "program_id": program.id,
                         "program": program.name,

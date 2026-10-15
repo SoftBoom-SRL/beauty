@@ -126,6 +126,17 @@ class Appointment(TimeStampedModel):
     auto_released = models.BooleanField(default=False)
     # Inserito dallo staff forzando le regole (fuori orario, sovrapposizione).
     forced = models.BooleanField(default=False)
+    # Conto unico: questa visita è stata incassata nella vendita di un'altra
+    # visita della stessa cliente (mani e piedi in contemporanea con due
+    # operatrici sono due appuntamenti, ma il conto è uno). La vendita «sua»
+    # (`sale`) non esiste; questa la sostituisce per «già incassato».
+    paid_in_sale = models.ForeignKey(
+        "sales.Sale",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="covered_appointments",
+    )
 
     class Meta:
         ordering = ["start"]

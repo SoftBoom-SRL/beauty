@@ -34,6 +34,9 @@ CLIENT_GIFT_CARD_MIN = Decimal("5")
 CLIENT_GIFT_CARD_MAX = Decimal("1000")
 CLIENT_GIFT_CARD_PER_DAY = 5
 
+# Sedute massime su una carta: un abbonamento annuale settimanale ci sta.
+MAX_SESSIONS = 100
+
 _ZERO = Value(Decimal("0"), output_field=DecimalField(max_digits=12, decimal_places=2))
 
 
@@ -63,30 +66,59 @@ def create_gift_card(
     sold_by=None,
     sale=None,
     cash_in=True,
+    kind=GiftCard.Kind.GIFT,
+    sessions=1,
+    package=None,
+    package_line=None,
+    expires_at=None,
 ):
     """Crea una gift card (usata anche da sales per le righe gift_card vendute).
 
     Se `gift_service` è valorizzato la carta regala quel trattamento: il valore
     passato deve già coincidere col prezzo del servizio (garantito dal chiamante).
+    Con `sessions` > 1 la carta copre più sedute di quel trattamento (pacchetto
+    o trattamenti pagati in anticipo): `value` è il prezzo di TUTTE le sedute.
+
+    `kind` dice come la si legge in agenda e in cassa: regalo, già pagato dalla
+    cliente stessa, sedute di un pacchetto (`package`, `package_line`).
 
     `cash_in=False` per le carte che nascono già pagate ma senza che nessuno
     abbia versato denaro (i premi fedeltà): la carta resta spendibile, ma nel
     registro attività non compare un incasso che non c'è stato."""
     value = Decimal(value)
-    if value <= 0:
+    # Zero solo per un trattamento (pacchetto o seduta in omaggio): una carta a
+    # importo da zero euro non serve a niente.
+    if value < 0 or (value == 0 and gift_service is None):
         raise HttpError(422, "Valore della gift card non valido")
+    if kind not in GiftCard.Kind.values:
+        raise HttpError(422, "Tipo di gift card non valido")
+    try:
+        sessions = int(sessions or 1)
+    except (TypeError, ValueError):
+        raise HttpError(422, "Numero di sedute non valido") from None
+    if sessions < 1 or sessions > MAX_SESSIONS:
+        raise HttpError(422, "Numero di sedute non valido")
+    if sessions > 1 and gift_service is None:
+        # Le sedute contano un trattamento: una carta a importo non ne ha.
+        raise HttpError(422, "Le sedute si indicano solo per un trattamento")
     card = GiftCard.objects.create(
         salon=salon,
+        kind=kind,
         code=unique_code(GiftCard, salon, GIFT_CARD_CODE_LENGTH),
         initial_value=value,
         balance=value,
         gift_service=gift_service,
+        sessions_total=sessions,
+        sessions_left=sessions,
+        package=package,
+        package_line=package_line,
         buyer_client=buyer_client,
         recipient_client=recipient_client,
         recipient_name=recipient_name,
         payment_status=GiftCard.PaymentStatus.PAID if paid else GiftCard.PaymentStatus.UNPAID,
         paid_at=timezone.now() if paid else None,
         paid_method=paid_method if paid else "",
+        expires_at=expires_at,
     )
     log_activity(
         salon,
@@ -112,11 +144,32 @@ def create_gift_card(
     return card
 
 
-def redeem_gift_card(salon, code, amount):
-    """Scala `amount` dal saldo della gift card `code`. Ritorna la card aggiornata."""
+def _counts_sessions(card) -> bool:
+    """Vero per le carte a trattamento con più sedute: lì il riscatto conta le sedute."""
+    return bool(card.gift_service_id) and (card.sessions_total or 1) > 1
+
+
+def redeem_gift_card(salon, code, amount, sessions=1):
+    """Scala `amount` dal saldo della gift card `code`. Ritorna la card aggiornata.
+
+    Sulle carte a più sedute (`gift_service` e `sessions_total` > 1) toglie
+    anche `sessions` sedute: una per ogni riga del servizio coperta in questo
+    conto. All'ultima seduta il saldo va a zero anche se `amount` è minore (le
+    sedute erano pagate per intero: il resto non diventa denaro spendibile) e
+    la carta è esaurita. Le carte a una seduta restano com'erano: si scala
+    l'importo, e il residuo resta spendibile finché non arriva a zero.
+    """
     amount = Decimal(amount)
-    if amount <= 0:
+    # Zero vale solo per una seduta di un trattamento regalato o in omaggio:
+    # su una carta a importo non scalerebbe niente (controllo sotto).
+    if amount < 0:
         raise HttpError(422, "Importo da scalare non valido")
+    try:
+        sessions = int(sessions or 1)
+    except (TypeError, ValueError):
+        raise HttpError(422, "Numero di sedute non valido") from None
+    if sessions < 1:
+        raise HttpError(422, "Numero di sedute non valido")
     # L'eventuale errore viene sollevato FUORI dal blocco atomico: così la marcatura
     # EXPIRED sopravvive al rollback che l'eccezione provocherebbe.
     # Attenzione: quando questa funzione gira dentro finalize_sale l'atomic qui
@@ -131,6 +184,8 @@ def redeem_gift_card(salon, code, amount):
         )
         if card is None:
             error = HttpError(404, "Gift card non trovata")
+        elif amount == 0 and not card.gift_service_id:
+            error = HttpError(422, "Importo da scalare non valido")
         elif card.status != GiftCard.Status.ACTIVE:
             error = HttpError(422, "Gift card non attiva")
         elif mark_expired_if_past(card):
@@ -141,16 +196,29 @@ def redeem_gift_card(salon, code, amount):
             error = HttpError(422, "Gift card non ancora pagata: incassala prima di usarla")
         elif card.balance < amount:
             error = HttpError(422, f"Saldo gift card insufficiente (residuo €{card.balance})")
+        elif _counts_sessions(card) and card.sessions_left < sessions:
+            error = HttpError(422, f"Sedute insufficienti (ne restano {card.sessions_left})")
     if error is not None:
         raise error
     with transaction.atomic():
         card = GiftCard.objects.select_for_update().get(pk=card.pk)
         if card.balance < amount:
             raise HttpError(422, f"Saldo gift card insufficiente (residuo €{card.balance})")
+        fields = ["balance", "status", "sessions_left"]
         card.balance -= amount
-        if card.balance == 0:
+        if _counts_sessions(card):
+            # A sedute la carta finisce con l'ultima seduta, non col saldo: un
+            # pacchetto in omaggio ha saldo zero dall'inizio.
+            if card.sessions_left < sessions:
+                raise HttpError(422, f"Sedute insufficienti (ne restano {card.sessions_left})")
+            card.sessions_left -= sessions
+            if card.sessions_left == 0:
+                card.balance = Decimal("0.00")
+                card.status = GiftCard.Status.REDEEMED
+        elif card.balance == 0:
             card.status = GiftCard.Status.REDEEMED
-        card.save(update_fields=["balance", "status"])
+            card.sessions_left = 0
+        card.save(update_fields=fields)
         log_activity(
             salon,
             "giftcard.redeemed",
@@ -160,6 +228,7 @@ def redeem_gift_card(salon, code, amount):
                 "code": card.code,
                 "amount": str(amount),
                 "balance": str(card.balance),
+                "sessions_left": card.sessions_left,
             },
         )
     return card

@@ -151,7 +151,7 @@ def _emit_visit_completed(salon, appointment, sale) -> None:
             "sale_id": sale.id,
             "client_id": client.id,
             "client_name": client.full_name,
-            "phone": client.phone,
+            "phone": client.contact_phone,
             "lang": client.lang,
             "services": service_names,
             "total": str(sale.total),
