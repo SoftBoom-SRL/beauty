@@ -1,12 +1,13 @@
 // SaleDone.jsx — la vendita al banco registrata (CartTab): articoli, totale,
-// pagamenti, a chi è accreditata, gift card emesse; da qui una nuova vendita
-// o lo storico.
+// pagamenti, a chi è accreditata, gift card emesse, pacchetti venduti e quanto
+// resta da saldare; da qui una nuova vendita o lo storico.
 import { Icon } from '@youty/shared';
 import { methodLabel, money, opName } from '../lib.js';
 
 export default function SaleDone({ done, seller, onNew, onGoHistory, t, lang }) {
   const hasGift = done.lines.some((l) => l.line_type === 'gift_card');
-  const methodsUsed = done.payments.map((p) => methodLabel(p.method, t)).join(' + ');
+  const packages = done.lines.filter((l) => l.line_type === 'package');
+  const methodsUsed = done.payments.map((p) => methodLabel(p.method, t)).join(' + ') || t('niente pagato adesso', 'nothing paid now');
   return (
     <div className="dk-card pop-in" style={{ padding: '44px 36px', textAlign: 'center', maxWidth: 540, margin: '0 auto' }}>
       <div style={{ width: 68, height: 68, borderRadius: 99, background: 'var(--ok-tint)', display: 'grid', placeItems: 'center', margin: '0 auto 18px' }}>
@@ -24,6 +25,17 @@ export default function SaleDone({ done, seller, onNew, onGoHistory, t, lang }) 
         <div className="t-sm" style={{ color: 'var(--ok)', marginTop: 10, fontWeight: 600 }}>
           <Icon name="gift" size={15} color="var(--ok)" style={{ verticalAlign: '-2px', marginRight: 5 }} />
           {t('Gift card emessa', 'Gift card issued')}{done.lines.filter((l) => l.line_type === 'gift_card').map((l) => l.gift_card_code).filter(Boolean).map((c) => ' · ' + c).join('')}
+        </div>
+      )}
+      {packages.length > 0 && (
+        <div className="t-sm" style={{ color: 'var(--ok)', marginTop: 6, fontWeight: 600 }}>
+          <Icon name="tag" size={15} color="var(--ok)" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 5 }} />
+          {t('Sedute create', 'Sessions created')} · {packages.map((l) => l.package_name).filter(Boolean).join(', ')}
+        </div>
+      )}
+      {Number(done.amount_due) > 0 && (
+        <div className="t-sm" style={{ color: 'var(--warn)', marginTop: 6, fontWeight: 700 }}>
+          {t('Da saldare', 'Left to pay')}: {money(done.amount_due, lang)}
         </div>
       )}
       <button className="dk-btn dk-btn--clay" style={{ marginTop: 24, width: '100%', height: 48 }} onClick={onNew}>

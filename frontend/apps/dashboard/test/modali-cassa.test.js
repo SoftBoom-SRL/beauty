@@ -47,3 +47,13 @@ test('gift card usate come prima, e server senza deposit_refunded', () => {
 test('confronto in centesimi: stringhe decimali diverse ma uguali non contano', () => {
   assert.equal(cashUpLines(summary({ total: '0.30', cash_in: '0.3' })).show, false);
 });
+
+test('conti da saldare: la parte lasciata aperta e i saldi di altri giorni fanno la differenza', () => {
+  // venduto 150, 60 lasciati da saldare, 25 saldati oggi di un conto di ieri
+  const r = cashUpLines(summary({ due_left: '60.00', settled: '25.00', cash_in: '115.00' }));
+  assert.equal(r.show, true);
+  assert.equal(r.cashIn, 115);
+  assert.deepEqual(r.parts, [{ key: 'due_left', amount: 60 }, { key: 'settled', amount: 25 }]);
+  // un server senza le due voci: niente di nuovo
+  assert.deepEqual(cashUpLines(summary({ deposit_used: '30.00', cash_in: '120.00' })).parts.map((p) => p.key), ['deposit_used']);
+});

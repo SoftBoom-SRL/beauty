@@ -1,5 +1,8 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
+// Al banco si vendono anche pacchetti e trattamenti già pagati (sedute della
+// cliente scelta), si lascia da saldare una parte del conto (con la cliente) e
+// si saldano i conti che la cliente ha lasciato aperti (DuesBanner).
 import { useState } from 'react';
 import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
@@ -7,23 +10,29 @@ import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
 import CouponField from './CouponField.jsx';
 import ConfirmPaymentModal from './ConfirmPaymentModal.jsx';
+import DuesBanner from './DuesBanner.jsx';
 import SaleDone from './cart/SaleDone.jsx';
 import ProductGrid from './cart/ProductGrid.jsx';
 import GiftCardBuilder from './cart/GiftCardBuilder.jsx';
+import CreditBuilder from './cart/CreditBuilder.jsx';
 import CartLine from './cart/CartLine.jsx';
 import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
-import { counterDiscountPct, counterGiftLine, counterProductLine, toApiLine } from './lines.js';
+import usePackages from './usePackages.js';
+import {
+  counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
+} from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
 import { salesApi } from '../../api/sales.js';
 import {
-  centsToEur, emptyPayments, lineCents, money, opName,
+  centsToEur, dueLeftCents, emptyPayments, lineCents, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
 
 export default function CartTab({ onGoHistory }) {
-  const { t, lang, operators, opColors, fireToast, hasScope } = useDash();
+  const { t, lang, operators, services, opColors, fireToast, hasScope } = useDash();
   const canSell = hasScope('sales');
+  const packages = usePackages(canSell);
 
   /* ---- products: prima pagina + ricerca lato server oltre la pagina ---- */
   const [q, setQ] = useState('');
@@ -72,6 +81,12 @@ export default function CartTab({ onGoHistory }) {
     setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName, lang)]);
     setGiftName('');
   };
+  const addPackage = (pkg) => setCart((c) => [...c, counterPackageLine('k' + pkg.id + '_' + Date.now(), pkg, lang)]);
+  const addPrepaid = (service, sessions, amt) => {
+    const v = centsToEur(toCents(amt));
+    if (!(v > 0)) return;
+    setCart((c) => [...c, counterPrepaidLine('q' + service.id + '_' + Date.now(), service, sessions, v, lang)]);
+  };
   const patchLine = (key, patch) => setCart((c) => c.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const stepQty = (l, d) => {
     const next = l.qty + d;
@@ -101,7 +116,15 @@ export default function CartTab({ onGoHistory }) {
   const total = centsToEur(totalCents);
   const discAmt = centsToEur(subtotalCents - totals.grossCents);
   const itemCount = cart.reduce((s, l) => s + (l.qty || 1), 0);
-  const payErr = paymentsError(pay, totalCents, t);
+  // Pacchetti e trattamenti già pagati sono sedute della cliente: senza, il
+  // server rifiuta la vendita. Si dice prima, sul pulsante.
+  const clientErr = needsClient(cart) && !clientSel
+    ? t('Scegli la cliente: pacchetti e trattamenti già pagati diventano sedute sue', 'Pick the client: packages and prepaid treatments become her sessions')
+    : null;
+  const payErr = clientErr || paymentsError(pay, totalCents, t);
+  // «Lascia da saldare»: solo con la cliente, che pagherà il resto un altro giorno.
+  const leftCents = clientSel ? dueLeftCents(pay, totalCents) : 0;
+  const collectCents = totalCents - leftCents;
   const seller = operators.find((o) => o.id === Number(sellerId)) || null;
 
   /* Il buono applicato va rivisto quando il conto cambia sotto di lui (14-12,
@@ -109,6 +132,8 @@ export default function CartTab({ onGoHistory }) {
   useCouponRoom(cp, couponBaseCents, t);
   const changeClient = (c) => {
     setClientSel(c);
+    // Senza cliente non si lascia niente da saldare: il conto torna da pagare per intero.
+    if (!c) setPay((p) => ({ ...p, leaveDue: false, payNow: '' }));
     // Un buono intestato vale solo per la sua cliente (come in findCoupon).
     if (coupon?.client_id && coupon.client_id !== (c?.id ?? null)) {
       setCoupon(null);
@@ -131,6 +156,7 @@ export default function CartTab({ onGoHistory }) {
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
         payments: resolvePayments(pay, totalCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
+        ...(leftCents > 0 ? { leave_due: true } : {}),
       });
       setDone(sale);
       refreshProducts();  // le giacenze sono cambiate: il banco deve vederlo subito
@@ -171,6 +197,10 @@ export default function CartTab({ onGoHistory }) {
 
         {/* gift-card line builder */}
         <GiftCardBuilder amt={giftAmt} setAmt={setGiftAmt} name={giftName} setName={setGiftName} onAdd={addGiftCard} t={t} />
+
+        {/* pacchetti e trattamenti già pagati: sedute della cliente del carrello */}
+        <CreditBuilder packages={packages} services={services} hasClient={!!clientSel}
+          onAddPackage={addPackage} onAddPrepaid={addPrepaid} t={t} lang={lang} />
       </div>
 
       {/* RIGHT — cart / checkout */}
@@ -198,6 +228,10 @@ export default function CartTab({ onGoHistory }) {
           <div className="t-meta" style={{ marginBottom: 7 }}>{t('Cliente (facoltativo)', 'Client (optional)')}</div>
           <div style={{ marginBottom: 16 }}>
             <ClientPicker value={clientSel} onChange={changeClient} t={t} />
+            {/* conti che la cliente ha lasciato da saldare: si pagano da qui, a parte */}
+            {clientSel && (
+              <DuesBanner key={clientSel.id} clientId={clientSel.id} enabled={canSell} t={t} lang={lang} fireToast={fireToast} style={{ marginTop: 10 }} />
+            )}
           </div>
 
           {/* line items */}
@@ -238,26 +272,34 @@ export default function CartTab({ onGoHistory }) {
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} />
           </div>
         </div>
 
         {/* footer — solo il pulsante (il totale è in alto) */}
         <div style={{ flexShrink: 0, padding: '14px 20px 16px', borderTop: '1px solid var(--hair)', background: 'var(--surface)' }}>
+          {clientErr && cart.length > 0 && (
+            <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="alert" size={13} color="var(--warn)" />{clientErr}
+            </div>
+          )}
           <button className="dk-btn dk-btn--clay" style={{ width: '100%', height: 50, fontSize: 15, fontWeight: 700 }}
             disabled={!cart.length || saving || !canSell || !!payErr} onClick={() => setConfirmOpen(true)}
             title={!canSell ? t('Permesso "vendite" mancante', 'Missing "sales" permission') : (payErr || undefined)}>
-            <Icon name="check" size={19} color="#fff" />{t('Completa vendita', 'Complete sale')} · {money(total, lang)}
+            <Icon name="check" size={19} color="#fff" />{t('Completa vendita', 'Complete sale')} · {money(centsToEur(collectCents), lang)}
           </button>
           <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 9, textAlign: 'center' }}>
-            {!canSell ? t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required') : t('Registrazione non fiscale', 'Non-fiscal record')}
+            {!canSell ? t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required')
+              : leftCents > 0 ? t(`Resta da saldare ${money(centsToEur(leftCents), 'it')} · registrazione non fiscale`, `${money(centsToEur(leftCents), 'en')} left to pay · non-fiscal record`)
+                : t('Registrazione non fiscale', 'Non-fiscal record')}
           </div>
         </div>
       </div>
 
       {/* conferma prima di finalizzare la vendita */}
       <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={complete}
-        summary={<>{itemCount} {t('articoli', 'items')} · {money(total, lang)}{seller ? ' · ' + opName(seller) : ''}</>}
+        summary={<>{itemCount} {t('articoli', 'items')} · {money(centsToEur(collectCents), lang)}{seller ? ' · ' + opName(seller) : ''}</>}
+        note={leftCents > 0 ? t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`) : null}
         t={t} />
     </div>
   );

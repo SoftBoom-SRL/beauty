@@ -1,7 +1,11 @@
 // history.js — le righe dello storico vendite (HistoryTab). Regole pure,
 // provate da `npm test` (apps/dashboard/test/pos-history.test.js).
-import { nameIn } from '@youty/shared';
+import { nameIn, toDateStr } from '@youty/shared';
 import { toCents } from './money.js';
+
+/** Vero se il pagamento è arrivato in un giorno diverso da quello della
+ *  vendita: un saldo di un conto lasciato da pagare. Giorni del salone. */
+export const paidLater = (p, sale) => !!(p?.created_at && sale?.created_at) && toDateStr(p.created_at) !== toDateStr(sale.created_at);
 
 /** Importo della riga PRIMA del buono sconto, come su uno scontrino: righe,
  *  poi «Buono −X», poi il totale. Il server ora scrive `amount` al netto della
@@ -16,6 +20,7 @@ export const lineGrossCents = (l) => toCents(l.amount) + toCents(l.coupon_share 
  *  l'addebito di un no-show, che prima comparivano come «Servizio #». */
 export function saleLineLabel(l, sale, { services = [], lang = 'it', t }) {
   if (l.line_type === 'gift_card') return 'Gift card' + (l.gift_card_code ? ' · ' + l.gift_card_code : '');
+  if (l.line_type === 'package') return t('Pacchetto', 'Package') + (l.package_name ? ' · ' + l.package_name : '');
   if (l.line_type === 'product') return l.product_name || t('Prodotto', 'Product') + ' #' + (l.product_id ?? '');
   const svc = l.service_id != null ? services.find((s) => s.id === l.service_id) : null;
   if (svc) return nameIn(svc, lang);

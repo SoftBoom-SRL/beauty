@@ -3,18 +3,26 @@
 // Split rows must add up to `dueCents` (the API 422s otherwise) — shows a live match indicator.
 // Tutto in centesimi interi (money.js): le somme in virgola mobile dicevano
 // «La somma non corrisponde» su importi giusti, o viceversa.
+// `allowDue`: la cliente può pagare adesso solo una parte (`leaveDue`): col
+// pagamento unico si scrive quanto paga, con quello diviso le righe possono
+// sommare meno del dovuto, e il resto resta da saldare. `dueToggleLabel` è la
+// scritta dell'interruttore («Lascia da saldare» in cassa, «Paga solo una
+// parte» nel saldo di un conto).
 import { Icon } from '@youty/shared';
-import { centsToEur, divHalfUp, paymentsMatch, toCents } from './money.js';
+import { PAYMENT_TOLERANCE_CENTS, centsToEur, divHalfUp, dueLeftCents, paymentsMatch, toCents } from './money.js';
 import { money, payMethods, sanitizeAmtInput } from './lib.js';
 
-export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false }) {
+export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, dueToggleLabel }) {
   const methods = payMethods(t);
   const set = (patch) => onChange({ ...v, ...patch });
   const setRow = (i, patch) => set({ rows: v.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const removeRow = (i) => set({ rows: v.rows.filter((_, j) => j !== i) });
+  const leaveDue = allowDue && !!v.leaveDue;
 
   const rowsSum = v.rows.reduce((s, r) => s + toCents(r.amt), 0);
   const ok = paymentsMatch(rowsSum, dueCents);
+  const leftCents = leaveDue ? dueLeftCents(v, dueCents) : 0;
+  const over = leaveDue && (v.split ? rowsSum : toCents(v.payNow)) - dueCents > PAYMENT_TOLERANCE_CENTS;
 
   const toggleSplit = () => {
     if (!v.split) {
@@ -55,10 +63,38 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
     </div>
   );
 
+  const amountBox = (val, onVal, onBlur) => (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 9, padding: '7px 9px', background: 'var(--surface)', width: 88, boxSizing: 'border-box', flexShrink: 0 }}>
+      <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
+      <input type="text" inputMode="decimal" value={val}
+        onChange={(e) => onVal(sanitizeAmtInput(e.target.value))} onBlur={onBlur}
+        placeholder="0,00"
+        style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13.5, width: '100%' }} />
+    </div>
+  );
+
+  // «Resta da saldare»: quanto la cliente lascia sul conto con questi pagamenti.
+  const dueNote = leaveDue && (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, marginTop: 10, background: over ? 'var(--danger-tint)' : 'var(--warn-tint)' }}>
+      <span className="t-sm" style={{ fontWeight: 700, color: over ? 'var(--danger)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <Icon name={over ? 'alert' : 'clock'} size={14} color={over ? 'var(--danger)' : 'var(--warn)'} />
+        {over ? t('Più del dovuto', 'More than due') : t('Resta da saldare', 'Left to pay')}
+      </span>
+      <span className="t-num" style={{ fontWeight: 700, color: over ? 'var(--danger)' : 'var(--warn)' }}>{money(centsToEur(over ? 0 : leftCents), lang)}</span>
+    </div>
+  );
+
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12 }}>
         <div className="t-meta" style={{ flex: 1 }}>{t('Metodo di pagamento', 'Payment method')}</div>
+        {allowDue && (
+          <button onClick={() => set({ leaveDue: !v.leaveDue, payNow: '' })} aria-pressed={leaveDue}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 12.5, fontWeight: 700, color: leaveDue ? 'var(--warn)' : 'var(--muted)' }}>
+            <Icon name={leaveDue ? 'check' : 'clock'} size={13} color={leaveDue ? 'var(--warn)' : 'var(--muted)'} />
+            {dueToggleLabel || t('Lascia da saldare', 'Leave to pay later')}
+          </button>
+        )}
         <button onClick={toggleSplit} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 12.5, fontWeight: 700, color: v.split ? 'var(--clay-ink)' : 'var(--muted)' }}>
           <Icon name={v.split ? 'check' : 'plus'} size={13} color={v.split ? 'var(--clay-ink)' : 'var(--muted)'} />
           {t('Pagamento diviso', 'Split payment')}
@@ -71,6 +107,13 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
             {methods.map(([k, l]) => methodBtn(v.method === k, k, l, () => set({ method: k }), compact))}
           </div>
           {v.method === 'gift_card' && codeInput(v.giftCode, (code) => set({ giftCode: code }))}
+          {leaveDue && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+              <span className="t-sm" style={{ flex: 1, color: 'var(--muted)', fontWeight: 600 }}>{t('Paga adesso', 'Paying now')}</span>
+              {amountBox(v.payNow, (payNow) => set({ payNow }))}
+            </div>
+          )}
+          {dueNote}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -80,14 +123,8 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
                 <div style={{ display: 'flex', gap: 5, flex: 1, minWidth: 0 }}>
                   {methods.map(([k, l]) => methodBtn(r.method === k, k, l, () => setRow(i, { method: k }), true))}
                 </div>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 9, padding: '7px 9px', background: 'var(--surface)', width: 88, boxSizing: 'border-box', flexShrink: 0 }}>
-                  <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-                  <input type="text" inputMode="decimal" value={r.amt}
-                    onChange={(e) => setRow(i, { amt: sanitizeAmtInput(e.target.value) })}
-                    onBlur={() => { if (v.rows.length === 2) balanceRow(i === 0 ? 1 : 0); }}
-                    placeholder="0,00"
-                    style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13.5, width: '100%' }} />
-                </div>
+                {/* con «Lascia da saldare» le righe non si pareggiano da sole: la differenza resta da saldare */}
+                {amountBox(r.amt, (amt) => setRow(i, { amt }), () => { if (v.rows.length === 2 && !leaveDue) balanceRow(i === 0 ? 1 : 0); })}
                 {v.rows.length > 2 && (
                   <button className="dk-iconbtn" style={{ width: 28, height: 28, flexShrink: 0 }} onClick={() => removeRow(i)} title={t('Rimuovi', 'Remove')}>
                     <Icon name="x" size={13} color="var(--muted-2)" />
@@ -95,18 +132,25 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
                 )}
               </div>
               {r.method === 'gift_card' && codeInput(r.code, (code) => setRow(i, { code }))}
+              {r.method === 'gift_card' && r.sessions > 0 && (
+                <div className="t-sm" style={{ color: 'var(--clay-ink)', fontWeight: 600, marginTop: 4 }}>
+                  {r.sessions === 1 ? t('Scala 1 seduta', 'Uses 1 session') : t(`Scala ${r.sessions} sedute`, `Uses ${r.sessions} sessions`)}
+                </div>
+              )}
             </div>
           ))}
           <button onClick={addRow} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', padding: '6px 11px', borderRadius: 9, border: '1px dashed var(--hair)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
             <Icon name="plus" size={13} color="var(--clay-ink)" />{t('Aggiungi metodo', 'Add method')}
           </button>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, background: ok ? 'var(--ok-tint)' : 'var(--warn-tint)' }}>
-            <span className="t-sm" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-              <Icon name={ok ? 'check' : 'alert'} size={14} color={ok ? 'var(--ok)' : 'var(--warn)'} />
-              {ok ? t('Importi corrispondenti', 'Amounts match') : t('La somma non corrisponde', 'Sum does not match')}
-            </span>
-            <span className="t-num" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)' }}>{money(centsToEur(rowsSum), lang)} / {money(centsToEur(dueCents), lang)}</span>
-          </div>
+          {leaveDue ? dueNote : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, background: ok ? 'var(--ok-tint)' : 'var(--warn-tint)' }}>
+              <span className="t-sm" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <Icon name={ok ? 'check' : 'alert'} size={14} color={ok ? 'var(--ok)' : 'var(--warn)'} />
+                {ok ? t('Importi corrispondenti', 'Amounts match') : t('La somma non corrisponde', 'Sum does not match')}
+              </span>
+              <span className="t-num" style={{ fontWeight: 700, color: ok ? 'var(--ok)' : 'var(--warn)' }}>{money(centsToEur(rowsSum), lang)} / {money(centsToEur(dueCents), lang)}</span>
+            </div>
+          )}
         </div>
       )}
     </div>

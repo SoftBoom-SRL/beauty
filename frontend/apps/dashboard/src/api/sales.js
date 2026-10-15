@@ -1,5 +1,6 @@
 // api/sales.js — endpoint delle vendite (/api/sales): storico, vendita al
-// banco, check-out di un appuntamento, collegamento Stripe del salone.
+// banco, check-out di un appuntamento (anche di più visite in un conto unico),
+// conti da saldare, collegamento Stripe del salone.
 // (Regole comuni ai moduli di api/: vedi l'intestazione di core.js.)
 import { api } from '@youty/shared';
 
@@ -8,6 +9,12 @@ export const salesApi = {
   get: (id) => api.get(`/api/sales/${id}`),
   pos: (body) => api.post('/api/sales/pos', body),
   checkout: (appointmentId, body) => api.post(`/api/sales/checkout/${appointmentId}`, body),
+  // le altre visite della cliente di quel giorno che si possono chiudere nello stesso conto
+  otherVisits: (appointmentId) => api.get(`/api/sales/checkout/${appointmentId}/other-visits`),
+  // i conti della cliente ancora da saldare, dal più vecchio, e il loro totale
+  dues: (clientId) => api.get('/api/sales/dues', { params: { client_id: clientId } }),
+  // pagamento (anche parziale) di quanto resta da saldare su una vendita
+  settle: (id, body) => api.post(`/api/sales/${id}/settle`, body),
 };
 
 /* Stripe Connect: `start` e `callback` li chiama la finestra di servizio
