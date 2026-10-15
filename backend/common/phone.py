@@ -192,8 +192,11 @@ def find_client_by_phone(salon, phone: str, *, active_only: bool = False, exclud
     if by_key is not None:
         return by_key
     # Schede scritte prima della colonna e mai risalvate: confronto in memoria,
-    # ristretto a quelle che la chiave non ha ancora.
-    for client in qs.filter(phone_key="").only("id", "phone").order_by("id").iterator():
+    # ristretto a quelle che la chiave non ha ancora. Quelle senza numero
+    # (phone="", ammesse dal 15/10) non possono combaciare: si saltano, o
+    # dopo un import con centinaia di schede senza telefono ogni ricerca le
+    # scorrerebbe tutte.
+    for client in qs.filter(phone_key="").exclude(phone="").only("id", "phone").order_by("id").iterator():
         if phone_key(client.phone) == key:
             return qs.get(pk=client.pk)
     return None

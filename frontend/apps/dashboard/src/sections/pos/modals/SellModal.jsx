@@ -1,57 +1,81 @@
 // SellModal — check-out of an appointment (payment & sale), opened from the Agenda with
 // openModal('sell', { appointment }). `appointment` is an AppointmentOut-shaped object.
 // Blocks are pre-populated from appointment.items grouped by operator; product / extra service /
-// gift-card lines can be added. If deposit_status === 'paid' the deposit is deducted from the
-// amount due (the API enforces Σ payments == total − deposit ±0.01, else 422).
+// gift-card / package / prepaid-treatment lines can be added. If deposit_status === 'paid' the
+// deposit is deducted from the amount due (the API enforces Σ payments == total − deposit ±0.01,
+// else 422; with «Lascia da saldare» the payments may be less and the rest stays due).
+// Conto unico: the client's other open visits of the same day (GET …/other-visits) can be ticked
+// into the same bill — their lines join the blocks of their stylists (visits.js).
 // Submit → POST /api/sales/checkout/{appointment_id} → shows CheckoutOut.breakdown.
 // Optional `onDone(checkoutOut)` prop lets the caller refetch its data.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
 import CouponField from '../CouponField.jsx';
 import ConfirmPaymentModal from '../ConfirmPaymentModal.jsx';
+import DuesBanner from '../DuesBanner.jsx';
 import CheckoutDone from '../sell/CheckoutDone.jsx';
 import OperatorBlock from '../sell/OperatorBlock.jsx';
+import OtherVisits from '../sell/OtherVisits.jsx';
 import LinePicker from '../sell/LinePicker.jsx';
 import GiftCardForm from '../sell/GiftCardForm.jsx';
+import PackageForm from '../sell/PackageForm.jsx';
+import PrepaidForm from '../sell/PrepaidForm.jsx';
 import TotalsBox from '../sell/TotalsBox.jsx';
 import { useCoupon, useCouponRoom } from '../useCoupon.js';
-import { apptItemLine, checkoutDiscountPct, checkoutGiftLine, checkoutProductLine, checkoutServiceLine, toApiLine } from '../lines.js';
+import usePackages from '../usePackages.js';
+import {
+  checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  checkoutServiceLine, toApiLine,
+} from '../lines.js';
+import { blockOperatorIds, checkoutState, depositCentsOf, visitGifts } from '../visits.js';
 import useProductCatalog from '../useProductCatalog.js';
 import { salesApi } from '../../../api/sales.js';
+import { useResource } from '../../../hooks/useResource.js';
 import {
-  centsToEur, emptyPayments, giftPrefillRows, lineCents,
+  centsToEur, dueLeftCents, giftLabel, lineCents,
   money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
 } from '../lib.js';
 
-// Visita senza gift card: sempre lo stesso array, così l'effetto che precompila
-// il pagamento non riparte a ogni render.
-const NO_GIFTS = [];
-
-/** Caparra detraibile: la quota ancora in cassa (`deposit_credit`, al netto dei
- *  rimborsi già fatti), in centesimi. */
-const depositCentsOf = (appt) => toCents(appt.deposit_credit ?? (appt.deposit_status === 'paid' ? appt.deposit_amount : 0) ?? 0);
+const newKey = (prefix) => prefix + Date.now() + Math.round(Math.random() * 1e4);
 
 export default function SellModal({ appointment, onDone, onClose }) {
   const { t, lang, services, operators, opColors, fireToast, hasScope } = useDash();
   const appt = appointment || null;
   const canSell = hasScope('sales');
 
-  /* ---- lines, pre-populated from the appointment items ---- */
-  // line: { key, operator_id, line_type, service_id|product_id, name, unit_price, qty,
-  //         discount_pct, is_gift, value, recipient_name, extra }
-  const [lines, setLines] = useState(() => (appt?.items || []).map(apptItemLine));
-  const blockIds = useMemo(
-    () => [...new Set((appt?.items || []).map((it) => it.operator_id))],
-    [], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  const blockNames = useMemo(() => {
-    const m = {};
-    (appt?.items || []).forEach((it) => { if (!(it.operator_id in m)) m[it.operator_id] = it.operator_name; });
-    return m;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ---- lines, pre-populated from the appointment items ----
+   * line: { key, operator_id, line_type, service_id|product_id|package_id, name, unit_price, qty,
+   *         discount_pct, is_gift, value, recipient_name, extra, visit_id?, list_price?, kind?,
+   *         gift_service_id?, sessions? }
+   * Il pagamento parte già impostato con le gift card «a trattamento» della
+   * cliente che coprono servizi di questa visita (AppointmentOut.gifts): la
+   * gift card per l'importo coperto e il resto in contanti, così l'operatrice
+   * non deve ricordarsi del regalo né cercare il codice. Il residuo parte da
+   * quanto resta DOPO la caparra già incassata (deposit_credit, non
+   * deposit_amount: dopo un rimborso parziale la quota ancora in cassa è più
+   * bassa); ogni carta copre solo le righe del suo servizio (giftPrefill,
+   * 07-12), e una carta a sedute dà a ciascuna riga il valore di una seduta. */
+  const [start] = useState(() => checkoutState([], appt ? [appt] : []));
+  const [lines, setLines] = useState(start.lines);
+  const [pay, setPay] = useState(start.pay);
+
+  /* ---- conto unico: le altre visite della cliente di oggi ---- */
+  const { data: otherVisits } = useResource(() => salesApi.otherVisits(appt.id), [appt?.id], { enabled: !!appt && canSell, fallback: [] });
+  const [included, setIncluded] = useState([]);   // id delle altre visite messe nel conto
+  const visitsInBill = appt ? [appt, ...(otherVisits || []).filter((v) => included.includes(v.id))] : [];
+  /* Una visita spuntata o tolta cambia righe, caparre e carte: righe e
+   * pagamento ripartono da capo (checkoutState), le righe aggiunte al banco
+   * restano. */
+  const toggleVisit = (visit) => {
+    const nextIds = included.includes(visit.id) ? included.filter((id) => id !== visit.id) : [...included, visit.id];
+    const next = checkoutState(lines, [appt, ...(otherVisits || []).filter((v) => nextIds.includes(v.id))]);
+    setIncluded(nextIds);
+    setLines(next.lines);
+    setPay(next.pay);
+  };
 
   /* ---- UI state ---- */
   const [pick, setPick] = useState(null);       // { opId, type: 'product' | 'service' }
@@ -59,8 +83,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
   /* ---- products for the per-block picker: prima pagina + ricerca lato server ---- */
   const { products, list: productMatches, searching: productSearching } = useProductCatalog(pick?.type === 'product' ? pickQ : '');
-  const [giftForm, setGiftForm] = useState(null); // { opId, amt, name }
-  const [pay, setPay] = useState(emptyPayments());
+  const [giftForm, setGiftForm] = useState(null);       // { opId, amt, name }
+  const [pkgForm, setPkgForm] = useState(null);         // { opId, packageId }
+  const [prepaidForm, setPrepaidForm] = useState(null); // { opId, serviceId, sessions, amt, edited }
+  const packages = usePackages(!!pkgForm);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);   // CheckoutOut { sale, breakdown }
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
@@ -69,28 +95,6 @@ export default function SellModal({ appointment, onDone, onClose }) {
    * a mano, o dire di no. Si verifica prima di incassare (useCoupon). */
   const cp = useCoupon(t);
   const { coupon } = cp;
-
-  /* Gift card «a trattamento» della cliente che coprono servizi di questa visita
-   * (AppointmentOut.gifts): il pagamento parte già impostato con la gift card
-   * per l'importo coperto e il resto in contanti, così l'operatrice non deve
-   * ricordarsi del regalo né cercare il codice. */
-  const gifts = appt?.gifts || NO_GIFTS;
-  const giftPrefilled = useRef(false);
-  useEffect(() => {
-    if (giftPrefilled.current || !gifts.length || !appt) return;
-    // Il residuo parte da quanto resta DOPO la caparra già incassata. Prima la
-    // gift card veniva messa al suo valore pieno: con un regalo da 50 € su un
-    // servizio da 50 € e 30 € di caparra, il precompilato chiedeva 50 € su un
-    // dovuto di 20 € e il pulsante «Incassa» restava spento senza spiegazioni.
-    // deposit_credit, non deposit_amount: dopo un rimborso parziale la quota
-    // ancora in cassa è più bassa, e detrarre l'intera caparra regalerebbe alla
-    // cliente soldi che il salone le ha già restituito.
-    // Ogni carta copre solo le righe del suo servizio (giftPrefillRows, 07-12).
-    const rows = giftPrefillRows(appt.items || [], gifts, depositCentsOf(appt));
-    if (!rows) return;
-    giftPrefilled.current = true;
-    setPay({ split: true, method: 'cash', giftCode: '', rows });
-  }, [appt, gifts]);
 
   /* Buono applicato e conto che cambia sotto di lui: si toglie (14-12, vedi
    * useCouponRoom). */
@@ -105,6 +109,13 @@ export default function SellModal({ appointment, onDone, onClose }) {
   // chiudere prima la conferma che sta sopra.
   const closeUnlessSaving = () => { if (!saving) onClose?.(); };
 
+  /* ---- blocks: one per stylist, in the order their lines appear ---- */
+  const blockIds = blockOperatorIds(lines);
+  const blockNames = {};
+  [appt, ...(otherVisits || [])].forEach((v) => (v.items || []).forEach((it) => {
+    if (!(it.operator_id in blockNames)) blockNames[it.operator_id] = it.operator_name;
+  }));
+
   /* ---- helpers ---- */
   const opOf = (opId) => operators.find((o) => o.id === opId) || null;
   const opLabel = (opId) => { const o = opOf(opId); return o ? opName(o) : (blockNames[opId] || '#' + opId); };
@@ -117,20 +128,31 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const linesOf = (opId) => lines.filter((l) => l.operator_id === opId);
   const patchLine = (key, patch) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const removeLine = (key) => setLines((ls) => ls.filter((l) => l.key !== key));
+  const closeForms = () => { setPick(null); setPickQ(''); setGiftForm(null); setPkgForm(null); setPrepaidForm(null); };
 
   const addProduct = (opId, p) => {
-    setLines((ls) => [...ls, checkoutProductLine('pl' + Date.now() + Math.round(Math.random() * 1e4), opId, p)]);
-    setPick(null); setPickQ('');
+    setLines((ls) => [...ls, checkoutProductLine(newKey('pl'), opId, p)]);
+    closeForms();
   };
   const addService = (opId, s) => {
-    setLines((ls) => [...ls, checkoutServiceLine('sl' + Date.now() + Math.round(Math.random() * 1e4), opId, s, lang)]);
-    setPick(null); setPickQ('');
+    setLines((ls) => [...ls, checkoutServiceLine(newKey('sl'), opId, s, lang)]);
+    closeForms();
   };
   const addGiftCard = () => {
     const v = centsToEur(toCents(giftForm?.amt));
     if (!(v > 0)) return;
     setLines((ls) => [...ls, checkoutGiftLine('gl' + Date.now(), giftForm.opId, v, giftForm.name, lang)]);
-    setGiftForm(null);
+    closeForms();
+  };
+  const addPackage = (pkg) => {
+    setLines((ls) => [...ls, checkoutPackageLine(newKey('kl'), pkgForm.opId, pkg, lang)]);
+    closeForms();
+  };
+  const addPrepaid = (service, sessions, amt) => {
+    const v = centsToEur(toCents(amt));
+    if (!(v > 0)) return;
+    setLines((ls) => [...ls, checkoutPrepaidLine(newKey('ql'), prepaidForm.opId, service, sessions, v, lang)]);
+    closeForms();
   };
 
   /* ---- totals & deposit rule ----
@@ -142,8 +164,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
   // significa regalare la differenza. È la regola del server, ripetuta qui solo
   // per far vedere lo sconto giusto prima dell'incasso.
   // Il buono si applica PRIMA della caparra: l'anticipo si detrae da ciò che la
-  // cliente deve davvero (stesso ordine di finalize_sale).
-  const totals = saleTotals(blockIds.flatMap((oid) => linesOf(oid)), coupon, depositCentsOf(appt));
+  // cliente deve davvero (stesso ordine di finalize_sale). Con il conto unico la
+  // caparra è quella di tutte le visite del conto.
+  const depositCents = visitsInBill.reduce((s, v) => s + depositCentsOf(v), 0);
+  const totals = saleTotals(blockIds.flatMap((oid) => linesOf(oid)), coupon, depositCents);
   const gross = centsToEur(totals.grossCents);
   const couponBaseCents = totals.couponBaseCents;
   const discount = centsToEur(totals.discountCents);
@@ -159,12 +183,19 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const deductedCents = Math.min(totals.depositCents, totals.totalCents);
   const excessCents = totals.excessCents;
   const payErr = paymentsError(pay, dueCents, t);
+  // «Lascia da saldare»: la cliente paga adesso solo una parte, il resto resta sul conto.
+  const leftCents = dueLeftCents(pay, dueCents);
+  const collectCents = Math.max(0, dueCents) - leftCents;
   const excessNote = t(
     `Caparra eccedente da restituire: ${money(centsToEur(excessCents), 'it')}. Se è stata pagata online torna sulla carta della cliente, altrimenti va restituita in cassa.`,
     `Excess deposit to return: ${money(centsToEur(excessCents), 'en')}. If it was paid online it goes back to the client's card, otherwise return it at the desk.`,
   );
+  const dueNote = leftCents > 0
+    ? t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`)
+    : null;
 
   const applyCoupon = () => cp.applyCoupon({ baseCents: couponBaseCents, clientId: appt.client?.id ?? null });
+  const gifts = visitGifts(visitsInBill);
 
   /* ---- submit ---- */
   const submit = async () => {
@@ -179,6 +210,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
         })),
         payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
+        ...(leftCents > 0 ? { leave_due: true } : {}),
+        ...(included.length ? { extra_appointment_ids: included } : {}),
       };
       const res = await salesApi.checkout(appt.id, body);
       setResult(res);
@@ -208,6 +241,14 @@ export default function SellModal({ appointment, onDone, onClose }) {
       ? services.filter((s) => s.active !== false && (!pickQ || svcLabel(s, lang).toLowerCase().includes(pickQ.toLowerCase())))
       : [];
 
+  const addButtons = (oid) => [
+    ['box', t('Prodotto', 'Product'), () => { closeForms(); setPick({ opId: oid, type: 'product' }); }],
+    ['scissors', t('Servizio extra', 'Extra service'), () => { closeForms(); setPick({ opId: oid, type: 'service' }); }],
+    ['gift', t('Gift card', 'Gift card'), () => { closeForms(); setGiftForm({ opId: oid, amt: '50', name: '' }); }],
+    ['tag', t('Pacchetto', 'Package'), () => { closeForms(); setPkgForm({ opId: oid, packageId: '' }); }],
+    ['wallet', t('Già pagato', 'Prepaid'), () => { closeForms(); setPrepaidForm({ opId: oid, serviceId: '', sessions: 1, amt: 0, edited: false }); }],
+  ];
+
   return (
     <>
     <DkModal open onClose={closeUnlessSaving} width={900}
@@ -219,7 +260,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
           <button className="dk-btn dk-btn--clay" disabled={saving || !canSell || !!payErr} onClick={() => setConfirmOpen(true)}
             title={!canSell ? t('Permesso "vendite" mancante', 'Missing "sales" permission') : (payErr || undefined)}>
             <Icon name="check" size={17} color="#fff" />
-            {saving ? t('Registrazione…', 'Recording…') : <>{t('Incassa', 'Take payment')} {money(Math.max(0, due), lang)}</>}
+            {saving ? t('Registrazione…', 'Recording…') : <>{t('Incassa', 'Take payment')} {money(centsToEur(collectCents), lang)}</>}
           </button>
         </>
       )}>
@@ -227,39 +268,42 @@ export default function SellModal({ appointment, onDone, onClose }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 22, alignItems: 'start' }}>
         {/* LEFT — sale grouped by operator */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <OtherVisits visits={otherVisits} included={included} onToggle={toggleVisit} clientName={appt.client?.full_name} t={t} lang={lang} />
           {blockIds.map((oid) => (
             <OperatorBlock key={oid} lines={linesOf(oid)} subtotal={opSubtotal(oid)} color={opColor(oid)} initials={opInitials(oid)} label={opLabel(oid)}
               onPatch={patchLine} onRemove={removeLine} t={t} lang={lang}>
               {/* add lines to this block */}
               {pick && pick.opId === oid
-                ? <LinePicker type={pick.type} q={pickQ} onQ={setPickQ} onClose={() => { setPick(null); setPickQ(''); }}
+                ? <LinePicker type={pick.type} q={pickQ} onQ={setPickQ} onClose={closeForms}
                   items={pickerList} products={products} searching={productSearching}
                   onPick={(x) => (pick.type === 'product' ? addProduct(oid, x) : addService(oid, x))} t={t} lang={lang} />
-                : giftForm && giftForm.opId === oid ? <GiftCardForm form={giftForm} setForm={setGiftForm} onAdd={addGiftCard} onCancel={() => setGiftForm(null)} t={t} />
-                  : (
-                    <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                      {[
-                        ['box', t('Prodotto', 'Product'), () => { setPick({ opId: oid, type: 'product' }); setPickQ(''); setGiftForm(null); }],
-                        ['scissors', t('Servizio extra', 'Extra service'), () => { setPick({ opId: oid, type: 'service' }); setPickQ(''); setGiftForm(null); }],
-                        ['gift', t('Gift card', 'Gift card'), () => { setGiftForm({ opId: oid, amt: '50', name: '' }); setPick(null); }],
-                      ].map(([ic, l, onClick]) => (
-                        <button key={ic} onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 9, border: '1px dashed var(--hair)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
-                          <Icon name="plus" size={13} color="var(--clay-ink)" /><Icon name={ic} size={14} color="var(--clay-ink)" />{l}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                : giftForm && giftForm.opId === oid ? <GiftCardForm form={giftForm} setForm={setGiftForm} onAdd={addGiftCard} onCancel={closeForms} t={t} />
+                  : pkgForm && pkgForm.opId === oid ? <PackageForm packages={packages} services={services} form={pkgForm} setForm={setPkgForm} onAdd={addPackage} onCancel={closeForms} t={t} lang={lang} />
+                    : prepaidForm && prepaidForm.opId === oid ? <PrepaidForm services={services} form={prepaidForm} setForm={setPrepaidForm} onAdd={addPrepaid} onCancel={closeForms} t={t} lang={lang} />
+                      : (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                          {addButtons(oid).map(([ic, l, onClick]) => (
+                            <button key={ic} onClick={onClick} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 9, border: '1px dashed var(--hair)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
+                              <Icon name="plus" size={13} color="var(--clay-ink)" /><Icon name={ic} size={14} color="var(--clay-ink)" />{l}
+                            </button>
+                          ))}
+                        </div>
+                      )}
             </OperatorBlock>
           ))}
         </div>
 
         {/* RIGHT — single shared payment */}
         <div>
+          {/* conti lasciati da saldare in visite di prima: si possono pagare adesso, a parte */}
+          <DuesBanner key={appt.client?.id} clientId={appt.client?.id} enabled={canSell} t={t} lang={lang} fireToast={fireToast} style={{ marginBottom: 10 }} />
           {gifts.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--clay-tint)', marginBottom: 10 }}>
-              <Icon name="gift" size={16} color="var(--clay-ink)" />
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'var(--clay-tint)', marginBottom: 10 }}>
+              <Icon name="gift" size={16} color="var(--clay-ink)" style={{ marginTop: 2 }} />
               <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-                <b>{t('Regalo', 'Gift')}</b> · {gifts.map((g) => `${g.service_name} (${g.code}${g.from_name ? ' · ' + t('da', 'from') + ' ' + g.from_name : ''})`).join(', ')}
+                {gifts.map((g) => (
+                  <div key={g.gift_card_id ?? g.code}><b>{giftLabel(g, t)}</b> · {g.service_name} ({g.code})</div>
+                ))}
                 <div className="t-sm" style={{ color: 'var(--ink-2)', marginTop: 2 }}>{t('Il pagamento è già impostato con la gift card per la parte coperta.', 'The payment is already set with the gift card for the covered part.')}</div>
               </div>
             </div>
@@ -269,7 +313,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
             label={t('Buono sconto', 'Voucher')} placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
             style={{ marginBottom: 12 }} labelStyle={{ marginBottom: 6 }} t={t} lang={lang} />
           {dueCents > 0 ? (
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact allowDue={!!appt.client} />
           ) : (
             <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--ok-tint)', color: 'var(--ok)', fontWeight: 600 }}>
               <Icon name="check" size={15} color="var(--ok)" stroke={2.4} />
@@ -289,8 +333,8 @@ export default function SellModal({ appointment, onDone, onClose }) {
 
     {/* conferma prima di finalizzare il check-out */}
     <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={submit}
-      summary={<>{money(Math.max(0, due), lang)}{appt.client?.full_name ? ' · ' + appt.client.full_name : ''}</>}
-      note={excessCents > 0 ? excessNote : null} t={t} />
+      summary={<>{money(centsToEur(collectCents), lang)}{appt.client?.full_name ? ' · ' + appt.client.full_name : ''}{included.length ? ' · ' + t(`conto unico di ${included.length + 1} visite`, `single bill for ${included.length + 1} visits`) : ''}</>}
+      note={[excessCents > 0 ? excessNote : null, dueNote].filter(Boolean).join(' ') || null} t={t} />
     </>
   );
 }

@@ -47,6 +47,11 @@ class Service(models.Model):
     # dentro la stessa categoria (Colore, Piega, Taglio…) i blocchi erano
     # tutti uguali e non si distinguevano a colpo d'occhio.
     color = models.CharField(max_length=7, blank=True, default="", db_default="")
+    # Aggiuntivo: si fa DENTRO il tempo di un altro servizio (nail art, scrub,
+    # rimozione durante la manicure). Nell'appuntamento aggiunge il prezzo ma
+    # non il tempo: la sua voce ha durata 0 e si appoggia al servizio prima.
+    # `duration_min` resta quella indicativa del listino.
+    is_addon = models.BooleanField(default=False, db_default=False)
     # per stima margine (vedi agenda GET /appointments/{id}/margin)
     product_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     supplier_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -68,6 +73,8 @@ class Package(models.Model):
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     active = models.BooleanField(default=True)
+    # Giorni entro cui usare le sedute dalla vendita. Vuoto = nessuna scadenza.
+    validity_days = models.PositiveSmallIntegerField(null=True, blank=True)
     # Voce di catalogo Yourang collegata (sync push).
     yourang_item_id = models.CharField(max_length=64, blank=True, default="")
 

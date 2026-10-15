@@ -24,6 +24,74 @@ export function relRange(key) {
   return {};
 }
 
+/** L'affidabilità non si scrive più a mano: la calcola il gestionale
+ *  (clients.services.reliability_basis). Qui come lo si spiega nella scheda:
+ *  la regola e i conteggi degli ultimi 12 mesi da `reliability_basis`
+ *  (null se il server non li ha mandati: si dice solo la regola).
+ *  → { rule, counts } */
+export function reliabilityExplain(basis, t) {
+  const rule = t(
+    'Calcolata dal gestionale sugli ultimi 12 mesi: si parte da 100, meno 25 per ogni giorno con un no-show e 10 per ogni giorno con un annullamento tardivo.',
+    'Calculated over the last 12 months: it starts at 100, minus 25 for each day with a no-show and 10 for each day with a late cancellation.',
+  );
+  if (!basis) return { rule, counts: '' };
+  const n = Number(basis.no_shows) || 0;
+  const l = Number(basis.late_cancellations) || 0;
+  if (!n && !l) return { rule, counts: t('Nessun no-show né annullamento tardivo in 12 mesi', 'No no-shows or late cancellations in 12 months') };
+  const parts = [];
+  if (n) parts.push(t(`${n} no-show`, `${n} no-show${n === 1 ? '' : 's'}`));
+  if (l) parts.push(t(`${l} annullament${l === 1 ? 'o' : 'i'} tardiv${l === 1 ? 'o' : 'i'}`, `${l} late cancellation${l === 1 ? '' : 's'}`));
+  return { rule, counts: parts.join(' · ') + t(' in 12 mesi', ' in 12 months') };
+}
+
+/* ---- Telefono e «si contatta tramite» ----
+ * Una scheda può non avere un numero suo (la bambina, chi riceve un regalo,
+ * la seconda persona che usa lo stesso numero): i messaggi vanno al numero di
+ * `contact`, se c'è (Client.contact_phone lato server). */
+
+/** Il telefono come si legge in lista e in testata: il numero, «tramite
+ *  Laura Rossi» o «senza telefono». → { kind: 'phone'|'contact'|'none', text } */
+export function phoneLine(c, t) {
+  if (c?.phone) return { kind: 'phone', text: c.phone };
+  if (c?.contact) return { kind: 'contact', text: t(`tramite ${c.contact.full_name}`, `via ${c.contact.full_name}`) };
+  return { kind: 'none', text: t('senza telefono', 'no phone') };
+}
+
+/** Il numero a cui scrivere o telefonare: il suo, altrimenti quello del contatto ('' se nessuno). */
+export function reachPhone(c) {
+  return c?.phone || c?.contact?.phone || '';
+}
+
+/** Dall'errore della creazione o della modifica, chi ha già il numero scritto:
+ *  al «telefono già registrato» il server aggiunge `phone_holder_id`, il nome
+ *  e `contact_allowed`. Madre e figlia, coppie: invece del solo rifiuto si
+ *  propone di usare quel numero come contatto.
+ *  → { id, name, allowed } (allowed = può fare da contatto) oppure null. */
+export function phoneHolderOf(err) {
+  const d = err?.data;
+  if (err?.status !== 400 || !d?.phone_holder_id) return null;
+  return { id: d.phone_holder_id, name: d.phone_holder_name || '', allowed: !!d.contact_allowed };
+}
+
+/** Archiviare chi fa da contatto scollega chi passa da lei (il server lo fa e
+ *  lo dice): la conferma lo avvisa prima. `deps` = `dependents` della scheda.
+ *  → la frase, o '' se nessuna scheda passa da lei. */
+export function dependentsNotice(deps, t) {
+  const names = (deps || []).map((d) => d.full_name).filter(Boolean);
+  if (!names.length) return '';
+  const list = names.join(', ');
+  return names.length === 1
+    ? t(`${list} si contatta tramite questa scheda: archiviandola perde il collegamento e resta senza numero di contatto.`, `${list} is contacted via this profile: archiving it removes the link, leaving no contact number.`)
+    : t(`${list} si contattano tramite questa scheda: archiviandola perdono il collegamento e restano senza numero di contatto.`, `${list} are contacted via this profile: archiving it removes the link, leaving them with no contact number.`);
+}
+
+/** Quanto la cliente deve ancora (sales.dues), in euro; null se niente o se
+ *  il dato è nascosto (senza il permesso «vendite» arriva null, mai 0). */
+export function amountDue(c) {
+  const v = Number(c?.amount_due);
+  return Number.isFinite(v) && Math.round(v * 100) > 0 ? v : null;
+}
+
 /** Segnalazioni `client.reactivation_requested` ancora da gestire, una per
  *  scheda, dalla più recente. Gli eventi del feed arrivano dal più recente:
  *  una riattivazione successiva (`client.updated` con `is_active` fra i
@@ -66,6 +134,8 @@ const EDITABLE = {
   first_name: (c) => c.first_name || '',
   last_name: (c) => c.last_name || '',
   phone: (c) => c.phone || '',
+  // «si contatta tramite»: l'id della scheda, null se nessuna (null scollega)
+  contact_client_id: (c) => c.contact?.id ?? null,
   wa: (c) => !!c.wa,
   email: (c) => c.email || '',
   lang: (c) => c.lang || 'it',
@@ -140,6 +210,18 @@ export function timelineDate(iso, lang, today = todayStr()) {
     month: monthShort(p.month, lang),
     year: p.year === Number(String(today).slice(0, 4)) ? '' : String(p.year).slice(2),
   };
+}
+
+/** Lo stato d'incasso di una visita nello storico: 'paid' (ha la sua vendita),
+ *  'due' (la vendita c'è ma resta qualcosa da saldare, `sale.amount_due`),
+ *  'shared' (incassata nel conto unico di un'altra visita della stessa cliente,
+ *  `covered_by_sale`), 'expected' (deve ancora venire) o 'unpaid'. La visita
+ *  chiusa nel conto dell'altra risultava «non incassato», e quella con un
+ *  resto da pagare «incassato». */
+export function visitPaidState(entry, upcoming) {
+  if (entry?.sale) return Number(entry.sale.amount_due || 0) > 0 ? 'due' : 'paid';
+  if (entry?.covered_by_sale) return 'shared';
+  return upcoming ? 'expected' : 'unpaid';
 }
 
 /** Caparra di una visita come va mostrata nello storico, o null se non c'è.

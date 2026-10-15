@@ -1,8 +1,10 @@
 // lanes.js — geometria delle corsie in agenda: dove finisce ogni blocco quando
 // due appuntamenti si sovrappongono, e dove passa la spina di una visita
-// multi-servizio. Sono funzioni pure, SENZA import: così si possono provare con
-// `node --test` senza tirarsi dietro React e il resto della dashboard
-// (vedi apps/dashboard/test/lanes.test.js).
+// multi-servizio. Sono funzioni pure, senza React né il resto della
+// dashboard: così si possono provare con `node --test` (vedi
+// apps/dashboard/test/lanes.test.js). L'unico import è lib/addons.js, puro e
+// senza import anche lui.
+import { timedItems } from './lib/addons.js';
 
 /** Corsie per i blocchi sovrapposti di una colonna.
  *
@@ -96,12 +98,14 @@ export function laneCss(lane = 0, laneCount = 1, fixedWidth = null) {
  *  cui prenderla tutta — il corpo del blocco stacca il suo servizio — e per
  *  spostarla di un'ora la si spezzava in due appuntamenti.
  *  `count` = servizi della visita in questa colonna, `total` = in tutta la visita.
+ *  Gli aggiuntivi (nail art durante la manicure) non contano: non sono blocchi,
+ *  e manicure + nail art è una visita da un servizio solo, senza spina.
  */
 export function visitSpines(placed) {
   const byAppt = new Map();
   for (const placedItem of placed) {
     const { b, pos } = placedItem;
-    const total = (b.appt.items || []).length;
+    const total = timedItems(b.appt.items).length;
     if (total < 2) continue;
     const start = pos.startMin;
     const end = start + (pos.activeMin ?? b.activeMin ?? 0) + (pos.soakMin ?? b.soakMin ?? 0);
@@ -129,9 +133,11 @@ export function visitSpines(placed) {
  *  dividere come nella vista giorno.
  *
  *  Ritorna [] quando i servizi sono meno di due: non c'è niente da dividere.
+ *  Gli aggiuntivi non hanno una fascia: col minimo di un minuto la nail art
+ *  diventerebbe una riga del suo colore in fondo alla manicure.
  */
 export function serviceBands(appt) {
-  const items = (appt?.items || []).filter(Boolean);
+  const items = timedItems(appt?.items);
   if (items.length < 2) return [];
   const spans = items.map((it) => Math.max(1, (it.duration_min || 0) + (it.soak_min || 0)));
   const total = spans.reduce((s, x) => s + x, 0);

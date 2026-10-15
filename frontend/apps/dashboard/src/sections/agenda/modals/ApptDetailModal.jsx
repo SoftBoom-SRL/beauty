@@ -13,7 +13,10 @@ import DkPanel from '../../../ui/DkPanel.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { serviceColor } from '../../../ui/palette.js';
-import { aStartMin, aEndMin, wlMatches, noShowSteps, cancelSteps, lateCancel, hmToMin, slotStep, LAST_START_MIN } from '../lib.js';
+import {
+  aStartMin, aEndMin, wlMatches, noShowSteps, cancelSteps, lateCancel, hmToMin, slotStep, LAST_START_MIN,
+  isAddonRow, isAddonService, insertAddonRow, removeRowWithAddons, setRowOperator, prevTimedIndex, nextTimedIndex,
+} from '../lib.js';
 import {
   itemsSig, joinReason, MAX_ITEM_MIN, handoverOps, otherOpNames, itemSpans, gapNotes, TERMINAL,
 } from './rules.js';
@@ -63,6 +66,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const noteDirty = note !== (appt?.note || '');
   const [savingItems, setSavingItems] = useState(false);
   const [justAdded, setJustAdded] = useState(null); // riga appena aggiunta: la si porta in vista
+  const [addonFor, setAddonFor] = useState(null);   // servizio con la scelta degli aggiuntivi aperta
 
   // caparra: link di pagamento, incasso al banco, copia del link
   const { linkBusy, linkCopyFailed, sendDepositLink, cashDeposit, copyDepositLink } = useDepositActions({ apptRef, alive, adopt, t, fireToast, onMutate });
@@ -153,7 +157,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     applyMove({ startMin: Math.max(0, Math.min(LAST_START_MIN, m)) });
   };
   const svcOf = (id) => (services || []).find((s) => s.id === id);
-  const activeServices = (services || []).filter((s) => s.active !== false);
+  // «Aggiungi servizio» offre i servizi veri; gli aggiuntivi (nail art) si
+  // aggiungono col «+» sotto il servizio durante il quale si fanno
+  const activeServices = (services || []).filter((s) => s.active !== false && !isAddonService(s));
+  const addonServices = (services || []).filter((s) => s.active !== false && isAddonService(s));
   // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
   const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
   const eligibleOps = (serviceId) => operators.filter((op) => (op.service_ids || []).includes(serviceId));
@@ -176,12 +183,25 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     setEditItems((l) => [...l, { key, id: undefined, service_id: sid, operator_id: mine, duration_min: s?.duration_min ?? 30, soak_min: s?.soak_min || 0, price: Number(s?.price) || 0, name: s ? nameIn(s, lang) : '' }]);
     setJustAdded(key);
   };
-  const removeServiceItem = (key) => setEditItems((l) => l.filter((x) => x.key !== key));
+  /* Un aggiuntivo (nail art) va sotto il servizio `parentKey`, dopo quelli
+   * che ha già: senza tempo, col suo prezzo, a chi fa quel servizio se lo sa
+   * fare (altrimenti decide il server: la prima abilitata). */
+  const addAddonItem = (parentKey, sid) => {
+    const s = svcOf(sid);
+    const parent = editItems.find((x) => x.key === parentKey);
+    const who = parent && eligibleOps(sid).some((op) => op.id === parent.operator_id) ? parent.operator_id : null;
+    const key = 'e' + (itemSeq.current++);
+    setEditItems((l) => insertAddonRow(l, parentKey, { key, id: undefined, service_id: sid, operator_id: who, duration_min: 0, soak_min: 0, price: Number(s?.price) || 0, name: s ? nameIn(s, lang) : '' }));
+    setJustAdded(key);
+  };
+  // togliendo un servizio se ne vanno anche i suoi aggiuntivi: si fanno durante lui
+  const removeServiceItem = (key) => setEditItems((l) => removeRowWithAddons(l, key));
   const setItemDuration = (key, raw) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: raw === '' ? '' : Math.max(0, parseInt(raw, 10) || 0) } : x)));
   // 12 ore al massimo, come ItemEditIn sul server: un «600» battuto al posto
   // di «60» finiva in un 422 in inglese senza dire quale campo (17-12)
   const clampItemDuration = (key) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, duration_min: Math.min(MAX_ITEM_MIN, Math.max(5, parseInt(x.duration_min, 10) || 5)) } : x)));
-  const setItemOperator = (key, opId) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
+  // gli aggiuntivi seguono chi fa il loro servizio, se li sa fare (lib/addons.js)
+  const setItemOperator = (key, opId) => setEditItems((l) => setRowOperator(l, key, opId, (sid, op) => eligibleOps(sid).some((o) => o.id === op)));
 
   const setItemGap = (key, minutes) => setEditItems((l) => l.map((x) => (x.key === key ? { ...x, soak_min: Math.min(MAX_ITEM_MIN, Math.max(0, minutes)) } : x)));
 
@@ -208,7 +228,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (!/^\d{1,2}:\d{2}$/.test(hm || '')) return;
     const active = Math.min(MAX_ITEM_MIN, Math.max(5, hmToMin(hm) - span.from));
     setItemDuration(it.key, String(active));
-    const next = editItems[index + 1];
+    // il servizio dopo: gli aggiuntivi in mezzo non hanno un orario loro
+    const next = editItems[nextTimedIndex(editItems, index)];
     if (next && span.gap > 0) {
       fireToast({
         msg: t(`${svcDisplayName(next)} slitta alle ${timeLabel(span.from + active + span.gap)}: fra i due restano ${span.gap} minuti di attesa`,
@@ -230,7 +251,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
       applyMove({ startMin: Math.max(0, Math.min(LAST_START_MIN, wanted)) });
       return;
     }
-    const prev = editItems[index - 1], prevSpan = spans[index - 1];
+    // L'attesa va sul servizio prima, saltando gli aggiuntivi in mezzo (la
+    // nail art della manicure): su di loro non si scrive tempo, e il server
+    // la ignorerebbe.
+    const prevIndex = prevTimedIndex(editItems, index);
+    if (prevIndex < 0) return;
+    const prev = editItems[prevIndex], prevSpan = spans[prevIndex];
     const gap = wanted - prevSpan.to;
     if (gap > MAX_ITEM_MIN) {
       fireToast({ msg: t('Fra un servizio e l’altro l’attesa può essere al massimo di 12 ore', 'The wait between two services can be at most 12 hours'), icon: 'alert' });
@@ -289,9 +315,10 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
             ...(it.id != null ? { id: it.id } : {}),   // existing → id; new → omitted; omitted rows → removed
             service_id: it.service_id,
             operator_id: it.operator_id ?? null,
-            duration_min: Math.min(MAX_ITEM_MIN, Math.max(5, parseInt(it.duration_min, 10) || 5)),
+            // un aggiuntivo non ha tempo: lo 0 lo accetta solo per lui
+            duration_min: isAddonRow(it) ? 0 : Math.min(MAX_ITEM_MIN, Math.max(5, parseInt(it.duration_min, 10) || 5)),
             // l'attesa dopo il servizio: posa del listino o buco voluto
-            soak_min: Math.min(MAX_ITEM_MIN, Math.max(0, parseInt(it.soak_min, 10) || 0)),
+            soak_min: isAddonRow(it) ? 0 : Math.min(MAX_ITEM_MIN, Math.max(0, parseInt(it.soak_min, 10) || 0)),
           })),
         } : {}),
         ...(noteDirty ? { note } : {}),
@@ -514,12 +541,12 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           ) : (
             <ServicesEditor
               appt={appt} editItems={editItems} spans={spans} gaps={gaps} startMin={startMin} justAdded={justAdded} addedRef={addedRef}
-              addingSvc={addingSvc} setAddingSvc={setAddingSvc} editTotal={editTotal} itemsDirty={itemsDirty}
+              addingSvc={addingSvc} setAddingSvc={setAddingSvc} addonFor={addonFor} setAddonFor={setAddonFor} editTotal={editTotal} itemsDirty={itemsDirty}
               operators={operators} opColors={opColors} t={t} lang={lang}
-              catalog={{ svcOf, svcColor, eligibleOps, svcDisplayName, catalogSoak, activeServices }}
+              catalog={{ svcOf, svcColor, eligibleOps, svcDisplayName, catalogSoak, activeServices, addonServices }}
               rows={{
                 draftOf, setDraft, commitItemStart, commitItemEnd, setItemDuration, clampItemDuration, setItemOperator, setItemGap,
-                removeServiceItem, addServiceItem,
+                removeServiceItem, addServiceItem, addAddonItem,
               }}
             />
           )}

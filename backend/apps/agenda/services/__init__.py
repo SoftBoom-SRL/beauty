@@ -12,6 +12,7 @@ Convenzioni interne:
 
 I moduli, dai più semplici a quelli che li usano (nessun ciclo):
 - `timegrid`: minuti da mezzanotte, intervalli liberi/occupati;
+- `addons`: gli aggiuntivi, voci senza tempo appoggiate al servizio prima;
 - `locking`: lock salone → riga dell'appuntamento;
 - `refund_ledger`: conti dei rimborsi della caparra (li usa anche sales);
 - `occupancy`: impegni per operatrice, chi si prenota, fasce di apertura;

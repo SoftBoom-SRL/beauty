@@ -118,7 +118,11 @@ def move_appointment(request, appointment_id: int, data: MoveIn):
 
 @router.post("/appointments/{int:appointment_id}/split", auth=staff_auth, response=SplitOut)
 def split_appointment(request, appointment_id: int, data: SplitIn):
-    """Stacca un servizio da un appuntamento multi-servizio e lo sposta (anche in un altro giorno)."""
+    """Stacca un servizio da un appuntamento multi-servizio e lo sposta (anche in un altro giorno).
+
+    Il servizio porta con sé gli aggiuntivi che gli vengono dietro (la nail art
+    della manicure); un aggiuntivo da solo non si stacca (422).
+    """
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
@@ -213,6 +217,11 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
     di listino per le voci nuove). Prezzo e posa delle voci esistenti restano
     quelli concordati con la cliente. Il deposito non si ricalcola: si riduce
     soltanto se la visita è scesa sotto la caparra.
+
+    Aggiuntivi (servizi `is_addon`, come la nail art durante la manicure): la
+    loro voce dura 0 minuti, senza posa, qualunque durata arrivi (lo 0 è
+    ammesso solo per loro), e va dopo il servizio a cui si appoggia. Una
+    visita di soli aggiuntivi, o che comincia con uno, è un 422.
 
     `force=True`: si prova comunque a scrivere anche se in quella fascia
     l'operatrice risulta occupata o la visita sfora la chiusura (allungare un

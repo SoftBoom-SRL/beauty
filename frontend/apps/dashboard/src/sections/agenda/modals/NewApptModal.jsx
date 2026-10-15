@@ -11,7 +11,9 @@ import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { serviceColor } from '../../../ui/palette.js';
 import { usePanelSlot } from '../../../ui/DkPanel.jsx';
-import { firstName, isoAtMin, hmToMin, slotStep } from '../lib.js';
+import {
+  firstName, isoAtMin, hmToMin, slotStep, isAddonRow, isAddonService, insertAddonRow, removeRowWithAddons, setRowOperator, bookingRows,
+} from '../lib.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { copyText, relativeDateLabel, requestStatus } from './rules.js';
 import { withForceRetry } from '../lib/retry.js';
@@ -62,27 +64,50 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   const [manualTime, setManualTime] = useState('');
   const [forceCreate, setForceCreate] = useState(false);
 
-  /* ---- servizi ---- */
+  /* ---- servizi ----
+   * Le righe stanno in fila come la catena che parte al server: ogni servizio
+   * seguito dai suoi aggiuntivi (la nail art durante la manicure), che si
+   * aggiungono col «+» sotto il servizio e non ne allungano la durata
+   * (lib/addons.js). */
   const seq = useRef(1);
   const eligibleOps = (serviceId) => operators.filter((o) => (o.service_ids || []).includes(serviceId));
   const isEligible = (serviceId, opId) => !!opId && eligibleOps(serviceId).some((o) => o.id === opId);
-  const [items, setItems] = useState(() => (pf.serviceIds || []).map((sid) => ({
+  const svcOf = (id) => (services || []).find((s) => s.id === id);
+  // «Rifai la visita» porta anche gli aggiuntivi: vanno dietro al loro servizio
+  const [items, setItems] = useState(() => bookingRows(pf.serviceIds, (sid) => isAddonService(svcOf(sid)), (sid) => ({
     key: 'i' + seq.current++, service_id: sid, operator_id: isEligible(sid, pf.operatorId) ? pf.operatorId : null,
   })));
   const [svcQ, setSvcQ] = useState('');
-  const activeServices = (services || []).filter((s) => s.active !== false);
-  const svcOf = (id) => (services || []).find((s) => s.id === id);
+  const [addonFor, setAddonFor] = useState(null);   // servizio con la scelta degli aggiuntivi aperta
+  const activeServices = (services || []).filter((s) => s.active !== false && !isAddonService(s));
+  const addonServices = (services || []).filter((s) => s.active !== false && isAddonService(s));
   // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
   const svcColor = (s) => serviceColor(s, serviceCategories) || 'var(--clay)';
-  const isSelected = (sid) => items.some((x) => x.service_id === sid);
+  const mainItems = items.filter((x) => !isAddonRow(x));
+  const isSelected = (sid) => mainItems.some((x) => x.service_id === sid);
   const toggleService = (sid) => {
-    if (isSelected(sid)) setItems((l) => l.filter((x) => x.service_id !== sid));
+    const on = mainItems.find((x) => x.service_id === sid);
+    // togliendo un servizio se ne vanno anche i suoi aggiuntivi
+    if (on) setItems((l) => removeRowWithAddons(l, on.key));
     else setItems((l) => [...l, { key: 'i' + seq.current++, service_id: sid, operator_id: isEligible(sid, req?.operatorId) ? req.operatorId : null }]);
   };
-  const setItemOp = (key, opId) => setItems((l) => l.map((x) => (x.key === key ? { ...x, operator_id: opId } : x)));
-  const removeItem = (key) => setItems((l) => l.filter((x) => x.key !== key));
+  /* Un aggiuntivo sotto il servizio `parentKey`: a chi fa il servizio, se lo
+   * sa fare; altrimenti «prima disponibile» (il server lo dà alla prima
+   * abilitata, senza cercarla libera: non le prende tempo). */
+  const addAddon = (parentKey, sid) => {
+    const key = 'i' + seq.current++;
+    setItems((l) => {
+      const parent = l.find((x) => x.key === parentKey);
+      const who = parent && isEligible(sid, parent.operator_id) ? parent.operator_id : null;
+      return insertAddonRow(l, parentKey, { key, service_id: sid, operator_id: who });
+    });
+  };
+  // gli aggiuntivi seguono chi fa il loro servizio, se lo sanno fare
+  const setItemOp = (key, opId) => setItems((l) => setRowOperator(l, key, opId, isEligible));
+  const removeItem = (key) => setItems((l) => removeRowWithAddons(l, key));
   const totalPrice = items.reduce((s, it) => s + Number(svcOf(it.service_id)?.price || 0), 0);
-  const totalDur = items.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
+  // la durata è quella dei servizi: un aggiuntivo si fa durante il suo
+  const totalDur = mainItems.reduce((s, it) => { const sv = svcOf(it.service_id); return s + (sv?.duration_min || 0) + (sv?.soak_min || 0); }, 0);
 
   /* ---- slot scelto in agenda mentre il drawer è aperto ---- */
   useEffect(() => {
@@ -141,8 +166,10 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   };
 
   /* stato dell'orario richiesto: disponibile / non disponibile + motivo + alternative (requestStatus) */
+  // sui soli servizi: chi non fa la nail art non rende «non libero» l'orario,
+  // l'aggiuntivo va a un'altra abilitata
   const reqStatus = useMemo(() => requestStatus({
-    req, reqOp, items, slots, dayRows, totalDur, step, nowMin: isToday ? nowMin : null, clientId: client?.id ?? null,
+    req, reqOp, items: mainItems, slots, dayRows, totalDur, step, nowMin: isToday ? nowMin : null, clientId: client?.id ?? null,
     t, lang, serviceName: (serviceId) => svcName(svcOf(serviceId), lang), isEligible,
   }), [req, reqOp, items, slots, dayRows, totalDur, isToday, nowMin, lang, step, client]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -289,6 +316,7 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
           inputCss={inputCss} isSelected={isSelected} toggleService={toggleService} eligibleOps={eligibleOps} svcColor={svcColor}
           svcOf={svcOf} svcName={svcName} giftFor={giftFor} selSlot={selSlot} assignedName={assignedName} removeItem={removeItem}
           setItemOp={setItemOp} onClose={onClose} setTab={setTab} t={t} lang={lang}
+          addonServices={addonServices} addAddon={addAddon} addonFor={addonFor} setAddonFor={setAddonFor}
         />
 
         {/* ── 3. orario ── */}

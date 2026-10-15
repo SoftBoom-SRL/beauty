@@ -545,7 +545,7 @@ def ensure_deposit_link(appointment, *, resend: bool = False, actor=None, reason
         "appointment_id": appointment.id,
         "client_id": appointment.client_id,
         "client_name": appointment.client.full_name,
-        "phone": appointment.client.phone,
+        "phone": appointment.client.contact_phone,
         "lang": appointment.client.lang,
         "amount": str(appointment.deposit_amount),
         "url": appointment.deposit_payment_link,

@@ -1,10 +1,16 @@
 // HistoryTab — "Storico": sales history from GET /api/sales/ (custom envelope {count,kpi,items}),
-// KPI header, filters (kind, dates, text, operator), expandable rows loading GET /api/sales/{id}.
+// KPI header, filters (kind, dates, text, operator, «da saldare»), expandable rows loading
+// GET /api/sales/{id}. Un conto con qualcosa da saldare ha il suo segno e, aperto, «Salda»
+// (POST /api/sales/{id}/settle): il denaro entra nella cassa del giorno in cui arriva.
 import { useEffect, useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { centsToEur, inputCss, methodLabel, money, opName, saleDateLabel } from './lib.js';
-import { lineGrossCents, saleLineLabel } from './history.js';
+import PaymentsPanel from './PaymentsPanel.jsx';
+import {
+  centsToApi, centsToEur, emptyPayments, inputCss, methodLabel, money, opName, paymentsError, resolvePayments,
+  saleDateLabel, toCents,
+} from './lib.js';
+import { lineGrossCents, paidLater, saleLineLabel } from './history.js';
 import { salesApi } from '../../api/sales.js';
 import { useDebounced } from '../../hooks/useDebounced.js';
 import { useLatestRequest } from '../../hooks/useLatestRequest.js';
@@ -20,6 +26,7 @@ export default function HistoryTab() {
   const [opId, setOpId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [dueOnly, setDueOnly] = useState(false);   // solo i conti con qualcosa da saldare
   const qDeb = useDebounced(q, 300);
 
   /* ---- data ---- */
@@ -29,10 +36,12 @@ export default function HistoryTab() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [details, setDetails] = useState({}); // sale id -> SaleDetailOut | 'loading' | 'error'
+  const [settle, setSettle] = useState(null);  // { id, pay }: il saldo aperto su una vendita
+  const [settleBusy, setSettleBusy] = useState(false);
 
   const params = (offset) => ({
     kind: kind || null, date_from: dateFrom || null, date_to: dateTo || null,
-    q: qDeb || null, operator_id: opId || null, limit: LIMIT, offset,
+    q: qDeb || null, operator_id: opId || null, due: dueOnly ? 1 : null, limit: LIMIT, offset,
   });
 
   /* Biglietto della richiesta in corso (useLatestRequest): ogni fetch ne
@@ -51,12 +60,12 @@ export default function HistoryTab() {
       .then((r) => { if (req.isLatest(seq)) { setData(r); setItems(r.items || []); } })
       .catch((err) => {
         if (!req.isLatest(seq)) return;
-        setData({ count: 0, kpi: { revenue: 0, count: 0, items_count: 0 } });
+        setData({ count: 0, kpi: { revenue: 0, count: 0, items_count: 0, due_total: 0 } });
         setItems([]);
         toastApiError(err, fireToast, t);
       })
       .finally(() => { if (req.isLatest(seq)) setLoading(false); });
-  }, [kind, dateFrom, dateTo, qDeb, opId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, dateFrom, dateTo, qDeb, opId, dueOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
     const seq = req.begin();
@@ -70,6 +79,31 @@ export default function HistoryTab() {
       toastApiError(err, fireToast, t);
     } finally {
       setLoadingMore(false);
+    }
+  };
+
+  /* Saldo di un conto dalla sua riga: paga tutto quello che resta o una parte.
+   * La riga, il dettaglio e il KPI «Da saldare» si aggiornano con la risposta. */
+  const doSettle = async (sale) => {
+    if (settleBusy || !settle) return;
+    const dueCents = toCents(sale.amount_due);
+    const err = paymentsError(settle.pay, dueCents, t);
+    if (err) { fireToast({ msg: err, icon: 'alert' }); return; }
+    const payments = resolvePayments(settle.pay, dueCents);
+    if (!payments.length) { fireToast({ msg: t('Indica quanto paga la cliente', 'Enter how much the client pays'), icon: 'alert' }); return; }
+    setSettleBusy(true);
+    try {
+      const res = await salesApi.settle(sale.id, { payments });
+      const paidCents = dueCents - toCents(res.amount_due);
+      setDetails((d) => ({ ...d, [sale.id]: res }));
+      setItems((list) => list.map((s) => (s.id === sale.id ? { ...s, amount_due: res.amount_due } : s)));
+      setData((d) => (d ? { ...d, kpi: { ...d.kpi, due_total: centsToApi(Math.max(0, toCents(d.kpi.due_total) - paidCents)) } } : d));
+      setSettle(null);
+      fireToast({ msg: t(`Saldo registrato · ${money(centsToEur(paidCents), 'it')}`, `Balance recorded · ${money(centsToEur(paidCents), 'en')}`), icon: 'check' });
+    } catch (e) {
+      toastApiError(e, fireToast, t);
+    } finally {
+      setSettleBusy(false);
     }
   };
 
@@ -98,8 +132,8 @@ export default function HistoryTab() {
     );
   }
 
-  const kpi = data?.kpi || { revenue: 0, count: 0, items_count: 0 };
-  const lineIcon = (lt) => (lt === 'gift_card' ? 'gift' : lt === 'service' ? 'scissors' : 'box');
+  const kpi = data?.kpi || { revenue: 0, count: 0, items_count: 0, due_total: 0 };
+  const lineIcon = (lt) => (lt === 'gift_card' ? 'gift' : lt === 'service' ? 'scissors' : lt === 'package' ? 'tag' : 'box');
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -108,11 +142,12 @@ export default function HistoryTab() {
       </div>
 
       {/* KPI strip (from the API kpi envelope) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 18 }}>
-        {loading && !data ? [...Array(3)].map((_, i) => <div key={i} className="skel" style={{ height: 92, borderRadius: 16 }} />) : [
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 18 }}>
+        {loading && !data ? [...Array(4)].map((_, i) => <div key={i} className="skel" style={{ height: 92, borderRadius: 16 }} />) : [
           [t('Incasso totale', 'Total revenue'), money(kpi.revenue, lang), t('per i filtri correnti', 'for the current filters'), 'wallet'],
           [t('N° vendite', 'Sales count'), String(kpi.count), t('vendite registrate', 'recorded sales'), 'box'],
           [t('Articoli venduti', 'Items sold'), String(kpi.items_count), t('righe servizi, prodotti e gift', 'service, product & gift lines'), 'gift'],
+          [t('Da saldare', 'Left to pay'), money(kpi.due_total || 0, lang), t('conti ancora aperti', 'bills still open'), 'clock'],
         ].map(([l, v, cap, ic], i) => (
           <div key={i} className="dk-card" style={{ padding: '14px 16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
@@ -142,6 +177,10 @@ export default function HistoryTab() {
         </select>
         <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={inputCss} title={t('Dal', 'From')} />
         <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={inputCss} title={t('Al', 'To')} />
+        <button onClick={() => setDueOnly((v) => !v)} aria-pressed={dueOnly}
+          style={{ ...inputCss, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (dueOnly ? 'var(--ink)' : 'var(--hair)'), fontWeight: dueOnly ? 800 : 600 }}>
+          <Icon name={dueOnly ? 'check' : 'clock'} size={14} color={dueOnly ? 'var(--ink)' : 'var(--muted)'} />{t('Da saldare', 'Left to pay')}
+        </button>
       </div>
 
       <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 10 }}>
@@ -159,6 +198,7 @@ export default function HistoryTab() {
             const det = details[s.id];
             const isCheckout = s.kind === 'checkout';
             const depositDeducted = Number(s.deposit_deducted) > 0;
+            const dueNow = Number(s.amount_due) > 0;
             return (
               <div key={s.id} style={{ borderTop: i ? '1px solid var(--hair)' : 'none' }}>
                 <button onClick={() => toggleOpen(s.id)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px', width: '100%', textAlign: 'left', cursor: 'pointer', background: 'transparent', border: 'none' }}>
@@ -175,6 +215,11 @@ export default function HistoryTab() {
                       {depositDeducted && (
                         <span style={{ color: 'var(--ok)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           · <Icon name="wallet" size={13} color="var(--ok)" />{t('caparra', 'deposit')} −{money(s.deposit_deducted, lang)}
+                        </span>
+                      )}
+                      {dueNow && (
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>
+                          {t('Da saldare', 'Left to pay')} {money(s.amount_due, lang)}
                         </span>
                       )}
                     </div>
@@ -231,13 +276,47 @@ export default function HistoryTab() {
                           <span style={{ fontWeight: 700, fontSize: 14 }}>{t('Totale', 'Total')}</span>
                           <span className="t-num" style={{ fontWeight: 800, fontSize: 16 }}>{money(det.total, lang)}</span>
                         </div>
+                        {(det.covered_appointment_ids || []).length > 0 && (
+                          <div className="t-sm" style={{ color: 'var(--muted)', paddingBottom: 6 }}>
+                            {t(`Conto unico: chiude anche ${det.covered_appointment_ids.length === 1 ? 'un’altra visita' : det.covered_appointment_ids.length + ' altre visite'} della cliente`,
+                              `Single bill: it also closed ${det.covered_appointment_ids.length === 1 ? 'another visit' : det.covered_appointment_ids.length + ' other visits'} of the client`)}
+                          </div>
+                        )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '4px 0 10px' }}>
                           {det.payments.map((p) => (
                             <span key={p.id} style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-2)', background: 'var(--surface)', border: '1px solid var(--hair)', padding: '4px 10px', borderRadius: 99 }}>
                               {methodLabel(p.method, t)} · {money(p.amount, lang)}{p.gift_card_code ? ' · ' + p.gift_card_code : ''}
+                              {/* un saldo arrivato dopo: il giorno in cui la cassa l'ha contato */}
+                              {paidLater(p, det) ? ' · ' + t('saldo', 'balance') + ' ' + saleDateLabel(p.created_at, lang) : ''}
                             </span>
                           ))}
                         </div>
+                        {Number(det.amount_due) > 0 && (
+                          <div style={{ padding: '10px 0 12px', borderTop: '1px solid var(--hair)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <span style={{ flex: 1, fontWeight: 700, color: 'var(--warn)', fontSize: 13.5 }}>
+                                {t('Da saldare', 'Left to pay')} {money(det.amount_due, lang)}
+                              </span>
+                              {settle?.id !== s.id && hasScope('sales') && (
+                                <button className="dk-btn dk-btn--soft" style={{ height: 32, fontSize: 12.5 }} onClick={() => setSettle({ id: s.id, pay: emptyPayments() })}>
+                                  <Icon name="wallet" size={14} />{t('Salda', 'Settle')}
+                                </button>
+                              )}
+                            </div>
+                            {settle?.id === s.id && (
+                              <div style={{ marginTop: 10 }}>
+                                <PaymentsPanel value={settle.pay} onChange={(pay) => setSettle((st) => ({ ...st, pay }))} dueCents={toCents(det.amount_due)}
+                                  t={t} lang={lang} compact allowDue dueToggleLabel={t('Paga solo una parte', 'Pay only part')} />
+                                <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+                                  <button className="dk-btn dk-btn--ghost" style={{ height: 34, fontSize: 12.5 }} disabled={settleBusy} onClick={() => setSettle(null)}>{t('Annulla', 'Cancel')}</button>
+                                  <button className="dk-btn dk-btn--clay" style={{ height: 34, fontSize: 12.5 }} disabled={settleBusy} onClick={() => doSettle(det)}>
+                                    <Icon name="check" size={14} color="#fff" />{settleBusy ? t('Registrazione…', 'Recording…') : t('Registra il saldo', 'Record the balance')}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                     <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 8 }}>{t('Registrazione non fiscale', 'Non-fiscal record')} · #{s.id}</div>

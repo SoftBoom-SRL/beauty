@@ -35,12 +35,13 @@ def gift_index(salon, client_ids) -> dict[int, list]:
 
     Quali carte coprono quale cliente lo decide `services.deposits.spendable_gift_cards`
     (destinataria, o acquirente senza nessun destinatario; scadenza verificata
-    in lettura): la stessa regola con cui la caparra esclude i servizi già
-    pagati da un regalo. Calcolata una volta per vista, così l'agenda non fa una
-    query per appuntamento.
+    in lettura; saldo o sedute ancora da fare): la stessa regola con cui la
+    caparra esclude i servizi già pagati da un regalo, da un pagamento in
+    anticipo o da un pacchetto. Calcolata una volta per vista, così l'agenda non
+    fa una query per appuntamento.
     """
     cards = deposits.spendable_gift_cards(salon, client_ids).select_related(
-        "gift_service", "buyer_client"
+        "gift_service", "buyer_client", "package"
     )
     index: dict[int, list] = defaultdict(list)
     for card in cards:
@@ -69,6 +70,15 @@ def _mask_code(code: str) -> str:
 
 
 def _gifts_out(appointment, gifts_by_client, hide_codes: bool = False) -> list[dict]:
+    """I trattamenti già pagati che coprono i servizi della visita (`appt.gifts`).
+
+    Le chiavi di sempre (gift_card_id, code, service_id, service_name, balance,
+    from_name) restano identiche: la cassa precompila i pagamenti con queste.
+    Le altre dicono che cosa si sta guardando — un regalo, un trattamento pagato
+    in anticipo, le sedute di un pacchetto — e quante sedute restano: la
+    reception deve vedere che il servizio è già pagato, e la cassa quanto
+    scalare per una seduta (`session_value`).
+    """
     cards = gifts_by_client.get(appointment.client_id) or []
     if not cards:
         return []
@@ -87,6 +97,12 @@ def _gifts_out(appointment, gifts_by_client, hide_codes: bool = False) -> list[d
                 if card.buyer_client_id and card.buyer_client_id != appointment.client_id
                 else ""
             ),
+            "kind": card.kind,
+            "sessions_total": card.sessions_total,
+            "sessions_left": card.sessions_left,
+            "session_value": card.session_value,
+            "package_name": card.package.name if card.package_id else "",
+            "expires_at": card.expires_at,
         }
         for card in cards
         if card.gift_service_id in service_ids
@@ -122,6 +138,9 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
         "cancelled_late": appointment.cancelled_late,
         "auto_released": appointment.auto_released,
         "forced": appointment.forced,
+        # Conto unico: la vendita di un'altra visita della cliente che ha
+        # incassato anche questa (la visita è chiusa e non ha una vendita sua).
+        "paid_in_sale_id": appointment.paid_in_sale_id,
         "items": [_item_out(item) for item in appointment.items.all()],
         "gifts": _gifts_out(appointment, gifts_by_client, _codes_hidden(viewer)),
         "updated_at": appointment.updated_at,

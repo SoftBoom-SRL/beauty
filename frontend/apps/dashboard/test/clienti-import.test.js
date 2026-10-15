@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { isPlausiblePhone } from '../../../packages/shared/src/phone.js';
 import {
   buildRows, decodeCsvBytes, fileLineOf, guessMapping, looksLikeHeader, looksMojibake,
-  parseCsvLines, parseFlexibleDate, splitFullName,
+  nameKey, parseCsvLines, parseFlexibleDate, splitFullName,
 } from '../src/sections/clienti/importCsv.js';
 
 const opts = { plausiblePhone: isPlausiblePhone, today: '2026-09-23' };
@@ -113,6 +113,34 @@ test('«cliente dal»: data con l’anno e non futura, altrimenti avviso', () =>
   assert.deepEqual(rows[1]._warn, ['since:15/03']);
   assert.deepEqual(rows[2]._warn, ['since:01/01/2030']);
   assert.equal(rows[2]._skip, false);
+});
+
+test('le righe senza telefono (né email) entrano: si salta solo chi non ha il nome', () => {
+  const [sola, junk, noname] = buildRows([
+    ['Sola Bianchi', '', ''],
+    ['Bea Neri', 'n/d', ''],
+    ['', '3331112233', ''],
+  ], ['full_name', 'phone', 'email'], opts);
+  assert.equal(sola._skip, false);
+  assert.ok(sola._warn.includes('nophone'));
+  assert.equal(junk._skip, false);
+  assert.equal(junk.phone, '');
+  assert.equal(noname._skip, true);
+});
+
+test('omonime senza telefono: `name_index` dice quale è, anche a blocchi', () => {
+  const rows = buildRows([
+    ['Maria Rossi', ''],
+    ['Rossi Maria', '3331112233'],   // col telefono: si riconosce dal numero
+    ['MARIA ROSSI', ''],
+    ['Màrià Rossi', ''],
+    ['Anna Rossi', ''],
+  ], ['full_name', 'phone'], opts);
+  assert.deepEqual(rows.map((r) => r.name_index), [0, undefined, 1, 2, 0]);
+  // lo stesso confronto del server: senza ordine, accenti né maiuscole
+  assert.equal(nameKey('Maria', 'Rossi'), nameKey('ROSSI', 'màrìa'));
+  assert.equal(nameKey('D’Amico', 'Nicolò'), nameKey("nicolo d'amico", ''));
+  assert.notEqual(nameKey('Maria', 'Rossi'), nameKey('Maria', ''));
 });
 
 test('codifica automatica: il CSV di Excel italiano (Windows-1252) si legge con gli accenti', () => {

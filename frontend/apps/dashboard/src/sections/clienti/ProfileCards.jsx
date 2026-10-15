@@ -3,13 +3,17 @@
 // affidabilità), l'anagrafica e la lingua preferita.
 import { Icon, fmtEur, fmtEurOrZero } from '@youty/shared';
 import { ProfStat, RelRing } from './components.jsx';
-import { relMeta, formatBirthday, dateLabel } from './helpers.js';
+import { relMeta, formatBirthday, dateLabel, phoneLine, reliabilityExplain } from './helpers.js';
 import { genderLabel } from '../../ui/GenderPicker.jsx';
 
-/* KPIs (visits / total_spent / avg ticket from ClientDetailOut) */
+/* KPIs (visits / total_spent / avg ticket from ClientDetailOut). Le visite
+ * sono GIORNI (due servizi in contemporanea sono una visita); l'affidabilità
+ * la calcola il gestionale dai no-show e dagli annullamenti tardivi, e qui si
+ * dice come (reliability_basis). */
 export function ProfileKpis({ c, t, lang }) {
   const score = c.reliability ?? 100;
   const rel = relMeta(score, t);
+  const why = reliabilityExplain(c.reliability_basis, t);
   const visits = c.visits || 0;
   const totalSpent = Number(c.total_spent || 0);
   // Il backend azzera visite e speso a chi non ha il permesso «vendite». Senza
@@ -28,8 +32,11 @@ export function ProfileKpis({ c, t, lang }) {
       <ProfStat label={t('Scontrino medio', 'Avg ticket')}
         value={statsHidden ? '—' : (totalSpent ? fmtEur(totalSpent / Math.max(1, visits), lang) : '€0')}
         hint={statsHidden ? hiddenNote : null} />
-      <div className="dk-card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)' }}>
-        <div className="t-meta" style={{ marginBottom: 8 }}>{t('Affidabilità', 'Reliability')}</div>
+      <div className="dk-card" title={why.rule} style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)' }}>
+        <div className="t-meta" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+          {t('Affidabilità', 'Reliability')}
+          <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--muted-2)' }}>· {t('calcolata', 'calculated')}</span>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <RelRing score={score} color={rel.color} />
           <div>
@@ -37,13 +44,22 @@ export function ProfileKpis({ c, t, lang }) {
             <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Punteggio', 'Score')} {score}/100</div>
           </div>
         </div>
+        {why.counts && <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5, marginTop: 8 }}>{why.counts}</div>}
+        <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11, marginTop: 4, lineHeight: 1.35 }}>
+          {t('100 − 25 per no-show − 10 per annullamento tardivo', '100 − 25 per no-show − 10 per late cancellation')}
+        </div>
       </div>
     </div>
   );
 }
 
-/* anagrafica: tutto ciò che si può modificare, con il percorso per farlo */
-export function ProfileDetails({ c, canWrite, openEdit, t, lang }) {
+/* anagrafica: tutto ciò che si può modificare, con il percorso per farlo.
+ * Senza un numero suo, al posto del telefono «tramite Laura Rossi» (e il
+ * numero di lei); sulla scheda di Laura, chi passa da lei. */
+export function ProfileDetails({ c, canWrite, openEdit, onOpenClient, t, lang }) {
+  const line = phoneLine(c, t);
+  const phoneValue = line.kind === 'contact' ? `${line.text} · ${c.contact.phone}` : c.phone;
+  const dependents = c.dependents || [];
   return (
     <div className="dk-card" style={{ padding: '14px 16px', marginBottom: 14, boxShadow: 'none', border: '1px solid var(--hair)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -53,7 +69,7 @@ export function ProfileDetails({ c, canWrite, openEdit, t, lang }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px 18px' }}>
         {[
-          [t('Telefono', 'Phone'), c.phone, 'phone'],
+          [t('Telefono', 'Phone'), phoneValue, 'phone'],
           ['Email', c.email, 'mail'],
           [t('Genere', 'Gender'), genderLabel(c.gender, t), 'user'],
           [t('Compleanno', 'Birthday'), c.birthday ? formatBirthday(c.birthday, lang) + (c.age != null ? ` · ${c.age} ${t('anni', 'y.o.')}` : ` · ${t('anno non indicato', 'no year')}`) : '', 'cake'],
@@ -70,6 +86,15 @@ export function ProfileDetails({ c, canWrite, openEdit, t, lang }) {
           </div>
         ))}
       </div>
+      {dependents.length > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--hair)', display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <span className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('Fa da contatto per', 'Contact for')}</span>
+          {dependents.map((d) => (
+            <button key={d.id} type="button" onClick={() => onOpenClient?.(d.id)} title={t('Si contatta tramite questo numero', 'Contacted via this number')}
+              style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', cursor: onOpenClient ? 'pointer' : 'default', background: 'transparent', border: 'none', padding: 0 }}>{d.full_name}</button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

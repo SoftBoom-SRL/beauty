@@ -3,20 +3,25 @@ import { Icon, todayStr, fmtEur, NumInput, nameIn, toastApiError } from '@youty/
 import { DkModal } from '../../../ui/index.js';
 import ClientPicker from '../ClientPicker.jsx';
 import { inputCss, segBtn, pillBtn } from '../formStyles.js';
-import { expiryInMonthsIso } from '../dates.js';
+import { MAX_SESSIONS, giftCardMissing, giftCardPayload, giftCardValueCents } from '../giftCardForm.js';
 import { giftCardsApi } from '../../../api/marketing.js';
 
-const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
+const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['transfer', 'Bonifico', 'Transfer'], ['other', 'Altro', 'Other']];
 
 /** Sell a new gift card → POST /api/marketing/gift-cards
- * (value, buyer_client_id?, recipient_client_id?, recipient_name, paid+paid_method,
- * delivery_date?, expires_at?). The code is generated server-side (prototype showed a locally
- * generated code — dropped). Expiry presets map to a concrete expires_at datetime. */
+ * (kind, value, gift_service_id + sessions?, buyer_client_id?, recipient_client_id?, recipient_name,
+ * paid+paid_method, delivery_date?, expires_at?). The code is generated server-side (prototype showed a locally
+ * generated code — dropped). Expiry presets map to a concrete expires_at datetime.
+ * «Già pagato» (kind prepaid): la cliente paga oggi un trattamento che farà più avanti — una
+ * sola scheda, acquirente e destinataria insieme, niente consegna. Regole e corpo della
+ * richiesta in giftCardForm.js. */
 export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, services = [], canCash = true, canPayLater = true }) {
   const [saving, setSaving] = useState(false);
+  const [kind, setKind] = useState('gift'); // gift (regalo) | prepaid (già pagato dalla cliente)
   const [type, setType] = useState('amount'); // amount | service (trattamento)
   const [value, setValue] = useState(50);
   const [service, setService] = useState(null); // servizio scelto dal catalogo (gift card a trattamento)
+  const [sessions, setSessions] = useState(1);  // sedute del trattamento
   const [svcQ, setSvcQ] = useState('');
   const [svcOpen, setSvcOpen] = useState(false);
   const svcName = (s) => nameIn(s, lang);
@@ -25,7 +30,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
     ? activeServices.filter((s) => svcName(s).toLowerCase().includes(svcQ.trim().toLowerCase()))
     : activeServices.slice(0, 8);
   const [buyer, setBuyer] = useState(null);          // {id, full_name} | null
-  const [recipient, setRecipient] = useState(null);  // {id, full_name} | null
+  const [recipient, setRecipient] = useState(null);  // {id, full_name} | null — con «Già pagato» è la cliente
   const [recipientName, setRecipientName] = useState('');
   const [byName, setByName] = useState(false);   // destinataria come testo libero, senza scheda cliente
   // «Pagata ora» è un incasso (vendita e pagamento): lo registra chi ha
@@ -36,26 +41,28 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
-  const canSave = (type === 'service' ? !!service : value > 0) && (byName ? recipientName.trim() : !!recipient)
-    && (paid ? canCash : canPayLater);
+  const prepaid = kind === 'prepaid';
+  const form = {
+    kind, type, value, service, sessions, buyer, recipient, recipientName, byName: !prepaid && byName,
+    paid, paidMethod, scheduled, deliveryDate, expiryMonths, canCash, canPayLater,
+  };
+  const missing = giftCardMissing(form, t);
+  const canSave = !missing.length;
+  const totalCents = giftCardValueCents(form);
+
+  const chooseKind = (k) => {
+    setKind(k);
+    // «Già pagato» è di una cliente con la sua scheda: il nome scritto a mano
+    // vale solo per un regalo da consegnare.
+    if (k === 'prepaid') { setByName(false); setRecipientName(''); }
+  };
 
   const save = async () => {
-    if (!canSave || saving) return;
+    if (saving) return;
+    if (!canSave) { fireToast({ msg: missing[0], icon: 'alert' }); return; }
     setSaving(true);
     try {
-      const payload = {
-        value: (type === 'service' ? Number(service.price) : Number(value)).toFixed(2),
-        ...(type === 'service' ? { gift_service_id: service.id } : {}),
-        buyer_client_id: buyer ? buyer.id : null,
-        recipient_client_id: recipient ? recipient.id : null,
-        recipient_name: recipient ? recipient.full_name : recipientName.trim(),
-        paid,
-        paid_method: paid ? paidMethod : '',
-        delivery_date: scheduled && deliveryDate ? deliveryDate : null,
-        // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
-        expires_at: expiryMonths ? expiryInMonthsIso(expiryMonths) : null,
-      };
-      await giftCardsApi.create(payload);
+      await giftCardsApi.create(giftCardPayload(form));
       onSaved();
     } catch (err) {
       toastApiError(err, fireToast, t);
@@ -64,12 +71,24 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   };
 
   return (
-    <DkModal open onClose={onClose} title={t('Nuova gift card', 'New gift card')}
-      sub={t('Valore prepagato: registra pagamento e consegna', 'Prepaid value: record payment and delivery')} width={540}
+    <DkModal open onClose={onClose} title={prepaid ? t('Trattamento già pagato', 'Prepaid treatment') : t('Nuova gift card', 'New gift card')}
+      sub={prepaid
+        ? t('La cliente paga oggi e fa il trattamento più avanti', 'The client pays today and comes for the treatment later')
+        : t('Valore prepagato: registra pagamento e consegna', 'Prepaid value: record payment and delivery')} width={540}
       foot={<React.Fragment>
         <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
-        <button className="dk-btn dk-btn--clay" disabled={!canSave || saving} onClick={save}><Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}</button>
+        <button className="dk-btn dk-btn--clay" aria-disabled={!canSave || saving} disabled={saving} onClick={save} style={{ opacity: canSave ? 1 : 0.55 }}>
+          <Icon name="check" size={17} color="#fff" />{t('Salva', 'Save')}
+        </button>
       </React.Fragment>}>
+
+      {/* regalo per qualcuno, oppure trattamento pagato in anticipo dalla
+          cliente stessa: in agenda e in cassa si legge «Già pagato» */}
+      <div className="t-meta" style={{ marginBottom: 8 }}>{t('Che cos’è', 'What is it')}</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        <button style={segBtn(!prepaid)} onClick={() => chooseKind('gift')}>{t('Regalo', 'Gift')}</button>
+        <button style={segBtn(prepaid)} onClick={() => chooseKind('prepaid')}>{t('Già pagato (per la cliente)', 'Prepaid (for the client)')}</button>
+      </div>
 
       {/* tipo: importo monetario oppure trattamento (servizio dal catalogo esistente) */}
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Tipo di gift card', 'Gift card type')}</div>
@@ -94,16 +113,16 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         </React.Fragment>
       ) : (
         <React.Fragment>
-          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Trattamento in regalo', 'Gifted treatment')}</div>
+          <div className="t-meta" style={{ marginBottom: 8 }}>{prepaid ? t('Trattamento pagato', 'Paid treatment') : t('Trattamento in regalo', 'Gifted treatment')}</div>
           {service ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--hair)', borderRadius: 10, padding: '10px 12px', background: 'var(--surface)', marginBottom: 16 }}>
-              <Icon name="gift" size={16} color="var(--clay-ink)" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--hair)', borderRadius: 10, padding: '10px 12px', background: 'var(--surface)', marginBottom: 10 }}>
+              <Icon name={prepaid ? 'wallet' : 'gift'} size={16} color="var(--clay-ink)" />
               <span style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{svcName(service)}</span>
               <span className="t-num" style={{ fontWeight: 700 }}>{fmtEur(Number(service.price), lang)}</span>
               <button onClick={() => setService(null)} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={14} color="var(--muted-2)" /></button>
             </div>
           ) : (
-            <div style={{ position: 'relative', marginBottom: 16 }}>
+            <div style={{ position: 'relative', marginBottom: 10 }}>
               <div className="dk-search" style={{ width: '100%' }}>
                 <Icon name="search" size={16} color="var(--muted-2)" />
                 <input value={svcQ} onChange={(e) => { setSvcQ(e.target.value); setSvcOpen(true); }} onFocus={() => setSvcOpen(true)} placeholder={t('Cerca un servizio dal catalogo…', 'Search a service from the catalogue…')} />
@@ -121,50 +140,82 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
                   </div>
                 </React.Fragment>
               )}
-              <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>{t('Il valore della card sarà il prezzo del servizio scelto.', 'The card value will be the chosen service price.')}</div>
             </div>
           )}
+          {/* Più sedute dello stesso trattamento su una carta sola: ogni
+              visita ne scala una, e agenda e scheda cliente dicono quante
+              ne restano. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+            <span className="t-meta">{t('Sedute', 'Sessions')}</span>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <button className="dk-iconbtn" aria-label={t('Una seduta in meno', 'One session less')} style={{ width: 28, height: 28, borderRadius: 8, fontSize: 15 }}
+                onClick={() => setSessions((n) => Math.max(1, (Number(n) || 1) - 1))}>−</button>
+              <NumInput integer min={1} max={MAX_SESSIONS} value={sessions} emptyValue="" onChange={setSessions} aria-label={t('Numero di sedute', 'Number of sessions')}
+                style={{ width: 44, textAlign: 'center', border: '1px solid var(--hair)', borderRadius: 8, padding: '5px 4px', fontSize: 14, fontWeight: 700, background: 'var(--surface)' }} />
+              <button className="dk-iconbtn" aria-label={t('Una seduta in più', 'One more session')} style={{ width: 28, height: 28, borderRadius: 8, fontSize: 15 }}
+                onClick={() => setSessions((n) => Math.min(MAX_SESSIONS, (Number(n) || 0) + 1))}>+</button>
+            </div>
+            {service && (
+              <span className="t-sm t-num" style={{ marginLeft: 'auto', color: 'var(--ink-2)', fontWeight: 700 }}>
+                {Number(sessions) > 1 ? `${sessions} × ${fmtEur(Number(service.price), lang)} = ` : ''}{fmtEur(totalCents / 100, lang)}
+              </span>
+            )}
+          </div>
+          <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 16 }}>{t('Il valore della card è il prezzo del servizio per le sedute.', 'The card value is the service price times the sessions.')}</div>
         </React.Fragment>
       )}
 
-      {/* Acquirente e destinataria su righe separate: i due ClientPicker aprono un
-        * menu assoluto e affiancati in una griglia si sovrapponevano, con le
-        * colonne di altezza diversa. */}
-      <div style={{ marginBottom: 14 }}>
-        <div className="t-meta" style={{ marginBottom: 6 }}>{t('Acquirente (chi paga)', 'Buyer (who pays)')}</div>
-        <ClientPicker client={buyer} onChange={setBuyer} placeholder={t('Cerca una cliente…', 'Search a client…')} t={t} />
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <div className="t-meta" style={{ marginBottom: 6 }}>{t('Destinataria (chi riceve il credito)', 'Recipient (who gets the credit)')}</div>
-        {/* Il credito segue la SCHEDA cliente: solo così la destinataria lo vede
-          * nella sua app e compare in agenda quando prenota quel trattamento.
-          * Il nome scritto a mano resta possibile (regalo da consegnare), ma va
-          * detto che in quel caso vale solo il codice sulla card. */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-          <button style={segBtn(!byName)} onClick={() => { setByName(false); setRecipientName(''); }}>{t('Una cliente', 'A client')}</button>
-          <button style={segBtn(byName)} onClick={() => { setByName(true); setRecipient(null); }}>{t('Solo un nome', 'Just a name')}</button>
+      {prepaid ? (
+        <div style={{ marginBottom: 16 }}>
+          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Cliente (ha già pagato)', 'Client (already paid)')}</div>
+          <ClientPicker client={recipient} onChange={setRecipient} placeholder={t('Cerca o crea la cliente…', 'Search or create the client…')} t={t} />
+          <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
+            {t('In agenda il servizio comparirà «Già pagato», con le sedute rimaste; nella sua scheda e nella sua app li trova fra i trattamenti già pagati.',
+               'In the agenda the service shows as «Prepaid», with the sessions left; she finds them among her prepaid treatments in her profile and app.')}
+          </div>
         </div>
-        {byName ? (
-          <React.Fragment>
-            <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder={t('Nome di chi riceve', 'Name of the recipient')} style={inputCss} />
-            <div style={{ display: 'flex', gap: 9, marginTop: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)' }}>
-              <Icon name="alert" size={15} color="var(--warn)" style={{ flexShrink: 0, marginTop: 1 }} />
-              <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.45 }}>
-                {t('Senza scheda cliente il credito non comparirà in nessuna app: vale il codice stampato sulla card, da usare in salone. Collega una cliente per farglielo trovare nel suo portafoglio e in agenda.',
-                   'Without a client profile the credit shows in no app: only the printed code counts, to be used in the salon. Link a client so she finds it in her wallet and in the agenda.')}
-              </div>
+      ) : (
+        <React.Fragment>
+          {/* Acquirente e destinataria su righe separate: i due ClientPicker aprono un
+            * menu assoluto e affiancati in una griglia si sovrapponevano, con le
+            * colonne di altezza diversa. */}
+          <div style={{ marginBottom: 14 }}>
+            <div className="t-meta" style={{ marginBottom: 6 }}>{t('Acquirente (chi paga)', 'Buyer (who pays)')}</div>
+            <ClientPicker client={buyer} onChange={setBuyer} placeholder={t('Cerca una cliente…', 'Search a client…')} t={t} />
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div className="t-meta" style={{ marginBottom: 6 }}>{t('Destinataria (chi riceve il credito)', 'Recipient (who gets the credit)')}</div>
+            {/* Il credito segue la SCHEDA cliente: solo così la destinataria lo vede
+              * nella sua app e compare in agenda quando prenota quel trattamento.
+              * Il nome scritto a mano resta possibile (regalo da consegnare), ma va
+              * detto che in quel caso vale solo il codice sulla card. */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              <button style={segBtn(!byName)} onClick={() => { setByName(false); setRecipientName(''); }}>{t('Una cliente', 'A client')}</button>
+              <button style={segBtn(byName)} onClick={() => { setByName(true); setRecipient(null); }}>{t('Solo un nome', 'Just a name')}</button>
             </div>
-          </React.Fragment>
-        ) : (
-          <React.Fragment>
-            <ClientPicker client={recipient} onChange={setRecipient} placeholder={t('Cerca o crea la cliente…', 'Search or create the client…')} t={t} />
-            <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
-              {t('Vedrà il credito nel suo portafoglio; se è un trattamento, comparirà accanto al servizio quando prenota.', 'She will see the credit in her wallet; if it is a treatment, it shows next to the service when she books.')}
-            </div>
-          </React.Fragment>
-        )}
-      </div>
+            {byName ? (
+              <React.Fragment>
+                <input value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder={t('Nome di chi riceve', 'Name of the recipient')} style={inputCss} />
+                <div style={{ display: 'flex', gap: 9, marginTop: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--warn-tint)' }}>
+                  <Icon name="alert" size={15} color="var(--warn)" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.45 }}>
+                    {t('Senza scheda cliente il credito non comparirà in nessuna app: vale il codice stampato sulla card, da usare in salone. Collega una cliente per farglielo trovare nel suo portafoglio e in agenda.',
+                       'Without a client profile the credit shows in no app: only the printed code counts, to be used in the salon. Link a client so she finds it in her wallet and in the agenda.')}
+                  </div>
+                </div>
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <ClientPicker client={recipient} onChange={setRecipient} placeholder={t('Cerca o crea la cliente…', 'Search or create the client…')} t={t} />
+                <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
+                  {t('Vedrà il credito nel suo portafoglio; se è un trattamento, comparirà accanto al servizio quando prenota.', 'She will see the credit in her wallet; if it is a treatment, it shows next to the service when she books.')}
+                </div>
+              </React.Fragment>
+            )}
+          </div>
+        </React.Fragment>
+      )}
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamento', 'Payment')}</div>
       <div style={{ display: 'flex', gap: 8, marginBottom: paid ? 10 : 16 }}>
@@ -181,13 +232,17 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
         </div>
       )}
 
-      <div className="t-meta" style={{ marginBottom: 8 }}>{t('Consegna', 'Delivery')}</div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: scheduled ? 10 : 16 }}>
-        <button style={segBtn(!scheduled)} onClick={() => setScheduled(false)}>{t('A mano · stampa QR', 'By hand · print QR')}</button>
-        <button style={segBtn(scheduled)} onClick={() => setScheduled(true)}>{t('Programmata', 'Scheduled')}</button>
-      </div>
-      {scheduled && (
-        <input type="date" min={todayStr()} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
+      {!prepaid && (
+        <React.Fragment>
+          <div className="t-meta" style={{ marginBottom: 8 }}>{t('Consegna', 'Delivery')}</div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: scheduled ? 10 : 16 }}>
+            <button style={segBtn(!scheduled)} onClick={() => setScheduled(false)}>{t('A mano · stampa QR', 'By hand · print QR')}</button>
+            <button style={segBtn(scheduled)} onClick={() => setScheduled(true)}>{t('Programmata', 'Scheduled')}</button>
+          </div>
+          {scheduled && (
+            <input type="date" min={todayStr()} value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} style={{ ...inputCss, marginBottom: 16 }} />
+          )}
+        </React.Fragment>
       )}
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Scadenza', 'Expiry')}</div>

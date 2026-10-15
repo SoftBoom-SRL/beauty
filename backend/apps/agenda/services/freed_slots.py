@@ -129,7 +129,9 @@ def _emit_freed_slot(appointment: Appointment, operator_id, start, end, *, since
     solo chi si è messa in lista dopo quell'istante; se non c'è nessuno non
     parte niente. `services_before` sono i servizi che la visita aveva prima
     del gesto: togliendo o staccando la piega, chi aspettava proprio una piega
-    restava fuori dai match, perché la visita non l'aveva più.
+    restava fuori dai match, perché la visita non l'aveva più. Mai chi aspetta
+    un aggiuntivo (un'iscrizione di prima che lo fosse): la nail art da sola
+    non si prenota, e lo slot gliel'avremmo offerto per niente.
     """
     minutes = int((end - start).total_seconds() // 60)
     service_ids = {item.service_id for item in appointment.items.all()} | set(services_before)
@@ -138,6 +140,7 @@ def _emit_freed_slot(appointment: Appointment, operator_id, start, end, *, since
             salon=appointment.salon,
             status=WaitlistEntry.Status.ACTIVE,
             service_id__in=service_ids,
+            service__is_addon=False,
         )
         .filter(Q(operator__isnull=True) | Q(operator_id=operator_id))
         .annotate(needed=F("service__duration_min") + F("service__soak_min"))

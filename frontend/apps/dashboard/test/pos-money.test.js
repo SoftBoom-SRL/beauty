@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  centsToApi, couponDiscountCents, giftPrefillRows, lineCents, paymentsError, resolvePayments,
-  saleTotals, toCents,
+  allocateSettlement, centsToApi, couponDiscountCents, dueLeftCents, emptyPayments, giftLabel, giftPrefill,
+  giftPrefillRows, isSessionCard, lineCents, paymentsError, resolvePayments, saleTotals, toCents,
 } from '../src/sections/pos/money.js';
 
 const t = (it) => it;
@@ -117,4 +117,128 @@ test('gift card «a trattamento»: ogni carta paga solo il suo servizio (07-12)'
   );
   // un codice mascherato («••••1234», chi non vede la cassa) non si spende
   assert.equal(giftPrefillRows(items, [{ service_id: 1, code: '••••1234', balance: '40.00' }], 0), null);
+});
+
+/* ---- conti da saldare ---- */
+
+test('lascia da saldare: si paga una parte, il resto resta sul conto', () => {
+  const v = { ...emptyPayments(), method: 'card', leaveDue: true, payNow: '40' };
+  assert.deepEqual(resolvePayments(v, 10000), [{ method: 'card', amount: '40.00' }]);
+  assert.equal(dueLeftCents(v, 10000), 6000);
+  assert.equal(paymentsError(v, 10000, t), null);
+  // niente pagato adesso: nessun pagamento, tutto da saldare
+  const nothing = { ...v, payNow: '' };
+  assert.deepEqual(resolvePayments(nothing, 10000), []);
+  assert.equal(dueLeftCents(nothing, 10000), 10000);
+  // più del dovuto resta un errore, come sul server
+  assert.equal(paymentsError({ ...v, payNow: '120' }, 10000, t), 'I pagamenti superano il totale da pagare');
+  // pagamento diviso: le righe possono sommare meno del dovuto
+  const split = { ...emptyPayments(), split: true, leaveDue: true, rows: [{ method: 'cash', amt: '20', code: '' }, { method: 'card', amt: '30', code: '' }] };
+  assert.equal(paymentsError(split, 10000, t), null);
+  assert.equal(dueLeftCents(split, 10000), 5000);
+  // senza «Lascia da saldare» la regola è quella di sempre
+  assert.equal(dueLeftCents({ ...split, leaveDue: false }, 10000), 0);
+  assert.equal(paymentsError({ ...split, leaveDue: false }, 10000, t), 'La somma dei pagamenti non corrisponde al totale');
+  // un centesimo di differenza non è un debito (tolleranza del server)
+  assert.equal(dueLeftCents({ ...v, payNow: '99,99' }, 10000), 0);
+});
+
+test('salda adesso: i pagamenti si ripartiscono sui conti dal più vecchio', () => {
+  const dues = [{ id: 1, amount_due: '60.00' }, { id: 2, amount_due: '25.00' }];
+  assert.deepEqual(allocateSettlement(dues, [{ method: 'cash', amount: '50.00' }, { method: 'card', amount: '35.00' }]), [
+    { sale_id: 1, payments: [{ method: 'cash', amount: '50.00' }, { method: 'card', amount: '10.00' }] },
+    { sale_id: 2, payments: [{ method: 'card', amount: '25.00' }] },
+  ]);
+  // una parte sola: il conto più vecchio per primo, gli altri restano aperti
+  assert.deepEqual(allocateSettlement(dues, [{ method: 'card', amount: '40.00' }]), [
+    { sale_id: 1, payments: [{ method: 'card', amount: '40.00' }] },
+  ]);
+  // la gift card porta il codice su ogni conto che paga; un saldo non porta sedute
+  assert.deepEqual(allocateSettlement(dues, [{ method: 'gift_card', amount: '85.00', gift_card_code: 'GC1', sessions: 3 }]).map((s) => s.payments[0]), [
+    { method: 'gift_card', amount: '60.00', gift_card_code: 'GC1' },
+    { method: 'gift_card', amount: '25.00', gift_card_code: 'GC1' },
+  ]);
+});
+
+/* ---- pacchetti e carte a sedute ---- */
+
+test('pacchetto: due pezzi scontati fanno il centesimo del server (un pezzo per riga)', () => {
+  // 33,33 −10% = 29,997 → 30,00 a pezzo; sull'intera riga sarebbe 59,99
+  assert.equal(lineCents({ line_type: 'package', unit_price: '33.33', discount_pct: 10, qty: 2 }), 6000);
+  assert.equal(lineCents({ line_type: 'package', unit_price: '450.00', qty: 1, is_gift: true }), 0);
+  // il buono vale anche sui pacchetti (non sono gift card)
+  assert.equal(saleTotals([{ line_type: 'package', unit_price: '100.00', qty: 1 }], { kind: 'percent', value: '10.00' }).discountCents, 1000);
+});
+
+test('carte a sedute: ogni riga coperta vale una seduta, il pagamento le conta', () => {
+  const items = [{ service_id: 1, price: '30.00' }, { service_id: 1, price: '30.00' }, { service_id: 2, price: '40.00' }];
+  // pacchetto da 10 manicure a 250 €: 8 sedute rimaste, 200 € di saldo
+  const pkg = { service_id: 1, code: 'PKG1', balance: '200.00', kind: 'package', sessions_total: 10, sessions_left: 8, session_value: '25.00' };
+  const { rows, prices } = giftPrefill(items, [pkg], 0);
+  assert.deepEqual(prices, [2500, 2500, null]);
+  assert.deepEqual(rows, [
+    { method: 'gift_card', amt: 50, code: 'PKG1', sessions: 2 },
+    { method: 'cash', amt: 40, code: '' },
+  ]);
+  // verso l'API il pagamento porta le sedute
+  assert.deepEqual(resolvePayments({ ...emptyPayments(), split: true, rows }, 9000)[0],
+    { method: 'gift_card', amount: '50.00', gift_card_code: 'PKG1', sessions: 2 });
+});
+
+test('carte a sedute: mai oltre le sedute rimaste, e l’ultima prende il resto del saldo', () => {
+  const three = [1, 2, 3].map(() => ({ service_id: 1, price: '40.00' }));
+  // 2 sedute rimaste su 3 righe: la terza resta a listino e si paga in contanti
+  const left2 = { service_id: 1, code: 'PRE', balance: '50.01', kind: 'prepaid', sessions_total: 5, sessions_left: 2 };
+  const { rows, prices } = giftPrefill(three, [left2], 0);
+  // 50,01 / 2 per difetto = 25,00; l'ultima seduta prende 25,01
+  assert.deepEqual(prices, [2500, 2501, null]);
+  assert.deepEqual(rows, [
+    { method: 'gift_card', amt: 50.01, code: 'PRE', sessions: 2 },
+    { method: 'cash', amt: 40, code: '' },
+  ]);
+  // senza session_value lo stesso calcolo del server
+  assert.deepEqual(giftPrefill([three[0]], [{ ...left2, sessions_left: 3, balance: '100.00' }], 0).prices, [3333]);
+});
+
+test('carte a sedute: un pacchetto in omaggio scala la seduta anche senza denaro', () => {
+  const free = { service_id: 1, code: 'FREE', balance: '0.00', kind: 'package', sessions_total: 5, sessions_left: 5, session_value: '0.00' };
+  const { rows, prices } = giftPrefill([{ service_id: 1, price: '30.00' }], [free], 0);
+  assert.deepEqual(prices, [0]);
+  assert.deepEqual(rows, [{ method: 'gift_card', amt: 0, code: 'FREE', sessions: 1 }]);
+  // dovuto zero: nessun denaro, ma la seduta parte lo stesso
+  assert.deepEqual(resolvePayments({ ...emptyPayments(), split: true, rows }, 0),
+    [{ method: 'gift_card', amount: '0.00', gift_card_code: 'FREE' }]);
+});
+
+test('carte di prima (senza tipo né sedute) e regali da una seduta: come sempre', () => {
+  assert.equal(isSessionCard({ service_id: 1, balance: '40.00' }), false);
+  assert.equal(isSessionCard({ kind: 'gift', sessions_total: 1 }), false);
+  assert.equal(isSessionCard({ kind: 'gift', sessions_total: 3 }), true);
+  assert.equal(isSessionCard({ kind: 'prepaid', sessions_total: 1 }), true);
+  const items = [{ service_id: 1, price: '40.00' }];
+  const gift = { service_id: 1, code: 'REG', balance: '40.00', kind: 'gift', sessions_total: 1, sessions_left: 1 };
+  assert.deepEqual(giftPrefill(items, [gift], 0), { rows: [{ method: 'gift_card', amt: 40, code: 'REG' }], prices: [null] });
+});
+
+test('le etichette delle carte nel check-out', () => {
+  assert.equal(giftLabel({ kind: 'gift', from_name: 'Anna' }, t), 'Regalo · da Anna');
+  assert.equal(giftLabel({ from_name: '' }, t), 'Regalo');
+  assert.equal(giftLabel({ kind: 'prepaid', sessions_total: 1, sessions_left: 1 }, t), 'Già pagato');
+  assert.equal(giftLabel({ kind: 'prepaid', sessions_total: 5, sessions_left: 3 }, t), 'Già pagato · 3/5 sedute');
+  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 1 }, t), 'Pacchetto · 1/10 sedute');
+  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 7 }, t), 'Pacchetto · 7/10 sedute');
+});
+
+// 15/10: abbassando i contanti di un pagamento diviso, la differenza finiva
+// sulla riga della carta a sedute (una seduta da 30 € ne scalava 40).
+test('pagamento diviso: la riga di una carta a sedute non si pareggia da sola', async () => {
+  const { canBalance } = await import('../src/sections/pos/money.js');
+  const rows = [
+    { method: 'gift_card', amt: '30', code: 'ABC', sessions: 1 },
+    { method: 'cash', amt: '10', code: '' },
+  ];
+  assert.equal(canBalance({ rows }, 1, false), false, 'si è cambiato il contante: la carta resta a 30');
+  assert.equal(canBalance({ rows }, 0, false), true, 'si è cambiata la carta: il contante si pareggia');
+  assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, false), true);
+  assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, true), false, 'con «Lascia da saldare» mai');
 });

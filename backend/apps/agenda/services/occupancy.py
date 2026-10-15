@@ -29,7 +29,9 @@ def _busy_map(
     - ATTIVO  (offset .. offset+duration_min)          -> hard=True  (blocca sempre)
     - POSA    (fine attivo .. +soak_min), se soak_min>0 -> hard=False (soft)
     Le pause manuali sono sempre hard. Considera solo gli appuntamenti attivi
-    (status non cancelled/no_show).
+    (status non cancelled/no_show). Un aggiuntivo (voce senza tempo, vedi
+    `addons`) non occupa niente: messo qui come intervallo vuoto, renderebbe
+    occupato ogni slot che contiene il suo istante.
 
     `ignore_client_id`: gli appuntamenti di QUELLA cliente non occupano niente.
     Serve ai gesti dello staff, dove due trattamenti sulla stessa persona nella
@@ -62,7 +64,7 @@ def _busy_map(
             offset -= 1440  # iniziato ieri: oggi conta solo la coda dopo mezzanotte
         for item in appointment.items.all():  # già ordinati per (order, id)
             active_end = offset + item.duration_min
-            if active_end > 0:
+            if item.duration_min and active_end > 0:
                 busy[item.operator_id].append((offset, active_end, True))
             if item.soak_min and active_end + item.soak_min > 0:
                 busy[item.operator_id].append(

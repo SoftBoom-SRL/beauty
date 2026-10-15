@@ -3,6 +3,7 @@
 // si prova con `node --test` (vedi apps/dashboard/test/modali-*.test.js) e le
 // regole che replicano il server stanno in un posto solo.
 import { fmtDur, isoAtMin, minutesOfDay, salonTzOpts, timeLabel, todayStr } from '@youty/shared';
+import { isAddonItem } from '../lib/addons.js';
 import { explainSlot } from '../lib/slots.js';
 
 /** Scadenza della caparra, letta sull'orologio del SALONE («24/09, 18:00»).
@@ -82,6 +83,8 @@ export const editRow = (it, key) => ({
   soak_min: it.soak_min || 0,       // solo per l'anteprima degli orari a destra
   price: Number(it.price) || 0,
   name: it.service_name,
+  // aggiuntivo (voce senza tempo): sotto il suo servizio, senza orari né durata
+  addon: isAddonItem(it),
 });
 
 const DRAFT_FIELDS = ['service_id', 'operator_id', 'duration_min', 'soak_min'];
@@ -241,14 +244,16 @@ export const usableCode = (code) => (code && !String(code).includes('•') ? Str
  *  scadute, a saldo zero o regalate a «Giulia» senza scheda: il servizio
  *  compariva barrato «Regalo» e in cassa il regalo non c'era (13-09, 17-09,
  *  07-07). Con status=active il server esclude già le scadute (C21): il
- *  controllo resta qui per un server che non lo fa ancora. */
+ *  controllo resta qui per un server che non lo fa ancora.
+ *  «Saldo > 0» vale anche come «sedute ancora da fare» (`has_remaining_q` del
+ *  server): un pacchetto in omaggio ha saldo zero e cinque sedute. */
 export function usableGiftCards(cards, clientId, now = Date.now()) {
   if (clientId == null) return [];
   return (cards || []).filter((g) => g
     && g.gift_service_id != null
     && g.payment_status === 'paid'
     && g.status === 'active'
-    && Number(g.balance) > 0
+    && (Number(g.balance) > 0 || Number(g.sessions_left) > 0)
     && (!g.expires_at || Date.parse(g.expires_at) >= now)
     && (g.recipient_client_id === clientId
       || (g.recipient_client_id == null && !g.recipient_name && g.buyer_client_id === clientId)));
@@ -359,13 +364,14 @@ export function slotReassignment(items, assignment) {
 /** «Incassato oggi» di GET /api/sales/today-summary (contratto C23): si mostra
  *  quando è diverso dal venduto, con le voci che fanno la differenza — gift
  *  card usate e caparre detratte (denaro entrato un altro giorno), caparre
- *  incassate oggi, caparre restituite oggi. Prima compariva solo con gift card
- *  riscattate (05-16). `cash_in` arriva già al netto dei rimborsi: qui non si
- *  sottrae niente. Confronto in centesimi. */
+ *  incassate oggi, caparre restituite oggi, la parte del venduto di oggi
+ *  lasciata da saldare e i saldi arrivati oggi per conti di altri giorni.
+ *  Prima compariva solo con gift card riscattate (05-16). `cash_in` arriva già
+ *  al netto di tutto: qui non si sottrae niente. Confronto in centesimi. */
 export function cashUpLines(summary) {
   if (!summary) return null;
   const cents = (v) => Math.round(Number(v || 0) * 100);
-  const parts = ['deposit_cashed', 'gift_card_redeemed', 'deposit_used', 'deposit_refunded']
+  const parts = ['deposit_cashed', 'gift_card_redeemed', 'deposit_used', 'deposit_refunded', 'due_left', 'settled']
     .filter((key) => cents(summary[key]) > 0)
     .map((key) => ({ key, amount: Number(summary[key]) }));
   return { show: cents(summary.cash_in) !== cents(summary.total), cashIn: Number(summary.cash_in || 0), parts };

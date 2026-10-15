@@ -1,7 +1,10 @@
 """Assistente vocale: l'agente Yourang legge servizi e orari e prenota al telefono."""
 
+from decimal import Decimal
+
 from apps.agenda.models import Appointment
 from apps.agenda.tests.base import RealShiftsTestBase
+from apps.catalog.models import Service
 from apps.clients.models import Client
 from apps.core.models import OutboxEvent
 from apps.integrations import voice
@@ -135,3 +138,37 @@ class VoiceBookingTests(VoiceTestBase):
         data = self.book_call(services=[self.cut30.id], customer_phone=393451112233, time="9.30")
         self.assertTrue(data["success"], data)
         self.assertEqual(data["time"], "09:30")
+
+
+class VoiceAddonTests(VoiceTestBase):
+    """15/10: un aggiuntivo (nail art) si fa durante un altro servizio: l'agente
+    lo sa dal listino, e da solo non lo prenota."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.nail_art = Service.objects.create(
+            salon=cls.salon, category=cls.cat, name_it="Nail art", duration_min=15,
+            price=Decimal("10.00"), is_addon=True,
+        )
+        cls.giulia.services.add(cls.nail_art)
+        cls.marta.services.add(cls.nail_art)
+
+    def test_the_agent_knows_which_services_are_addons(self):
+        flags = {row["name"]: row["addon"] for row in self.services().json()}
+        self.assertEqual(flags, {"Taglio": False, "Colore": False, "Manicure": False, "Nail art": True})
+
+    def test_an_addon_alone_is_answered_with_the_reason(self):
+        data = self.availability(self.nail_art.id).json()
+        self.assertEqual(data["error"], "invalid_request")
+        self.assertIn("aggiuntivo", data["message"])
+        data = self.book_call(services=f"{self.nail_art.id}")
+        self.assertEqual(data["error"], "invalid_request")
+        self.assertFalse(Client.objects.filter(first_name="Carla").exists())
+
+    def test_an_addon_after_its_service_takes_no_time(self):
+        data = self.book_call(services=f"{self.man60.id},{self.nail_art.id}", time="18:00")
+        self.assertTrue(data["success"], data)
+        appointment = Appointment.objects.get(id=data["appointment_id"])
+        self.assertEqual([row.duration_min for row in appointment.items.all()], [60, 0])
+        self.assertEqual(appointment.end, aware(self.day, 19))

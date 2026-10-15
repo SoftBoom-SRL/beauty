@@ -145,15 +145,23 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
 
 **Models**
 - `ClientCategory`: salon FK, name, color (#hex), order int. (Etichette: Local, Expat, VIP…)
-- `Client`: salon FK, first_name, last_name, phone (unique per salon), email blank,
+- `Client`: salon FK, first_name, last_name, phone blank (unico per salone
+  quando c'è, comunque scritto: `phone_key`; "" = la cliente un numero suo non
+  ce l'ha, e allora niente OTP né accesso all'app), contact_client FK a sé
+  SET_NULL null (`dependents`: «si contatta tramite», la scheda col numero a
+  cui vanno i messaggi di chi non ne ha uno), email blank,
   wa bool default True, lang it/en default it, categories M2M ClientCategory blank,
-  reliability int default 100 (0–100), origin char blank (Instagram, Google…),
+  reliability int default 100 (0–100, calcolata: vedi sotto), origin char blank (Instagram, Google…),
   birthday date null/blank, since date null/blank,
   consents JSON default dict ({privacy, marketing, card_charge} bool),
   whatsapp_reminders bool default True,
   stripe_customer_id char blank, stripe_payment_method_id char blank,
   deposit_always bool default False, is_active bool default True.
-  property `full_name`.
+  property `full_name`; property `contact_phone` (il numero a cui scrivere: il
+  suo, altrimenti quello di `contact_client`, un livello solo, altrimenti "").
+  Regole del contatto (`profiles.resolve_contact`): stesso salone, non sé
+  stessa, attiva, con un numero suo, che non passi a sua volta da un'altra; chi
+  fa da contatto non può passare da un'altra né togliersi il numero.
 - `ClientNote`: client FK, text, visibility private/ai (TextChoices), author FK user null, created_at.
 - `TechnicalSheet` (scheda tecnica, sola lettura una volta creata): client FK,
   appointment FK "agenda.Appointment" null/blank, category char (nail/hair/viso/extra…),
@@ -161,12 +169,37 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
   outcome text blank, duration_hold char blank, advice text blank, protocol text blank,
   next_step char blank, photo ImageField null/blank, author FK user null, created_at.
 
-**Service** `client_facts(client) -> dict`: {reliability, categories:[nomi], total_spent (somma
-Sale del cliente, import lazy di sales), visits (Sale count), noshow_count, latecancel_count
-(da agenda.Appointment status/flag, import lazy), deposit_always}. Campi mancanti → 0/[].
+**Service** (`clients.services`)
+- Visite = GIORNI (fuso del salone) con almeno una visita chiusa o un passaggio
+  al banco (`visit_days`): due appuntamenti in contemporanea con due operatrici
+  sono una visita. Le vendite fatte solo di gift card o pacchetti
+  (`line_type` gift_card/package) non sono visite; spesa senza caparre né
+  penali no-show. `client_stats(client)` → {visits, total_spent, last_visit}.
+  Contano allo stesso modo lo storico (`counts.visits`) e le statistiche
+  dell'operatrice (clienti di oggi, visite delle clienti servite).
+- Affidabilità calcolata: 100 − 25 per ogni giorno con un no-show − 10 per ogni
+  giorno con un annullamento tardivo (`cancelled_late`, e non già no-show)
+  negli ultimi 12 mesi (dallo stesso giorno di un anno fa), fra 0 e 100
+  (`reliability_basis`). `recompute_reliability(client)` la salva (UPDATE della
+  sola colonna, log `client.updated` con `fields: ["reliability"]` se cambia):
+  la chiamano no-show, annullamento tardivo e «torna indietro» dell'agenda e
+  l'evento Yourang che arriva già no-show. Non è scrivibile dall'API.
+- `client_facts(client) -> dict`: {reliability (calcolata ora, non la colonna),
+  categories:[nomi], total_spent, visits (giorni), noshow_count,
+  latecancel_count (giorni, di sempre), deposit_always}. Campi mancanti → 0/[].
+
+**Comando** `python manage.py recompute_reliability [--salon ID]`: ricalcola
+l'affidabilità di tutte le schede (una query per salone, un UPDATE per
+punteggio; log `client.reliability_recomputed` con `{changed}`). Da lanciare
+dopo un import di visite da un altro gestionale e da programmare una volta al
+giorno: un no-show di tredici mesi fa esce dalla finestra senza che nessun
+gesto lo dica (la scheda aperta si corregge da sola, la lista no).
 
 **Endpoint staff** (/api/clients)
-- GET `/` (paginate) filtri: q (nome/telefono/email), category_id, reliability_min/max, is_active.
+- GET `/` (paginate) filtri: q (nome/telefono/email; un numero trova anche le
+  schede senza telefono che passano da quel numero, mai le altre senza
+  telefono), category_id, reliability_min/max, is_active. Ogni riga
+  (`ClientListOut`) ha `contact` e `amount_due` (debito, null senza «vendite»).
 - GET `/counts` (staff_auth) → `{active, categories: [{id, count}]}`: le schede
   attive e quante per etichetta, in una risposta (la sezione Clienti), con lo
   stesso filtro per salone della lista.
@@ -174,15 +207,32 @@ Sale del cliente, import lazy di sales), visits (Sale count), noshow_count, late
   come il salvataggio di regole caparra e automazioni che la citano:
   un'etichetta (o una regola, o un'automazione) sparita nel frattempo è un 404.
 - GET `/categories` + CRUD (scope clients). GET `/{id}` → dettaglio + computed
-  {visits, total_spent, last_visit} (aggregati lazy da sales). POST/PUT (scope clients, log).
-  DELETE (scope clients) → soft: is_active=False + log `client.deleted`.
-- POST `/import` {rows:[{first_name,last_name,email,phone}]} (scope clients) →
-  upsert per telefono (poi email); ritorna {created, updated}. Log.
+  {visits (giorni), total_spent, last_visit, amount_due (`sales.dues`); a
+  zero/null con `stats_hidden` senza «vendite»}, `dependents` (le schede attive
+  che si contattano tramite lei), `reliability_basis` {no_shows,
+  late_cancellations, since}. Ogni `ClientOut` ha `contact` {id, full_name,
+  phone} o null. POST/PUT (scope clients, log): telefono facoltativo,
+  `contact_client_id` (null sul PUT = scollega), `reliability` ignorato. Un
+  numero già di un'altra scheda: 409 `archived_client_id` se archiviata (alla
+  creazione; 400 in modifica), 400 {detail, phone_holder_id,
+  phone_holder_name, contact_allowed} se attiva.
+  DELETE (scope clients) → soft: is_active=False + log `client.deleted`; chi si
+  contattava tramite lei perde il collegamento → {ok, unlinked_dependents:
+  [{id, full_name, phone}]} (e un `client.updated` per ognuna).
+- POST `/import` {rows:[{first_name,last_name,email,phone,…,name_index}]} (scope
+  clients) → upsert per telefono (poi email, poi per nome fra le schede senza
+  numero, la n-esima omonima con `name_index`); le righe senza telefono entrano
+  senza numero; un numero già in rubrica con un altro nome di battesimo → scheda
+  senza telefono collegata a chi ha il numero (avviso). Ritorna {created,
+  updated, skipped, linked, errors, warnings}. Log.
 - Note: GET/POST/DELETE `/{id}/notes` (scope clients).
 - Schede tecniche: GET `/{id}/sheets`, POST `/{id}/sheets` (scope clients, log).
   NESSUN endpoint update/delete (read-only dopo il salvataggio).
 
-**Tests**: import upsert, client_facts con dati minimi, immutabilità scheda (nessuna rotta update).
+**Tests**: import upsert, client_facts con dati minimi, immutabilità scheda
+(nessuna rotta update), schede senza telefono e contatto (`test_no_phone`),
+visite per giorno (`test_history_stats`), affidabilità e comando
+(`test_reliability`).
 
 ---
 
@@ -223,21 +273,33 @@ finestre lavorabili in minuti per quella data = turno del weekday
 - `ServiceCategory`: salon FK, name_it, name_en blank, color (#hex pastello), order int.
 - `Service`: salon FK, category FK, name_it, name_en blank, duration_min int, price Decimal,
   product_cost Decimal default 0, supplier_cost Decimal default 0 (per stima margine),
-  active bool default True, order int default 0.
-- `Package`: salon FK, name, description blank, price Decimal, active bool default True.
-- `PackageItem`: package FK related_name="items", service FK, qty int default 1.
+  active bool default True, order int default 0, is_addon bool default False.
+  `is_addon` = aggiuntivo: si fa DURANTE un altro servizio (nail art durante la manicure,
+  massaggio ai piedi durante la pedicure). In agenda aggiunge il prezzo, non il tempo
+  (vedi §7, «Aggiuntivi»); `duration_min` resta la durata indicativa di listino (≥ 1).
+- `Package`: salon FK, name, description blank, price Decimal, active bool default True,
+  validity_days int null (giorni per usare le sedute dalla vendita; null = senza scadenza).
+- `PackageItem`: package FK related_name="items", service FK, qty int default 1
+  (= sedute di quel servizio nel pacchetto).
 
 **Endpoint** (/api/catalog)
 - GET `/categories` + CRUD (scope pricing) + POST `/categories/reorder` {ids:[...]}.
 - GET `/services?category_id=&active=` + CRUD (scope pricing).
-  Su cambio prezzo → log `service.price_changed` con {old, new}.
+  Su cambio prezzo → log `service.price_changed` con {old, new}. `is_addon` nel PUT:
+  assente = invariato (come `color`), nel POST assente = falso.
 - GET `/packages` + CRUD (scope pricing) — items nested nel payload
-  {items:[{service_id, qty}]}, ricreati a ogni update.
+  {items:[{service_id, qty}]}, ricreati a ogni update; `validity_days` 1–3650 o null.
+  Nel PUT `items` e `validity_days` assenti = invariati (null = senza scadenza).
 - Pubblici (no auth, per la web app prima del login): GET `/public/services?salon=slug`
-  → categorie ordinate con servizi attivi {id, name_it, name_en, duration_min, price};
-  GET `/public/packages?salon=slug`.
+  → categorie ordinate con servizi attivi {id, name_it, name_en, duration_min, soak_min,
+  price, is_addon}; GET `/public/packages?salon=slug` → {id, name, description, price,
+  validity_days, items:[{service_id, name_it, name_en, soak_min, qty}]}. L'app cliente
+  non prenota un aggiuntivo da solo: lo offre come «Aggiungi» dopo il servizio principale.
+- Un pacchetto venduto in cassa diventa una gift card a sedute per servizio
+  (`marketing.credits.create_package_credits`, vedi §10), che scade dopo
+  `validity_days` dalla vendita.
 
-**Tests**: reorder, package con items, endpoint pubblico.
+**Tests**: reorder, package con items, validità delle sedute, endpoint pubblico.
 
 ---
 
@@ -282,7 +344,33 @@ finestre lavorabili in minuti per quella data = turno del weekday
   operatrice del primo item; calcola deposito → deposit_status required/none;
   log + emit `appointment.created` (payload: client nome/telefono/lang, servizi, start ISO, deposito).
 - `freed_slots.free_slot_event(appointment)`: emit `slot.freed` {start, duration_min, operator_id,
-  matching_waitlist: [entry_id...]} — waitlist attive compatibili per servizio+operatrice.
+  matching_waitlist: [entry_id...]} — waitlist attive compatibili per servizio+operatrice
+  (mai quelle per un aggiuntivo).
+
+**Aggiuntivi** (`services/addons.py`; servizi `catalog.Service.is_addon`)
+- La voce (`AppointmentService`) di un aggiuntivo ha `duration_min = 0` e `soak_min = 0`:
+  aggiunge il prezzo (conto, caparra, margine: niente manodopera) ma non il tempo, non
+  allunga la visita e non occupa nessuno slot (né di chi la fa né nella ricerca). Le voci
+  NUOVE lo sono se il servizio è un aggiuntivo; quelle già sulla visita restano come sono
+  state concordate (una nail art prenotata a 15' prima del flag resta di 15').
+- Si appoggia al servizio PRIMA di lei: un aggiuntivo non può essere la prima voce (422
+  «Un aggiuntivo va dopo il servizio a cui si appoggia») e una visita non può essere di
+  soli aggiuntivi (422 «Un aggiuntivo va insieme a un servizio»). Vale per creazione
+  (dashboard, app, assistente vocale), modifica, ricerca degli orari (anche pubblica) e
+  lista d'attesa (nessuna iscrizione per un aggiuntivo). Il 422 non si supera con `force`.
+- Chi lo fa: l'operatrice indicata, se idonea (400 altrimenti, come ogni servizio); senza
+  indicazione chi fa il servizio a cui si appoggia, se lo sa fare, altrimenti la prima idonea.
+  Nessuna verifica di libertà né di turno: non occupa tempo. Ricerca e conferma scelgono
+  allo stesso modo.
+- Modifica (PUT): la durata di un aggiuntivo resta 0 qualunque `duration_min`/`soak_min`
+  arrivi; lo 0 è ammesso solo per lui (su un altro servizio: 422).
+- Spostamento: gli aggiuntivi seguono la loro colonna come ogni voce (idoneità compresa).
+- Stacco (`/split`): un servizio si stacca INSIEME agli aggiuntivi che gli vengono dietro
+  (le righe di chi aveva il servizio passano all'operatrice di arrivo); un aggiuntivo da
+  solo no (422 «Un aggiuntivo non si stacca da solo: …»). Se servizio e aggiuntivi sono
+  tutta la visita → 400 «usa Sposta». Il tempo lasciato in mezzo diventa attesa dopo
+  l'ultimo servizio CON tempo prima del pezzo staccato.
+- Messaggi a Yourang: l'aggiuntivo compare fra i `services` con `duration_min: 0`.
 
 Gli endpoint stanno in `api/`, un modulo per risorsa (`agenda_views`, `appointments`,
 `undo_routes`, `pauses`, `waitlist`, `availability`, `client_app`); la forma delle
@@ -321,6 +409,7 @@ risposte in `presenters.py`.
   refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
   Log, emit `appointment.cancelled` {…, reason, late, by_client}, free_slot_event.
 - PUT `/appointments/{id}` {items?, note?} (scope agenda) → modifica trattamenti (snapshot nuovi), log.
+  `items[].duration_min` da 1 a 720; 0 solo per un aggiuntivo (vedi «Aggiuntivi»).
   Se modifica o stacco liberano tempo, `slot.freed` lo annuncia come lo
   spostamento (nei match anche chi aspettava il servizio tolto o staccato). Se la
   caparra da pagare scende a 0 € diventa «nessuna», senza scadenza e con il link
@@ -362,24 +451,50 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 **Models**
 - `Sale`: salon FK, location FK null/blank, kind checkout/pos, appointment OneToOne
   "agenda.Appointment" null/blank, client FK null/blank, total Decimal,
-  deposit_deducted Decimal default 0, created_by FK user null, created_at.
+  deposit_deducted Decimal default 0, amount_due Decimal default 0 (quanto la
+  cliente deve ancora: 0 = saldato), created_by FK user null, created_at.
+  Conto unico: le altre visite chiuse con la vendita la puntano con
+  `Appointment.paid_in_sale` (related_name `covered_appointments`).
 - `SaleLine`: sale FK related_name="lines", operator FK "staff.Operator" null/blank,
-  line_type service/product/gift_card, service FK null, product FK "inventory.Product" null,
-  gift_card FK "marketing.GiftCard" null (venduta), qty int default 1, unit_price Decimal,
+  line_type service/product/gift_card/package, service FK null, product FK "inventory.Product" null,
+  gift_card FK "marketing.GiftCard" null (venduta), package FK "catalog.Package" null
+  (venduto), qty int default 1, unit_price Decimal,
   discount_pct int default 0, is_gift bool default False, amount Decimal
   (= qty×unit_price×(1−discount/100), 0 se is_gift).
 - `Payment`: sale FK related_name="payments", method cash/card/other/gift_card,
-  amount Decimal, gift_card FK null (usata come pagamento).
+  amount Decimal, gift_card FK null (usata come pagamento), created_at (quando è
+  arrivato il denaro: al conto la data della vendita, per un saldo il giorno del saldo).
 
 **Servizi**
-- `finalize_sale(...)` core condiviso checkout/POS, in transazione:
+- `finalize_sale(..., allow_due=False)` core condiviso checkout/POS, in transazione:
   calcola amounts; total = Σ amounts; per gift_card in pagamento →
-  `marketing.gift_cards.redeem_gift_card(salon, code, amount)` (import nella funzione);
+  `marketing.gift_cards.redeem_gift_card(salon, code, amount)` (import nella funzione;
+  con `sessions` > 1 nel pagamento anche `sessions=`);
   valida Σ payments == total − deposit_deducted (tolleranza 0.01, altrimenti 422
-  "I pagamenti non corrispondono al totale"); crea Sale/lines/payments;
+  "I pagamenti non corrispondono al totale"). Con `allow_due` e una cliente i
+  pagamenti possono essere meno del dovuto: la differenza va in `amount_due`; più
+  del dovuto → 422 "I pagamenti superano il totale da pagare"; senza cliente →
+  422 "Per lasciare un conto da saldare scegli la cliente". Crea Sale/lines/payments
+  (i pagamenti con la data della vendita);
   righe product (anche is_gift) → `inventory.services.deduct_stock_for_sale(sale)`;
-  righe gift_card vendute → `marketing.gift_cards.create_gift_card(...)`;
+  righe gift_card vendute → `marketing.gift_cards.create_gift_card(...)` (con
+  `gift_service_id` e `sessions` è una carta «a trattamento»; `kind` gift | prepaid,
+  con prepaid la destinataria è la cliente stessa e serve la cliente);
+  righe package (`package_id`, del salone e attivo, prezzo di default quello del
+  pacchetto, sconto e omaggio ammessi, qty spezzata in righe da 1, serve la cliente) →
+  `marketing.credits.create_package_credits(salon, package, client, amount=line.amount,
+  sale, line, paid_method=<primo metodo>, actor)`: le sedute della cliente;
   `marketing.loyalty.accrue_loyalty(sale)`; log `sale.created`.
+- `settle_sale(salon, sale_id, payments)`: lock del salone, poi della vendita;
+  aggiunge i pagamenti con la data di adesso e riduce `amount_due` (400 se già
+  saldato, 422 se si paga più di quanto resta); log `sale.settled`.
+- `reports.cash_movements(salon, start, end)`: il denaro entra quando arriva.
+  `due_left` = parte delle vendite del periodo non pagata nel periodo (dovuto
+  ancora aperto + saldi arrivati dopo), `settled` = pagamenti del periodo per
+  vendite di prima, `gift_card_redeemed` = pagamenti con gift card del periodo,
+  `package_sold`. Lo usano il riepilogo di oggi e i KPI degli insight
+  (`cash_in` = venduto + caparre incassate − gift card − caparre detratte
+  − caparre restituite − due_left + settled).
 - Stripe (`stripe_service.py`): `_client()` → HttpError(503, "Stripe non configurato") se
   manca STRIPE_SECRET_KEY; `ensure_customer(client)`, `create_setup_intent(client)`,
   link di pagamento della caparra, rimborsi, `charge_full_amount(appointment)` (off-session sul
@@ -390,18 +505,44 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 
 **Endpoint staff** (/api/sales)
 - POST `/checkout/{appointment_id}` (scope sales)
-  body {blocks:[{operator_id, lines:[{line_type, service_id?, product_id?, qty, unit_price,
-  discount_pct?, is_gift?}]}], payments:[{method, amount, gift_card_code?}]} →
-  finalize_sale(kind=checkout, deposit_deducted = deposit se paid);
+  body {blocks:[{operator_id, lines:[{line_type, service_id?, product_id?, package_id?, qty,
+  unit_price, discount_pct?, is_gift?, value?, recipient_name?, gift_service_id?, sessions?,
+  kind?}]}], payments:[{method, amount, gift_card_code?, sessions?}], coupon_code?,
+  leave_due?, extra_appointment_ids?} →
+  finalize_sale(kind=checkout, deposit_deducted = caparre ancora in cassa, allow_due=leave_due);
   appuntamento → closed; emit `visit.completed` {client, services, total};
   response: sale + breakdown per operatrice.
-- POST `/pos` (scope sales) {client_id?, blocks, payments} → finalize_sale(kind=pos).
-  Vendita gift card dal POS: line_type gift_card con {value, recipient_name?}.
-- GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id;
-  response include KPI header {revenue, count, items_count} sul filtro corrente.
-- GET `/{id}` → dettaglio con righe e pagamenti.
-- GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total} di oggi
-  (il box dell'agenda).
+  Già incassato (400): la visita ha la sua vendita o `paid_in_sale`.
+  Conto unico: `extra_appointment_ids` (al più 10) sono altre visite della stessa
+  cliente, nello stesso giorno del salone, non annullate né no-show, non già
+  incassate, diverse dalla principale (altrimenti 400; 404 se non sono del salone);
+  rilette sotto gli stessi lock. Le loro righe le manda il frontend nei blocchi, con
+  la loro operatrice. Si detrae la somma delle caparre ancora in cassa di tutte le
+  visite; l'eccedenza torna alla cliente ripartita sulle visite (la principale per
+  prima) senza restituire a nessuna più di quanto ha versato. Dopo la vendita la
+  principale è `closed` e le altre `closed` con `paid_in_sale` = la vendita, ognuna
+  col suo `appointment.closed`. `visit.completed` è uno solo, per la visita
+  principale, con i servizi di tutto il conto.
+- GET `/checkout/{appointment_id}/other-visits` (scope sales) → [AppointmentOut]: le
+  altre visite aperte della cliente nello stesso giorno, ancora da incassare (la
+  sezione «Altre visite oggi» della cassa).
+- POST `/pos` (scope sales) {client_id?, blocks, payments, coupon_code?, leave_due?} →
+  finalize_sale(kind=pos). Vendita gift card dal POS: line_type gift_card con {value,
+  recipient_name?} (o a trattamento: gift_service_id, sessions, kind); pacchetto:
+  line_type package con {package_id}.
+- POST `/{id}/settle` (scope sales) {payments:[…]} → settle_sale; response: dettaglio vendita.
+- GET `/dues?client_id=` (scope sales) → {client_id, amount_due, sales:[SaleOut]}: i
+  conti da saldare della cliente, dal più vecchio.
+- GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id,
+  due (solo i conti da saldare);
+  response include KPI header {revenue, count, items_count, due_total} sul filtro corrente.
+  SaleOut porta `amount_due`; ogni pagamento la sua `created_at`.
+- GET `/{id}` → dettaglio con righe (anche `package_id`/`package_name`), pagamenti e
+  `covered_appointment_ids` (conto unico).
+- GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total,
+  gift_card_sold, package_sold, gift_card_redeemed, deposit_used, deposit_cashed,
+  deposit_refunded, due_left, settled, cash_in} di oggi (il box dell'agenda): il
+  venduto per data della vendita, `cash_in` il denaro arrivato oggi (vedi `cash_movements`).
 - POST `/appointments/{appointment_id}/charge-no-show` (scope sales) → charge_full_amount, log.
   Solo su appuntamenti no_show; un solo addebito per appuntamento (no_show_payment_intent_id +
   idempotency key Stripe), il secondo tentativo → 409.
@@ -422,7 +563,8 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   «in corso» da più di 10 minuti si riprende con la stessa chiave di idempotenza.
 
 **Tests**: finalize_sale ok e mismatch pagamenti → errore; sconto/omaggio amounts;
-deposito detratto; today-summary.
+deposito detratto; today-summary; conti da saldare e saldi (`test_dues`); conto
+unico (`test_single_bill`); pacchetti, trattamenti già pagati e sedute (`test_prepaid`).
 
 ---
 
@@ -491,6 +633,11 @@ per fornitore; receive con discrepanza → partial.
   buyer_client FK null/blank, recipient_client FK null/blank, recipient_name blank,
   payment_status paid/unpaid, paid_at null, paid_method blank,
   delivery_date null/blank, expires_at null/blank, status active/redeemed/expired, created_at.
+  Trattamenti già pagati: gift_service FK null (carta «a trattamento»), kind
+  gift (regalo) / prepaid (già pagato dalla cliente stessa) / package (sedute di un
+  pacchetto: package FK, package_line FK alla SaleLine), sessions_total e
+  sessions_left (1/1 per le carte a importo); `session_value` = saldo ÷ sedute
+  rimaste per difetto, l'ultima seduta prende il resto.
 - `LoyaltyProgram`: salon FK, name, type points/stamps/tiers/membership,
   earn_metric per_euro/per_visit/per_service, earn_ratio Decimal default 1,
   reward_type coupon_amount/discount_pct/free_service/free_product/gift_card,
@@ -506,13 +653,25 @@ per fornitore; receive con discrepanza → partial.
   scheduled_at null, sent_at null, created_at.
 
 **Servizi**
-Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loyalty.py`,
-`communications.py`, `consent.py`, `wallet.py`.
-- `gift_cards.create_gift_card(salon, value, *, buyer_client=None, recipient_name="", paid=False,
-  paid_method="", sold_by=None, sale=None)` → GiftCard (usata anche da sales).
-- `gift_cards.redeem_gift_card(salon, code, amount)`: select_for_update; attiva, non scaduta,
-  balance ≥ amount (altrimenti HttpError 422 con messaggio); scala balance,
-  status redeemed se 0; ritorna la card. Log `giftcard.redeemed`.
+Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `credits.py`
+(sedute dei pacchetti), `loyalty.py`, `communications.py`, `consent.py`, `wallet.py`.
+- `gift_cards.create_gift_card(salon, value, *, gift_service=None, buyer_client=None,
+  recipient_client=None, recipient_name="", paid=False, paid_method="", sold_by=None,
+  sale=None, cash_in=True, kind="gift", sessions=1, package=None, package_line=None,
+  expires_at=None)` → GiftCard (usata anche da sales). Valore fra 0 e MAX_MONEY (zero solo
+  per un trattamento), sedute 1–100 e solo con `gift_service`.
+- `gift_cards.redeem_gift_card(salon, code, amount, sessions=1)`: select_for_update; attiva,
+  non scaduta, pagata, balance ≥ amount (altrimenti HttpError 422 con messaggio); scala
+  balance, status redeemed se 0. Sulle carte a più sedute toglie `sessions` sedute e
+  all'ultima azzera saldo e carta. Ritorna la card. Log `giftcard.redeemed`.
+- `gift_cards.sell_gift_card(...)`: la vendita dallo staff (kind gift o prepaid; con
+  `gift_service` valore = prezzo × sedute; prepaid = acquirente e destinataria la stessa
+  cliente). `has_remaining_q()`: carte con saldo o con sedute di un trattamento ancora da
+  fare — la regola di agenda (`spendable_gift_cards`), caparra e portafoglio.
+- `credits.create_package_credits(salon, *, package, client, amount, sale=None, line=None,
+  paid_method="", actor=None, expires_at=None)`: una carta kind=package per servizio del
+  pacchetto (sedute = qty), importo diviso in proporzione al listino, scadenza
+  `validity_days` dalla vendita. La chiama la cassa per le righe «package».
 - `loyalty.accrue_loyalty(sale)`: se sale.client None → no-op. Per ogni programma attivo:
   account esistente o auto-creato se enrollment=auto; accrue per earn_metric
   (per_euro: floor(total×ratio); per_visit: ratio; per_service: ratio×n righe servizio);
@@ -527,11 +686,23 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loy
   Un coupon intestato si lega solo a una vendita della stessa cliente: su quella
   di un'altra, o senza cliente, 422 «Coupon riservato a un altro cliente:
   intestalo alla vendita» (come in cassa).
-- GET `/gift-cards` + KPI {sold_total, redeemed_total, outstanding};
-  POST `/gift-cards` (creazione/vendita manuale: se paid → log incasso);
+- GET `/gift-cards?status=&payment_status=&kind=&q=&client_id=` + KPI {sold_total,
+  redeemed_total, outstanding} sulle carte filtrate; `q` cerca anche trattamento e
+  pacchetto. Ogni carta porta kind, sessions_total, sessions_left, session_value,
+  package_id, package_name.
+  POST `/gift-cards` (creazione/vendita manuale: se paid → vendita in cassa e log
+  incasso) con `kind` gift | prepaid e `sessions` (1–100, solo con gift_service_id: il
+  valore diventa prezzo × sedute). prepaid = acquirente e destinataria la stessa
+  cliente (422 senza cliente o con due clienti diverse); package → 422 (nasce solo
+  dalla vendita del pacchetto in cassa).
   POST `/gift-cards/{id}/mark-paid` {method}. `paid_method`/`method` è uno dei metodi
   della cassa (`cash`, `card`, `other`, `gift_card`; "" = non indicato), al massimo
   20 caratteri; altrimenti 422 «Metodo di pagamento non valido».
+- In agenda (`appt.gifts`, `agenda.presenters._gifts_out`) ogni trattamento già pagato
+  che copre un servizio della visita: {gift_card_id, code, service_id, service_name,
+  balance, from_name, kind, sessions_total, sessions_left, session_value, package_name,
+  expires_at}. La caparra si calcola al netto: una carta a sedute copre una riga per
+  seduta rimasta, per intero; una carta a una seduta fino al suo saldo.
 - CRUD `/loyalty-programs`; GET `/loyalty-programs/{id}/accounts` (paginate).
 - CRUD `/communications`; POST `/communications/{id}/send` → risolve audience in
   client ids (labels → clienti con quelle categorie; consents.marketing True) →
@@ -550,13 +721,16 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `loy
   cliente anche dagli invii che ha già in mano.
 
 **Endpoint cliente**
-- GET `/client/wallet` → {gift_cards (recipient o buyer, attive, con balance),
-  coupons (attivi del cliente), loyalty:[{program, points, threshold, progress_pct}]}.
+- GET `/client/wallet` → {gift_cards (recipient o buyer, attive, non scadute; con
+  `spendable`, `received`, `from_name` e, per i trattamenti già pagati, kind,
+  sessions_total, sessions_left, session_value, package_name), coupons (attivi del
+  cliente), loyalty:[{program, points, threshold, progress_pct}]}.
 - POST `/client/gift-cards` {value, recipient_name?} → gift card unpaid
   (pagamento in salone; Stripe checkout in fase 2) → response con code.
 
 **Tests**: redeem_gift_card (scala e blocca oltre saldo), accrue_loyalty soglia → coupon
-origin=loyalty, validate_coupon scaduto, send communication → outbox event.
+origin=loyalty, validate_coupon scaduto, send communication → outbox event; carte a
+sedute, pacchetti venduti, già pagato dallo staff, KPI e portafoglio (`test_credits`).
 
 ---
 

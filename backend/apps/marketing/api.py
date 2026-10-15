@@ -232,25 +232,35 @@ def list_gift_cards(
     payment_status: str = "",
     q: str = "",
     client_id: Optional[int] = None,
+    kind: str = "",
     limit: int = 200,
     offset: int = 0,
 ):
-    # select_related anche su gift_service: la riga «carta a trattamento» mostra
-    # il nome del servizio, e senza questo ogni carta dell'elenco costava una
-    # query in più.
+    """Gift card del salone con i KPI sulle carte filtrate.
+
+    `kind` (gift | prepaid | package) separa i regali dai trattamenti già pagati
+    e dalle sedute dei pacchetti; `q` cerca anche per trattamento e pacchetto.
+    """
+    # select_related anche su gift_service e package: la riga «carta a
+    # trattamento» mostra il nome del servizio (e del pacchetto), e senza
+    # questo ogni carta dell'elenco costava una query in più.
     ctx = request.auth
     qs = GiftCard.objects.filter(salon=ctx.salon).select_related(
-        "buyer_client", "gift_service"
+        "buyer_client", "gift_service", "package"
     )
     if status:
         qs = qs.filter(status_q(GiftCard, status))
     if payment_status:
         qs = qs.filter(payment_status=payment_status)
+    if kind:
+        qs = qs.filter(kind=kind)
     if q:
         match = (
             Q(recipient_name__icontains=q)
             | Q(buyer_client__first_name__icontains=q)
             | Q(buyer_client__last_name__icontains=q)
+            | Q(gift_service__name_it__icontains=q)
+            | Q(package__name__icontains=q)
         )
         # Codici mascherati: niente ricerca per pezzi di codice (vedi list_coupons).
         if not codes_hidden(ctx):
@@ -279,17 +289,14 @@ def create_gift_card_staff(request, data: GiftCardIn):
     # vedere la cassa. Una carta che nasce da pagare resta del marketing.
     require_scope(ctx, "sales" if data.paid else "marketing")
     buyer = _get_client(ctx, data.buyer_client_id) if data.buyer_client_id else None
-    # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio,
-    # ignora l'eventuale `value` inviato. gift_service_id None => carta monetaria.
-    gift_service = None
-    value = data.value
-    if data.gift_service_id:
-        gift_service = salon_get(Service, ctx, data.gift_service_id)
-        value = gift_service.price
+    # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio
+    # per le sedute, e `sell_gift_card` ignora l'eventuale `value` inviato.
+    # gift_service_id None => carta monetaria.
+    gift_service = salon_get(Service, ctx, data.gift_service_id) if data.gift_service_id else None
     recipient = _get_client(ctx, data.recipient_client_id) if data.recipient_client_id else None
     return sell_gift_card(
         ctx.salon,
-        value,
+        data.value,
         gift_service=gift_service,
         buyer=buyer,
         recipient=recipient,
@@ -299,6 +306,8 @@ def create_gift_card_staff(request, data: GiftCardIn):
         delivery_date=data.delivery_date,
         expires_at=data.expires_at,
         actor=ctx.user,
+        kind=data.kind,
+        sessions=data.sessions,
     )
 
 

@@ -1,8 +1,10 @@
 // ApptHoverCard — l'anteprima di un appuntamento al passaggio del mouse, la
 // stessa in giorno e settimana (`hints` = i gesti che la vista permette).
 // La mostra la vista che la chiede, con la posizione di hoverPlacement.
+import React from 'react';
 import { Avatar, Icon, fmtDur, timeLabel } from '@youty/shared';
-import { aEndMin, aStartMin, initialsOf, svcLabel } from '../lib.js';
+import { aEndMin, aStartMin, addonGroups, initialsOf } from '../lib.js';
+import { creditIcon, creditLabel } from '../../fedelta/credits.js';
 
 /* ---------- appointment hover card ---------- */
 export default function ApptHoverCard({ hover, t, lang, operators, colorOf, hints = 'day' }) {
@@ -24,8 +26,33 @@ export default function ApptHoverCard({ hover, t, lang, operators, colorOf, hint
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
           <Icon name="scissors" size={15} color="var(--muted-2)" style={{ marginTop: 1, flexShrink: 0 }} />
-          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{svcLabel(a)}</span>
+          {/* i servizi in fila; gli aggiuntivi come etichetta «+ Nail art»
+              accanto al servizio durante il quale si fanno: non allungano
+              l'orario qui sotto, e in fila con gli altri sembrerebbero un
+              trattamento in più */}
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+            {addonGroups(a.items).map((g, i) => (
+              <React.Fragment key={i}>
+                {i > 0 && ' + '}{g.item.service_name}
+                {g.addons.map((x, k) => (
+                  <span key={k} style={{ marginLeft: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', borderRadius: 6, padding: '1px 6px', whiteSpace: 'nowrap' }}>
+                    + {x.service_name}
+                  </span>
+                ))}
+              </React.Fragment>
+            ))}
+          </span>
         </div>
+        {/* Il servizio è già pagato (regalo, pagato in anticipo, seduta di
+            un pacchetto): al banco va saputo prima di aprire la visita. */}
+        {(a.gifts || []).map((g) => (
+          <div key={g.gift_card_id ?? g.code} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+            <Icon name={creditIcon(g)} size={15} color="var(--clay-ink)" style={{ marginTop: 1, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--clay-ink)' }}>
+              {g.service_name ? g.service_name + ' · ' : ''}{creditLabel(g, t)}
+            </span>
+          </div>
+        ))}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <Icon name="clock" size={15} color="var(--muted-2)" style={{ flexShrink: 0 }} />
           <span className="tabnum" style={{ fontSize: 13.5 }}>{timeLabel(startMin)}–{timeLabel(endMin)}</span>

@@ -8,6 +8,7 @@ from ninja.errors import HttpError
 from apps.core.services import emit_event, log_activity
 
 from ..models import WaitlistEntry
+from .addons import ADDON_ALONE_MESSAGE
 
 
 def mark_contacted(salon, entry: WaitlistEntry, *, actor=None) -> WaitlistEntry:
@@ -26,7 +27,13 @@ def mark_contacted(salon, entry: WaitlistEntry, *, actor=None) -> WaitlistEntry:
 def join_waitlist(
     salon, client, service, operator, *, preference: str, exact_days: list, exact_time
 ) -> WaitlistEntry:
-    """Iscrive la cliente (dall'app) per quel servizio; 400 se preferenza o giorni non vanno."""
+    """Iscrive la cliente (dall'app) per quel servizio; 400 se preferenza o giorni non vanno.
+
+    Non per un aggiuntivo (422): da solo non si prenota, e lo slot che gli
+    annunceremmo non lo potrebbe prendere.
+    """
+    if service.is_addon:
+        raise HttpError(422, ADDON_ALONE_MESSAGE)
     if preference not in WaitlistEntry.Preference.values:
         raise HttpError(400, "Preferenza non valida")
     if any(not isinstance(d, int) or d < 0 or d > 6 for d in exact_days):

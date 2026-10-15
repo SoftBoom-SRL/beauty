@@ -119,7 +119,7 @@ nasconde arrivano `null` con `*_hidden: true` e si mostrano «•••».
 | stato dell'appuntamento | `confirmed`, `checked_in`, `in_progress`, `closed`, `no_show`, `cancelled` |
 | caparra | `none`, `required`, `paid`, `refunded`, `forfeited` |
 | origine | `created_via`: `dashboard` \| `app` |
-| righe di vendita | `line_type`: `service` \| `product` \| `gift_card` |
+| righe di vendita | `line_type`: `service` \| `product` \| `gift_card` \| `package` |
 | pagamenti | `method`: `cash` \| `card` \| `other` \| `gift_card` |
 
 `statusMeta(status, t)` e `depositMeta(dep, t)` di `@youty/shared` danno etichetta

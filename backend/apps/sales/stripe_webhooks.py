@@ -171,7 +171,7 @@ def on_payment_intent_succeeded(obj: dict, metadata: dict, account: str = "") ->
                 "appointment_id": appointment.id,
                 "client_id": appointment.client_id,
                 "client_name": client_name,
-                "phone": appointment.client.phone,
+                "phone": appointment.client.contact_phone,
                 "lang": appointment.client.lang,
                 "amount": str(appointment.deposit_amount),
             },

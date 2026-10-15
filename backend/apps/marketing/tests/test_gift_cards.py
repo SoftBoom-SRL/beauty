@@ -361,6 +361,17 @@ class GiftCardCashInTests(OwnerTestBase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(Payment.objects.get(sale__salon=self.salon).method, Payment.Method.OTHER)
 
+    def test_a_value_beyond_the_column_is_refused(self):
+        """Il valore di una carta venduta dallo staff sta nella sua colonna.
+
+        `value` non aveva tetto: un miliardo arrivava al salvataggio, che non
+        entra in numeric(10,2), e su PostgreSQL la richiesta finiva in un 500
+        invece di dire che cosa correggere (SQLite, nei test, la salvava).
+        """
+        res = self._post("/api/marketing/gift-cards", {"value": "1000000000", "paid": False})
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(GiftCard.objects.exists())
+
     def test_a_loyalty_reward_card_is_not_counted_as_money_sold(self):
         """I premi fedeltà nascono «pagati» col metodo loyalty: nessuno li ha
         comprati, non sono ricavi del salone."""

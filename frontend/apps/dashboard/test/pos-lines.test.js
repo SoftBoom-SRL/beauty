@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptItemLine, checkoutDiscountPct, checkoutGiftLine, checkoutProductLine, checkoutServiceLine,
-  counterDiscountPct, counterGiftLine, counterProductLine, giftLineName, toApiLine,
+  apptItemLine, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine,
+  giftLineName, needsClient, packageSummary, prepaidValue, toApiLine, visitItemLine,
 } from '../src/sections/pos/lines.js';
 
 const item = { id: 41, operator_id: 7, service_id: 3, service_name: 'Taglio', price: '35.00' };
@@ -86,4 +87,52 @@ test('verso l’API: servizio, prodotto e gift card, con il prezzo in centesimi 
   // stesso ordine dei campi che scrivevano SellModal e CartTab
   assert.deepEqual(Object.keys(toApiLine({ line_type: 'product', product_id: 1, qty: 1, unit_price: 1 }, 0)),
     ['line_type', 'product_id', 'qty', 'unit_price', 'discount_pct', 'is_gift']);
+});
+
+/* ---- pacchetti e trattamenti già pagati ---- */
+
+const pkg = { id: 9, name: 'Mani e piedi', price: '450.00', items: [{ service_id: 3, qty: 5 }, { service_id: 4, qty: 5 }] };
+const manicure = { id: 3, name_it: 'Manicure', name_en: 'Manicure', price: '40.00' };
+
+test('pacchetto: nel conto con il suo prezzo, verso l’API con il suo id', () => {
+  assert.deepEqual(checkoutPackageLine('kl1', 7, pkg, 'it'), {
+    key: 'kl1', operator_id: 7, line_type: 'package', package_id: 9, name: 'Pacchetto · Mani e piedi',
+    unit_price: 450, qty: 1, discount_pct: 0, is_gift: false, extra: true,
+  });
+  assert.equal(counterPackageLine('k1', pkg, 'en').name, 'Package · Mani e piedi');
+  assert.deepEqual(toApiLine(checkoutPackageLine('kl1', 7, pkg, 'it'), 10),
+    { line_type: 'package', package_id: 9, qty: 1, unit_price: '450.00', discount_pct: 10, is_gift: false });
+  // al banco il pacchetto prende lo sconto sulla vendita come i prodotti
+  assert.equal(counterDiscountPct(counterPackageLine('k1', pkg, 'it'), 15), 15);
+  assert.equal(packageSummary(pkg, [manicure], 'it'), '5 × Manicure · 5 × #4');
+});
+
+test('trattamento già pagato: una gift card «prepaid» del servizio, con le sedute', () => {
+  const line = checkoutPrepaidLine('ql1', 7, manicure, 5, 180, 'it');
+  assert.equal(line.name, 'Già pagato · Manicure × 5');
+  assert.deepEqual(toApiLine(line, 0), {
+    line_type: 'gift_card', value: '180.00', gift_service_id: 3, sessions: 5, kind: 'prepaid',
+  });
+  assert.equal(counterPrepaidLine('q1', manicure, 1, 40, 'en').name, 'Prepaid · Manicure');
+  // il prezzo parte da listino × sedute
+  assert.equal(prepaidValue(manicure, 5), 200);
+  assert.equal(prepaidValue({ price: '19.99' }, 3), 59.97);
+  // una gift card normale parte come prima, senza tipo né sedute
+  assert.deepEqual(toApiLine(counterGiftLine('g1', 25, '', 'it'), 0), { line_type: 'gift_card', value: '25.00' });
+});
+
+test('pacchetti e trattamenti già pagati vogliono la cliente', () => {
+  assert.equal(needsClient([counterProductLine('p1', shampoo, 3)]), false);
+  assert.equal(needsClient([counterGiftLine('g1', 25, '', 'it')]), false);
+  assert.equal(needsClient([counterPackageLine('k1', pkg, 'it')]), true);
+  assert.equal(needsClient([counterPrepaidLine('q1', manicure, 2, 70, 'it')]), true);
+});
+
+test('conto unico: le righe di un’altra visita sanno da che visita vengono', () => {
+  const line = visitItemLine(55, item, 0);
+  assert.equal(line.key, 'v55_41_0');
+  assert.equal(line.visit_id, 55);
+  assert.equal(line.list_price, 35);
+  assert.equal(line.extra, false);
+  assert.equal(line.operator_id, 7);
 });

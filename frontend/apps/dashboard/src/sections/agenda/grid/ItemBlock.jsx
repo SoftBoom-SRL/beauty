@@ -5,6 +5,7 @@
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
 import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
+import { creditIcon, creditTitle } from '../../fedelta/credits.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
 export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK_START, lane = 0, laneCount = 1, dragging, resizing = false, tone, color, highlight = false, soakLabel, pxm = PXM, t, lang, canWrite, onDown, onResizeDown, onHover, onLeave, onSlotMenu }) {
@@ -20,8 +21,11 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   // Visita con più servizi: senza un segno che li lega, in agenda si vedono
   // due riquadri identici a due appuntamenti diversi della stessa cliente, e
   // non si capisce né che sono una cosa sola né che si possono staccare.
-  const total = (appt.items || []).length;
+  // Si contano i blocchi: gli aggiuntivi (la nail art della manicure) non lo
+  // sono, stanno qui dentro come etichetta «+ Nail art».
+  const total = block.total ?? (appt.items || []).length;
   const grouped = total > 1;
+  const addons = block.addons || [];
   const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
   // testo scuro sui colori chiari, bianco su quelli scuri (vedi lib/colors.js)
   const ink = inkOn(color, 0.82);
@@ -29,6 +33,18 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
   const textZ = { position: 'relative', zIndex: 2 };
+  // Servizio già pagato (regalo, pagato in anticipo, seduta di un pacchetto):
+  // un segno piccolo davanti al nome del servizio, del suo tipo. La
+  // descrizione intera — sedute rimaste, pacchetto — sta nella scheda al
+  // passaggio del mouse, non in un tooltip in più sulla griglia.
+  // Un aggiuntivo (la nail art di un pacchetto) lo porta nella sua etichetta.
+  const giftOf = (serviceId) => (appt.gifts || []).find((g) => g.service_id === serviceId);
+  const creditMark = (g, size = 11) => (g ? (
+    <span role="img" aria-label={creditTitle(g, t, lang, { code: false })} style={{ display: 'inline-flex', verticalAlign: '-1px', marginRight: size > 10 ? 4 : 3 }}>
+      <Icon name={creditIcon(g)} size={size} color={ink.ink} stroke={2} />
+    </span>
+  ) : null);
+  const giftMark = creditMark(giftOf(item.service_id));
   return (
     <div
       data-appt={appt.id}
@@ -95,11 +111,26 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
       <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>
         {/* arrivata / in corso: il pallino accanto al nome, visibile in ogni altezza */}
         {showStatusDot && <span title={sm.label} style={{ display: 'inline-block', verticalAlign: 'middle', width: 7, height: 7, borderRadius: 99, background: sm.color, marginRight: 5, marginTop: -2, boxShadow: '0 0 0 1.5px rgba(255,255,255,0.8)' }} />}
+        {!client && giftMark}
         {client || item.service_name}
       </div>
       {client && (
         <div style={{ ...textZ, fontSize: 11.5, fontWeight: 500, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, marginTop: compact ? 0 : 1 }}>
-          {item.service_name}
+          {giftMark}{item.service_name}
+          {/* gli aggiuntivi di questo servizio: niente blocco (durano 0
+              minuti), un'etichetta accanto al servizio durante il quale si fanno;
+              se anche l'aggiuntivo è già pagato, il segno del suo tipo sta lì */}
+          {addons.map((x) => (
+            <span key={x.id} data-addon={x.id} title={t('Aggiuntivo: si fa durante questo servizio', 'Add-on: done during this service')}
+              style={{ marginLeft: 5, fontSize: 10.5, fontWeight: 700, color: ink.ink, background: ink.chip, borderRadius: 5, padding: '0 4px' }}>
+              {creditMark(giftOf(x.service_id), 10)}+ {x.service_name}
+            </span>
+          ))}
+        </div>
+      )}
+      {!client && addons.length > 0 && (
+        <div style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, minWidth: 0 }}>
+          {addons.map((x) => '+ ' + x.service_name).join(' ')}
         </div>
       )}
       {showTime && <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 2, flexShrink: 0 }}>

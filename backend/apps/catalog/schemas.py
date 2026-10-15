@@ -60,6 +60,14 @@ class ServiceOut(Schema):
     color: str = Field(
         "", description="Colore del servizio (#RRGGBB); vuoto = quello della categoria"
     )
+    is_addon: bool = Field(
+        False,
+        description=(
+            "Aggiuntivo: si fa durante un altro servizio (nail art durante la manicure). "
+            "In agenda aggiunge il prezzo, non il tempo: la sua voce dura 0 minuti e va "
+            "dopo il servizio a cui si appoggia. `duration_min` resta quella indicativa."
+        ),
+    )
 
 
 class ServiceIn(Schema):
@@ -87,6 +95,17 @@ class ServiceIn(Schema):
         None,
         description="Colore del servizio (#RRGGBB); \"\" = quello della categoria; assente = invariato",
     )
+    # Assente = invariato, come il colore: la riattivazione dalla lista manda il
+    # servizio senza questo campo, e con un default a False avrebbe tolto in
+    # silenzio il segno «aggiuntivo» alla nail art (che da lì in poi avrebbe
+    # allungato ogni manicure del suo tempo di listino).
+    is_addon: Optional[bool] = Field(
+        None,
+        description=(
+            "Aggiuntivo: si fa durante un altro servizio e in agenda non aggiunge tempo; "
+            "assente = invariato (falso per un servizio nuovo)"
+        ),
+    )
 
 
 # ---- Pacchetti ------------------------------------------------------------------
@@ -103,6 +122,11 @@ class PackageItemOut(Schema):
     qty: int
 
 
+# Validità massima delle sedute di un pacchetto: dieci anni. Un numero di giorni
+# battuto con uno zero in più (36500) è un errore da dire, non una scadenza.
+MAX_PACKAGE_VALIDITY_DAYS = 3650
+
+
 class PackageIn(Schema):
     # Nome e prezzo dentro le loro colonne (120 caratteri, numeric(10,2)): fuori,
     # su PostgreSQL erano un 500.
@@ -113,6 +137,15 @@ class PackageIn(Schema):
     # Assente = «non toccare le righe». Con il default a [] un PUT che cambiava
     # solo il prezzo svuotava il pacchetto dei servizi inclusi.
     items: Optional[list[PackageItemIn]] = None
+    # Giorni per usare le sedute dalla vendita; null = senza scadenza. Assente
+    # nel PUT = invariata (come `items`): un modulo che non la conosce non deve
+    # togliere la scadenza a un pacchetto.
+    validity_days: Optional[int] = Field(
+        None,
+        ge=1,
+        le=MAX_PACKAGE_VALIDITY_DAYS,
+        description="Giorni di validità delle sedute dalla vendita; null = senza scadenza",
+    )
 
 
 class PackageOut(Schema):
@@ -121,6 +154,7 @@ class PackageOut(Schema):
     description: str
     price: Decimal
     active: bool
+    validity_days: Optional[int] = None
     items: list[PackageItemOut]
 
 
@@ -139,6 +173,9 @@ class PublicServiceOut(Schema):
     # «1 h», mentre l'agenda la tiene 1 h 40' (09-07, C4).
     soak_min: int = 0
     price: Decimal
+    # Aggiuntivo (nail art, scrub): non si prenota da solo. L'app lo offre come
+    # «Aggiungi» dopo il servizio principale, e non ne conta il tempo.
+    is_addon: bool = False
 
 
 class PublicCategoryOut(Schema):
@@ -162,4 +199,6 @@ class PublicPackageOut(Schema):
     name: str
     description: str
     price: Decimal
+    # Entro quanti giorni dall'acquisto vanno fatte le sedute (null = nessun limite).
+    validity_days: Optional[int] = None
     items: list[PublicPackageItemOut]

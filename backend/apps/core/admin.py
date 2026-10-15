@@ -3,7 +3,15 @@ from django.contrib import admin
 from django.db import transaction
 from unfold.admin import ModelAdmin
 
-from .models import ActivityLog, DepositRule, Location, OutboxEvent, Salon, SalonSettings
+from .models import (
+    ActivityLog,
+    DepositRule,
+    ExternalRef,
+    Location,
+    OutboxEvent,
+    Salon,
+    SalonSettings,
+)
 from .services import make_only_default_location, normalize_opening_hours_week, opening_hours_text
 
 
@@ -113,3 +121,10 @@ class OutboxEventAdmin(ModelAdmin):
     )
     list_filter = ("status", "event_type")
     search_fields = ("coalesce_key",)
+
+
+@admin.register(ExternalRef)
+class ExternalRefAdmin(ModelAdmin):
+    list_display = ("source", "kind", "external_id", "content_type", "object_id", "salon", "created_at")
+    list_filter = ("salon", "source", "kind")
+    search_fields = ("external_id",)

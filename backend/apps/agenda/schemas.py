@@ -56,7 +56,10 @@ class ItemEditIn(Schema):
     # None = keep the duration already booked. Con un tetto, come posa e
     # listino: un «600» battuto al posto di «60» passava, forzato dal
     # ritentativo automatico, e bloccava l'agenda dell'operatrice per giorni.
-    duration_min: Optional[int] = Field(None, ge=1, le=12 * 60)
+    # Lo 0 è la durata di un aggiuntivo (nail art durante la manicure): chi
+    # rimanda la lista intera per allungare un altro servizio lo ricopia così
+    # com'è. Su un servizio che non lo è resta un errore (422).
+    duration_min: Optional[int] = Field(None, ge=0, le=12 * 60)
     # Attesa DOPO il servizio: la posa di un colore, o semplicemente il buco che
     # il salone vuole lasciare prima del trattamento successivo (la cliente
     # resta lì, l'operatrice nel frattempo è libera — è la stessa cosa per
@@ -206,7 +209,12 @@ class ItemOut(Schema):
 
 
 class GiftOut(Schema):
-    """Gift card «a trattamento» attiva e pagata che copre un servizio dell'appuntamento."""
+    """Gift card «a trattamento» attiva e pagata che copre un servizio dell'appuntamento.
+
+    `kind`: gift (regalo) | prepaid (già pagato dalla cliente) | package (sedute
+    di un pacchetto, `package_name`). `sessions_left` su `sessions_total` sono
+    le sedute ancora da fare; `session_value` quanto scala la prossima.
+    """
 
     gift_card_id: int
     code: str
@@ -214,6 +222,12 @@ class GiftOut(Schema):
     service_name: str
     balance: Decimal
     from_name: str = ""
+    kind: str = "gift"
+    sessions_total: int = 1
+    sessions_left: int = 1
+    session_value: Decimal = Decimal("0.00")
+    package_name: str = ""
+    expires_at: Optional[dt.datetime] = None
 
 
 class AppointmentOut(Schema):
@@ -241,6 +255,8 @@ class AppointmentOut(Schema):
     cancelled_late: bool
     auto_released: bool = False
     forced: bool = False
+    # Conto unico: la vendita (di un'altra visita della cliente) che ha incassato anche questa.
+    paid_in_sale_id: Optional[int] = None
     items: list[ItemOut]
     gifts: list[GiftOut] = []
     # Versione della visita: va rimandata in `expected_updated_at` del PUT.

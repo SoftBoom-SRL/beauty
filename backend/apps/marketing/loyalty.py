@@ -153,7 +153,10 @@ def _loyalty_basis(sale) -> dict:
       carta. Contarle significava pagare due volte lo stesso denaro, una
       all'acquisto e una al riscatto. Per la stessa ragione una vendita fatta
       SOLO di gift card non è una visita: cinque carte di Natale in cinque
-      scontrini valevano cinque timbri.
+      scontrini valevano cinque timbri. I pacchetti venduti sono la stessa
+      cosa (sedute pagate in anticipo, che si scalano con le loro carte): un
+      pacchetto da dieci manicure dava i punti alla vendita e poi di nuovo a
+      ogni seduta.
     - Il premio speso non fa guadagnare altro: una piega omaggio da 45 € pagata
       con la carta premio accreditava 45 punti, e con i timbri per servizio
       l'omaggio contava come timbro — il premio arrivava ogni nove visite
@@ -164,7 +167,7 @@ def _loyalty_basis(sale) -> dict:
     sold_cards = Decimal("0")
     gift_card_lines = other_lines = services = 0
     for line in sale.lines.all():
-        if line.line_type == "gift_card":
+        if line.line_type in ("gift_card", "package"):
             gift_card_lines += 1
             sold_cards += Decimal(str(line.amount))
         else:
@@ -284,7 +287,7 @@ def accrue_loyalty(sale):
                     {
                         "client_id": client.id,
                         "client_name": client.full_name,
-                        "phone": client.phone,
+                        "phone": client.contact_phone,
                         "lang": client.lang,
                         "program_id": program.id,
                         "program": program.name,

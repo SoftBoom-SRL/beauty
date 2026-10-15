@@ -12,6 +12,7 @@ from typing import NamedTuple
 from ninja.errors import HttpError
 
 from ..models import Appointment
+from .addons import addon_operator, check_chain, is_timeless
 from .occupancy import (
     _bookable_service,
     _busy_map,
@@ -31,13 +32,14 @@ class ChainStep(NamedTuple):
 
     `requested` è l'operatrice indicata, None = la prima libera fra `eligible`;
     la voce impegna `duration_min` di lavoro attivo, poi `soak_min` di posa prima
-    della voce successiva.
+    della voce successiva. `addon`: un aggiuntivo, senza tempo (vedi `addons`).
     """
 
     requested: object
     eligible: list
     duration_min: int
     soak_min: int
+    addon: bool = False
 
 
 class ResolvedItem(NamedTuple):
@@ -104,13 +106,16 @@ def _pick_operator(
 
 
 def _chain_step(
-    service, requested, operators, operator_by_id, duration_min: int, soak_min: int, *, previous=None
+    service, requested, operators, operator_by_id, duration_min: int, soak_min: int, *,
+    previous=None, addon: bool = False,
 ) -> ChainStep:
     """La voce di `service` con l'operatrice indicata (`requested`) o le idonee; 400 se non si può.
 
     `previous` (modifica) è la riga già sulla visita: chi ce l'ha la tiene
     anche se nel frattempo non è più prenotabile o non ha più quel servizio fra
     le competenze. Il controllo vale per chi riceve una voce nuova o cambia mano.
+    Anche un aggiuntivo (`addon`) lo deve saper fare chi lo riceve: non occupa
+    tempo, ma resta un lavoro.
     """
     eligible_ids = set(service.operators.values_list("id", flat=True))
     if requested:
@@ -123,11 +128,11 @@ def _chain_step(
             # L'idoneità non si forza MAI: nessuno può fare un servizio che
             # non sa fare, per quanto il banco insista.
             raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
-        return ChainStep(operator, [], duration_min, soak_min)
+        return ChainStep(operator, [], duration_min, soak_min, addon)
     eligible = [op for op in operators if op.id in eligible_ids]
     if not eligible:
         raise HttpError(400, NO_ELIGIBLE_OPERATOR_MESSAGE)
-    return ChainStep(None, eligible, duration_min, soak_min)
+    return ChainStep(None, eligible, duration_min, soak_min, addon)
 
 
 def _assign_chain(
@@ -150,14 +155,25 @@ def _assign_chain(
     centro (`_ensure_within_opening`). Va chiamata a voci già validate: i 404 e
     i 400 dell'idoneità vengono prima di ogni 409, perché il banco riprova
     forzando solo quelli.
+
+    Un aggiuntivo (`step.addon`) non occupa tempo: nessuna verifica di libertà
+    e la catena non avanza. Senza operatrice indicata lo fa chi fa il servizio
+    a cui si appoggia, se lo sa fare (`addons.addon_operator`): la nail art
+    durante la manicure di Giulia la fa Giulia, senza cercare una collega
+    libera a quell'ora.
     """
     busy, same_client_busy = _busy_maps(
         salon, day, exclude_appointment_id=exclude_appointment_id, ignore_client_id=ignore_client_id
     )
     windows_of = _shift_windows_memo(day)
     chosen_operators = []
+    timed_operators = []  # chi ha davvero del tempo nella catena: decide il turno
+    parent = None
     cursor = first_min
     for step in steps:
+        if step.addon:
+            chosen_operators.append(step.requested or addon_operator(step.eligible, parent))
+            continue
         end = cursor + step.duration_min
         chosen = _pick_operator(
             step.requested, step.eligible, windows_of, busy, same_client_busy, cursor, end,
@@ -166,11 +182,13 @@ def _assign_chain(
         if chosen is None:
             raise HttpError(409, "Orario non più disponibile")
         chosen_operators.append(chosen)
+        timed_operators.append(chosen)
+        parent = chosen
         cursor = end + step.soak_min
     if not force:
         _ensure_within_opening(
             salon, day, cursor, force=False, start_min=first_min,
-            windows=[w for op in set(chosen_operators) for w in windows_of(op)],
+            windows=[w for op in set(timed_operators) for w in windows_of(op)],
         )
     return chosen_operators
 
@@ -201,9 +219,12 @@ def resolve_items(
     scelto la stilista finiva nella posa di un'altra. In auto-assegnazione mai.
     Solleva, idoneità PRIMA della libertà (il banco riprova forzando solo i 409):
     - 404 servizio inesistente, 400 operatrice non idonea o nessuna abilitata,
+    - 422 un aggiuntivo da solo o in testa alla catena (vedi `addons`),
     - 409 "Orario non più disponibile" se lo slot non è libero.
 
     Ritorna le voci (`ResolvedItem`, col listino di oggi) nell'ordine richiesto.
+    La voce di un aggiuntivo nasce senza tempo: durata e posa 0, non quelle
+    indicative del listino.
     """
     if not items:
         raise HttpError(400, "Nessun servizio selezionato")
@@ -215,19 +236,22 @@ def resolve_items(
     services, steps = [], []
     for raw in items:
         service = _bookable_service(salon, raw.get("service_id"))
+        addon = service.is_addon
         steps.append(_chain_step(
             service, raw.get("operator_id"), operators, operator_by_id,
-            service.duration_min, service.soak_min or 0,
+            0 if addon else service.duration_min, 0 if addon else service.soak_min or 0,
+            addon=addon,
         ))
         services.append(service)
+    check_chain(step.addon for step in steps)
     chosen = _assign_chain(
         salon, day, first_min, steps,
         exclude_appointment_id=exclude_appointment_id, ignore_client_id=ignore_client_id,
         force=force, allow_soak=allow_soak,
     )
     return [
-        ResolvedItem(service, operator, service.duration_min, service.soak_min, service.price)
-        for service, operator in zip(services, chosen)
+        ResolvedItem(service, operator, step.duration_min, step.soak_min, service.price)
+        for service, step, operator in zip(services, steps, chosen)
     ]
 
 
@@ -284,6 +308,11 @@ def resolve_items_edit(
     taglio prenotato a 35 lo faceva costare 40, senza che nessuno l'avesse
     deciso. Solo le voci nuove (senza `id`) prendono prezzo e posa dal listino.
 
+    Aggiuntivi (vedi `addons`): una voce nuova di un servizio aggiuntivo, o una
+    voce già senza tempo sulla visita, resta a durata e posa 0 qualunque
+    `duration_min`/`soak_min` arrivi; lo 0 su un altro servizio è un 422. Come
+    in creazione, un aggiuntivo non può restare da solo né in testa (422).
+
     Ritorna le voci (`ResolvedItem`) nell'ordine richiesto.
     """
     keep = set(keep_service_ids or ())
@@ -305,32 +334,52 @@ def resolve_items_edit(
         previous = known.get(raw.get("id"))
         if previous is not None and previous.service_id != service.id:
             previous = None
+        # Aggiuntivo: una voce nuova di un servizio aggiuntivo, o una voce che
+        # sulla visita è già senza tempo. Le voci esistenti restano come sono
+        # state concordate: la nail art prenotata a 15' prima che il salone la
+        # segnasse come aggiuntivo non si accorcia da sola alla prima modifica.
+        addon = (
+            is_timeless(previous.duration_min, previous.soak_min)
+            if previous is not None
+            else service.is_addon
+        )
         raw_duration = raw.get("duration_min")
-        # durata ATTIVA effettiva: override solo se int positivo, altrimenti lo
-        # snapshot della visita e, per le voci nuove, il listino
-        default_duration = previous.duration_min if previous is not None else service.duration_min
-        duration_min = (
-            raw_duration
-            if isinstance(raw_duration, int) and not isinstance(raw_duration, bool) and raw_duration > 0
-            else default_duration
-        )
-        # Posa/attesa: si può scrivere (`soak_min`), perché è il buco fra un
-        # servizio e il successivo e lo decide il salone. Se non arriva vale lo
-        # snapshot della visita, o il listino per le voci nuove. Il prezzo no:
-        # quello resta sempre quello concordato con la cliente.
         raw_soak = raw.get("soak_min")
-        default_soak = previous.soak_min if previous is not None else (service.soak_min or 0)
-        soak = (
-            raw_soak
-            if isinstance(raw_soak, int) and not isinstance(raw_soak, bool) and raw_soak >= 0
-            else default_soak
-        )
+        if addon:
+            # Durata e posa restano 0 qualunque cosa arrivi: il pannello che
+            # rimanda la lista intera (allungando un altro servizio) non deve
+            # far ricominciare a occupare tempo la nail art.
+            duration_min = soak = 0
+        else:
+            if raw_duration == 0 and not isinstance(raw_duration, bool):
+                # Lo 0 l'ammette lo schema solo per gli aggiuntivi: su un altro
+                # servizio passava in silenzio (vedi test_edit).
+                raise HttpError(422, "Durata non valida: un servizio dura almeno un minuto")
+            # durata ATTIVA effettiva: override solo se int positivo, altrimenti lo
+            # snapshot della visita e, per le voci nuove, il listino
+            default_duration = previous.duration_min if previous is not None else service.duration_min
+            duration_min = (
+                raw_duration
+                if isinstance(raw_duration, int) and not isinstance(raw_duration, bool) and raw_duration > 0
+                else default_duration
+            )
+            # Posa/attesa: si può scrivere (`soak_min`), perché è il buco fra un
+            # servizio e il successivo e lo decide il salone. Se non arriva vale lo
+            # snapshot della visita, o il listino per le voci nuove. Il prezzo no:
+            # quello resta sempre quello concordato con la cliente.
+            default_soak = previous.soak_min if previous is not None else (service.soak_min or 0)
+            soak = (
+                raw_soak
+                if isinstance(raw_soak, int) and not isinstance(raw_soak, bool) and raw_soak >= 0
+                else default_soak
+            )
         price = previous.price if previous is not None else service.price
         steps.append(_chain_step(
             service, raw.get("operator_id"), operators, operator_by_id, duration_min, soak,
-            previous=previous,
+            previous=previous, addon=addon,
         ))
         agreed.append((service, duration_min, soak, price))
+    check_chain(step.addon for step in steps)
 
     # Operatrice indicata a mano: può sovrapporsi alla posa altrui (è un gesto
     # dello staff); in auto-assegnazione mai. Anche in modifica la cliente
@@ -381,7 +430,11 @@ def _validate_segments(
     windows_of = _shift_windows_memo(day)
     for active_min, soak_min, operator in segments:
         end = cursor + active_min
-        if not _is_free(
+        # Un aggiuntivo (senza lavoro attivo) non occupa nessuno: niente da
+        # verificare. Visto come un istante cadrebbe «fuori turno» quando la
+        # posa del colore a cui si appoggia finisce dopo l'ultima finestra, e
+        # spostare la visita risponderebbe 409.
+        if active_min and not _is_free(
             windows_of(operator), busy.get(operator.id, ()), cursor, end,
             allow_soak=True,
         ):
@@ -389,7 +442,7 @@ def _validate_segments(
         cursor = end + (soak_min or 0)
     _ensure_within_opening(
         salon, day, cursor, force=False, start_min=first_min,
-        windows=[w for op in {op for _, _, op in segments} for w in windows_of(op)],
+        windows=[w for op in {op for active, soak, op in segments if active or soak} for w in windows_of(op)],
     )
 
 
@@ -397,13 +450,14 @@ def _reject_soak_overlap(appointment: Appointment, start: dt.datetime, segments:
     """409 se un lavoro attivo della catena cade nella posa di un'altra cliente.
 
     Complemento di `_validate_segments` (che per lo staff la ammette) per le
-    richieste dell'app: segments = [(active_min, soak_min, operator)].
+    richieste dell'app: segments = [(active_min, soak_min, operator)]. Un
+    aggiuntivo, senza lavoro attivo, non cade nella posa di nessuno.
     """
     day, cursor = day_and_minute(start)
     busy = _busy_map(appointment.salon, day, exclude_appointment_id=appointment.id)
     for active_min, soak_min, operator in segments:
         end = cursor + active_min
         soaks = [(s, e) for s, e, hard in busy.get(operator.id, ()) if not hard]
-        if _overlaps(soaks, cursor, end):
+        if active_min and _overlaps(soaks, cursor, end):
             raise HttpError(409, "Orario non più disponibile")
         cursor = end + (soak_min or 0)

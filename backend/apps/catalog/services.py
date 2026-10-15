@@ -21,6 +21,7 @@ def package_out(package: Package) -> dict:
         "description": package.description,
         "price": package.price,
         "active": package.active,
+        "validity_days": package.validity_days,
         "items": list(package.items.all()),
     }
 
@@ -85,7 +86,7 @@ def public_price_list(salon) -> list[dict]:
 
 
 def public_package_list(salon) -> list[dict]:
-    """Pacchetti pubblici attivi, con i servizi inclusi (nome, posa, quantità)."""
+    """Pacchetti pubblici attivi, con la validità e i servizi inclusi (nome, posa, quantità)."""
     packages = Package.objects.filter(salon=salon, active=True).prefetch_related("items__service")
     return [
         {
@@ -93,6 +94,7 @@ def public_package_list(salon) -> list[dict]:
             "name": p.name,
             "description": p.description,
             "price": p.price,
+            "validity_days": p.validity_days,
             "items": [
                 {
                     "service_id": item.service_id,

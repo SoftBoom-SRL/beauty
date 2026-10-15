@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Sale(models.Model):
@@ -44,6 +45,11 @@ class Sale(models.Model):
     total = models.DecimalField(max_digits=10, decimal_places=2)
     coupon_discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     deposit_deducted = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Quanto la cliente deve ancora su questo conto: `total` meno la caparra
+    # detratta meno i pagamenti fatti finora. 0 = saldato. Si paga dopo con
+    # nuovi `Payment` (con la loro data), che lo riducono. Il venduto resta
+    # `total` dal giorno della vendita; il denaro entra in cassa quando arriva.
+    amount_due = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_default=0)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )
@@ -51,19 +57,30 @@ class Sale(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["salon", "-created_at"])]
+        indexes = [
+            models.Index(fields=["salon", "-created_at"]),
+            # I conti ancora da saldare: scheda cliente, cassa, elenco del titolare.
+            models.Index(
+                fields=["salon", "client"],
+                condition=models.Q(amount_due__gt=0),
+                name="sale_due_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"Vendita #{self.pk} · {self.kind} · € {self.total}"
 
 
 class SaleLine(models.Model):
-    """Riga di vendita: servizio, prodotto retail o gift card venduta."""
+    """Riga di vendita: servizio, prodotto retail, gift card o pacchetto venduto."""
 
     class LineType(models.TextChoices):
         SERVICE = "service"
         PRODUCT = "product"
         GIFT_CARD = "gift_card"
+        # Pacchetto di listino venduto: crea le sedute della cliente
+        # (marketing.GiftCard di tipo «package», una per servizio).
+        PACKAGE = "package"
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="lines")
     operator = models.ForeignKey(
@@ -83,6 +100,14 @@ class SaleLine(models.Model):
         blank=True,
         related_name="sold_in_lines",
         help_text="Gift card venduta con questa riga",
+    )
+    package = models.ForeignKey(
+        "catalog.Package",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Pacchetto venduto con questa riga",
     )
     qty = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
@@ -115,6 +140,10 @@ class Payment(models.Model):
         CARD = "card"
         OTHER = "other"
         GIFT_CARD = "gift_card"
+        # Bonifico o versamento sul conto del salone, anche quello che arriva
+        # da un link di pagamento di un'altra banca (Nexi): le caparre pagate
+        # così finivano in «altro», e la cassa non le distingueva dal resto.
+        TRANSFER = "transfer"
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="payments")
     method = models.CharField(max_length=10, choices=Method.choices)
@@ -127,6 +156,10 @@ class Payment(models.Model):
         related_name="redeemed_in_payments",
         help_text="Gift card usata come pagamento",
     )
+    # Quando il denaro è arrivato. Di solito coincide con la vendita; per un
+    # conto saldato in un secondo momento (`Sale.amount_due`) è il giorno del
+    # saldo, ed è lì che la cassa lo conta.
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     class Meta:
         ordering = ["id"]

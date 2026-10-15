@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from apps.core.models import Salon
 from apps.sales.models import Sale, SaleLine
+from common.testing import aware
 
 from ..models import Operator
 from ..stats import served_clients, today_clients_by_operator
@@ -153,6 +154,23 @@ class SecondaryOperatorTests(_StaffSetup):
         self.assertEqual(rows[0]["visits"], 1)
         # E per la principale nulla cambia.
         self.assertEqual(served_clients(self.anna)[0]["visits"], 1)
+
+    def test_the_same_client_twice_in_a_day_is_one_client(self):
+        """Mattina e pomeriggio, o due servizi prenotati come due appuntamenti:
+        la cliente della giornata è una (le visite si contano per giorno)."""
+        today = timezone.localdate()
+        morning = timezone.make_aware(dt.datetime.combine(today, dt.time(10, 0)))
+        afternoon = timezone.make_aware(dt.datetime.combine(today, dt.time(16, 0)))
+        self._visit(morning, [(self.cut, self.bea)])
+        self._visit(afternoon, [(self.color, self.bea)])
+        self.assertEqual(today_clients_by_operator([self.bea], today), {self.bea.id: 1})
+
+    def test_served_visits_are_days(self):
+        day = timezone.localdate() - dt.timedelta(days=4)
+        self._visit(aware(day, 10), [(self.cut, self.bea)])
+        self._visit(aware(day, 10), [(self.color, self.anna), (self.cut, self.bea)])
+        self._visit(aware(day - dt.timedelta(days=7), 11), [(self.cut, self.bea)])
+        self.assertEqual(served_clients(self.bea)[0]["visits"], 2)
 
     def test_the_list_shows_the_secondary_operator_clients(self):
         auth = self._member("titolare@parlour.it", owner=True)

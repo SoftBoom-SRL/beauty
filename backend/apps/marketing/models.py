@@ -1,3 +1,5 @@
+from decimal import ROUND_DOWN, Decimal
+
 from django.db import models
 
 
@@ -60,7 +62,19 @@ class GiftCard(models.Model):
         REDEEMED = "redeemed", "Esaurita"
         EXPIRED = "expired", "Scaduta"
 
+    class Kind(models.TextChoices):
+        # Comprata da qualcuno per qualcun altro (o per sé, come buono).
+        GIFT = "gift", "Regalo"
+        # Trattamento pagato in anticipo dalla cliente stessa: in agenda e in
+        # cassa si legge «Già pagato», non «Regalo».
+        PREPAID = "prepaid", "Già pagato"
+        # Sedute di un pacchetto venduto in cassa (`package`, `package_line`).
+        PACKAGE = "package", "Pacchetto"
+
     salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="gift_cards")
+    kind = models.CharField(
+        max_length=10, choices=Kind.choices, default=Kind.GIFT, db_default=Kind.GIFT
+    )
     code = models.CharField(max_length=16)  # human_code(12), unique per salone
     initial_value = models.DecimalField(max_digits=10, decimal_places=2)
     balance = models.DecimalField(max_digits=10, decimal_places=2)
@@ -68,6 +82,23 @@ class GiftCard(models.Model):
     # null = carta monetaria ordinaria. Il saldo/riscatto resta invariato.
     gift_service = models.ForeignKey(
         "catalog.Service", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    # Sedute del trattamento (solo con `gift_service`): un pacchetto da 12
+    # manicure è UNA carta con 12 sedute. Ogni riscatto ne toglie una e scala
+    # dal saldo il valore di una seduta (`session_value`); all'ultima il saldo
+    # va a zero e la carta è esaurita. Le carte monetarie restano a 1/1.
+    sessions_total = models.PositiveSmallIntegerField(default=1, db_default=1)
+    sessions_left = models.PositiveSmallIntegerField(default=1, db_default=1)
+    # Il pacchetto di listino e la riga di vendita da cui nasce la carta.
+    package = models.ForeignKey(
+        "catalog.Package", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    package_line = models.ForeignKey(
+        "sales.SaleLine",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="package_credits",
     )
     buyer_client = models.ForeignKey(
         "clients.Client",
@@ -102,6 +133,19 @@ class GiftCard(models.Model):
 
     def __str__(self):
         return f"{self.code} (€{self.balance}/{self.initial_value})"
+
+    @property
+    def session_value(self) -> Decimal:
+        """Quanto scala dal saldo la prossima seduta.
+
+        Il saldo diviso le sedute rimaste, arrotondato per difetto al centesimo:
+        l'ultima seduta prende tutto quello che resta, così il saldo arriva a
+        zero esatto. Per le carte monetarie (o a una seduta) è il saldo intero.
+        """
+        left = self.sessions_left or 0
+        if left <= 1:
+            return self.balance
+        return (Decimal(self.balance) / left).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
 class LoyaltyProgram(models.Model):

@@ -89,7 +89,12 @@ def date_label(day: dt.date) -> str:
 
 
 def services_reply(salon) -> list[dict]:
-    """Il listino pubblico in una lista piatta, quella che l'agente legge."""
+    """Il listino pubblico in una lista piatta, quella che l'agente legge.
+
+    `addon` = aggiuntivo (nail art, scrub): si fa durante un altro servizio e
+    non si prenota da solo. Senza saperlo l'agente lo proponeva come un
+    trattamento a sé, e la prenotazione tornava indietro col motivo.
+    """
     from apps.catalog.services import public_price_list
 
     return [
@@ -99,6 +104,7 @@ def services_reply(salon) -> list[dict]:
             "category": category["name_it"],
             "duration_min": service.duration_min,
             "price": str(service.price),
+            "addon": service.is_addon,
         }
         for category in public_price_list(salon)
         for service in category["services"]

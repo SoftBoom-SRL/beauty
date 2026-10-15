@@ -31,6 +31,8 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     order: service?.order ?? 0,
     // "" = il colore della categoria; "#RRGGBB" = uno solo di questo servizio
     color: service?.color || '',
+    // aggiuntivo: si fa durante un altro servizio (nail art durante la manicure)
+    is_addon: !!service?.is_addon,
   }));
   // operators currently enabled for this service (existing services only until saved)
   const [opIds, setOpIds] = useState(() =>
@@ -79,6 +81,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
           active: draft.active,
           order: draft.order,
           color: draft.color,
+          is_addon: draft.is_addon,
         },
         opIds,
       );
@@ -93,7 +96,7 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
     <DkModal
       open onClose={onClose}
       title={isNew ? t('Nuovo servizio', 'New service') : t('Modifica servizio', 'Edit service')}
-      sub={t('Nome, categoria, colore, durata, prezzo e operatrici', 'Name, category, colour, duration, price and stylists')}
+      sub={t('Nome, categoria, colore, durata, prezzo, aggiuntivo e operatrici', 'Name, category, colour, duration, price, add-on and stylists')}
       width={580}
       foot={(
         <React.Fragment>
@@ -221,19 +224,33 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
       <FRow label={t('Prezzo', 'Price')}>
         <PriceBox value={draft.price} onChange={(v) => set({ price: v })} />
       </FRow>
-      <FRow label={t('Tempo attivo', 'Active time')} hint={t("Minuti in cui l'operatrice lavora sul cliente", 'Minutes the stylist actively works on the client')}>
+      {/* Aggiuntivo: nail art, scrub, rimozione del gel durante la manicure.
+          In agenda va sotto il servizio durante il quale si fa, col suo
+          prezzo, senza allungare l'appuntamento; da solo non si prenota. */}
+      <FRow label={t('Aggiuntivo', 'Add-on')} hint={t('Si fa durante un altro servizio: aggiunge il prezzo, non il tempo', 'Done during another service: adds the price, not the time')}>
+        <Toggle on={draft.is_addon} onChange={(v) => set({ is_addon: v })} />
+      </FRow>
+      <FRow
+        label={draft.is_addon ? t('Durata indicativa', 'Indicative duration') : t('Tempo attivo', 'Active time')}
+        hint={draft.is_addon
+          ? t('Solo di riferimento: in agenda l’aggiuntivo non occupa tempo', 'For reference only: in the agenda the add-on takes no time')
+          : t("Minuti in cui l'operatrice lavora sul cliente", 'Minutes the stylist actively works on the client')}
+      >
         <DurationInput value={draft.duration_min} onChange={(v) => set({ duration_min: v })} />
       </FRow>
-      <FRow label={t('Tempo di posa', 'Soak time')} hint={t('Posa/attesa finale, opzionale (0 = nessuna)', 'Final soak/wait, optional (0 = none)')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <DurationInput value={draft.soak_min} onChange={(v) => set({ soak_min: v })} min={0} />
-          {(parseInt(draft.soak_min, 10) || 0) > 0 && (
-            <span className="t-sm" style={{ color: 'var(--muted)' }}>
-              {t('Totale per il cliente', 'Total for the client')}: <strong style={{ color: 'var(--ink)' }}>{(parseInt(draft.duration_min, 10) || 0) + (parseInt(draft.soak_min, 10) || 0)} min</strong>
-            </span>
-          )}
-        </div>
-      </FRow>
+      {/* la posa non c'è, per un aggiuntivo: si fa dentro il tempo di un altro */}
+      {!draft.is_addon && (
+        <FRow label={t('Tempo di posa', 'Soak time')} hint={t('Posa/attesa finale, opzionale (0 = nessuna)', 'Final soak/wait, optional (0 = none)')}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <DurationInput value={draft.soak_min} onChange={(v) => set({ soak_min: v })} min={0} />
+            {(parseInt(draft.soak_min, 10) || 0) > 0 && (
+              <span className="t-sm" style={{ color: 'var(--muted)' }}>
+                {t('Totale per il cliente', 'Total for the client')}: <strong style={{ color: 'var(--ink)' }}>{(parseInt(draft.duration_min, 10) || 0) + (parseInt(draft.soak_min, 10) || 0)} min</strong>
+              </span>
+            )}
+          </div>
+        </FRow>
+      )}
       <FRow label={t('Costo prodotti', 'Product cost')} hint={t('Materiali consumati per seduta', 'Materials used per session')}>
         <PriceBox value={draft.product_cost} onChange={(v) => set({ product_cost: v })} width={96} />
       </FRow>

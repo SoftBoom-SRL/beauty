@@ -726,6 +726,37 @@ class DepositNetOfGiftCardsTests(RealShiftsTestBase):
         body = self._book([self.cut30, self.cut30])
         self.assertEqual(Decimal(body["deposit_amount"]), Decimal("9.00"))
 
+    # Carte a sedute (pacchetti, trattamenti pagati in anticipo): la seduta è
+    # pagata, quale che sia il saldo diviso le sedute.
+
+    def test_a_package_session_covers_its_treatment_in_full(self):
+        # 5 tagli a 100 €, ultima seduta: restano 20 € contro i 30 di listino,
+        # ma la seduta è pagata. Contata come denaro, la caparra si chiedeva
+        # anche sui 10 € di differenza.
+        self.gift(self.cut30, Decimal("20.00"), kind="package", sessions_total=5, sessions_left=1)
+        body = self._book([self.cut30, self.man60])
+        self.assertEqual(Decimal(body["deposit_amount"]), Decimal("12.00"))  # solo sulla manicure
+
+    def test_a_free_package_needs_no_deposit(self):
+        # pacchetto in omaggio: saldo zero, tre sedute da fare
+        self.gift(self.cut30, Decimal("0.00"), kind="package", sessions_total=3, sessions_left=3)
+        body = self._book([self.cut30])
+        self.assertEqual(body["deposit_status"], Appointment.DepositStatus.NONE)
+        self.assertEqual(Decimal(body["deposit_amount"]), Decimal("0"))
+
+    def test_one_line_for_each_session_left(self):
+        self.gift(self.cut30, Decimal("60.00"), kind="prepaid", sessions_total=4, sessions_left=2)
+        body = self._book([self.cut30, self.cut30, self.cut30])  # due coperte, una da pagare
+        self.assertEqual(Decimal(body["deposit_amount"]), Decimal("9.00"))
+
+    def test_used_up_or_expired_sessions_do_not_count(self):
+        self.gift(self.cut30, Decimal("0.00"), kind="package", sessions_total=3, sessions_left=0,
+                  status="redeemed")
+        self.gift(self.cut30, Decimal("60.00"), kind="package", sessions_total=3, sessions_left=2,
+                  expires_at=timezone.now() - dt.timedelta(days=1))
+        body = self._book([self.cut30])
+        self.assertEqual(Decimal(body["deposit_amount"]), Decimal("9.00"))
+
 
 class PaidDepositOnAShorterVisitTests(AgendaTestBase):
     """02-01, 05-06: ridurre la visita non fa perdere quello che la cliente ha versato."""

@@ -65,6 +65,12 @@ export default function DepositCard({
               title={t('Segna la caparra incassata con il POS del salone', 'Mark the deposit as cashed on the salon card terminal')}>
               <Icon name="wallet" size={13} />{t('Incassata: POS', 'Cashed: card')}
             </button>
+            {/* Caparre versate con bonifico o con il link di un'altra banca
+                (Nexi): arrivano sul conto, non al banco né su Stripe. */}
+            <button className="dk-btn dk-btn--ghost" disabled={linkBusy} style={{ height: 30, fontSize: 12 }} onClick={() => cashDeposit('transfer')}
+              title={t('Segna la caparra arrivata con un bonifico o un link di pagamento della banca', 'Mark the deposit as received by bank transfer or a bank payment link')}>
+              <Icon name="wallet" size={13} />{t('Incassata: bonifico', 'Cashed: transfer')}
+            </button>
           </div>
         )}
       </div>

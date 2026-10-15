@@ -522,6 +522,25 @@ class GiftCardOnlySaleTests(_Base):
         self.assertEqual(self._points(stamps), 0)
         self.assertEqual(self._points(visits), 0)
 
+    def test_a_package_sale_gives_no_points_until_its_sessions_are_used(self):
+        """Il pacchetto è pagato in anticipo: i punti arrivano con le sedute, una volta sola."""
+        from apps.catalog.models import Package, PackageItem
+        from apps.marketing.models import GiftCard
+
+        points = self._program(name="Punti", type="points", earn_metric="per_euro",
+                               earn_ratio=Decimal("1"))
+        stamps = self._program(type="stamps", earn_metric="per_visit", threshold=10)
+        package = Package.objects.create(salon=self.salon, name="Dieci pieghe", price=Decimal("400"))
+        PackageItem.objects.create(package=package, service=self.piega, qty=10)
+        self._sell([{"line_type": "package", "package_id": package.id, "qty": 1}],
+                   [{"method": "card", "amount": "400.00"}])
+        self.assertEqual(self._points(points), 0)
+        self.assertEqual(self._points(stamps), 0)
+        card = GiftCard.objects.get(package=package)
+        self._sell([{**self._service_line(self.piega), "unit_price": "40.00"}],
+                   [{"method": "gift_card", "amount": "40.00", "gift_card_code": card.code}])
+        self.assertEqual(self._points(stamps), 1)
+
     def test_a_visit_that_also_buys_a_gift_card_still_counts_once(self):
         stamps = self._program(type="stamps", earn_metric="per_visit", threshold=10)
         self._sell(

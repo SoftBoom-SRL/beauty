@@ -9,7 +9,7 @@ import { useApiData } from '../hooks/useApiData.js';
 import { headFont, headWeight } from '../theme.js';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
-import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
+import { fmtCredit, fmtExpiry, giftCardTotals, isUnpaid, myTreatments } from '../lib/wallet.js';
 
 const PRESETS = [25, 50, 75, 100];
 
@@ -30,7 +30,11 @@ export default function GiftCard() {
   const [bought, setBought] = React.useState(null); // GiftCardOut
 
   const loading = !wallet && !error;
-  const cards = wallet?.gift_cards || [];
+  // I trattamenti già pagati (sedute, regali a trattamento) sono servizi, non
+  // saldo: stanno nel Portafoglio, e qui si dice solo che ci sono.
+  const allCards = wallet?.gift_cards || [];
+  const treatments = myTreatments(allCards);
+  const cards = allCards.filter((g) => !treatments.includes(g));
   // «Spendibili in salone» sono solo le carte che la cassa accetta da lei, come
   // nel Portafoglio: la carta appena comprata dall'app (da pagare in salone)
   // entrava nel saldo e la cassa poi la rifiutava; quella comprata per
@@ -130,6 +134,18 @@ export default function GiftCard() {
                 );
               })}
               {!cards.length && <DashedEmpty>{t('Nessuna gift card attiva.', 'No active gift cards.')}</DashedEmpty>}
+              {treatments.length > 0 && (
+                <button className="press" onClick={() => setView('wallet')}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '12px 14px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)', color: 'var(--brand-ink)', fontWeight: 600, fontSize: 13.5 }}>
+                  <Icon name="wallet" size={17} color="var(--brand-ink)" />
+                  <span style={{ flex: 1 }}>
+                    {treatments.length === 1
+                      ? t('Hai anche un trattamento già pagato: lo trovi nel Portafoglio.', 'You also have a prepaid treatment: it’s in your Wallet.')
+                      : t(`Hai anche ${treatments.length} trattamenti già pagati: li trovi nel Portafoglio.`, `You also have ${treatments.length} prepaid treatments: they’re in your Wallet.`)}
+                  </span>
+                  <Icon name="chevR" size={16} color="var(--brand-ink)" />
+                </button>
+              )}
             </div>
 
             {/* acquista / regala */}

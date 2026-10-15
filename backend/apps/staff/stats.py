@@ -12,7 +12,7 @@ from datetime import date as date_cls
 from decimal import Decimal
 
 from django.db.models import Count, Max, Q, Sum
-from django.db.models.functions import TruncMonth
+from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 
 from apps.agenda.models import Appointment, AppointmentService
@@ -65,7 +65,10 @@ def today_clients_by_operator(operators, on_date: date_cls | None = None) -> dic
     principale (`Appointment.operator`, quella del PRIMO servizio): Bea che fa
     tutto il giorno i tagli dopo i colori di Anna risultava «Clienti oggi: 0»,
     mentre l'incasso di quei tagli le veniva contato (09-04). Una visita conta
-    una volta per operatrice, anche se lei ne fa due servizi.
+    una volta per operatrice, anche se lei ne fa due servizi; e la visita è la
+    cliente nella giornata (come clients.services.visit_days): due appuntamenti
+    della stessa cliente con la stessa operatrice, la mattina e il pomeriggio
+    o prenotati come due servizi in contemporanea, sono una cliente, non due.
     """
     ids = [op.pk for op in operators]
     if not ids:
@@ -75,17 +78,17 @@ def today_clients_by_operator(operators, on_date: date_cls | None = None) -> dic
     pairs = set(
         Appointment.objects.filter(operator_id__in=ids, start__date=on_date)
         .exclude(status__in=excluded)
-        .values_list("operator_id", "id")
+        .values_list("operator_id", "client_id")
     )
     pairs.update(
         AppointmentService.objects.filter(
             operator_id__in=ids, appointment__start__date=on_date
         )
         .exclude(appointment__status__in=excluded)
-        .values_list("operator_id", "appointment_id")
+        .values_list("operator_id", "appointment__client_id")
     )
     counts: dict[int, int] = {}
-    for operator_id, _appointment_id in pairs:
+    for operator_id, _client_id in pairs:
         counts[operator_id] = counts.get(operator_id, 0) + 1
     return counts
 
@@ -155,9 +158,12 @@ def served_clients(operator, q: str = "") -> list[dict]:
             | Q(client__last_name__icontains=q)
             | Q(client__phone__icontains=q)
         )
+    # Le visite sono i GIORNI (nel fuso del salone) con un appuntamento, come
+    # nella scheda cliente (clients.services.visit_days): mani e piedi in
+    # contemporanea sono due appuntamenti ma una visita.
     rows = (
         qs.values("client_id", "client__first_name", "client__last_name", "client__phone")
-        .annotate(visits=Count("id"), last_visit=Max("start"))
+        .annotate(visits=Count(TruncDate("start"), distinct=True), last_visit=Max("start"))
         .order_by("-last_visit")
     )
 

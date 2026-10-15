@@ -1,18 +1,22 @@
 // ServicesReadOnly — i servizi di una visita chiusa (o senza il permesso
-// agenda): chi li fa, durata, prezzo, regalo, e il totale.
+// agenda): chi li fa, durata, prezzo, il trattamento già pagato che lo copre
+// (regalo, pagato in anticipo, pacchetto), e il totale. Gli aggiuntivi (la
+// nail art della manicure) stanno sotto il loro servizio, «+ Nail art» col
+// prezzo e senza durata: non ne hanno una loro.
 import { Icon, fmtDur, fmtEur } from '@youty/shared';
-import { fmtMoney } from '../../lib.js';
-import { usableCode } from '../rules.js';
+import { fmtMoney, isAddonItem } from '../../lib.js';
+import { creditIcon, creditLabel, creditTitle } from '../../../fedelta/credits.js';
 
 export default function ServicesReadOnly({ appt, operators, t, lang }) {
   return (
     <div style={{ background: 'var(--surface-2)', borderRadius: 14, padding: 14 }}>
       {(appt.items || []).map((it) => {
         const gift = (appt.gifts || []).find((g) => g.service_id === it.service_id);
+        const addon = isAddonItem(it);
         return (
-          <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-            <span style={{ fontWeight: 600, fontSize: 14, flex: 1, minWidth: 0 }}>{it.service_name}{gift && <span title={[t('Gift card', 'Gift card'), usableCode(gift.code)].filter(Boolean).join(' ')} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name="gift" size={10} color="var(--clay-ink)" />{t('Regalo', 'Gift')}</span>}</span>
-            <span className="t-sm" style={{ color: 'var(--muted)' }}>{[operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name, fmtDur(it.duration_min, lang), fmtEur(Number(it.price), lang)].filter(Boolean).join(' · ')}</span>
+          <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: addon ? '2px 0 6px 16px' : '6px 0' }}>
+            <span style={{ fontWeight: 600, fontSize: addon ? 13 : 14, color: addon ? 'var(--ink-2)' : undefined, flex: 1, minWidth: 0 }}>{addon ? '+ ' : ''}{it.service_name}{gift && <span title={creditTitle(gift, t, lang)} style={{ marginLeft: 6, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '1px 7px', borderRadius: 99, verticalAlign: 'middle' }}><Icon name={creditIcon(gift)} size={10} color="var(--clay-ink)" />{creditLabel(gift, t, { withFrom: false })}</span>}</span>
+            <span className="t-sm" style={{ color: 'var(--muted)' }}>{[operators.find((x) => x.id === it.operator_id)?.first_name || it.operator_name, addon ? '' : fmtDur(it.duration_min, lang), fmtEur(Number(it.price), lang)].filter(Boolean).join(' · ')}</span>
           </div>
         );
       })}

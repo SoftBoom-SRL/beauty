@@ -3,18 +3,23 @@
 // la prenotazione, e dice che cosa manca finché non si può.
 import React from 'react';
 import { Icon, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
-import { firstName, fmtMoney } from '../../lib.js';
+import { firstName, fmtMoney, isAddonRow } from '../../lib.js';
 
 export default function BookingFoot({
   client, items, totalDur, totalPrice, selStart, dateLabel, clientRef, svcRef, timeRef, missing, ready, saving, create, onClose, t, lang,
 }) {
+  // i servizi e, a parte, gli aggiuntivi: la durata è quella dei servizi
+  const n = items.filter((x) => !isAddonRow(x)).length;
+  const extra = items.length - n;
+  const extraIt = extra ? ` + ${extra} aggiuntiv${extra === 1 ? 'o' : 'i'}` : '';
+  const extraEn = extra ? ` + ${extra} add-on${extra === 1 ? '' : 's'}` : '';
   return (
     <React.Fragment>
       {/* checklist: cosa manca per poter creare */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10, fontSize: 12.5, fontWeight: 600, color: 'var(--muted)' }}>
         {[
           { ok: !!client, label: client ? firstName(client.full_name) : t('Cliente', 'Client'), ref: clientRef },
-          { ok: items.length > 0, label: items.length ? t(`${items.length} serviz${items.length === 1 ? 'io' : 'i'} · ${fmtDur(totalDur, lang)}`, `${items.length} service${items.length === 1 ? '' : 's'} · ${fmtDur(totalDur, lang)}`) : t('Servizio', 'Service'), ref: svcRef },
+          { ok: items.length > 0, label: items.length ? t(`${n} serviz${n === 1 ? 'io' : 'i'}${extraIt} · ${fmtDur(totalDur, lang)}`, `${n} service${n === 1 ? '' : 's'}${extraEn} · ${fmtDur(totalDur, lang)}`) : t('Servizio', 'Service'), ref: svcRef },
           { ok: !!selStart, label: selStart ? timeLabel(minutesOfDay(selStart)) + ' · ' + dateLabel : t('Orario', 'Time'), ref: timeRef },
         ].map((c, i) => (
           <button key={i} type="button" onClick={() => c.ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 9px', borderRadius: 99, border: 'none', cursor: 'pointer', background: c.ok ? 'var(--ok-tint)' : 'var(--surface)', color: c.ok ? 'var(--ok)' : 'var(--muted)', boxShadow: c.ok ? 'none' : 'inset 0 0 0 1px var(--hair)' }}>

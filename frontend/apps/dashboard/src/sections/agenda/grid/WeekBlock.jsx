@@ -3,7 +3,8 @@
 // trascinamento). Senza hook: i test lo disegnano chiamandolo come una
 // funzione.
 import { Icon, timeLabel } from '@youty/shared';
-import { DK_START, PXM, inkOn, opSegments, serviceBands } from '../lib.js';
+import { DK_START, PXM, addonGroups, inkOn, opSegments, serviceBands } from '../lib.js';
+import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
 
 /* ---------- blocco appuntamento della settimana ----------
  * Sfondo nel colore del SERVIZIO (categoria), come in vista giorno: il colore
@@ -18,8 +19,12 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
   const parts = String(a.client_name || '').split(' ');
   const first = parts[0], last = parts.slice(1).join(' ');
   const segs = opSegments(a);
-  const nServices = (a.items || []).length;
+  // I servizi con tempo: gli aggiuntivi (la nail art della manicure) non sono
+  // una fascia né un servizio in più nel «×2», si leggono come «+ Nail art».
+  const groups = addonGroups(a.items);
+  const nServices = groups.length || (a.items || []).length;
   const multi = nServices > 1;
+  const addonNames = groups.flatMap((g) => g.addons.map((x) => '+ ' + (x.service_name || ''))).join(' ');
   const bands = serviceBands(a);
   const gifts = (a.gifts || []).length;   // il payload settimana può non avere `gifts`
   const depositDue = a.deposit_status === 'required';
@@ -83,7 +88,9 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
       {flags && (
         <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 3 }}>
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
-          {gifts > 0 && <span title={t('Gift card', 'Gift card')} style={{ display: 'grid' }}><Icon name="gift" size={10} color={ink.sub} stroke={2.2} /></span>}
+          {/* il trattamento già pagato col suo tipo: regalo, pagato in
+              anticipo, pacchetto (e le sedute nel tooltip) */}
+          {gifts > 0 && <span title={creditsTitle(a.gifts, t, null, { code: false })} style={{ display: 'grid' }}><Icon name={creditIcon(a.gifts[0])} size={10} color={ink.sub} stroke={2.2} /></span>}
         </div>
       )}
       <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
@@ -97,6 +104,14 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
               ×{nServices}
             </span>
           )}
+        </div>
+      )}
+      {/* gli aggiuntivi, dove c'è posto: nella sottocolonna stretta restano
+          nell'anteprima al passaggio del mouse */}
+      {addonNames && h > 58 && lc < 3 && (
+        <div className="dk-wblock__txt" title={addonNames}
+          style={{ ...textZ, fontSize: 9, fontWeight: 700, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, marginTop: 1, pointerEvents: 'none' }}>
+          {addonNames}
         </div>
       )}
       {/* blocco troppo basso per la riga dell'orario: il conteggio va comunque detto */}

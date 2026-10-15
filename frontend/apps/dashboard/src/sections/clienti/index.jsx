@@ -2,12 +2,12 @@
 // filterable, paginated client list (left) and full client profile (right).
 // Ported from desktop-clienti.jsx (DkClienti) onto the real API.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Avatar, EmptyState, Icon, toastApiError } from '@youty/shared';
+import { Avatar, EmptyState, Icon, fmtEur, toastApiError } from '@youty/shared';
 import { GroupedFilterMenu } from '../../ui/index.js';
 import { useDash, useLive } from '../../ctx.jsx';
 import ClientProfile from './ClientProfile.jsx';
 import { CatChip, RelBadge } from './components.jsx';
-import { initialsOf, relRange, daysToBirthday, reactivationRequests } from './helpers.js';
+import { initialsOf, relRange, daysToBirthday, reactivationRequests, phoneLine, amountDue } from './helpers.js';
 import { genderGlyph, genderLabel } from '../../ui/GenderPicker.jsx';
 import { clientsApi } from '../../api/clients.js';
 import { useDebounced } from '../../hooks/useDebounced.js';
@@ -17,7 +17,7 @@ import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 const PAGE = 50;
 
 export default function ClientiSection() {
-  const { t, search, setSearch, selClient, setSelClient, clientCategories, openModal, modal, fireToast, live } = useDash();
+  const { t, lang, search, setSearch, selClient, setSelClient, clientCategories, openModal, modal, fireToast, live } = useDash();
 
   const [seg, setSeg] = useState('all');          // 'all' | '__active' | '__archived' | category id (number)
   const [relFilt, setRelFilt] = useState('all');  // 'all' | 'good' | 'watch' | 'risk'
@@ -27,9 +27,16 @@ export default function ClientiSection() {
   const [catCounts, setCatCounts] = useState(null); // { __active: n, [catId]: n }
   const [refreshKey, setRefreshKey] = useState(0);
   const bump = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   // anagrafica creata/modificata altrove → lista reale; solo gli eventi che
-  // cambiano le righe (una nota o un consenso non le toccano)
-  useLive(/^client\.(created|updated|deleted|imported)$|^client_category\./, bump);
+  // cambiano le righe (una nota o un consenso non le toccano). «Da saldare»
+  // cambia in cassa: per le vendite si rilegge solo se sono di una cliente
+  // che si sta guardando, non a ogni scontrino del salone.
+  useLive(/^client\.(created|updated|deleted|imported)$|^client_category\.|^sale\./, (events) => {
+    const shown = new Set((itemsRef.current || []).map((c) => c.id));
+    if (events.some((e) => !String(e.type).startsWith('sale.') || shown.has(e.payload?.client_id))) bump();
+  });
 
   /* debounce the shared topbar search before hitting the API */
   const q = useDebounced(search, 250);
@@ -58,8 +65,6 @@ export default function ClientiSection() {
    * cambiando subito filtro le 50 clienti del filtro precedente finivano in
    * coda alla lista nuova, con il conteggio in testata che non tornava. */
   const req = useLatestRequest();
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
   const shownParams = useRef(null);
   useEffect(() => {
     const seq = req.begin();
@@ -202,13 +207,25 @@ export default function ClientiSection() {
                       <span style={{ fontWeight: 700, fontSize: 14.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cl.full_name}</span>
                       {cl.deposit_always && <Icon name="coupon" size={13} color="var(--warn)" />}
                     </div>
-                    <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="tabnum">{cl.phone || '—'}</span>{cl.lang === 'en' ? <span>· EN</span> : null}
+                    <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 1, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      {(() => {
+                        // senza un numero suo: «tramite Laura Rossi» o «senza telefono»
+                        const line = phoneLine(cl, t);
+                        return line.kind === 'phone'
+                          ? <span className="tabnum">{line.text}</span>
+                          : <span style={{ fontStyle: 'italic', color: 'var(--muted-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line.text}</span>;
+                      })()}
+                      {cl.lang === 'en' ? <span>· EN</span> : null}
                       {cl.gender && <span title={genderLabel(cl.gender, t)} style={{ color: 'var(--muted-2)' }}>{genderGlyph(cl.gender)}</span>}
                       {(() => { const n = daysToBirthday(cl.birthday); return n != null && n <= 7 ? <span title={n === 0 ? t('Compleanno oggi', 'Birthday today') : t(`Compleanno tra ${n} giorni`, `Birthday in ${n} days`)} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--warn)', fontWeight: 700, fontSize: 11 }}><Icon name="cake" size={11} color="var(--warn)" />{n === 0 ? t('oggi', 'today') : `${n}g`}</span> : null; })()}
                     </div>
                     <div style={{ display: 'flex', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
                       <RelBadge score={cl.reliability} t={t} sm />
+                      {amountDue(cl) != null && (
+                        <span title={t('Conti non saldati: il saldo si fa in cassa', 'Unpaid bills: settle them at the till')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--danger)', background: 'var(--danger-tint)', padding: '2px 8px', borderRadius: 99, whiteSpace: 'nowrap' }}>
+                          {t(`Da saldare ${fmtEur(amountDue(cl), lang)}`, `${fmtEur(amountDue(cl), lang)} to pay`)}
+                        </span>
+                      )}
                       {(cl.categories || []).slice(0, 2).map((cat) => <CatChip key={cat.id} cat={cat} sm />)}
                     </div>
                   </div>

@@ -13,6 +13,7 @@ import { svcMinutes } from '../../lib/catalog.js';
 import { nextDays } from '../../lib/dates.js';
 import { toastSlotTaken } from '../../lib/errors.js';
 import { giftServiceCards } from '../../lib/wallet.js';
+import { addonsOf, bookingItems, toggleAddon as toggleAddonIn, toggleMain } from './addons.js';
 import { STEP } from './steps.js';
 
 /** `app`: t, lang, session e fireToast dal contesto. Restituisce quello che
@@ -59,9 +60,9 @@ export function usePrenota({ t, lang, session, fireToast }) {
     return () => { alive = false; };
   }, [session]);
   const giftFor = (serviceId) => giftCards.find((g) => g.gift_service_id === serviceId) || null;
-  // «Regalo di …» solo per la carta ricevuta: su quella comprata per sé il
-  // nome di chi l'ha pagata è il suo.
-  const giftFrom = (g) => (g && g.received && g.buyer_name) || '';
+  // Le etichette («Regalo di …», «Già pagato», «Pacchetto · …») le scrivono i
+  // passi con lib/wallet.js (`coveredLabel`, `coveredSummary`): «Regalo di»
+  // solo se gliel'ha regalato un'altra persona (`giftFromName`).
   const giftedSelected = serviceIds.map(giftFor).filter(Boolean);
 
   const allSvcs = React.useMemo(
@@ -70,11 +71,19 @@ export function usePrenota({ t, lang, session, fireToast }) {
   );
   const svcs = serviceIds.map((id) => allSvcs.find((s) => s.id === id)).filter(Boolean);
   const s = svcs[0];
+  /* Aggiuntivi (nail art durante la manicure): da soli non si prenotano, si
+   * offrono sotto il servizio scelto e non ne allungano il tempo. `serviceIds`
+   * è la fila della richiesta: ogni servizio seguito dai suoi (addons.js). */
+  const isAddon = (id) => !!allSvcs.find((sv) => sv.id === id)?.is_addon;
+  const addonSvcs = allSvcs.filter((sv) => sv.is_addon);
+  const mainIds = serviceIds.filter((id) => !isAddon(id));
   // Lavoro + posa: è il tempo che la cliente passa in salone (C4, 09-07).
-  const dur = svcs.reduce((sum, sv) => sum + svcMinutes(sv), 0);
+  const dur = svcs.filter((sv) => !sv.is_addon).reduce((sum, sv) => sum + svcMinutes(sv), 0);
   const price = svcs.reduce((sum, sv) => sum + Number(sv.price || 0), 0);
-  const toggleSvc = (id) => setServiceIds((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
-  const items = serviceIds.map((id) => ({ service_id: id, operator_id: operatorId }));
+  const toggleSvc = (id) => setServiceIds((l) => toggleMain(l, id, isAddon));
+  const toggleAddon = (mainId, addonId) => setServiceIds((l) => toggleAddonIn(l, mainId, addonId, isAddon));
+  const addonsFor = (mainId) => addonsOf(serviceIds, mainId, isAddon);
+  const items = bookingItems(serviceIds, operatorId, isAddon);
 
   /* ---- stylist picker (step 1): solo chi può svolgere TUTTI i servizi scelti ----
    * `items` manda la stessa operatrice su ogni voce, quindi chi ne sa fare solo
@@ -82,13 +91,16 @@ export function usePrenota({ t, lang, session, fireToast }) {
    * la proponeva lo stesso e il backend rispondeva con una lista vuota, senza
    * spiegazioni. Risultato: quattordici chip di fila con «Nessun orario libero»
    * e nessun modo di capire perché. */
+  // Contano i servizi: chi non fa la nail art può fare la manicure, e la nail
+  // art la prende un'altra abilitata (`bookingItems`).
   const eligibleOperators = React.useMemo(() => {
-    if (!operators || !serviceIds.length) return [];
-    return operators.filter((op) => serviceIds.every((id) => op.service_ids.includes(id)));
-  }, [operators, serviceIds]);
+    const mains = serviceIds.filter((id) => !allSvcs.find((sv) => sv.id === id)?.is_addon);
+    if (!operators || !mains.length) return [];
+    return operators.filter((op) => mains.every((id) => op.service_ids.includes(id)));
+  }, [operators, serviceIds, allSvcs]);
   // Nessuna le fa tutte: si prenota solo con «Prima disponibile», che il
   // backend assegna servizio per servizio. Va detto, non lasciato indovinare.
-  const splitVisit = Boolean(operators && serviceIds.length > 1 && !eligibleOperators.length);
+  const splitVisit = Boolean(operators && mainIds.length > 1 && !eligibleOperators.length);
   const selectedOperator = eligibleOperators.find((op) => op.id === operatorId) || null;
   // Aggiungendo un servizio dopo aver scelto l'operatrice, quella scelta poteva
   // non essere più valida: restava selezionata e svuotava tutti i giorni.
@@ -251,9 +263,10 @@ export function usePrenota({ t, lang, session, fireToast }) {
   };
 
   return {
-    step, setStep, cats, serviceIds, toggleSvc, dayIdx, setDayIdx, operatorId, setOperatorId, slot, setSlot, slots,
+    step, setStep, cats, serviceIds, toggleSvc, addonSvcs, toggleAddon, addonsFor, mainIds,
+    dayIdx, setDayIdx, operatorId, setOperatorId, slot, setSlot, slots,
     booking, booked, ident, setIdent, otp, setOtp, otpErr, codeSurelySent, blocked, days,
-    giftFor, giftFrom, giftedSelected, svcs, s, dur, price, eligibleOperators, splitVisit, selectedOperator,
+    giftFor, giftedSelected, svcs, s, dur, price, eligibleOperators, splitVisit, selectedOperator,
     confirm, sendBookingOtp, registerAndOtp, verifyAndBook,
   };
 }

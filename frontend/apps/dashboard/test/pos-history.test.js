@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { lineGrossCents, saleLineLabel } from '../src/sections/pos/history.js';
+import { lineGrossCents, paidLater, saleLineLabel } from '../src/sections/pos/history.js';
 
 const t = (it) => it;
 const services = [{ id: 12, name_it: 'Piega', name_en: 'Blow-dry' }];
@@ -35,4 +35,19 @@ test('prodotti e gift card come prima', () => {
 test('importo di riga prima del buono, con o senza coupon_share', () => {
   assert.equal(lineGrossCents({ amount: '36.00', coupon_share: '4.00' }), 4000);
   assert.equal(lineGrossCents({ amount: '40.00' }), 4000);   // risposta senza il campo: amount è già il lordo
+});
+
+test('riga pacchetto: «Pacchetto · nome»', () => {
+  assert.equal(saleLineLabel({ line_type: 'package', package_id: 9, package_name: 'Mani e piedi' }, checkout, { t }), 'Pacchetto · Mani e piedi');
+  assert.equal(saleLineLabel({ line_type: 'package', package_id: 9, package_name: '' }, checkout, { t }), 'Pacchetto');
+});
+
+test('un pagamento arrivato un altro giorno è un saldo (giorni del salone, non UTC)', () => {
+  const sale = { created_at: '2026-10-14T18:00:00+02:00' };
+  assert.equal(paidLater({ created_at: '2026-10-14T18:00:00+02:00' }, sale), false);
+  assert.equal(paidLater({ created_at: '2026-10-15T09:30:00+02:00' }, sale), true);
+  // le 23:30 di Roma sono già il giorno dopo in UTC, ma è lo stesso giorno di cassa
+  assert.equal(paidLater({ created_at: '2026-10-14T21:30:00Z' }, sale), false);
+  // pagamenti di prima, senza data: non si dice niente
+  assert.equal(paidLater({}, sale), false);
 });

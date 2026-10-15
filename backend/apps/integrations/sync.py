@@ -248,7 +248,12 @@ def _sync_clients(conn: YourangConnection, client: YourangClient, *, push: bool)
     # 3) locali senza corrispondenza → push su Yourang
     if not push:
         return report
-    for local in Client.objects.filter(salon=salon, is_active=True):
+    # Le schede senza un numero loro non si spingono: su Yourang il contatto È
+    # il numero. Quella che si contatta tramite la mamma avrebbe il numero di
+    # lei, e il by-phone remoto la fonderebbe con la mamma; quella senza
+    # contatto non ha niente da mandare. Restano fuori dalla query, e non
+    # contano fra gli errori della sync.
+    for local in Client.objects.filter(salon=salon, is_active=True).exclude(phone=""):
         if local.yourang_contact_id:
             continue
         phone = normalize_phone(local.phone)
@@ -549,7 +554,12 @@ def _client_for_event(salon, data: dict) -> Client:
 
     existing = find_client_by_phone(salon, phone)
     if existing is not None:
-        return existing
+        # Il numero può essere della mamma e la prenotazione per la figlia,
+        # che in rubrica si contatta tramite lei: il nome dice di chi è la
+        # visita. Senza, finiva nello storico della mamma.
+        from apps.clients.profiles import dependent_named  # lazy
+
+        return dependent_named(existing, first, last) or existing
     try:
         # Savepoint: due consegne dello stesso evento in parallelo, o il vincolo
         # di unicità su (salon, phone_key), fanno perdere la corsa a una delle
@@ -676,6 +686,12 @@ def _create_from_event(salon, event_id: str, data: dict, remote: dict, remote_st
     _log_event(
         appt, "appointment.created", f"Prenotazione da Yourang per {client_obj.full_name}", event_id
     )
+    if appt.status == Appointment.Status.NO_SHOW:
+        # Un evento che arriva già «no_show» non passa da mark_no_show: senza
+        # questo la cliente lo avrebbe nello storico e non nell'affidabilità.
+        from apps.clients.services import recompute_reliability  # lazy
+
+        recompute_reliability(client_obj)
     return appt
 
 
