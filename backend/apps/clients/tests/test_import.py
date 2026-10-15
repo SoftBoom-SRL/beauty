@@ -25,15 +25,16 @@ from .base import ClientsTestCase
 
 class ImportUpsertTests(ClientsTestCase):
     def test_import_creates_and_updates(self):
-        existing = self.make_client(phone="+393330001111", first_name="Old", last_name="Name")
+        existing = self.make_client(phone="+393330001111", first_name="Anna", last_name="Vecchi")
         rows = [
-            {"first_name": "New", "last_name": "Name", "phone": "+393330001111", "email": ""},
+            {"first_name": "anna", "last_name": "Nuovi", "phone": "+393330001111", "email": ""},
             {"first_name": "Fresh", "last_name": "Client", "phone": "+393339998888", "email": ""},
         ]
         result = import_rows(self.salon, rows)
-        self.assertEqual((result["created"], result["updated"]), (1, 1))
+        self.assertEqual((result["created"], result["updated"], result["linked"]), (1, 1, 0))
         existing.refresh_from_db()
-        self.assertEqual(existing.first_name, "New")
+        # stesso numero e stesso nome di battesimo: è lei, e il cognome viene dal file
+        self.assertEqual((existing.first_name, existing.last_name), ("anna", "Nuovi"))
         self.assertTrue(Client.objects.filter(salon=self.salon, phone="+393339998888").exists())
 
     def test_import_matches_by_email_when_no_phone_match(self):
@@ -48,9 +49,13 @@ class ImportUpsertTests(ClientsTestCase):
         self.assertEqual(existing.first_name, "Giulia")
         self.assertEqual(existing.lang, "en")
 
-    def test_import_row_without_phone_or_match_is_skipped(self):
+    def test_a_row_without_phone_becomes_a_card_without_phone(self):
+        """Prima veniva saltata: un salone arrivato da un altro gestionale
+        perdeva tutte le clienti senza un numero valido (114 in uno solo)."""
         result = import_rows(self.salon, [{"first_name": "Nessuno", "email": "", "phone": ""}])
-        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 1))
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (1, 0, 0))
+        card = Client.objects.get(salon=self.salon)
+        self.assertEqual((card.first_name, card.phone, card.contact_client_id), ("Nessuno", "", None))
 
     def test_rows_with_their_own_phone_are_never_merged_by_email(self):
         """L'email è la rete di sicurezza delle righe SENZA telefono.
@@ -77,18 +82,23 @@ class ImportUpsertTests(ClientsTestCase):
         existing.refresh_from_db()
         self.assertEqual(existing.phone, "+393330005555")
 
-    def test_phones_without_a_single_digit_are_refused(self):
+    def test_phones_without_a_single_digit_enter_without_a_number(self):
         """`phone_key("n/d") == ""`: tutte queste righe condividevano la chiave
-        vuota e si sovrascrivevano l'una con l'altra sulla stessa scheda."""
+        vuota e si sovrascrivevano l'una con l'altra sulla stessa scheda; poi
+        venivano scartate. Sono clienti senza numero: entrano così, con l'avviso."""
         rows = [
             {"first_name": "Anna", "phone": "n/d"},
             {"first_name": "Bea", "phone": "-"},
             {"first_name": "Carla", "phone": "nessuno"},
         ]
         result = import_rows(self.salon, rows)
-        self.assertEqual((result["created"], result["updated"], result["skipped"]), (0, 0, 3))
-        self.assertEqual([e["row"] for e in result["errors"]], [0, 1, 2])
-        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 0)
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (3, 0, 0))
+        self.assertEqual([w["row"] for w in result["warnings"]], [0, 1, 2])
+        self.assertIn("«n/d» senza cifre", result["warnings"][0]["reason"])
+        self.assertEqual(
+            sorted(Client.objects.filter(salon=self.salon).values_list("first_name", "phone")),
+            [("Anna", ""), ("Bea", ""), ("Carla", "")],
+        )
 
     def test_imported_clients_get_a_since_date(self):
         # «Cliente dal» è quello del file; senza colonna resta vuoto, non la
@@ -160,19 +170,24 @@ class ImportRobustnessTests(ClientsTestCase):
     """L'import non deve fermarsi a metà lasciando dati scritti e conteggi falsi."""
 
     def test_a_row_the_database_refuses_does_not_stop_the_import(self):
-        # Due righe con lo stesso telefono: la seconda viola il vincolo di
-        # unicità (salone, telefono). Prima l'eccezione usciva da import_rows e
-        # l'utente vedeva un errore 500 con metà file già importato.
+        # Una scheda con la chiave telefono salvata da un algoritmo vecchio
+        # (18-02): l'import non la riconosce dal numero, e il vincolo di
+        # unicità su (salone, chiave) rifiuta la scheda nuova. Prima
+        # l'eccezione usciva da import_rows e l'utente vedeva un errore 500 con
+        # metà file già importato.
+        stale = self.make_client(first_name="Vecchia", phone="+390000000009")
+        Client.objects.filter(pk=stale.pk).update(phone="n/d vecchio", phone_key="393330001111")
         rows = [
-            {"first_name": "Prima", "phone": "+393330001111", "email": ""},
+            {"first_name": "Prima", "phone": "+393330002222", "email": ""},
             {"first_name": "Doppia", "phone": "+39 333 000 1111", "email": ""},
-            {"first_name": "Terza", "phone": "+393330002222", "email": ""},
+            {"first_name": "Terza", "phone": "+393330003333", "email": ""},
         ]
         result = import_rows(self.salon, rows, update_existing=False)
-        self.assertEqual(result["created"], 2)
+        self.assertEqual((result["created"], result["skipped"]), (2, 1))
+        self.assertEqual([e["row"] for e in result["errors"]], [1])
         self.assertEqual(
             sorted(Client.objects.filter(salon=self.salon).values_list("first_name", flat=True)),
-            ["Prima", "Terza"],
+            ["Prima", "Terza", "Vecchia"],
         )
 
     def test_counters_match_what_was_actually_written(self):
@@ -260,18 +275,26 @@ class SinceTests(_Base):
 
 class SharedEmailTests(_Base):
     def test_a_phoneless_row_does_not_rename_someone_else(self):
+        """06-08: la figlia senza numero con l'email di famiglia rinominava la
+        madre. Poi veniva scartata; ora è una scheda sua, senza telefono, e
+        l'avviso dice di chi è l'email."""
         mamma = self.card(first_name="Mamma", last_name="Rossi", email="famiglia@rossi.it",
                           birthday=dt.date(1965, 6, 1))
-        result = import_rows(self.salon, [
-            {"first_name": "Figlia", "last_name": "Rossi", "phone": "", "email": "famiglia@rossi.it",
-             "birthday": "2001-02-03", "note": "Allergia al nichel"},
-        ])
+        row = {"first_name": "Figlia", "last_name": "Rossi", "phone": "", "email": "famiglia@rossi.it",
+               "birthday": "2001-02-03", "note": "Allergia al nichel"}
+        result = import_rows(self.salon, [row])
         mamma.refresh_from_db()
         self.assertEqual((mamma.first_name, mamma.birthday), ("Mamma", dt.date(1965, 6, 1)))
         self.assertFalse(ClientNote.objects.filter(client=mamma).exists())
-        self.assertEqual((result["updated"], result["skipped"]), (0, 1))
-        self.assertEqual(result["errors"][0]["client_id"], mamma.id)
-        self.assertIn("Mamma Rossi", result["errors"][0]["reason"])
+        self.assertEqual((result["created"], result["updated"], result["skipped"]), (1, 0, 0))
+        figlia = Client.objects.get(salon=self.salon, first_name="Figlia")
+        self.assertEqual((figlia.phone, figlia.birthday), ("", dt.date(2001, 2, 3)))
+        self.assertEqual(result["warnings"][0]["client_id"], figlia.id)
+        self.assertIn("Mamma Rossi", result["warnings"][0]["reason"])
+        # Reimportata, è la stessa scheda: niente doppioni né avvisi.
+        again = import_rows(self.salon, [row])
+        self.assertEqual((again["created"], again["updated"], again["warnings"]), (0, 1, []))
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 2)
 
     def test_the_same_person_without_phone_is_still_updated(self):
         nicolo = self.card(first_name="Nicolò", last_name="D’Amico", email="nicolo@esempio.it")
@@ -415,3 +438,102 @@ class LongLabelNameTests(_Base):
         self.assertEqual(label.name, self.LONG[:60])
         for name in ("Anna", "Bea", "Carla"):
             self.assertEqual(list(Client.objects.get(salon=self.salon, first_name=name).categories.all()), [label])
+
+
+class SharedNumberTests(_Base):
+    """Lo stesso numero su più righe con nomi diversi: madre e figlia, coppie.
+
+    In un solo salone arrivato da un altro gestionale 64 numeri erano usati da
+    130 schede. Due schede non possono avere lo stesso telefono (è l'identità
+    per l'app), e la seconda riga rinominava la prima: ora entra senza
+    telefono e si contatta tramite chi ha il numero.
+    """
+
+    ROWS = [
+        {"first_name": "Laura", "last_name": "Rossi", "phone": "333 111 2233", "birthday": "1968-05-02"},
+        {"first_name": "Giulia", "last_name": "Rossi", "phone": "+39 333 1112233", "birthday": "2012-09-14"},
+        {"first_name": "Marco", "last_name": "Bianchi", "phone": "3331112233"},
+    ]
+
+    def test_the_second_person_is_linked_to_the_first(self):
+        result = import_rows(self.salon, self.ROWS)
+        self.assertEqual((result["created"], result["updated"], result["linked"]), (3, 0, 2))
+        laura = Client.objects.get(salon=self.salon, first_name="Laura")
+        self.assertEqual((laura.phone, laura.birthday), ("+393331112233", dt.date(1968, 5, 2)))
+        for name in ("Giulia", "Marco"):
+            card = Client.objects.get(salon=self.salon, first_name=name)
+            self.assertEqual((card.phone, card.contact_client_id), ("", laura.id))
+            self.assertEqual(card.contact_phone, "+393331112233")
+        self.assertEqual([w["row"] for w in result["warnings"]], [1, 2])
+        self.assertIn("Il numero è di Laura Rossi", result["warnings"][0]["reason"])
+        giulia = Client.objects.get(salon=self.salon, first_name="Giulia")
+        self.assertEqual(result["warnings"][0]["client_id"], giulia.id)
+        self.assertEqual(giulia.birthday, dt.date(2012, 9, 14))
+
+    def test_reimporting_does_not_duplicate_the_linked_cards(self):
+        import_rows(self.salon, self.ROWS)
+        again = import_rows(self.salon, self.ROWS)
+        self.assertEqual((again["created"], again["updated"], again["linked"]), (0, 3, 0))
+        self.assertEqual(Client.objects.filter(salon=self.salon).count(), 3)
+        skipped = import_rows(self.salon, self.ROWS, update_existing=False)
+        self.assertEqual((skipped["created"], skipped["skipped"]), (0, 3))
+
+    def test_the_same_person_written_another_way_is_still_her(self):
+        """Nome e cognome invertiti, senza accenti, o il cognome cambiato: è lei."""
+        laura = self.card(first_name="Laura", last_name="Rossi")
+        result = import_rows(self.salon, [
+            {"first_name": "Rossi", "last_name": "Laura", "phone": "333 111 2233"},
+            {"first_name": "LAURA", "last_name": "Bianchi", "phone": "333 111 2233"},
+        ])
+        self.assertEqual((result["created"], result["updated"]), (0, 2))
+        laura.refresh_from_db()
+        self.assertEqual(laura.last_name, "Bianchi")
+
+    def test_an_existing_card_without_phone_gets_linked(self):
+        laura = self.card(first_name="Laura", last_name="Rossi")
+        giulia = self.card(first_name="Giulia", last_name="Rossi", phone="")
+        result = import_rows(self.salon, [{"first_name": "Giulia", "last_name": "Rossi", "phone": "3331112233"}])
+        self.assertEqual((result["created"], result["updated"], result["linked"]), (0, 1, 1))
+        giulia.refresh_from_db()
+        self.assertEqual((giulia.phone, giulia.contact_client_id), ("", laura.id))
+
+    def test_an_archived_holder_is_not_a_contact(self):
+        self.card(first_name="Laura", last_name="Rossi", is_active=False)
+        result = import_rows(self.salon, [{"first_name": "Giulia", "phone": "3331112233"}])
+        self.assertEqual((result["created"], result["linked"]), (1, 0))
+        giulia = Client.objects.get(salon=self.salon, first_name="Giulia")
+        self.assertEqual((giulia.phone, giulia.contact_client_id), ("", None))
+        self.assertIn("archiviata", result["warnings"][0]["reason"])
+
+
+class RowsWithoutPhoneTests(_Base):
+    def test_namesakes_without_phone_stay_two_people_across_blocks(self):
+        """Due Maria Rossi senza numero sono due persone, anche quando il file
+        arriva in due blocchi (la dashboard ne manda 250 alla volta): la riga
+        dice quale è con `name_index`. Reimportando, ognuna ritrova la sua."""
+        first = {"first_name": "Maria", "last_name": "Rossi", "phone": "", "name_index": 0, "note": "la prima"}
+        second = {"first_name": "Maria", "last_name": "Rossi", "phone": "", "name_index": 1, "note": "la seconda"}
+        self.assertEqual(import_rows(self.salon, [first])["created"], 1)
+        self.assertEqual(import_rows(self.salon, [second])["created"], 1)
+        again = import_rows(self.salon, [first, second])
+        self.assertEqual((again["created"], again["updated"]), (0, 2))
+        marie = list(Client.objects.filter(salon=self.salon).order_by("id"))
+        self.assertEqual(len(marie), 2)
+        self.assertEqual([m.notes.get().text for m in marie], ["la prima", "la seconda"])
+
+    def test_a_different_email_is_a_different_person(self):
+        import_rows(self.salon, [{"first_name": "Maria", "phone": "", "email": "maria@uno.it"}])
+        result = import_rows(self.salon, [{"first_name": "Maria", "phone": "", "email": "maria@due.it"}])
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(Client.objects.filter(salon=self.salon, first_name="Maria").count(), 2)
+
+    def test_an_archived_card_without_phone_is_pointed_to(self):
+        archived = self.card(first_name="Maria", last_name="Rossi", phone="", is_active=False)
+        result = import_rows(self.salon, [{"first_name": "Maria", "last_name": "Rossi", "phone": ""}])
+        self.assertEqual((result["created"], result["skipped"]), (0, 1))
+        self.assertEqual(result["errors"][0]["client_id"], archived.id)
+
+    def test_a_row_without_name_or_phone_is_refused(self):
+        result = import_rows(self.salon, [{"first_name": "", "phone": "", "email": ""}])
+        self.assertEqual((result["created"], result["skipped"]), (0, 1))
+        self.assertEqual(result["errors"][0]["reason"], "Nome mancante")

@@ -145,15 +145,23 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
 
 **Models**
 - `ClientCategory`: salon FK, name, color (#hex), order int. (Etichette: Local, Expat, VIP…)
-- `Client`: salon FK, first_name, last_name, phone (unique per salon), email blank,
+- `Client`: salon FK, first_name, last_name, phone blank (unico per salone
+  quando c'è, comunque scritto: `phone_key`; "" = la cliente un numero suo non
+  ce l'ha, e allora niente OTP né accesso all'app), contact_client FK a sé
+  SET_NULL null (`dependents`: «si contatta tramite», la scheda col numero a
+  cui vanno i messaggi di chi non ne ha uno), email blank,
   wa bool default True, lang it/en default it, categories M2M ClientCategory blank,
-  reliability int default 100 (0–100), origin char blank (Instagram, Google…),
+  reliability int default 100 (0–100, calcolata: vedi sotto), origin char blank (Instagram, Google…),
   birthday date null/blank, since date null/blank,
   consents JSON default dict ({privacy, marketing, card_charge} bool),
   whatsapp_reminders bool default True,
   stripe_customer_id char blank, stripe_payment_method_id char blank,
   deposit_always bool default False, is_active bool default True.
-  property `full_name`.
+  property `full_name`; property `contact_phone` (il numero a cui scrivere: il
+  suo, altrimenti quello di `contact_client`, un livello solo, altrimenti "").
+  Regole del contatto (`profiles.resolve_contact`): stesso salone, non sé
+  stessa, attiva, con un numero suo, che non passi a sua volta da un'altra; chi
+  fa da contatto non può passare da un'altra né togliersi il numero.
 - `ClientNote`: client FK, text, visibility private/ai (TextChoices), author FK user null, created_at.
 - `TechnicalSheet` (scheda tecnica, sola lettura una volta creata): client FK,
   appointment FK "agenda.Appointment" null/blank, category char (nail/hair/viso/extra…),
@@ -161,12 +169,37 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
   outcome text blank, duration_hold char blank, advice text blank, protocol text blank,
   next_step char blank, photo ImageField null/blank, author FK user null, created_at.
 
-**Service** `client_facts(client) -> dict`: {reliability, categories:[nomi], total_spent (somma
-Sale del cliente, import lazy di sales), visits (Sale count), noshow_count, latecancel_count
-(da agenda.Appointment status/flag, import lazy), deposit_always}. Campi mancanti → 0/[].
+**Service** (`clients.services`)
+- Visite = GIORNI (fuso del salone) con almeno una visita chiusa o un passaggio
+  al banco (`visit_days`): due appuntamenti in contemporanea con due operatrici
+  sono una visita. Le vendite fatte solo di gift card o pacchetti
+  (`line_type` gift_card/package) non sono visite; spesa senza caparre né
+  penali no-show. `client_stats(client)` → {visits, total_spent, last_visit}.
+  Contano allo stesso modo lo storico (`counts.visits`) e le statistiche
+  dell'operatrice (clienti di oggi, visite delle clienti servite).
+- Affidabilità calcolata: 100 − 25 per ogni giorno con un no-show − 10 per ogni
+  giorno con un annullamento tardivo (`cancelled_late`, e non già no-show)
+  negli ultimi 12 mesi (dallo stesso giorno di un anno fa), fra 0 e 100
+  (`reliability_basis`). `recompute_reliability(client)` la salva (UPDATE della
+  sola colonna, log `client.updated` con `fields: ["reliability"]` se cambia):
+  la chiamano no-show, annullamento tardivo e «torna indietro» dell'agenda e
+  l'evento Yourang che arriva già no-show. Non è scrivibile dall'API.
+- `client_facts(client) -> dict`: {reliability (calcolata ora, non la colonna),
+  categories:[nomi], total_spent, visits (giorni), noshow_count,
+  latecancel_count (giorni, di sempre), deposit_always}. Campi mancanti → 0/[].
+
+**Comando** `python manage.py recompute_reliability [--salon ID]`: ricalcola
+l'affidabilità di tutte le schede (una query per salone, un UPDATE per
+punteggio; log `client.reliability_recomputed` con `{changed}`). Da lanciare
+dopo un import di visite da un altro gestionale e da programmare una volta al
+giorno: un no-show di tredici mesi fa esce dalla finestra senza che nessun
+gesto lo dica (la scheda aperta si corregge da sola, la lista no).
 
 **Endpoint staff** (/api/clients)
-- GET `/` (paginate) filtri: q (nome/telefono/email), category_id, reliability_min/max, is_active.
+- GET `/` (paginate) filtri: q (nome/telefono/email; un numero trova anche le
+  schede senza telefono che passano da quel numero, mai le altre senza
+  telefono), category_id, reliability_min/max, is_active. Ogni riga
+  (`ClientListOut`) ha `contact` e `amount_due` (debito, null senza «vendite»).
 - GET `/counts` (staff_auth) → `{active, categories: [{id, count}]}`: le schede
   attive e quante per etichetta, in una risposta (la sezione Clienti), con lo
   stesso filtro per salone della lista.
@@ -174,15 +207,32 @@ Sale del cliente, import lazy di sales), visits (Sale count), noshow_count, late
   come il salvataggio di regole caparra e automazioni che la citano:
   un'etichetta (o una regola, o un'automazione) sparita nel frattempo è un 404.
 - GET `/categories` + CRUD (scope clients). GET `/{id}` → dettaglio + computed
-  {visits, total_spent, last_visit} (aggregati lazy da sales). POST/PUT (scope clients, log).
-  DELETE (scope clients) → soft: is_active=False + log `client.deleted`.
-- POST `/import` {rows:[{first_name,last_name,email,phone}]} (scope clients) →
-  upsert per telefono (poi email); ritorna {created, updated}. Log.
+  {visits (giorni), total_spent, last_visit, amount_due (`sales.dues`); a
+  zero/null con `stats_hidden` senza «vendite»}, `dependents` (le schede attive
+  che si contattano tramite lei), `reliability_basis` {no_shows,
+  late_cancellations, since}. Ogni `ClientOut` ha `contact` {id, full_name,
+  phone} o null. POST/PUT (scope clients, log): telefono facoltativo,
+  `contact_client_id` (null sul PUT = scollega), `reliability` ignorato. Un
+  numero già di un'altra scheda: 409 `archived_client_id` se archiviata (alla
+  creazione; 400 in modifica), 400 {detail, phone_holder_id,
+  phone_holder_name, contact_allowed} se attiva.
+  DELETE (scope clients) → soft: is_active=False + log `client.deleted`; chi si
+  contattava tramite lei perde il collegamento → {ok, unlinked_dependents:
+  [{id, full_name, phone}]} (e un `client.updated` per ognuna).
+- POST `/import` {rows:[{first_name,last_name,email,phone,…,name_index}]} (scope
+  clients) → upsert per telefono (poi email, poi per nome fra le schede senza
+  numero, la n-esima omonima con `name_index`); le righe senza telefono entrano
+  senza numero; un numero già in rubrica con un altro nome di battesimo → scheda
+  senza telefono collegata a chi ha il numero (avviso). Ritorna {created,
+  updated, skipped, linked, errors, warnings}. Log.
 - Note: GET/POST/DELETE `/{id}/notes` (scope clients).
 - Schede tecniche: GET `/{id}/sheets`, POST `/{id}/sheets` (scope clients, log).
   NESSUN endpoint update/delete (read-only dopo il salvataggio).
 
-**Tests**: import upsert, client_facts con dati minimi, immutabilità scheda (nessuna rotta update).
+**Tests**: import upsert, client_facts con dati minimi, immutabilità scheda
+(nessuna rotta update), schede senza telefono e contatto (`test_no_phone`),
+visite per giorno (`test_history_stats`), affidabilità e comando
+(`test_reliability`).
 
 ---
 

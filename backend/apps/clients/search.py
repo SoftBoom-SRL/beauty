@@ -49,6 +49,17 @@ def strip_accents(text: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
 
+def name_key(first_name: str, last_name: str = "") -> tuple:
+    """Il nome senza ordine, accenti, maiuscole né apostrofi tipografici: «Rossi Maria» è «Maria Rossi».
+
+    Serve a riconoscere la stessa persona fra le schede che condividono un
+    numero (import, prenotazioni da Yourang): gli altri gestionali esportano
+    la cliente in una colonna sola, a volte col cognome prima.
+    """
+    plain = re.sub(APOSTROPHE_CLASS, "'", strip_accents(f"{first_name or ''} {last_name or ''}"))
+    return tuple(sorted(plain.casefold().split()))
+
+
 def _accent_insensitive(word: str) -> str:
     """Espressione regolare che trova `word` con o senza accenti e apostrofi tipografici."""
     plain = strip_accents(word).lower()
@@ -85,6 +96,11 @@ def search_filter(q: str) -> Q:
     tipografici. Il numero si cerca anche sulla chiave normalizzata, la stessa
     che riconosce la cliente al login, calcolata sulle sole parole che sono
     numeri: vale come alternativa per quelle parole, non per le altre.
+
+    Le schede senza numero non rispondono a nessun numero (un telefono vuoto
+    non «contiene» niente), tranne quello di chi le rappresenta: la mamma che
+    chiama per la figlia detta il suo numero, e la reception deve trovare
+    anche la scheda della bambina, che si contatta tramite lei.
     """
     words = [w for w in q.split() if w]
     condition = Q()
@@ -98,7 +114,7 @@ def search_filter(q: str) -> Q:
             | Q(email__icontains=word)
         )
         if _is_number(word):
-            numbers &= match
+            numbers &= match | Q(phone="", contact_client__phone__icontains=word)
         else:
             condition &= match
     # La chiave si calcolava su tutta la ricerca e andava in OR con il resto:
@@ -109,5 +125,5 @@ def search_filter(q: str) -> Q:
     # sono tutte numeri, e la chiave è quella di tutta la ricerca.
     key = phone_key(" ".join(w for w in words if _is_number(w)))
     if key:
-        numbers |= Q(phone_key__contains=key)
+        numbers |= Q(phone_key__contains=key) | Q(phone="", contact_client__phone_key__contains=key)
     return condition & numbers

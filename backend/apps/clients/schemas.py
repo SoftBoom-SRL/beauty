@@ -58,16 +58,33 @@ class ClientCountsOut(Schema):
 # ---- Cliente ------------------------------------------------------------------
 
 
+class ClientContactOut(Schema):
+    """Una scheda vista da un'altra: il contatto di chi non ha un numero suo, o chi passa da lei."""
+
+    id: int
+    full_name: str
+    phone: str
+
+
 class ClientOut(Schema):
     id: int
     first_name: str
     last_name: str
     full_name: str
+    # "" = la cliente un numero suo non ce l'ha: i messaggi vanno a `contact`,
+    # se c'è, e all'app non può accedere (l'OTP arriva al telefono).
     phone: str
+    # «Si contatta tramite»: la scheda col numero a cui arrivano conferme e
+    # promemoria di chi non ha un telefono suo (la mamma della bambina). null
+    # se non c'è. Il numero a cui scrivere è `phone`, altrimenti `contact.phone`.
+    contact: Optional[ClientContactOut] = None
     email: str
     wa: bool
     lang: str
     categories: list[ClientCategoryOut]
+    # Calcolata dal gestionale (clients.services.reliability_basis): 100 meno
+    # 25 per ogni giorno di no-show e 10 per ogni giorno di annullamento
+    # tardivo negli ultimi 12 mesi. Non si scrive dall'API.
     reliability: int
     origin: str
     gender: str = ""  # female | male | other | "" (non specificato)
@@ -92,14 +109,63 @@ class ClientOut(Schema):
     def resolve_age(obj):
         return getattr(obj, "age", None)
 
+    @staticmethod
+    def resolve_contact(obj):
+        if not getattr(obj, "contact_client_id", None):
+            return None
+        contact = obj.contact_client
+        return {"id": contact.id, "full_name": contact.full_name, "phone": contact.phone}
+
+
+class ClientListOut(ClientOut):
+    """Una riga dell'elenco clienti: la scheda e quanto deve ancora al salone."""
+
+    # Totale ancora da saldare (sales.dues). null per chi non ha il permesso
+    # «vendite»: è un dato di cassa, e nascosto non vuol dire zero.
+    amount_due: Optional[Decimal] = None
+
+    @staticmethod
+    def resolve_amount_due(obj):
+        return getattr(obj, "amount_due", None)
+
+
+class ReliabilityBasisOut(Schema):
+    """Da dove viene l'affidabilità: i giorni che tolgono punti negli ultimi 12 mesi."""
+
+    no_shows: int
+    late_cancellations: int
+    # Il primo giorno che conta (lo stesso giorno di un anno fa).
+    since: date
+
 
 class ClientDetailOut(ClientOut):
+    # Giorni (non appuntamenti) con una visita chiusa o un passaggio al banco.
     visits: int
     total_spent: Decimal
     last_visit: Optional[datetime] = None
     # True quando chi legge non ha il permesso «vendite»: i tre contatori sopra
-    # valgono zero perché sono nascosti, non perché la cliente sia nuova.
+    # valgono zero perché sono nascosti, non perché la cliente sia nuova; e
+    # `amount_due` è null.
     stats_hidden: bool = False
+    # Totale ancora da saldare (sales.dues.client_amount_due): il saldo si fa
+    # in cassa. null se nascosto (vedi `stats_hidden`).
+    amount_due: Optional[Decimal] = None
+    # Le schede attive che si contattano tramite questa: archiviarla le lascia
+    # senza numero di contatto.
+    dependents: list[ClientContactOut] = []
+    reliability_basis: Optional[ReliabilityBasisOut] = None
+
+    @staticmethod
+    def resolve_dependents(obj):
+        rows = obj.dependents.filter(is_active=True).order_by("first_name", "last_name", "id")
+        return [{"id": d.id, "full_name": d.full_name, "phone": d.phone} for d in rows]
+
+
+class ClientArchiveOut(Schema):
+    """Esito dell'archiviazione: le schede che si contattavano tramite lei e ora non più."""
+
+    ok: bool = True
+    unlinked_dependents: list[ClientContactOut] = []
 
 
 class ClientIn(Schema):
@@ -107,8 +173,19 @@ class ClientIn(Schema):
 
     Sul PUT i campi si applicano solo se presenti nel corpo (`exclude_unset` in
     fields.client_payload): quasi tutti hanno un default e riversarli su una
-    scheda esistente cancellava la prova del consenso privacy, l'affidabilità e
-    perfino la disattivazione di chi mandava solo il campo da correggere.
+    scheda esistente cancellava la prova del consenso privacy e perfino la
+    disattivazione di chi mandava solo il campo da correggere.
+
+    Il telefono è facoltativo: una bambina, chi riceve un regalo, la seconda
+    persona che usa lo stesso numero non ne hanno uno loro. Chi lo condivide
+    con un'altra cliente lo lascia vuoto e indica lei in `contact_client_id`
+    (stesso salone, con un numero suo, che non passi a sua volta da un'altra).
+    Un numero già di un'altra scheda attiva risponde 400 con `phone_holder_id`,
+    `phone_holder_name` e `contact_allowed` (vedi api.create_client).
+
+    L'affidabilità non c'è: la calcola il gestionale dai no-show e dagli
+    annullamenti tardivi. Un `reliability` nel corpo (da una versione vecchia
+    della dashboard) si ignora senza errore.
 
     Gli identificativi Stripe NON sono qui: sono scritti da
     apps.sales.stripe_service quando la carta viene registrata davvero.
@@ -119,12 +196,12 @@ class ClientIn(Schema):
 
     first_name: str = Field(max_length=80)
     last_name: str = Field("", max_length=80)
-    phone: str = Field(max_length=32)
+    phone: str = Field("", max_length=32)
+    contact_client_id: Optional[int] = None
     email: str = Field("", max_length=254)
     wa: bool = True
     lang: Literal["it", "en"] = "it"
     category_ids: list[int] = []
-    reliability: int = Field(100, ge=0, le=100)
     origin: str = Field("", max_length=60)
     gender: str = ""
     # 'YYYY-MM-DD' | '--MM-DD' (solo giorno e mese) | None
@@ -145,17 +222,20 @@ class ClientUpdateIn(Schema):
     rimandare tutta la copia letta all'apertura, e con lei i consensi, la
     lingua e i promemoria che nel frattempo la cliente aveva cambiato
     dall'app (06-10, 14-05, 18-07). `null` vale solo per compleanno e «cliente
-    dal» (li svuota) e per i testi facoltativi; sugli altri è un errore.
+    dal» (li svuota), per il telefono e i testi facoltativi (li svuota) e per
+    `contact_client_id` (toglie il collegamento); sugli altri è un errore.
+    Il telefono di chi fa da contatto ad altre schede non si può togliere.
+    Come nel POST, un `reliability` nel corpo si ignora.
     """
 
     first_name: Optional[str] = Field(None, max_length=80)
     last_name: Optional[str] = Field(None, max_length=80)
     phone: Optional[str] = Field(None, max_length=32)
+    contact_client_id: Optional[int] = None
     email: Optional[str] = Field(None, max_length=254)
     wa: Optional[bool] = None
     lang: Optional[Literal["it", "en"]] = None
     category_ids: Optional[list[int]] = None
-    reliability: Optional[int] = Field(None, ge=0, le=100)
     origin: Optional[str] = Field(None, max_length=60)
     gender: Optional[str] = None
     birthday: Optional[str] = None
@@ -194,6 +274,12 @@ class ImportRowIn(Schema):
     # la scheda importata resta senza data: prima prendeva quella dell'import
     # e tutta la rubrica storica risultava cliente «dal 2026» (06-07, 08-05).
     since: str = ""
+    # Per le righe senza telefono: quante righe senza telefono con lo stesso
+    # nome la precedono nel FILE (0 = la prima). Le omonime senza numero sono
+    # persone diverse, e il file arriva a blocchi: è così che la seconda Maria
+    # Rossi diventa la seconda scheda Maria Rossi, al primo import come al
+    # secondo, invece di finire sopra la prima (importer._Rubrica.without_phone).
+    name_index: int = 0
 
 
 # Tetto per richiesta. Ogni riga costa 2-5 query dentro un savepoint, in una
@@ -221,6 +307,9 @@ class ImportOut(Schema):
     created: int
     updated: int
     skipped: int = 0
+    # Di `created`, le schede nate senza telefono e collegate a chi ha già quel
+    # numero (madre e figlia, coppie): ognuna ha anche il suo avviso in `warnings`.
+    linked: int = 0
     # Righe NON importate.
     errors: list[ImportErrorOut] = []
     # Righe importate lasciando fuori un dato che non si poteva leggere (per

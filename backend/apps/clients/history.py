@@ -11,6 +11,7 @@ from django.utils import timezone
 from common.permissions import has_scope
 
 from .records import note_out, sheet_out
+from .services import visit_days
 
 
 def client_appointments_qs(salon, client):
@@ -112,6 +113,13 @@ def build_history(ctx, client) -> dict:
         if not sh.appointment_id:
             entries.append({"kind": "sheet", "date": sh.created_at, "sheet": sheet_out(sh)})
     entries.sort(key=lambda e: e["date"], reverse=True)
+    # Le visite si contano come nella scheda (clients.services.visit_days):
+    # i giorni con una visita chiusa o un passaggio al banco. Qui si contava
+    # ogni appuntamento passato, anche annullato o saltato, e mani e piedi in
+    # contemporanea facevano due visite: «Visite · 7» nello storico accanto a
+    # «Visite 4» in testa alla scheda. Senza il permesso «vendite» le vendite
+    # al banco non si vedono, e non si contano.
+    days, _last = visit_days(client, counter_sales=can_read_sales)
     return {
         "client_id": client.id,
         # Senza il permesso «vendite» `sale` è sempre null, anche sulle visite
@@ -120,7 +128,7 @@ def build_history(ctx, client) -> dict:
         # Come `stats_hidden` sulla scheda: nascosto e assente si distinguono.
         "sales_hidden": not can_read_sales,
         "counts": {
-            "visits": sum(1 for e in entries if e["kind"] == "visit" and not e["upcoming"]),
+            "visits": len(days),
             "upcoming": sum(1 for e in entries if e["kind"] == "visit" and e["upcoming"]),
             "notes": len(notes),
             "sheets": len(sheets),

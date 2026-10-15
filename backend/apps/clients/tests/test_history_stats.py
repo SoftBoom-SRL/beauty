@@ -14,7 +14,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.models import Salon
-from common.testing import bearer, staff_context
+from common.testing import aware, bearer, staff_context
 
 from ..api import client_history, get_client, list_client_appointments, list_notes, list_sheets
 from ..models import Client, ClientCategory, ClientNote, TechnicalSheet
@@ -27,12 +27,14 @@ class ClientFactsTests(ClientsTestCase):
     non sono installate (come in questo ambiente di sviluppo/test)."""
 
     def test_client_facts_minimal_data_no_exceptions(self):
+        # 80 scritto a mano nella colonna non conta: senza no-show né
+        # annullamenti tardivi l'affidabilità calcolata è 100.
         client = self.make_client(reliability=80, deposit_always=True)
         facts = client_facts(client)
         self.assertEqual(
             facts,
             {
-                "reliability": 80,
+                "reliability": 100,
                 "categories": [],
                 "total_spent": Decimal("0"),
                 "visits": 0,
@@ -133,7 +135,9 @@ class ClientHistoryApiTests(TestCase):
         from apps.agenda.models import Appointment
 
         now = timezone.now()
-        past = Appointment.objects.create(salon=self.salon, client=self.client_obj, operator=self.operator, start=now - dt.timedelta(days=10))
+        # Chiusa: lo storico conta le visite come la scheda (giorni con una
+        # visita chiusa), non ogni appuntamento passato.
+        past = Appointment.objects.create(salon=self.salon, client=self.client_obj, operator=self.operator, start=now - dt.timedelta(days=10), status="closed")
         future = Appointment.objects.create(salon=self.salon, client=self.client_obj, operator=self.operator, start=now + dt.timedelta(days=3))
         ClientNote.objects.create(client=self.client_obj, appointment=past, text="Nota di trattamento", author=self.user)
         ClientNote.objects.create(client=self.client_obj, text="Nota libera")
@@ -268,12 +272,33 @@ class ClientStatsOnRealSalesTests(TestCase):
         return sale
 
     def test_visits_and_total_spent_add_up(self):
-        self._sale("40", ["service"])
+        from apps.sales.models import Sale
+
+        earlier = self._sale("40", ["service"])
+        Sale.objects.filter(pk=earlier.pk).update(created_at=timezone.now() - dt.timedelta(days=3))
         self._sale("25", ["product"])
         stats = client_stats(self.client_obj)
         self.assertEqual(stats["visits"], 2)
         self.assertEqual(stats["total_spent"], Decimal("65"))
         self.assertIsNotNone(stats["last_visit"])
+
+    def test_two_purchases_on_the_same_day_are_one_visit(self):
+        from apps.sales.models import Sale
+
+        today = timezone.localdate()
+        for hour, sale in ((10, self._sale("40", ["service"])), (17, self._sale("25", ["product"]))):
+            Sale.objects.filter(pk=sale.pk).update(created_at=aware(today, hour))
+        stats = client_stats(self.client_obj)
+        self.assertEqual((stats["visits"], stats["total_spent"]), (1, Decimal("65")))
+        self.assertEqual(stats["last_visit"], aware(today, 17))
+
+    def test_a_package_bought_at_the_counter_is_not_a_visit(self):
+        """Le visite saranno le sedute del pacchetto, non il giorno dell'acquisto."""
+        self._sale("300", ["package"])
+        self._sale("80", ["package", "gift_card"])
+        stats = client_stats(self.client_obj)
+        self.assertEqual((stats["visits"], stats["total_spent"]), (0, Decimal("380")))
+        self.assertIsNone(stats["last_visit"])
 
     def test_a_gift_card_bought_at_the_counter_is_not_a_visit(self):
         """Chi regala un buono non si è seduto in poltrona. Contarlo gonfiava
@@ -546,3 +571,63 @@ class HistorySalesHiddenTests(_Base):
         owner = SimpleNamespace(auth=staff_context(self.salon, is_owner=True))
         data = client_history(owner, self.client_obj.id)
         self.assertFalse(data["sales_hidden"])
+
+
+class VisitsAreDaysTests(_Base):
+    """Le visite si contano per GIORNO (nel fuso del salone), non per appuntamento.
+
+    In un salone arrivato da un altro gestionale due visite in contemporanea
+    (mani e piedi con due operatrici) erano due visite: «Visite 2» per un
+    pomeriggio, e le regole caparra («sotto le 3 visite») la davano per abituale.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from apps.staff.models import Operator
+
+        self.other_operator = Operator.objects.create(salon=self.salon, first_name="Bea", last_name="Neri")
+        self.day = timezone.localdate() - dt.timedelta(days=5)
+
+    def test_two_visits_at_the_same_time_are_one(self):
+        hands = self.appointment(start=aware(self.day, 10))
+        feet = self.appointment(start=aware(self.day, 10), operator=self.other_operator)
+        self.checkout(hands, "40")
+        self.checkout(feet, "35")
+        stats = client_stats(self.client_obj)
+        self.assertEqual((stats["visits"], stats["total_spent"]), (1, Decimal("75")))
+
+    def test_a_visit_and_a_purchase_on_the_same_day_are_one(self):
+        from apps.sales.models import Sale
+
+        self.appointment(start=aware(self.day, 10))
+        sale = self.counter_sale("25")
+        Sale.objects.filter(pk=sale.pk).update(created_at=aware(self.day, 12))
+        stats = client_stats(self.client_obj)
+        self.assertEqual(stats["visits"], 1)
+        self.assertEqual(stats["last_visit"], aware(self.day, 12))
+
+    def test_different_days_add_up(self):
+        self.appointment(start=aware(self.day, 10))
+        self.appointment(start=aware(self.day - dt.timedelta(days=30), 10))
+        self.assertEqual(client_stats(self.client_obj)["visits"], 2)
+
+    def test_the_salon_day_not_the_utc_day(self):
+        """Le 00:30 del giorno dopo sono un altro giorno per il salone, anche se in UTC è lo stesso."""
+        self.appointment(start=aware(self.day, 22))
+        self.appointment(start=aware(self.day + dt.timedelta(days=1), 0, 30))
+        self.assertEqual(client_stats(self.client_obj)["visits"], 2)
+
+    def test_the_history_counts_the_same_days(self):
+        hands = self.appointment(start=aware(self.day, 10))
+        self.appointment(start=aware(self.day, 10), operator=self.other_operator)
+        self.checkout(hands, "40")
+        # annullate e saltate sono nello storico, ma visite non sono
+        self.appointment(start=aware(self.day - dt.timedelta(days=2), 10), status="cancelled")
+        self.appointment(start=aware(self.day - dt.timedelta(days=3), 10), status="no_show")
+        self.counter_sale("25")  # oggi
+        full = client_history(_request(self.salon), self.client_obj.id)
+        self.assertEqual(full["counts"]["visits"], 2)
+        self.assertEqual(full["counts"]["visits"], client_stats(self.client_obj)["visits"])
+        # Senza «vendite» il passaggio al banco non si vede, e non si conta.
+        hidden = client_history(_request(self.salon, scopes=("clients",)), self.client_obj.id)
+        self.assertEqual(hidden["counts"]["visits"], 1)

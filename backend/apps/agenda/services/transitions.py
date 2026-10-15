@@ -18,6 +18,13 @@ from .messages import _event_payload, _withdraw_deposit_messages, emit_appointme
 from .refunds import settle_deposit_refund
 
 
+def _refresh_reliability(appointment: Appointment, actor=None) -> None:
+    """La cliente ha un no-show o un annullamento tardivo in più (o in meno): l'affidabilità si ricalcola."""
+    from apps.clients.services import recompute_reliability  # lazy: è dell'anagrafica
+
+    recompute_reliability(appointment.client, actor=actor)
+
+
 @transaction.atomic
 def check_in(appointment: Appointment, *, actor=None, start: bool = False) -> Appointment:
     """Check-in; con `start` anche l'inizio del trattamento, in un passo solo.
@@ -130,6 +137,7 @@ def mark_no_show(appointment: Appointment, *, reason: str = "", actor=None) -> A
         actor=actor,
         payload={"appointment_id": appointment.id, "reason": reason},
     )
+    _refresh_reliability(appointment, actor)
     if appointment.deposit_status == Appointment.DepositStatus.REQUIRED:
         # Come nell'annullamento: il link della caparra non ha più niente da
         # incassare. Restava pagabile, e la cliente che lo apriva la sera
@@ -232,6 +240,8 @@ def cancel_appointment(
                 "by_client": by_client,
             },
         )
+        if late or before["status"] == Appointment.Status.NO_SHOW or before["cancelled_late"]:
+            _refresh_reliability(appointment, actor)
         unpaid_link = appointment.deposit_status == Appointment.DepositStatus.REQUIRED
         if unpaid_link:
             # Il link della caparra non ha più niente da incassare: quello non
