@@ -646,3 +646,18 @@ del salone cifrati sulla connessione, segreto del webhook per salone.
   `contact.*` con `resource_id` riconcilia solo quel contatto. Gli annullamenti
   arrivati DA Yourang non vengono rimandati a Yourang come
   `appointment.cancelled`.
+- Assistente vocale (prenotazioni al telefono, `voice.py`): l'agente Yourang usa
+  tre strumenti esterni con `Authorization: Bearer <chiave del salone>` (a
+  database solo l'sha256, `Salon.voice_api_key_hash`; chiave assente o sbagliata
+  → 401). GET `/voice/services` → `[{id, name, category, duration_min, price}]`
+  (il listino pubblico); GET `/voice/availability?date=YYYY-MM-DD&services=12,15`
+  → `{success, date, date_label, times: ["HH:MM"]}` (gli orari dell'app, sede
+  predefinita); POST `/voice/appointments` `{date, time, services, customer_name,
+  customer_phone, notes}` → `{success, appointment_id, date, date_label, time,
+  services, deposit_amount}`. Cliente trovata o creata dal telefono, prenotazione
+  con `create_appointment` (`created_via=yourang`, caparra, conferma). Esiti per
+  l'agente sempre 200: `{success: false, error: "unavailable", message,
+  alternatives}` o `error: "invalid_request"`. Lo stesso orario ripetuto entro 10
+  minuti restituisce l'appuntamento già creato. Chiave: GET `/voice/key` →
+  `{active, created_at}`, POST → `{key, created_at}` (in chiaro una volta sola,
+  la precedente smette di valere), DELETE la revoca; solo titolare.

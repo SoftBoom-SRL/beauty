@@ -88,7 +88,8 @@ Le app, con i moduli di dominio principali:
 - **integrations** — Yourang: `oauth.py` (flusso OAuth con nonce e state),
   `connection.py` (collegamento, token, webhook), `login.py` («Accedi con
   Yourang»), `webhooks.py` (smistamento degli eventi in arrivo), `sync.py`
-  (sincronizzazione di contatti, catalogo, eventi), `client.py` (client HTTP).
+  (sincronizzazione di contatti, catalogo, eventi), `client.py` (client HTTP),
+  `voice.py` (l'agente vocale che prenota al telefono).
 
 ### 1.2 `backend/common/`
 
