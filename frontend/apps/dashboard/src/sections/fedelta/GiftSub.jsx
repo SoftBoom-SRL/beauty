@@ -19,6 +19,7 @@ const LIMIT = 24;
 const PAY_METHOD_LABELS = {
   cash: { it: 'Contanti', en: 'Cash' },
   card: { it: 'Carta', en: 'Card' },
+  transfer: { it: 'Bonifico', en: 'Transfer' },
   other: { it: 'Altro', en: 'Other' },
 };
 

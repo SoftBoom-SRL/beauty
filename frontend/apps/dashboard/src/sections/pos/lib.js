@@ -24,10 +24,13 @@ export function sanitizeAmtInput(raw) {
  *  (la regola di fmtEurNoFree, con il nome che usa la cassa). */
 export { fmtEurNoFree as money } from '@youty/shared';
 
-/** payment methods (API enum order: cash | card | other | gift_card) */
+/** payment methods (API enum: cash | card | transfer | other | gift_card).
+ *  «Bonifico» è anche il versamento arrivato da un link di pagamento di
+ *  un'altra banca (Nexi): prima finiva in «Altro». */
 export const payMethods = (t) => [
   ['cash', t('Contanti', 'Cash')],
   ['card', t('Carta', 'Card')],
+  ['transfer', t('Bonifico', 'Transfer')],
   ['other', t('Altro', 'Other')],
   ['gift_card', t('Gift card', 'Gift card')],
 ];

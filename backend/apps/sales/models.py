@@ -140,6 +140,10 @@ class Payment(models.Model):
         CARD = "card"
         OTHER = "other"
         GIFT_CARD = "gift_card"
+        # Bonifico o versamento sul conto del salone, anche quello che arriva
+        # da un link di pagamento di un'altra banca (Nexi): le caparre pagate
+        # così finivano in «altro», e la cassa non le distingueva dal resto.
+        TRANSFER = "transfer"
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="payments")
     method = models.CharField(max_length=10, choices=Method.choices)

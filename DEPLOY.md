@@ -567,13 +567,14 @@ Dopo il deploy:
 
 ### 9.5 Trattamenti già pagati, conti da saldare, aggiuntivi, clienti senza telefono
 
-Le funzioni nate dall'import da altri gestionali portano sei migrazioni:
+Le funzioni nate dall'import da altri gestionali portano sette migrazioni:
 `catalog.0006` (servizi aggiuntivi, validità dei pacchetti), `clients.0009`
 (telefono facoltativo: il vincolo di unicità vale solo per i numeri non vuoti,
 più «contatto tramite»), `core.0015` (riferimenti agli id di un altro
 gestionale), `sales.0006` (resto da pagare sulla vendita, riga pacchetto, data
 del pagamento), `marketing.0006` (tipo e sedute delle gift card) e
-`agenda.0012` (conto unico). `sales.0006` dà a ogni pagamento già registrato
+`agenda.0012` (conto unico), più `sales.0007`, che aggiunge solo la scelta
+«Bonifico» ai metodi di pagamento (nessuna modifica alle tabelle). `sales.0006` dà a ogni pagamento già registrato
 la data della sua vendita: su tabelle grandi è un UPDATE unico, nessuna pausa
 da prevedere oltre al tempo della query.
 

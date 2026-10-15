@@ -6,7 +6,7 @@ import { inputCss, segBtn, pillBtn } from '../formStyles.js';
 import { MAX_SESSIONS, giftCardMissing, giftCardPayload, giftCardValueCents } from '../giftCardForm.js';
 import { giftCardsApi } from '../../../api/marketing.js';
 
-const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['other', 'Altro', 'Other']];
+const PAY_METHODS = [['card', 'Carta', 'Card'], ['cash', 'Contanti', 'Cash'], ['transfer', 'Bonifico', 'Transfer'], ['other', 'Altro', 'Other']];
 
 /** Sell a new gift card → POST /api/marketing/gift-cards
  * (kind, value, gift_service_id + sessions?, buyer_client_id?, recipient_client_id?, recipient_name,
