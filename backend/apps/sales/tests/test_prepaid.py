@@ -216,3 +216,23 @@ class PayingWithSessionsTests(PrepaidTestBase):
         self.assertEqual(res.status_code, 200, res.content)
         self.card.refresh_from_db()
         self.assertEqual((self.card.sessions_left, self.card.balance, self.card.status), (0, Decimal("0.00"), "redeemed"))
+
+    def test_a_session_of_a_free_package_is_paid_with_zero_euros(self):
+        """Pacchetto in omaggio: la seduta vale 0, il conto è 0, ma la carta va scalata.
+
+        Il pagamento da 0 € con la gift card non va scartato: è l'unico modo
+        di togliere la seduta fatta (lo ammette solo una carta a trattamento).
+        """
+        free = create_gift_card(
+            self.salon, Decimal("0"), gift_service=self.manicure, buyer_client=self.sofia,
+            recipient_client=self.sofia, paid=True, paid_method="cash", kind=GiftCard.Kind.PACKAGE, sessions=5,
+        )
+        line = {"line_type": "service", "service_id": self.manicure.id, "qty": 1, "unit_price": "0.00"}
+        res = self._pos([line], "0", payments=[
+            {"method": "gift_card", "amount": "0.00", "gift_card_code": free.code},
+        ])
+        self.assertEqual(res.status_code, 200, res.content)
+        free.refresh_from_db()
+        self.assertEqual((free.sessions_left, free.balance), (4, Decimal("0.00")))
+        payment = Sale.objects.get().payments.get()
+        self.assertEqual((payment.amount, payment.gift_card), (Decimal("0.00"), free))
