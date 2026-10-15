@@ -3,6 +3,8 @@ solo gli attivi, pacchetti con le loro righe, 404 per un salone inesistente.
 
 Caccia del 22/09:
 - 09-07 (C4): il listino pubblico porta la posa (`soak_min`), anche nei pacchetti.
+
+15/10: il listino pubblico dice quali servizi sono aggiuntivi (`is_addon`).
 """
 
 from decimal import Decimal
@@ -80,3 +82,18 @@ class PublicSoakTests(_CatalogSetup):
         res = self.client.get(f"/api/catalog/public/packages?salon={self.salon.slug}")
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(res.json()[0]["items"][0]["soak_min"], 40)
+
+
+class PublicAddonTests(_CatalogSetup):
+    """15/10: l'app cliente deve sapere quali servizi sono aggiuntivi, per
+    offrirli dopo il servizio principale e non contarne il tempo."""
+
+    def test_public_services_say_which_are_addons(self):
+        Service.objects.create(
+            salon=self.salon, category=self.cat, name_it="Nail art", duration_min=15,
+            price=Decimal("10"), is_addon=True,
+        )
+        res = self.client.get(f"/api/catalog/public/services?salon={self.salon.slug}")
+        self.assertEqual(res.status_code, 200, res.content)
+        flags = {s["name_it"]: s["is_addon"] for s in res.json()[0]["services"]}
+        self.assertEqual(flags, {"Colore": False, "Nail art": True})

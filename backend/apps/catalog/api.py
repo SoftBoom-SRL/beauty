@@ -167,6 +167,7 @@ def create_service(request, data: ServiceIn):
     payload = data.dict()
     category = salon_get(ServiceCategory, ctx, payload.pop("category_id"))
     payload["color"] = _service_color(payload["color"])
+    payload["is_addon"] = bool(payload["is_addon"])  # assente = un servizio normale
     service = Service.objects.create(salon=ctx.salon, category=category, **payload)
     log_activity(
         ctx.salon,
@@ -190,6 +191,10 @@ def update_service(request, service_id: int, data: ServiceIn):
         del payload["color"]  # assente: resta quello di prima
     else:
         payload["color"] = _service_color(payload["color"])
+    if payload["is_addon"] is None:
+        # Assente: resta com'era. Le visite già in agenda non cambiano in
+        # nessuno dei due versi: le loro voci tengono il tempo concordato.
+        del payload["is_addon"]
     for name, value in payload.items():
         setattr(service, name, value)
     # Solo le colonne del modulo: il save() completo riscriveva anche

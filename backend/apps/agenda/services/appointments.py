@@ -17,6 +17,7 @@ from apps.core.services import log_activity
 
 from .. import undo as undo_log
 from ..models import Appointment, AppointmentService, UndoEntry
+from .addons import ADDON_SPLIT_MESSAGE, is_timeless, with_addons
 from .deposit_holds import realign_deposit_due, schedule_deposit_hold
 from .deposits import compute_deposit, gift_covered_amount, shrink_deposit_to_total
 from .freed_slots import _appointment_spans, _chain_spans, _spans_union, emit_with_freed_slots
@@ -456,6 +457,13 @@ def split_appointment(
     `client_overlap_ok=True` (gesti dello staff in agenda): due trattamenti
     sulla stessa cliente possono stare nella stessa fascia — è una seduta sola,
     non un conflitto — e l'appuntamento NON viene marcato come forzato.
+
+    Aggiuntivi (vedi `addons`): il servizio si stacca INSIEME agli aggiuntivi
+    che gli vengono dietro — la nail art segue la manicure, perché si fa
+    durante quella — e chi cambia mano è chi aveva la manicure. Un aggiuntivo
+    da solo non si stacca (422): resterebbe una visita senza servizio, o la
+    nail art appoggiata alla pedicure. Se il servizio con i suoi aggiuntivi è
+    tutta la visita, non c'è niente da staccare: si sposta.
     Ritorna (originale aggiornato, nuovo appuntamento).
     """
     _lock_and_reload(appointment)
@@ -471,8 +479,23 @@ def split_appointment(
     item = next((it for it in items if it.id == item_id), None)
     if item is None:
         raise HttpError(404, "Servizio non trovato nell'appuntamento")
+    if is_timeless(item.duration_min, item.soak_min):
+        raise HttpError(422, ADDON_SPLIT_MESSAGE)
+    group = with_addons(items, item)
+    if len(group) == len(items):
+        raise HttpError(400, "L'appuntamento ha un solo servizio: usa «Sposta»")
     target = operator or item.operator
-    if operator is not None and not item.service.operators.filter(id=operator.id).exists():
+    # Chi riceve il pezzo: le righe di chi aveva il servizio passano a
+    # `target`, quelle di una collega (la nail art fatta da un'altra) restano
+    # sue. L'idoneità vale per ogni riga che cambia mano, aggiuntivi compresi.
+    movers = [
+        (row, target if row.operator_id == item.operator_id else row.operator) for row in group
+    ]
+    if operator is not None and any(
+        (row is item or who.id != row.operator_id)
+        and not row.service.operators.filter(id=who.id).exists()
+        for row, who in movers
+    ):
         raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
 
     # Minuto (dall'inizio della visita) di ogni servizio PRIMA dello stacco:
@@ -486,13 +509,17 @@ def split_appointment(
         cursor += existing.duration_min + existing.soak_min
     position = items.index(item)
 
-    # Prima si stacca l'item, POI si valida: così il controllo vede la
+    # Prima si stacca il pezzo, POI si valida: così il controllo vede la
     # situazione reale (i servizi rimasti da una parte, quello spostato
     # dall'altra) invece di escludere l'intera visita e lasciar passare una
     # sovrapposizione fra i due pezzi. Siamo in transazione: un conflitto
     # annulla tutto.
-    service, duration_min, soak_min, price = item.service, item.duration_min, item.soak_min, item.price
-    item.delete()
+    service = item.service
+    leaving = [
+        ResolvedItem(row.service, who, row.duration_min, row.soak_min, row.price) for row, who in movers
+    ]
+    taken = sum(row.duration_min + row.soak_min for row in group)
+    appointment.items.filter(id__in=[row.id for row in group]).delete()
     remaining = list(appointment.items.select_related("operator").order_by("order", "id"))
     for index, rest in enumerate(remaining):
         if rest.order != index:
@@ -509,9 +536,15 @@ def split_appointment(
             changed.append("deposit_due_at")
     elif position < len(remaining):
         # Staccato in mezzo: chi veniva dopo resta alla sua ora, e il tempo del
-        # servizio tolto diventa attesa dopo quello che lo precedeva.
-        previous = remaining[position - 1]
-        previous.soak_min += duration_min + soak_min
+        # servizio tolto diventa attesa dopo quello che lo precedeva. Dopo
+        # l'ultimo servizio CON tempo: messa sulla nail art della manicure
+        # prima, l'attesa ne avrebbe fatto una voce con tempo, non più un
+        # aggiuntivo.
+        previous = next(
+            (row for row in reversed(remaining[:position]) if not is_timeless(row.duration_min, row.soak_min)),
+            remaining[position - 1],
+        )
+        previous.soak_min += taken
         previous.save(update_fields=["soak_min"])
     appointment.operator = remaining[0].operator
     appointment.save(update_fields=changed)
@@ -534,7 +567,7 @@ def split_appointment(
         deposit_amount=Decimal("0.00"),
         deposit_status=Appointment.DepositStatus.NONE,
     )
-    _write_items(created, [ResolvedItem(service, target, duration_min, soak_min, price)])
+    _write_items(created, leaving)
 
     if not force:
         # il servizio staccato non deve finire sopra nulla — ma i servizi della
@@ -542,16 +575,22 @@ def split_appointment(
         # contano come ostacolo quando lo staff sta spostando a mano.
         ignore_client = appointment.client_id if client_overlap_ok else None
         _validate_segments(
-            appointment.salon, new_start, [(duration_min, soak_min, target)],
+            appointment.salon, new_start,
+            [(row.duration_min, row.soak_min, row.operator) for row in leaving],
             exclude_appointment_id=created.id,
             ignore_client_id=ignore_client,
         )
 
     client_name = appointment.client.full_name
+    # «Manicure con Nail art»: nel registro e in «torna indietro» si legge
+    # che cosa è partito davvero.
+    piece = service.name_it + (
+        " con " + ", ".join(row.service.name_it for row in group[1:]) if len(group) > 1 else ""
+    )
     log_activity(
         appointment.salon,
         "appointment.split",
-        f"{service.name_it} di {client_name} spostato in un appuntamento a parte",
+        f"{piece} di {client_name} spostato in un appuntamento a parte",
         actor=actor,
         payload={
             "appointment_id": appointment.id,
@@ -576,7 +615,7 @@ def split_appointment(
     undo_log.record(
         appointment.salon,
         kind=UndoEntry.Kind.SPLIT,
-        label=f"Stacco di {service.name_it} dall'appuntamento di {client_name}",
+        label=f"Stacco di {piece} dall'appuntamento di {client_name}",
         actor=actor,
         before={"appointments": [before]},
         after={

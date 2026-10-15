@@ -223,19 +223,24 @@ finestre lavorabili in minuti per quella data = turno del weekday
 - `ServiceCategory`: salon FK, name_it, name_en blank, color (#hex pastello), order int.
 - `Service`: salon FK, category FK, name_it, name_en blank, duration_min int, price Decimal,
   product_cost Decimal default 0, supplier_cost Decimal default 0 (per stima margine),
-  active bool default True, order int default 0.
+  active bool default True, order int default 0, is_addon bool default False.
+  `is_addon` = aggiuntivo: si fa DURANTE un altro servizio (nail art durante la manicure,
+  massaggio ai piedi durante la pedicure). In agenda aggiunge il prezzo, non il tempo
+  (vedi §7, «Aggiuntivi»); `duration_min` resta la durata indicativa di listino (≥ 1).
 - `Package`: salon FK, name, description blank, price Decimal, active bool default True.
 - `PackageItem`: package FK related_name="items", service FK, qty int default 1.
 
 **Endpoint** (/api/catalog)
 - GET `/categories` + CRUD (scope pricing) + POST `/categories/reorder` {ids:[...]}.
 - GET `/services?category_id=&active=` + CRUD (scope pricing).
-  Su cambio prezzo → log `service.price_changed` con {old, new}.
+  Su cambio prezzo → log `service.price_changed` con {old, new}. `is_addon` nel PUT:
+  assente = invariato (come `color`), nel POST assente = falso.
 - GET `/packages` + CRUD (scope pricing) — items nested nel payload
   {items:[{service_id, qty}]}, ricreati a ogni update.
 - Pubblici (no auth, per la web app prima del login): GET `/public/services?salon=slug`
-  → categorie ordinate con servizi attivi {id, name_it, name_en, duration_min, price};
-  GET `/public/packages?salon=slug`.
+  → categorie ordinate con servizi attivi {id, name_it, name_en, duration_min, soak_min,
+  price, is_addon}; GET `/public/packages?salon=slug`. L'app cliente non prenota un
+  aggiuntivo da solo: lo offre come «Aggiungi» dopo il servizio principale.
 
 **Tests**: reorder, package con items, endpoint pubblico.
 
@@ -282,7 +287,33 @@ finestre lavorabili in minuti per quella data = turno del weekday
   operatrice del primo item; calcola deposito → deposit_status required/none;
   log + emit `appointment.created` (payload: client nome/telefono/lang, servizi, start ISO, deposito).
 - `freed_slots.free_slot_event(appointment)`: emit `slot.freed` {start, duration_min, operator_id,
-  matching_waitlist: [entry_id...]} — waitlist attive compatibili per servizio+operatrice.
+  matching_waitlist: [entry_id...]} — waitlist attive compatibili per servizio+operatrice
+  (mai quelle per un aggiuntivo).
+
+**Aggiuntivi** (`services/addons.py`; servizi `catalog.Service.is_addon`)
+- La voce (`AppointmentService`) di un aggiuntivo ha `duration_min = 0` e `soak_min = 0`:
+  aggiunge il prezzo (conto, caparra, margine: niente manodopera) ma non il tempo, non
+  allunga la visita e non occupa nessuno slot (né di chi la fa né nella ricerca). Le voci
+  NUOVE lo sono se il servizio è un aggiuntivo; quelle già sulla visita restano come sono
+  state concordate (una nail art prenotata a 15' prima del flag resta di 15').
+- Si appoggia al servizio PRIMA di lei: un aggiuntivo non può essere la prima voce (422
+  «Un aggiuntivo va dopo il servizio a cui si appoggia») e una visita non può essere di
+  soli aggiuntivi (422 «Un aggiuntivo va insieme a un servizio»). Vale per creazione
+  (dashboard, app, assistente vocale), modifica, ricerca degli orari (anche pubblica) e
+  lista d'attesa (nessuna iscrizione per un aggiuntivo). Il 422 non si supera con `force`.
+- Chi lo fa: l'operatrice indicata, se idonea (400 altrimenti, come ogni servizio); senza
+  indicazione chi fa il servizio a cui si appoggia, se lo sa fare, altrimenti la prima idonea.
+  Nessuna verifica di libertà né di turno: non occupa tempo. Ricerca e conferma scelgono
+  allo stesso modo.
+- Modifica (PUT): la durata di un aggiuntivo resta 0 qualunque `duration_min`/`soak_min`
+  arrivi; lo 0 è ammesso solo per lui (su un altro servizio: 422).
+- Spostamento: gli aggiuntivi seguono la loro colonna come ogni voce (idoneità compresa).
+- Stacco (`/split`): un servizio si stacca INSIEME agli aggiuntivi che gli vengono dietro
+  (le righe di chi aveva il servizio passano all'operatrice di arrivo); un aggiuntivo da
+  solo no (422 «Un aggiuntivo non si stacca da solo: …»). Se servizio e aggiuntivi sono
+  tutta la visita → 400 «usa Sposta». Il tempo lasciato in mezzo diventa attesa dopo
+  l'ultimo servizio CON tempo prima del pezzo staccato.
+- Messaggi a Yourang: l'aggiuntivo compare fra i `services` con `duration_min: 0`.
 
 Gli endpoint stanno in `api/`, un modulo per risorsa (`agenda_views`, `appointments`,
 `undo_routes`, `pauses`, `waitlist`, `availability`, `client_app`); la forma delle
@@ -321,6 +352,7 @@ risposte in `presenters.py`.
   refund_due (conferma manuale: POST /appointments/{id}/deposit-refunded, scope sales).
   Log, emit `appointment.cancelled` {…, reason, late, by_client}, free_slot_event.
 - PUT `/appointments/{id}` {items?, note?} (scope agenda) → modifica trattamenti (snapshot nuovi), log.
+  `items[].duration_min` da 1 a 720; 0 solo per un aggiuntivo (vedi «Aggiuntivi»).
   Se modifica o stacco liberano tempo, `slot.freed` lo annuncia come lo
   spostamento (nei match anche chi aspettava il servizio tolto o staccato). Se la
   caparra da pagare scende a 0 € diventa «nessuna», senza scadenza e con il link

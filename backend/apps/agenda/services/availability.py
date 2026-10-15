@@ -17,6 +17,7 @@ from apps.core.services import default_location
 from common.intervals import merge_intervals
 
 from ..models import Appointment
+from .addons import addon_operator, check_chain, is_timeless
 from .occupancy import (
     _bookable_service,
     _busy_map,
@@ -34,7 +35,8 @@ class PlanStep(NamedTuple):
     `candidates` sono le operatrici fra cui scegliere, `duration_min` e
     `soak_min` il lavoro attivo e la posa della voce; `group` (spostamento di
     una visita) è l'id dell'operatrice non più prenotabile le cui righe passano
-    tutte a UNA sola collega, None altrimenti.
+    tutte a UNA sola collega, None altrimenti. `addon`: un aggiuntivo, senza
+    tempo, che non si cerca libero (vedi `addons`).
     """
 
     service: object
@@ -42,6 +44,7 @@ class PlanStep(NamedTuple):
     duration_min: int
     soak_min: int
     group: int | None
+    addon: bool = False
 
 
 def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_service_ids=()):
@@ -64,10 +67,15 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
     sostituisce in silenzio: la ricerca proponeva orari di un'altra e la
     conferma rispondeva «Operatrice non idonea» a ogni tentativo (la stilista
     dell'altra sede scelta dall'app).
+
+    Aggiuntivi: per una prenotazione nuova sono i servizi `is_addon`, a durata
+    e posa 0, e come alla conferma non possono stare da soli né in testa (422);
+    spostando una visita sono le sue voci senza tempo.
     """
     operator_by_id = {op.id: op for op in operators}
     keep = set(keep_service_ids or ())
     plan: list[PlanStep] = []
+    unavailable = False
     for raw in items:
         service = _bookable_service(salon, raw.get("service_id"), keep_ids=keep)
         eligible_ids = set(service.operators.values_list("id", flat=True))
@@ -89,29 +97,47 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
         else:
             candidates = eligible
         if not candidates:
-            return None  # nessuna operatrice idonea: mai disponibile
-        duration = int(raw.get("duration_min") or service.duration_min)
-        soak = raw.get("soak_min")
-        soak = int(service.soak_min or 0) if soak is None else int(soak)
-        plan.append(PlanStep(service, candidates, duration, soak, group))
-    return plan
+            unavailable = True  # nessuna operatrice idonea: mai disponibile
+        raw_duration = raw.get("duration_min")
+        if raw_duration is not None:
+            # Le righe di una visita da spostare: durata e posa scritte, anche
+            # 0. Con `durata or listino` lo 0 di un aggiuntivo tornava la sua
+            # durata indicativa, e la nail art occupava di nuovo un quarto d'ora.
+            duration, soak = int(raw_duration), int(raw.get("soak_min") or 0)
+            addon = is_timeless(duration, soak)
+        elif service.is_addon:
+            addon, duration, soak = True, 0, 0
+        else:
+            addon, duration = False, int(service.duration_min)
+            soak = raw.get("soak_min")
+            soak = int(service.soak_min or 0) if soak is None else int(soak)
+        plan.append(PlanStep(service, candidates, duration, soak, group, addon))
+    if not moving:
+        # Prima dell'esito «nessun orario»: chi chiede la sola nail art deve
+        # sapere perché, non vedere una giornata vuota.
+        check_chain(step.addon for step in plan)
+    return None if unavailable else plan
 
 
 def _chain_at(plan, windows, busy, tick: int, bands):
     """Assegnazione della catena che parte al minuto `tick`, o None se non ci sta.
 
     Ritorna (assignment, segments): `segments` sono (operatrice, inizio, fine)
-    con la POSA della voce compresa, per il calcolo dei buchi.
+    con la POSA della voce compresa, per il calcolo dei buchi. Un aggiuntivo
+    non ha segmento e non si cerca libero: va a chi fa il servizio a cui si
+    appoggia, se lo sa fare, come alla conferma (`addons.addon_operator`).
     """
     # Le voci sono sequenziali: dove cade ciascuna dipende solo da `tick`.
     positions = []
     cursor = tick
-    for _service, _candidates, duration_min, soak_min, _group in plan:
-        positions.append((cursor, cursor + duration_min))
+    for step in plan:
+        positions.append((cursor, cursor + step.duration_min))
         # il prossimo servizio parte dopo lavoro attivo + posa di questo
-        cursor += duration_min + soak_min
+        cursor += step.duration_min + step.soak_min
 
     def free(op, index):
+        if plan[index].addon:
+            return True  # non occupa tempo: non c'è niente da trovare libero
         start, end = positions[index]
         # disponibilità automatica: la posa altrui conta come occupata
         # (allow_soak=False), quindi uno slot non viene MAI offerto se
@@ -121,26 +147,32 @@ def _chain_at(plan, windows, busy, tick: int, bands):
     by_group: dict = {}
     assignment = []
     segments = []
-    for index, (service, candidates, _duration, soak_min, group) in enumerate(plan):
-        if group is None:
-            chosen = next((op for op in candidates if free(op, index)), None)
-        else:
-            if group not in by_group:
-                members = [i for i, step in enumerate(plan) if step.group == group]
-                by_group[group] = next(
+    parent = None  # chi fa l'ultimo servizio con tempo: l'aggiuntivo si appoggia lì
+    for index, step in enumerate(plan):
+        if step.group is not None:
+            if step.group not in by_group:
+                members = [i for i, other in enumerate(plan) if other.group == step.group]
+                by_group[step.group] = next(
                     (
                         op
-                        for op in candidates
+                        for op in step.candidates
                         if all(op in plan[i].candidates and free(op, i) for i in members)
                     ),
                     None,
                 )
-            chosen = by_group[group]
+            chosen = by_group[step.group]
+        elif step.addon:
+            chosen = addon_operator(step.candidates, parent)
+        else:
+            chosen = next((op for op in step.candidates if free(op, index)), None)
         if chosen is None:
             return None
+        assignment.append({"service_id": step.service.id, "operator_id": chosen.id})
+        if step.addon:
+            continue
         start, end = positions[index]
-        assignment.append({"service_id": service.id, "operator_id": chosen.id})
-        segments.append((chosen, start, end + soak_min))
+        segments.append((chosen, start, end + step.soak_min))
+        parent = chosen
 
     # La cliente resta in salone anche durante la posa finale: uno slot che la
     # porta oltre la chiusura veniva offerto e poi rifiutato alla conferma.
@@ -222,8 +254,10 @@ def get_free_slots(
     plan, windows, busy = context
     min_useful = _min_useful_minutes(salon, step)
 
+    # Le finestre di chi lavora davvero: quelle di chi può fare un aggiuntivo
+    # non decidono dove cercare, l'aggiuntivo non prende tempo.
     all_windows = [
-        w for entry in plan for op in entry.candidates for w in windows.get(op.id, [])
+        w for entry in plan if not entry.addon for op in entry.candidates for w in windows.get(op.id, [])
     ]
     if not all_windows:
         return []
@@ -283,12 +317,19 @@ def slot_assignment(
 
 
 def _min_useful_minutes(salon, step: int) -> int:
-    """Il buco più piccolo ancora vendibile: la durata del servizio attivo più corto."""
+    """Il buco più piccolo ancora vendibile: la durata del servizio attivo più corto.
+
+    Gli aggiuntivi non contano: non si prenotano da soli, quindi la nail art da
+    dieci minuti non riempie nessun buco da dieci minuti.
+    """
     from django.db.models import Min
 
     from apps.catalog.models import Service  # lazy
 
-    shortest = Service.objects.filter(salon=salon, active=True).aggregate(m=Min("duration_min"))["m"]
+    shortest = (
+        Service.objects.filter(salon=salon, active=True, is_addon=False)
+        .aggregate(m=Min("duration_min"))["m"]
+    )
     return max(int(shortest or 0), step)
 
 

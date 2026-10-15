@@ -6,7 +6,8 @@ Caccia del 22/09:
 - 18-07: modificare un servizio o un pacchetto non riscrive `yourang_item_id`
   scritto nel frattempo dalla sincronizzazione.
 
-15/10: ogni servizio può avere un colore suo, o prendere quello della categoria.
+15/10: ogni servizio può avere un colore suo, o prendere quello della categoria;
+e può essere un aggiuntivo (si fa durante un altro servizio).
 """
 
 import json
@@ -406,3 +407,50 @@ class ServiceColorTests(_CatalogSetup):
         self.color.refresh_from_db()
         self.assertEqual(self.color.color, "#B71C1C")
         self.assertEqual(self._send("post", "/api/catalog/services", color="blu").status_code, 400)
+
+
+class ServiceAddonTests(_CatalogSetup):
+    """15/10: un servizio può essere un «aggiuntivo» (nail art durante la
+    manicure): nell'appuntamento aggiunge il prezzo, non il tempo."""
+
+    BODY = {"name_it": "Nail art", "duration_min": 15, "price": "10.00"}
+
+    def _send(self, method, url, **body):
+        return getattr(self.client, method)(
+            url, data=json.dumps({"category_id": self.cat.id, **self.BODY, **body}),
+            content_type="application/json", **self.auth,
+        )
+
+    def test_a_new_service_is_an_addon_only_if_asked(self):
+        res = self._send("post", "/api/catalog/services")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(res.json()["is_addon"])
+        res = self._send("post", "/api/catalog/services", is_addon=True)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(res.json()["is_addon"])
+        addon = Service.objects.get(id=res.json()["id"])
+        self.assertTrue(addon.is_addon)
+        # la durata di listino resta quella indicativa
+        self.assertEqual(addon.duration_min, 15)
+        listed = {s["id"]: s["is_addon"] for s in self.client.get("/api/catalog/services", **self.auth).json()}
+        self.assertTrue(listed[addon.id])
+        self.assertFalse(listed[self.color.id])
+
+    def test_editing_without_the_flag_keeps_it(self):
+        Service.objects.filter(id=self.color.id).update(is_addon=True)
+        url = f"/api/catalog/services/{self.color.id}"
+        # la riattivazione dalla lista manda il servizio senza il campo
+        res = self._send("put", url)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.color.refresh_from_db()
+        self.assertTrue(self.color.is_addon)
+        res = self._send("put", url, is_addon=False)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.color.refresh_from_db()
+        self.assertFalse(self.color.is_addon)
+
+    def test_an_addon_still_has_its_indicative_duration(self):
+        # «un servizio da zero minuti non esiste», neanche aggiuntivo: lo 0 è
+        # della voce nell'appuntamento, non del listino
+        res = self._send("post", "/api/catalog/services", is_addon=True, duration_min=0)
+        self.assertEqual(res.status_code, 422)

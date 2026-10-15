@@ -56,7 +56,10 @@ class ItemEditIn(Schema):
     # None = keep the duration already booked. Con un tetto, come posa e
     # listino: un «600» battuto al posto di «60» passava, forzato dal
     # ritentativo automatico, e bloccava l'agenda dell'operatrice per giorni.
-    duration_min: Optional[int] = Field(None, ge=1, le=12 * 60)
+    # Lo 0 è la durata di un aggiuntivo (nail art durante la manicure): chi
+    # rimanda la lista intera per allungare un altro servizio lo ricopia così
+    # com'è. Su un servizio che non lo è resta un errore (422).
+    duration_min: Optional[int] = Field(None, ge=0, le=12 * 60)
     # Attesa DOPO il servizio: la posa di un colore, o semplicemente il buco che
     # il salone vuole lasciare prima del trattamento successivo (la cliente
     # resta lì, l'operatrice nel frattempo è libera — è la stessa cosa per

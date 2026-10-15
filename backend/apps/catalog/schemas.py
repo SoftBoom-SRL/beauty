@@ -60,6 +60,14 @@ class ServiceOut(Schema):
     color: str = Field(
         "", description="Colore del servizio (#RRGGBB); vuoto = quello della categoria"
     )
+    is_addon: bool = Field(
+        False,
+        description=(
+            "Aggiuntivo: si fa durante un altro servizio (nail art durante la manicure). "
+            "In agenda aggiunge il prezzo, non il tempo: la sua voce dura 0 minuti e va "
+            "dopo il servizio a cui si appoggia. `duration_min` resta quella indicativa."
+        ),
+    )
 
 
 class ServiceIn(Schema):
@@ -86,6 +94,17 @@ class ServiceIn(Schema):
     color: Optional[str] = Field(
         None,
         description="Colore del servizio (#RRGGBB); \"\" = quello della categoria; assente = invariato",
+    )
+    # Assente = invariato, come il colore: la riattivazione dalla lista manda il
+    # servizio senza questo campo, e con un default a False avrebbe tolto in
+    # silenzio il segno «aggiuntivo» alla nail art (che da lì in poi avrebbe
+    # allungato ogni manicure del suo tempo di listino).
+    is_addon: Optional[bool] = Field(
+        None,
+        description=(
+            "Aggiuntivo: si fa durante un altro servizio e in agenda non aggiunge tempo; "
+            "assente = invariato (falso per un servizio nuovo)"
+        ),
     )
 
 
@@ -139,6 +158,9 @@ class PublicServiceOut(Schema):
     # «1 h», mentre l'agenda la tiene 1 h 40' (09-07, C4).
     soak_min: int = 0
     price: Decimal
+    # Aggiuntivo (nail art, scrub): non si prenota da solo. L'app lo offre come
+    # «Aggiungi» dopo il servizio principale, e non ne conta il tempo.
+    is_addon: bool = False
 
 
 class PublicCategoryOut(Schema):
