@@ -221,14 +221,14 @@ const SERVICES = [
   { id: 9, name_it: 'Nail art', duration_min: 15, soak_min: 0, price: '10.00', category_id: 1, is_addon: true },
 ];
 
-function newBooking(prefill) {
+function newBooking(prefill, giftCards = []) {
   installDom();
   const calls = { get: [], post: [] };
   globalThis.__api = {
     get: (url, opts) => {
       calls.get.push({ url, opts });
       if (url === '/api/clients/7') return Promise.resolve({ id: 7, full_name: 'Maria Russo' });
-      if (url === '/api/marketing/gift-cards') return Promise.resolve({ items: [] });
+      if (url === '/api/marketing/gift-cards') return Promise.resolve({ items: giftCards });
       if (url === '/api/agenda/availability') return Promise.resolve([{ start: at(600), assignment: [] }]);
       return Promise.resolve([]);
     },
@@ -278,6 +278,24 @@ test('nuova prenotazione: togliendo il taglio se ne va anche la sua nail art; ri
   assert.ok(textOf(g.m.tree).includes('Manca servizio'), 'nessun aggiuntivo rimasto da solo');
   avail = g.calls.get.filter((x) => x.url === '/api/agenda/availability');
   assert.deepEqual(avail.at(-1).opts.params.items.map((i) => i.service_id), [3, 9], 'nessuna ricerca con la sola nail art');
+});
+
+test('nuova prenotazione: la nail art già pagata ha l\'icona del suo tipo e il prezzo barrato, come il servizio', async () => {
+  const card = {
+    id: 50, code: 'PACC5678ABCD', gift_service_id: 9, gift_service_name: 'Nail art', payment_status: 'paid', status: 'active',
+    balance: '30.00', expires_at: null, buyer_client_id: 7, recipient_client_id: 7, recipient_name: 'Maria Russo',
+    kind: 'package', sessions_total: 3, sessions_left: 3, package_name: 'Mani da festa',
+  };
+  const g = newBooking({ clientId: 7, clientName: 'Maria Russo', serviceIds: [3, 9], date: DAY, start: at(600), operatorId: 1 }, [card]);
+  await settle(g);
+  const row = find(g.m.tree, (el) => el.props?.['data-addon-row'] != null);
+  assert.equal(textOf(row), '+ Nail art€10,00');
+  const mark = find(row, (el) => el.type === 'span' && /^Nail art · Pacchetto «Mani da festa» · 3 sedute rimaste su 3/.test(el.props?.title || ''));
+  assert.ok(mark && find(mark, (el) => el.props?.name === 'box'), 'l\'icona del pacchetto, con le sedute al passaggio del mouse');
+  assert.equal(find(row, (el) => el.props?.className === 't-num').props.style.textDecoration, 'line-through');
+  // il taglio non è coperto: prezzo pieno
+  const taglio = find(g.m.tree, (el) => el.props?.className === 't-num' && textOf(el) === '€35,00');
+  assert.equal(taglio.props.style.textDecoration, 'none');
 });
 
 /* ---- dettaglio ------------------------------------------------------------ */

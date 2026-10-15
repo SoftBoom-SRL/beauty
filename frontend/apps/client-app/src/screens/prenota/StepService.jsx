@@ -81,12 +81,15 @@ export function renderService(p) {
                         <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 700 }}>{t('Aggiungi', 'Add')}</span>
                         {addonSvcs.map((a) => {
                           const added = chosen.includes(a.id);
+                          // già pagato anche lui (un regalo, una seduta del pacchetto): il segno del suo tipo
+                          const covered = giftFor(a.id);
                           return (
                             <button key={a.id} className="press" onClick={() => toggleAddon(sv.id, a.id)} aria-pressed={added}
-                              title={t('Si fa durante il servizio: non allunga la visita', 'Done during the service: does not lengthen the visit')}
+                              title={[t('Si fa durante il servizio: non allunga la visita', 'Done during the service: does not lengthen the visit'), covered ? coveredLabel(covered, t) : ''].filter(Boolean).join(' · ')}
                               style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 11px', borderRadius: 99, fontSize: 13, fontWeight: 700, border: '1.5px solid ' + (added ? 'var(--brand)' : 'var(--hair)'), background: added ? 'var(--brand)' : 'var(--paper-0)', color: added ? 'var(--brand-on)' : 'var(--ink)' }}>
                               <Icon name={added ? 'check' : 'plus'} size={13} color={added ? 'var(--brand-on)' : 'var(--brand-ink)'} stroke={2.4} />
                               {svcLangName(a, lang)}
+                              {covered && <Icon name={treatmentIcon(covered)} size={12} color={added ? 'var(--brand-on)' : 'var(--brand-ink)'} />}
                               <span className="t-num" style={{ fontWeight: 600, opacity: 0.8 }}>{fmtEur(Number(a.price), lang)}</span>
                             </button>
                           );

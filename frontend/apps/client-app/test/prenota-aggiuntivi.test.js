@@ -107,3 +107,26 @@ test('togliendo la manicure se ne va anche la sua nail art', async () => {
     assert.equal(button(s.tree, 'Continua').props.disabled, true);
   } finally { s.unmount(); }
 });
+
+test('la nail art già pagata (una seduta del pacchetto) lo dice nel suo «Aggiungi»', async () => {
+  fakeCtx({ session: { access: 'jwt', client: { id: 1 } } });
+  const s = mount(Prenota);
+  try {
+    await reply(pending('get', '/api/catalog/public/services')[0], CATS);
+    await reply(pending('get', '/api/staff/public/operators')[0], OPS);
+    await reply(pending('get', '/api/marketing/client/wallet')[0], { gift_cards: [{
+      id: 9, code: 'PACC', balance: '20.00', payment_status: 'paid', spendable: true, received: false, from_name: '',
+      gift_service_id: 21, gift_service_name: 'Nail art', kind: 'package', sessions_total: 2, sessions_left: 2, package_name: 'Unghie da festa',
+    }] });
+    s.render();
+    await tap(s, /Prenota nell’app/);
+    await tap(s, /^Manicure/);
+    const nailArt = button(s.tree, 'Nail art€10,00');
+    assert.match(nailArt.props.title, / · Pacchetto · 2 sedute rimaste$/);
+    assert.equal(findAll(nailArt, (el) => el.props?.name === 'box').length, 1);
+    // lo scrub non è coperto
+    const scrub = button(s.tree, 'Scrub€8,00');
+    assert.doesNotMatch(scrub.props.title, /Pacchetto/);
+    assert.equal(findAll(scrub, (el) => el.props?.name === 'box').length, 0);
+  } finally { s.unmount(); }
+});

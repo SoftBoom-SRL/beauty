@@ -37,12 +37,14 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   // un segno piccolo davanti al nome del servizio, del suo tipo. La
   // descrizione intera — sedute rimaste, pacchetto — sta nella scheda al
   // passaggio del mouse, non in un tooltip in più sulla griglia.
-  const gift = (appt.gifts || []).find((g) => g.service_id === item.service_id);
-  const giftMark = gift ? (
-    <span role="img" aria-label={creditTitle(gift, t, lang, { code: false })} style={{ display: 'inline-flex', verticalAlign: '-1px', marginRight: 4 }}>
-      <Icon name={creditIcon(gift)} size={11} color={ink.ink} stroke={2} />
+  // Un aggiuntivo (la nail art di un pacchetto) lo porta nella sua etichetta.
+  const giftOf = (serviceId) => (appt.gifts || []).find((g) => g.service_id === serviceId);
+  const creditMark = (g, size = 11) => (g ? (
+    <span role="img" aria-label={creditTitle(g, t, lang, { code: false })} style={{ display: 'inline-flex', verticalAlign: '-1px', marginRight: size > 10 ? 4 : 3 }}>
+      <Icon name={creditIcon(g)} size={size} color={ink.ink} stroke={2} />
     </span>
-  ) : null;
+  ) : null);
+  const giftMark = creditMark(giftOf(item.service_id));
   return (
     <div
       data-appt={appt.id}
@@ -116,11 +118,12 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         <div style={{ ...textZ, fontSize: 11.5, fontWeight: 500, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, marginTop: compact ? 0 : 1 }}>
           {giftMark}{item.service_name}
           {/* gli aggiuntivi di questo servizio: niente blocco (durano 0
-              minuti), un'etichetta accanto al servizio durante il quale si fanno */}
+              minuti), un'etichetta accanto al servizio durante il quale si fanno;
+              se anche l'aggiuntivo è già pagato, il segno del suo tipo sta lì */}
           {addons.map((x) => (
             <span key={x.id} data-addon={x.id} title={t('Aggiuntivo: si fa durante questo servizio', 'Add-on: done during this service')}
               style={{ marginLeft: 5, fontSize: 10.5, fontWeight: 700, color: ink.ink, background: ink.chip, borderRadius: 5, padding: '0 4px' }}>
-              + {x.service_name}
+              {creditMark(giftOf(x.service_id), 10)}+ {x.service_name}
             </span>
           ))}
         </div>

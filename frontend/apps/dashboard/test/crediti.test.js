@@ -216,6 +216,26 @@ test('vista giorno: il servizio coperto ha l’icona del suo tipo, l’altro no'
   assert.equal(find(block(visit.items[1]), (el) => el.props?.role === 'img'), null);
 });
 
+test('vista giorno: l’aggiuntivo già pagato ha il segno del suo tipo nella sua etichetta «+ Nail art»', () => {
+  // l'aggiuntivo non è un blocco (dura 0 minuti): senza il segno nell'etichetta
+  // la nail art regalata non si vedrebbe da nessuna parte nella griglia
+  installDom();
+  const [manicure] = visit.items;
+  const nailArt = { id: 5, service_id: 9, service_name: 'Nail art', operator_id: 1, duration_min: 0, soak_min: 0, price: '10.00' };
+  const a = { ...visit, items: [manicure, nailArt], gifts: [{ ...regalo, service_id: 9, service_name: 'Nail art' }] };
+  const tree = ItemBlock({
+    block: { item: manicure, addons: [nailArt], total: 1, appt: a, isFirst: true, index: 0, activeMin: 45, soakMin: 0 },
+    startMin: 600, color: '#FDE2E4', t, lang: 'it', canWrite: true, onDown: () => {},
+  });
+  const label = find(tree, (el) => el.props?.['data-addon'] === 5);
+  assert.equal(textOf(label), '+ Nail art');
+  const marks = findAll(tree, (el) => el.props?.role === 'img');
+  assert.equal(marks.length, 1, 'la manicure non è coperta: un segno solo');
+  assert.equal(find(label, (el) => el === marks[0]), marks[0], 'ed è nell’etichetta della nail art');
+  assert.match(marks[0].props['aria-label'], /^Nail art · Regalo da Carla Ricci/);
+  assert.ok(iconsOf(label).includes('gift'));
+});
+
 test('vista settimana e mese: l’icona del tipo, con le sedute nel tooltip', () => {
   installDom();
   const a = { ...visit, gifts: [giaPagato] };

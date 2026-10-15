@@ -109,6 +109,7 @@ export default function ServiceStep({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '0 11px 9px' }}>
                     {addons.map((x) => {
                       const a = svcOf(x.service_id);
+                      // già pagato anche lui: l'icona del suo tipo e il prezzo barrato, come il servizio
                       const covered = giftFor(x.service_id);
                       return (
                         <div key={x.key} data-addon-row={x.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -117,7 +118,7 @@ export default function ServiceStep({
                             + {a ? svcName(a, lang) : ''}
                             {covered && <span title={creditTitle(covered, t, lang)} style={{ display: 'inline-flex', marginLeft: 5, verticalAlign: '-2px' }}><Icon name={creditIcon(covered)} size={11} color="var(--clay-ink)" /></span>}
                           </span>
-                          <span className="t-num" style={{ fontSize: 12.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(a?.price || 0), lang)}</span>
+                          <span className="t-num" style={{ fontSize: 12.5, fontWeight: 700, flexShrink: 0, textDecoration: covered ? 'line-through' : 'none', color: covered ? 'var(--muted-2)' : undefined }}>{fmtEur(Number(a?.price || 0), lang)}</span>
                           <button type="button" className="dk-iconbtn" style={{ width: 22, height: 22, borderRadius: 7, flexShrink: 0 }} onClick={() => removeItem(x.key)} aria-label={t('Rimuovi aggiuntivo', 'Remove add-on')}><Icon name="x" size={11} /></button>
                         </div>
                       );
