@@ -1,4 +1,5 @@
-// Wallet.jsx — gift cards (balance/initial/code), coupons (kind/value/origin/
+// Wallet.jsx — trattamenti già pagati (servizio, sedute rimaste, scadenza, da
+// dove vengono), gift cards (balance/initial/code), coupons (kind/value/origin/
 // expiry), loyalty programs (points/threshold/progress bar).
 // Data: GET /api/marketing/client/wallet. Gift card detail → view 'giftcard'.
 import React from 'react';
@@ -8,14 +9,22 @@ import { getWallet } from '../api/client.js';
 import { useApiData } from '../hooks/useApiData.js';
 import { ClientSubHead } from '../components/ClientSubHead.jsx';
 import { DashedEmpty } from '../components/DashedEmpty.jsx';
-import { couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, isUnpaid } from '../lib/wallet.js';
+import {
+  couponLabel, couponOrigin, fmtCredit, fmtExpiry, giftCardTotals, giftFromName, isUnpaid, myTreatments, sessionsLeftLabel,
+  treatmentIcon, treatmentOrigin,
+} from '../lib/wallet.js';
 
 export default function Wallet() {
   const { t, lang, brand, setView, fireToast } = useApp();
   const { data: wallet, error } = useApiData(getWallet, [], { onError: (e) => toastApiError(e, fireToast, t) });
 
   const loading = !wallet && !error;
-  const cards = wallet?.gift_cards || [];
+  const allCards = wallet?.gift_cards || [];
+  // I trattamenti già pagati (regali a trattamento, pagati in anticipo,
+  // sedute dei pacchetti) stanno in cima e a parte: sono servizi da venire a
+  // fare, non euro da spendere. Fra le gift card resta il credito in euro.
+  const treatments = myTreatments(allCards);
+  const cards = allCards.filter((g) => !treatments.includes(g));
   const coupons = wallet?.coupons || [];
   const loyalty = wallet?.loyalty || [];
   // Nel credito solo le carte che la cassa accetta da lei (vedi isSpendable):
@@ -37,6 +46,55 @@ export default function Wallet() {
           </div>
         ) : (
           <React.Fragment>
+            {/* ---- TRATTAMENTI GIÀ PAGATI — da venire a fare ---- */}
+            {treatments.length > 0 && (
+              <React.Fragment>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <div className="t-meta">{t('Trattamenti già pagati', 'Prepaid treatments')}</div>
+                  <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>{treatments.length}</span>
+                </div>
+                <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12 }}>{t('Prenotali quando vuoi: in salone non li paghi di nuovo.', 'Book them whenever you like: you won’t pay for them again in the salon.')}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }} className="stagger">
+                  {treatments.map((g) => {
+                    const total = Math.max(1, Number(g.sessions_total) || 1);
+                    const left = Math.max(0, Number(g.sessions_left ?? total) || 0);
+                    return (
+                      <div key={g.id} className="card" style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                          <div style={{ width: 38, height: 38, borderRadius: 10, background: 'var(--brand-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                            <Icon name={treatmentIcon(g)} size={19} color="var(--brand-ink)" />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14.5 }}>{g.gift_service_name}</div>
+                            <div className="t-sm" style={{ color: 'var(--muted)' }}>{treatmentOrigin(g, t)}</div>
+                          </div>
+                          {total > 1 && (
+                            <span className="t-num" style={{ fontSize: 15, color: 'var(--brand-ink)', flexShrink: 0 }}>
+                              {left}<span style={{ color: 'var(--muted-2)', fontSize: 12 }}>/{total}</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', color: 'var(--muted)', marginTop: 10 }}>
+                          <span style={{ fontWeight: 700, color: 'var(--ink-2)' }}>{sessionsLeftLabel(g, t)}</span>
+                          <span>· {fmtExpiry(g.expires_at, lang, t)}</span>
+                          {isUnpaid(g) && (
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--warn, #B4761F)', background: 'var(--warn-tint, #FDF2E3)', padding: '3px 9px', borderRadius: 99 }}>
+                              {t('Da pagare in salone', 'To pay in the salon')}
+                            </span>
+                          )}
+                        </div>
+                        {total > 1 && <div style={{ marginTop: 10 }}><ProgressBar value={Math.round(((total - left) / total) * 100)} color="var(--brand)" /></div>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <button className="press" onClick={() => setView('prenota')}
+                  style={{ width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: 11, borderRadius: 'var(--r-pill)', background: 'var(--brand-tint)', color: 'var(--brand-ink)', fontWeight: 700, fontSize: 14, marginBottom: 28 }}>
+                  <Icon name="calendar" size={16} color="var(--brand-ink)" />{t('Prenota un trattamento', 'Book a treatment')}
+                </button>
+              </React.Fragment>
+            )}
+
             {/* ---- GIFT CARD — saldo prepagato ---- */}
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
               <div className="t-meta">{t('Gift card', 'Gift cards')}</div>
@@ -66,17 +124,19 @@ export default function Wallet() {
                     const used = initial > 0 ? Math.round((1 - Number(g.balance) / initial) * 100) : 0;
                     const gifted = g.gift_service_name;      // carta «a trattamento»
                     const unpaid = isUnpaid(g);
+                    // «da…» solo se gliel'ha regalata un'altra persona
+                    const from = giftFromName(g);
                     return (
                       <button key={g.id} className="card press" onClick={() => setView('giftcard')} style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', textAlign: 'left', width: '100%' }}>
-                        {(gifted || g.buyer_name || unpaid) && (
+                        {(gifted || from || unpaid) && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
                             {gifted && (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 9px', borderRadius: 99 }}>
-                                <Icon name="gift" size={12} color="var(--brand-ink)" />{gifted}
+                                <Icon name={treatmentIcon(g)} size={12} color="var(--brand-ink)" />{gifted}
                               </span>
                             )}
-                            {g.received && g.buyer_name && (
-                              <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t(`da ${g.buyer_name}`, `from ${g.buyer_name}`)}</span>
+                            {from && (
+                              <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600 }}>{t(`da ${from}`, `from ${from}`)}</span>
                             )}
                             {unpaid && (
                               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--warn, #B4761F)', background: 'var(--warn-tint, #FDF2E3)', padding: '3px 9px', borderRadius: 99 }}>

@@ -2,11 +2,12 @@
 import { Icon, fmtDur, fmtEur } from '@youty/shared';
 import { StickyCta } from '../../components/StickyCta.jsx';
 import { catIcon, svcLangName, svcMinutes } from '../../lib/catalog.js';
+import { coveredLabel, treatmentIcon } from '../../lib/wallet.js';
 import { StepBar } from './parts.jsx';
 import { STEP } from './steps.js';
 
 export function renderService(p) {
-  const { t, lang, setView, head, cats, serviceIds, toggleSvc, giftFor, giftFrom, price, setSlot, setDayIdx, setOperatorId, setStep } = p;
+  const { t, lang, setView, head, cats, serviceIds, toggleSvc, giftFor, price, setSlot, setDayIdx, setOperatorId, setStep } = p;
   return (
     <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
       {head(t('Scegli il servizio', 'Choose a service'))}
@@ -52,10 +53,11 @@ export function renderService(p) {
                       )}
                       <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="clock" size={13} color="var(--muted-2)" />{fmtDur(svcMinutes(sv))}</span>
+                        {/* già pagato: un regalo, un trattamento pagato in anticipo, una seduta del pacchetto */}
                         {giftFor(sv.id) && (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '2px 8px', borderRadius: 99 }}>
-                            <Icon name="gift" size={12} color="var(--brand-ink)" />
-                            {giftFrom(giftFor(sv.id)) ? t(`Regalo di ${giftFrom(giftFor(sv.id))}`, `A gift from ${giftFrom(giftFor(sv.id))}`) : t('Hai un regalo', 'You have a gift')}
+                            <Icon name={treatmentIcon(giftFor(sv.id))} size={12} color="var(--brand-ink)" />
+                            {coveredLabel(giftFor(sv.id), t)}
                           </span>
                         )}
                       </div>

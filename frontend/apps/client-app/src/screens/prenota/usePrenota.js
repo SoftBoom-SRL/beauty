@@ -59,9 +59,9 @@ export function usePrenota({ t, lang, session, fireToast }) {
     return () => { alive = false; };
   }, [session]);
   const giftFor = (serviceId) => giftCards.find((g) => g.gift_service_id === serviceId) || null;
-  // «Regalo di …» solo per la carta ricevuta: su quella comprata per sé il
-  // nome di chi l'ha pagata è il suo.
-  const giftFrom = (g) => (g && g.received && g.buyer_name) || '';
+  // Le etichette («Regalo di …», «Già pagato», «Pacchetto · …») le scrivono i
+  // passi con lib/wallet.js (`coveredLabel`, `coveredSummary`): «Regalo di»
+  // solo se gliel'ha regalato un'altra persona (`giftFromName`).
   const giftedSelected = serviceIds.map(giftFor).filter(Boolean);
 
   const allSvcs = React.useMemo(
@@ -253,7 +253,7 @@ export function usePrenota({ t, lang, session, fireToast }) {
   return {
     step, setStep, cats, serviceIds, toggleSvc, dayIdx, setDayIdx, operatorId, setOperatorId, slot, setSlot, slots,
     booking, booked, ident, setIdent, otp, setOtp, otpErr, codeSurelySent, blocked, days,
-    giftFor, giftFrom, giftedSelected, svcs, s, dur, price, eligibleOperators, splitVisit, selectedOperator,
+    giftFor, giftedSelected, svcs, s, dur, price, eligibleOperators, splitVisit, selectedOperator,
     confirm, sendBookingOtp, registerAndOtp, verifyAndBook,
   };
 }

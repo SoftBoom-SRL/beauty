@@ -11,6 +11,7 @@ import { DepositDue } from '../components/DepositDue.jsx';
 import { useClientAppointments } from '../hooks/useClientAppointments.js';
 import { apptMinutes, apptServiceNames } from '../lib/appointments.js';
 import { fmtDayMed } from '../lib/dates.js';
+import { apptGiftLabel, treatmentIcon } from '../lib/wallet.js';
 
 function StatusChip({ status, t }) {
   const m = statusMeta(status, t);
@@ -37,10 +38,8 @@ function ApptRow({ appt, t, lang, dim, actions, onSposta, onAnnulla, fireToast, 
       </div>
       {(appt.gifts || []).length > 0 && (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, marginRight: 8, padding: '4px 10px', borderRadius: 99, background: 'var(--brand-tint)', fontWeight: 700, fontSize: 12, color: 'var(--brand-ink)' }}>
-          <Icon name="gift" size={13} color="var(--brand-ink)" />
-          {appt.gifts[0].from_name
-            ? t(`In regalo da ${appt.gifts[0].from_name}`, `A gift from ${appt.gifts[0].from_name}`)
-            : t('Coperto da gift card', 'Covered by a gift card')}
+          <Icon name={treatmentIcon(appt.gifts[0])} size={13} color="var(--brand-ink)" />
+          {apptGiftLabel(appt.gifts[0], t)}
         </div>
       )}
       {dm && (

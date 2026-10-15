@@ -1,5 +1,5 @@
-// Pacchetti.jsx — public packages with included services + price and the
-// phone-only booking CTA.
+// Pacchetti.jsx — public packages with included services (e le loro sedute),
+// la validità delle sedute dall'acquisto, price and the phone-only booking CTA.
 // Data: GET /api/catalog/public/packages (+ public services to compute the
 // original price → discount badge). Il numero per il `tel:` arriva dal branding
 // pubblico (sede predefinita) e può mancare: in quel caso niente pulsante.
@@ -13,6 +13,7 @@ import { DashedEmpty } from '../components/DashedEmpty.jsx';
 import { useApiData } from '../hooks/useApiData.js';
 import { usePublicServices } from '../hooks/usePublicCatalog.js';
 import { svcLangName } from '../lib/catalog.js';
+import { packageSessions, packageValidity } from '../lib/wallet.js';
 
 export default function Pacchetti() {
   const { t, lang, brand, setView, fireToast } = useApp();
@@ -60,20 +61,27 @@ export default function Pacchetti() {
                     <div style={{ fontFamily: headFont(brand), fontSize: 19, fontWeight: headWeight(brand, 700), lineHeight: 1.15, flex: 1, minWidth: 0 }}>{p.name}</div>
                     {off > 0 && <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 800, color: 'var(--brand-on)', background: 'var(--brand)', padding: '4px 10px', borderRadius: 99 }}>-{off}%</span>}
                   </div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 10px', borderRadius: 99 }}>
-                    <Icon name="sparkle" size={12} color="var(--brand-ink)" />{t('Pacchetto', 'Package')}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, color: 'var(--brand-ink)', background: 'var(--brand-tint)', padding: '3px 10px', borderRadius: 99 }}>
+                      <Icon name="sparkle" size={12} color="var(--brand-ink)" />{t('Pacchetto', 'Package')}
+                    </span>
+                    {/* entro quando vanno fatte le sedute: va saputo prima di comprarlo */}
+                    <span className="t-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--muted)', fontWeight: 600 }}>
+                      <Icon name="calendar" size={13} color="var(--muted-2)" />{packageValidity(p.validity_days, t)}
+                    </span>
+                  </div>
 
                   {p.description && <div className="t-sm" style={{ color: 'var(--muted)', margin: '13px 0', lineHeight: 1.5 }}>{p.description}</div>}
 
-                  {/* servizi inclusi */}
+                  {/* servizi inclusi, con le loro sedute */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '13px 0', borderTop: '1px solid var(--hair)', borderBottom: '1px solid var(--hair)', marginTop: p.description ? 0 : 13 }}>
                     {(p.items || []).map((it, i) => (
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                         <Icon name="check" size={15} color="var(--brand)" stroke={2.4} />
-                        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink-2)' }}>
-                          {svcLangName(it, lang)}{(it.qty || 1) > 1 ? ` ×${it.qty}` : ''}
+                        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink-2)', flex: 1, minWidth: 0 }}>
+                          {svcLangName(it, lang)}
                         </span>
+                        <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 700, flexShrink: 0 }}>{packageSessions(it.qty, t)}</span>
                       </div>
                     ))}
                   </div>

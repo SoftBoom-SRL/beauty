@@ -5,11 +5,13 @@ import { DetailRow } from '../../components/DetailRow.jsx';
 import { StickyCta } from '../../components/StickyCta.jsx';
 import { catIcon, svcLangName } from '../../lib/catalog.js';
 import { fmtDayMed } from '../../lib/dates.js';
+import { coveredSummary, treatmentIcon } from '../../lib/wallet.js';
 import { StepBar } from './parts.jsx';
 import { STEP } from './steps.js';
 
 export function renderReview(p) {
-  const { t, lang, brand, session, head, s, svcs, slot, dur, selectedOperator, price, giftedSelected, giftFrom, booking, confirm, setStep } = p;
+  const { t, lang, brand, session, head, s, svcs, slot, dur, selectedOperator, price, giftedSelected, booking, confirm, setStep } = p;
+  const covered = coveredSummary(giftedSelected, t);
   return (
     <div style={{ paddingBottom: 30, minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
       {head(t('Conferma prenotazione', 'Confirm booking'))}
@@ -45,15 +47,15 @@ export function renderReview(p) {
             <span style={{ fontWeight: 700, fontSize: 15 }}>{t('Totale', 'Total')}</span>
             <span className="t-num" style={{ fontSize: 22, color: 'var(--brand-ink)' }}>{fmtEur(price, lang)}</span>
           </div>
-          {/* trattamenti già regalati: si vedono qui, non alla cassa */}
+          {/* trattamenti già pagati (regali, pagati in anticipo, sedute del
+              pacchetto): si vedono qui, non alla cassa */}
           {giftedSelected.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, padding: '11px 13px', borderRadius: 'var(--r-md)', background: 'var(--brand-tint)' }}>
-              <Icon name="gift" size={17} color="var(--brand-ink)" />
+              <Icon name={treatmentIcon(giftedSelected[0])} size={17} color="var(--brand-ink)" />
               <div style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--ink-2)' }}>
-                <b style={{ color: 'var(--brand-ink)' }}>{t('Coperto da gift card', 'Covered by a gift card')}</b>
+                <b style={{ color: 'var(--brand-ink)' }}>{covered.title}</b>
                 {': '}
-                {giftedSelected.map((g) => g.gift_service_name).join(', ')}
-                {giftFrom(giftedSelected[0]) ? t(` · regalo di ${giftFrom(giftedSelected[0])}`, ` · a gift from ${giftFrom(giftedSelected[0])}`) : ''}
+                {covered.text}
                 {'. '}
                 {t('In salone non pagherai questa parte.', 'You will not pay this part in the salon.')}
               </div>
