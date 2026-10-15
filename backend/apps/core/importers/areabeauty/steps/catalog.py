@@ -55,13 +55,13 @@ def run(ctx):
             continue
         category = _category_for(ctx, s, categories, created_cats)
         minutes = int(s.get("Minuti") or 0)
-        client_minutes = int(s.get("MinutiCliente") or minutes)
         service = Service.objects.create(
             salon=ctx.salon,
             category=category,
             name_it=name,
             duration_min=max(0, minutes),
-            soak_min=max(0, client_minutes - minutes),
+            # niente posa: i «minuti cliente» di AreaBeauty non lo sono (vedi «agenda»)
+            soak_min=0,
             price=money(s.get("Prezzo")),
             color=color(s.get("Colore"), ""),
             is_addon=norm(name).startswith(("add ", "addon")) or norm(category.name_it) in ADDON_CATEGORY_NAMES,
