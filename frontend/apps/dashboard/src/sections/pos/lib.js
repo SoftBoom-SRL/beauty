@@ -6,8 +6,9 @@ import { couponsApi } from '../../api/marketing.js';
 // Il denaro si conta in centesimi interi con gli arrotondamenti del server:
 // le regole stanno in money.js (senza dipendenze, quindi provate da npm test).
 export {
-  PAYMENT_TOLERANCE_CENTS, centsToApi, centsToEur, couponDiscountCents, emptyPayments,
-  giftPrefillRows, lineCents, paymentsError, paymentsMatch, resolvePayments, saleTotals, toCents,
+  PAYMENT_TOLERANCE_CENTS, allocateSettlement, centsToApi, centsToEur, couponDiscountCents, dueLeftCents,
+  emptyPayments, giftLabel, giftPrefill, giftPrefillRows, isSessionCard, lineCents, paymentsError,
+  paymentsMatch, resolvePayments, saleTotals, toCents,
 } from './money.js';
 
 /** Ripulisce ciò che si digita nel campo importo a testo libero: solo cifre e

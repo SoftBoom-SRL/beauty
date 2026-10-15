@@ -209,7 +209,12 @@ def apply_deposit_payment(appointment, intent_id: str, obj: dict, account: str =
         # ma non copre più niente. Sul conto chiuso la caparra non è stata
         # detratta (era ancora «richiesta»), quindi il salone incasserebbe due
         # volte lo stesso servizio. Si segna «da rimborsare» e si restituisce.
-        already_cashed = Sale.objects.filter(appointment=appointment).exists()
+        # Incassata vuol dire anche chiusa nel conto unico di un'altra visita
+        # della cliente (`paid_in_sale`).
+        already_cashed = (
+            appointment.paid_in_sale_id is not None
+            or Sale.objects.filter(appointment=appointment).exists()
+        )
         if appointment.status in ("cancelled", "no_show", "closed") or already_cashed:
             appointment.deposit_status = "refund_due"
             appointment.deposit_payment_intent_id = intent_id

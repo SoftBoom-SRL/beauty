@@ -23,7 +23,7 @@ from ninja.errors import HttpError
 from apps.agenda.models import Appointment, AppointmentService
 from apps.catalog.models import ServiceCategory
 from apps.clients.models import Client, ClientCategory
-from apps.sales.models import DepositRefund, Payment, Sale, SaleLine
+from apps.sales.models import DepositRefund, Sale, SaleLine
 from apps.staff.models import Operator
 from common.money import CENT
 
@@ -400,22 +400,30 @@ def _sales_figures(salon, sales_qs, start: datetime, end: datetime) -> dict:
         ).aggregate(total=Sum("amount"))["total"]
         or ZERO
     )
-    gift_card_redeemed = (
-        Payment.objects.filter(
-            sale__salon=salon, sale__created_at__gte=start, sale__created_at__lt=end, method="gift_card"
-        ).aggregate(total=Sum("amount"))["total"]
-        or ZERO
-    )
+    # Il denaro entra quando arriva, non quando si vende: la parte del venduto
+    # lasciata da saldare esce dal periodo, i saldi di vendite di prima ci
+    # entrano, e le gift card contano nel periodo in cui pagano. Le regole sono
+    # quelle del riepilogo di cassa (`sales.reports.cash_movements`).
+    from apps.sales.reports import cash_movements  # lazy: regola della cassa
+
+    moves = cash_movements(salon, start, end)
+    gift_card_redeemed = moves["gift_card_redeemed"]
     # Caparre versate prima e detratte al checkout: denaro incassato in un altro
     # periodo, da non sommare di nuovo qui.
     deposit_used = billed_qs.aggregate(total=Sum("deposit_deducted"))["total"] or ZERO
     return {
         "revenue": revenue,
         "gift_card_sold": gift_card_sold,
+        "package_sold": moves["package_sold"],
         "gift_card_redeemed": gift_card_redeemed,
         "deposit_used": deposit_used,
         "deposit_cashed": deposit_cashed,
-        "cash_in": revenue + deposit_cashed - gift_card_redeemed - deposit_used,
+        "due_left": moves["due_left"],
+        "settled": moves["settled"],
+        "cash_in": (
+            revenue + deposit_cashed - gift_card_redeemed - deposit_used
+            - moves["due_left"] + moves["settled"]
+        ),
         "sales_count": sales_count,
         "avg_ticket": avg_ticket,
         "retail_revenue": retail_revenue,

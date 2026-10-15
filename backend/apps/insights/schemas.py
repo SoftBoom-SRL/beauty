@@ -12,11 +12,17 @@ class ClientCategoryCount(Schema):
 class KpisOut(Schema):
     revenue: Decimal
     gift_card_sold: Decimal = Decimal("0.00")
+    # Pacchetti venduti nel periodo (righe «package»): già nel fatturato.
+    package_sold: Decimal = Decimal("0.00")
     gift_card_redeemed: Decimal = Decimal("0.00")
     deposit_used: Decimal = Decimal("0.00")
     # Caparre entrate in cassa nel periodo: non sono fatturato (lo diventa il
     # conto del giorno della visita), ma sono denaro incassato.
     deposit_cashed: Decimal = Decimal("0.00")
+    # Venduto del periodo non ancora pagato nel periodo (conti da saldare) e
+    # saldi arrivati nel periodo per vendite di prima: già dentro `cash_in`.
+    due_left: Decimal = Decimal("0.00")
+    settled: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
     sales_count: int
     avg_ticket: Decimal

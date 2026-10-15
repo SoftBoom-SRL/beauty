@@ -255,6 +255,8 @@ class AppointmentOut(Schema):
     cancelled_late: bool
     auto_released: bool = False
     forced: bool = False
+    # Conto unico: la vendita (di un'altra visita della cliente) che ha incassato anche questa.
+    paid_in_sale_id: Optional[int] = None
     items: list[ItemOut]
     gifts: list[GiftOut] = []
     # Versione della visita: va rimandata in `expected_updated_at` del PUT.

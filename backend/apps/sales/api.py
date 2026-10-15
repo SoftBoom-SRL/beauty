@@ -20,27 +20,31 @@ from common.schemas import OkOut
 from common.utils import salon_get
 
 from apps.agenda.models import Appointment
+from apps.agenda.schemas import AppointmentOut
 from apps.clients.models import Client
 from apps.core.services import log_activity
 
 from . import reports, serializers, stripe_service, stripe_webhooks
-from .checkout import checkout_appointment
+from .checkout import checkout_appointment, other_visits_to_cash
+from .dues import client_amount_due, open_dues
 from .models import Sale
 from .schemas import (
     ChargeNoShowOut,
     CheckoutIn,
     CheckoutOut,
+    ClientDuesOut,
     DepositLinkOut,
     PosIn,
     SaleDetailOut,
     SaleListOut,
+    SettleIn,
     SetupIntentOut,
     StripeConnectCallbackIn,
     StripeConnectStartOut,
     StripeConnectStatusOut,
     TodaySummaryOut,
 )
-from .services import finalize_sale, record_no_show_charge
+from .services import finalize_sale, record_no_show_charge, settle_sale
 
 router = Router(tags=["sales"])
 
@@ -49,12 +53,29 @@ router = Router(tags=["sales"])
 
 @router.post("/checkout/{int:appointment_id}", auth=staff_auth, response=CheckoutOut)
 def checkout(request, appointment_id: int, data: CheckoutIn):
+    """Chiude il conto di una visita (e, con `extra_appointment_ids`, di altre visite
+    della stessa cliente nello stesso giorno: conto unico). Con `leave_due` la
+    cliente può pagare meno del dovuto e il resto resta da saldare."""
     ctx = request.auth
     require_scope(ctx, "sales")
     salon_get(Appointment, ctx, appointment_id)  # 404 fuori dal salone
     payload = data.dict()
     sale = checkout_appointment(ctx.salon, appointment_id, payload, actor=ctx.user)
     return {"sale": serializers.sale_detail(sale), "breakdown": serializers.operator_breakdown(sale)}
+
+
+@router.get("/checkout/{int:appointment_id}/other-visits", auth=staff_auth, response=list[AppointmentOut])
+def checkout_other_visits(request, appointment_id: int):
+    """Le altre visite aperte della stessa cliente nello stesso giorno, ancora da incassare:
+    si possono chiudere nello stesso conto (`extra_appointment_ids` del checkout)."""
+    from apps.agenda.presenters import _appointment_out, gift_index  # lazy: forma della visita dell'agenda
+
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    appointment = salon_get(Appointment, ctx, appointment_id)
+    visits = list(other_visits_to_cash(ctx.salon, appointment))
+    gifts = gift_index(ctx.salon, [appointment.client_id])
+    return [_appointment_out(visit, gifts, viewer=ctx) for visit in visits]
 
 
 @router.post("/pos", auth=staff_auth, response=SaleDetailOut)
@@ -73,8 +94,37 @@ def pos_sale(request, data: PosIn):
         client=client,
         coupon_code=payload["coupon_code"],
         actor=ctx.user,
+        allow_due=payload["leave_due"],
     )
     return serializers.sale_detail(sale)
+
+
+# ---- Conti da saldare --------------------------------------------------------
+
+
+@router.post("/{int:sale_id}/settle", auth=staff_auth, response=SaleDetailOut)
+def settle(request, sale_id: int, data: SettleIn):
+    """Paga (tutto o in parte) quanto resta da saldare di una vendita: i pagamenti
+    hanno la data di adesso, ed è oggi che la cassa li conta."""
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    salon_get(Sale, ctx, sale_id)  # 404 fuori dal salone
+    sale = settle_sale(ctx.salon, sale_id, data.dict()["payments"], actor=ctx.user)
+    return serializers.sale_detail(sale)
+
+
+@router.get("/dues", auth=staff_auth, response=ClientDuesOut)
+def client_dues(request, client_id: int):
+    """I conti della cliente ancora da saldare, dal più vecchio, e il loro totale."""
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    client = salon_get(Client, ctx, client_id)
+    sales = list(open_dues(client).select_related("client"))
+    return {
+        "client_id": client.id,
+        "amount_due": client_amount_due(client),
+        "sales": [serializers.sale_out(sale) for sale in sales],
+    }
 
 
 # ---- Storico e riepiloghi ----------------------------------------------------
@@ -93,8 +143,10 @@ def list_sales(
     # li mette lo schema, così la risposta è un 422 leggibile.
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    due: bool = False,
 ):
-    """Storico vendite con KPI {revenue, count, items_count} sul filtro corrente."""
+    """Storico vendite con KPI {revenue, count, items_count, due_total} sul filtro corrente.
+    `due=1`: solo i conti con qualcosa ancora da saldare."""
     ctx = request.auth
     require_scope(ctx, "sales")
     return reports.sales_history(
@@ -107,6 +159,7 @@ def list_sales(
         operator_id=operator_id,
         limit=limit,
         offset=offset,
+        due=due,
     )
 
 

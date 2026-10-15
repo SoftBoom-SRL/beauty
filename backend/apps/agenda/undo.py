@@ -297,7 +297,12 @@ def _ensure_untouched(snap: dict, appointment: Appointment) -> None:
         raise HttpError(
             409, "Il no-show è già stato addebitato sulla carta: non si può tornare indietro"
         )
-    if Appointment.objects.filter(id=appointment.id, sale__isnull=False).exists():
+    # Incasso suo o del conto unico di un'altra visita della cliente
+    # (`paid_in_sale`): rimettere in agenda una visita già pagata nel conto di
+    # un'altra la lascerebbe aperta con i soldi già in cassa.
+    if appointment.paid_in_sale_id is not None or Appointment.objects.filter(
+        id=appointment.id, sale__isnull=False
+    ).exists():
         raise HttpError(409, "C'è già un incasso su questo appuntamento: non si può tornare indietro")
     was, now = snap.get("deposit_status"), appointment.deposit_status
     if was is not None and was != now:
@@ -430,7 +435,8 @@ def _restore_appointment(snap: dict) -> Appointment:
 def _delete_appointment(appointment: Appointment, label: str) -> None:
     """Fa sparire un appuntamento nato per sbaglio, con i suoi servizi."""
     has_sale = (
-        Appointment.objects.filter(id=appointment.id)
+        appointment.paid_in_sale_id is not None  # chiuso nel conto unico di un'altra visita
+        or Appointment.objects.filter(id=appointment.id)
         .filter(sale__isnull=False)
         .exists()
         or Appointment.objects.filter(id=appointment.id)

@@ -1,6 +1,7 @@
 // CheckoutDone.jsx — il check-out registrato (SellModal): totale, caparra
-// detratta o da restituire, pagamenti e ripartizione per operatrice
-// (CheckoutOut.breakdown).
+// detratta o da restituire, quanto resta da saldare, pagamenti e ripartizione
+// per operatrice (CheckoutOut.breakdown). Con il conto unico dice quante visite
+// ha chiuso.
 import { Avatar, Icon } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { centsToEur, methodLabel, money, toCents } from '../lib.js';
@@ -11,6 +12,7 @@ export default function CheckoutDone({ result, depositCents, clientName, onClose
   const { sale, breakdown } = result;
   // Quello che il server non ha detratto della caparra torna alla cliente.
   const returnedCents = Math.max(0, depositCents - toCents(sale.deposit_deducted));
+  const covered = (sale.covered_appointment_ids || []).length;
   return (
     <DkModal open onClose={onClose} title={t('Check-out completato', 'Check-out complete')} sub={clientName} width={520}
       foot={<button className="dk-btn dk-btn--clay" onClick={onClose}><Icon name="check" size={16} color="#fff" />{t('Chiudi', 'Close')}</button>}>
@@ -19,6 +21,11 @@ export default function CheckoutDone({ result, depositCents, clientName, onClose
           <Icon name="check" size={30} color="var(--ok)" stroke={2.4} />
         </div>
         <div className="t-num" style={{ fontSize: 28, fontWeight: 800 }}>{money(sale.total, lang)}</div>
+        {covered > 0 && (
+          <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginTop: 4 }}>
+            {t(`Conto unico di ${covered + 1} visite`, `Single bill for ${covered + 1} visits`)}
+          </div>
+        )}
         {Number(sale.deposit_deducted) > 0 && (
           <div className="t-sm" style={{ color: 'var(--ok)', fontWeight: 700, marginTop: 4 }}>
             {t('Caparra detratta', 'Deposit deducted')} −{money(sale.deposit_deducted, lang)}
@@ -27,6 +34,11 @@ export default function CheckoutDone({ result, depositCents, clientName, onClose
         {returnedCents > 0 && (
           <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 700, marginTop: 4 }}>
             {t('Caparra eccedente da restituire', 'Excess deposit to return')}: {money(centsToEur(returnedCents), lang)}
+          </div>
+        )}
+        {Number(sale.amount_due) > 0 && (
+          <div className="t-sm" style={{ color: 'var(--warn)', fontWeight: 700, marginTop: 4 }}>
+            {t('Da saldare', 'Left to pay')}: {money(sale.amount_due, lang)}
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>

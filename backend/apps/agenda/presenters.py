@@ -138,6 +138,9 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
         "cancelled_late": appointment.cancelled_late,
         "auto_released": appointment.auto_released,
         "forced": appointment.forced,
+        # Conto unico: la vendita di un'altra visita della cliente che ha
+        # incassato anche questa (la visita è chiusa e non ha una vendita sua).
+        "paid_in_sale_id": appointment.paid_in_sale_id,
         "items": [_item_out(item) for item in appointment.items.all()],
         "gifts": _gifts_out(appointment, gifts_by_client, _codes_hidden(viewer)),
         "updated_at": appointment.updated_at,

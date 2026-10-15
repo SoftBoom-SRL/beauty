@@ -68,6 +68,8 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
     gift_card_redeemed: t('gift card usate', 'gift cards used'),
     deposit_used: t('caparre detratte', 'deposits deducted'),
     deposit_refunded: t('caparre rimborsate', 'deposits refunded'),
+    due_left: t('da saldare', 'left to pay'),
+    settled: t('saldi incassati', 'balances collected'),
   };
   return (
     <div>
@@ -99,7 +101,7 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
             netto delle caparre restituite (05-16). */}
         {cash?.show && (
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 3 }}
-            title={t('Il venduto di oggi, meno quello già incassato in un altro giorno (gift card, caparre versate prima), più le caparre versate oggi, meno quelle restituite', 'Today’s sales, minus what was collected on another day (gift cards, deposits paid earlier), plus deposits paid today, minus deposits refunded')}>
+            title={t('Il venduto di oggi, meno quello già incassato in un altro giorno (gift card, caparre versate prima) e quello lasciato da saldare, più le caparre versate oggi e i saldi di conti di altri giorni, meno le caparre restituite', 'Today’s sales, minus what was collected on another day (gift cards, deposits paid earlier) and what was left to pay, plus deposits paid today and balances of earlier bills, minus deposits refunded')}>
             {t('Incassato oggi', 'Cash in today')} <b style={{ color: '#fff' }}>{fmtMoney(cash.cashIn, lang)}</b>
             {cash.parts.map((p) => <span key={p.key}> · {partLabel[p.key]} {fmtMoney(p.amount, lang)}</span>)}
           </div>
