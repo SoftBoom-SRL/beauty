@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { setSalonTz } from '../../../packages/shared/src/format.js';
-import { dateLabel, daysToBirthday, depositBadge, timelineDate } from '../src/sections/clienti/helpers.js';
+import { dateLabel, daysToBirthday, depositBadge, timelineDate, visitPaidState } from '../src/sections/clienti/helpers.js';
 
 test('visita serale: nella timeline vale il giorno del salone, non quello del dispositivo', () => {
   setSalonTz('Europe/Rome');
@@ -56,4 +56,11 @@ test('caparra da restituire o in rimborso: compare, con quanto manca', () => {
 test('nessuna caparra, o richiesta e non pagata: niente etichetta', () => {
   assert.equal(depositBadge({ deposit_status: 'none', deposit_amount: '0.00' }), null);
   assert.equal(depositBadge({ deposit_status: 'required', deposit_amount: '30.00' }), null);
+});
+
+test('conto unico: la visita incassata nel conto dell\'altra non è «non incassato»', () => {
+  assert.equal(visitPaidState({ sale: { id: 1 } }, false), 'paid');
+  assert.equal(visitPaidState({ sale: null, covered_by_sale: { id: 1, appointment_id: 7 } }, false), 'shared');
+  assert.equal(visitPaidState({ sale: null, covered_by_sale: null }, true), 'expected');
+  assert.equal(visitPaidState({ sale: null, covered_by_sale: null }, false), 'unpaid');
 });

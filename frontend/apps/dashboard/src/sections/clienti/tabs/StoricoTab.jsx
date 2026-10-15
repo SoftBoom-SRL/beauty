@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { EmptyState, Icon, fmtEur, fmtEurNoFree, fmtDur, timeLabel, minutesOfDay, statusMeta, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { NoteCard, NoteComposer } from '../NoteBits.jsx';
-import { dateLabel, depositBadge, sheetVal, timelineDate } from '../helpers.js';
+import { dateLabel, depositBadge, sheetVal, timelineDate, visitPaidState } from '../helpers.js';
 import { clientsApi } from '../../../api/clients.js';
 import { useOnModalClosed } from '../../../hooks/useOnModalClosed.js';
 
@@ -157,6 +157,7 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
   // il prezzo «previsto» di una visita futura è dell'agenda e resta
   const saleHidden = salesHidden && !upcoming;
   const dep = depositBadge(a);
+  const paidState = visitPaidState(e, upcoming);
   const depLook = dep && {
     paid: { color: 'var(--ok)', label: fmtEurNoFree(dep.amount, lang),
       title: dep.refunded > 0
@@ -198,7 +199,14 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
           ) : (
             <React.Fragment>
               <div className="t-num" style={{ fontSize: 17, fontWeight: 700 }}>{fmtEur(Number(e.sale ? e.sale.total : a.total_price), lang)}</div>
-              <div className="t-sm" style={{ color: e.sale ? 'var(--ok)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{e.sale ? t('incassato', 'paid') : upcoming ? t('previsto', 'expected') : t('non incassato', 'not paid')}</div>
+              {/* Conto unico (`covered_by_sale`): l'importo resta quello della
+                  visita, non il conto intero dell'altra. */}
+              <div className="t-sm" style={{ color: paidState === 'paid' || paidState === 'shared' ? 'var(--ok)' : 'var(--muted-2)', fontSize: 11.5, fontWeight: 600 }}>{{
+                paid: t('incassato', 'paid'),
+                shared: t('incassato nel conto unico', 'paid on a shared bill'),
+                expected: t('previsto', 'expected'),
+                unpaid: t('non incassato', 'not paid'),
+              }[paidState]}</div>
             </React.Fragment>
           )}
         </div>

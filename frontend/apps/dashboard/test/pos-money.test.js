@@ -224,7 +224,7 @@ test('le etichette delle carte nel check-out', () => {
   assert.equal(giftLabel({ kind: 'gift', from_name: 'Anna' }, t), 'Regalo · da Anna');
   assert.equal(giftLabel({ from_name: '' }, t), 'Regalo');
   assert.equal(giftLabel({ kind: 'prepaid', sessions_total: 1, sessions_left: 1 }, t), 'Già pagato');
-  assert.equal(giftLabel({ kind: 'prepaid', sessions_total: 5, sessions_left: 3 }, t), 'Già pagato · 3 sedute rimaste');
-  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 1 }, t), 'Pacchetto · 1 seduta rimasta');
-  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 7 }, t), 'Pacchetto · 7 sedute rimaste');
+  assert.equal(giftLabel({ kind: 'prepaid', sessions_total: 5, sessions_left: 3 }, t), 'Già pagato · 3/5 sedute');
+  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 1 }, t), 'Pacchetto · 1/10 sedute');
+  assert.equal(giftLabel({ kind: 'package', sessions_total: 10, sessions_left: 7 }, t), 'Pacchetto · 7/10 sedute');
 });

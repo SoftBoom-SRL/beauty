@@ -13,6 +13,7 @@
 // Niente import da '@youty/shared': sono regole pure, provate con `npm test`
 // (apps/dashboard/test/pos-money.test.js). lib.js le riesporta.
 import { isMaskedCode } from '../fedelta/meta.js';
+import { creditLabel } from '../fedelta/credits.js';
 
 /** Tolleranza dei pagamenti del server (sales.services.PAYMENT_TOLERANCE, 0,01 €). */
 export const PAYMENT_TOLERANCE_CENTS = 1;
@@ -199,14 +200,12 @@ function sessionCents(g, left) {
   return left > 1 ? Math.floor(balance / left) : balance;
 }
 
-/** L'etichetta della carta nel riquadro del check-out: «Regalo · da X»,
- *  «Già pagato», «Pacchetto · N sedute rimaste». */
+/** L'etichetta della carta nel riquadro del check-out: la stessa di agenda,
+ *  scheda cliente e promozioni (`fedelta/credits.creditLabel`): «Regalo · da
+ *  X», «Già pagato», «Pacchetto · 7/10 sedute». Due scritture diverse dello
+ *  stesso credito, in cassa e in agenda, sembravano due crediti diversi. */
 export function giftLabel(g, t) {
-  const left = sessionsLeft(g || {});
-  const leftText = left === 1 ? t('1 seduta rimasta', '1 session left') : t(`${left} sedute rimaste`, `${left} sessions left`);
-  if (g?.kind === 'package') return t('Pacchetto', 'Package') + ' · ' + leftText;
-  if (g?.kind === 'prepaid') return t('Già pagato', 'Prepaid') + (Number(g.sessions_total) > 1 ? ' · ' + leftText : '');
-  return g?.from_name ? t(`Regalo · da ${g.from_name}`, `Gift · from ${g.from_name}`) : t('Regalo', 'Gift');
+  return creditLabel(g, t);
 }
 
 /** Pagamento precompilato del check-out con le gift card «a trattamento»

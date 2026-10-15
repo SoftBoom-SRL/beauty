@@ -212,6 +212,16 @@ export function timelineDate(iso, lang, today = todayStr()) {
   };
 }
 
+/** Lo stato d'incasso di una visita nello storico: 'paid' (ha la sua vendita),
+ *  'shared' (incassata nel conto unico di un'altra visita della stessa cliente,
+ *  `covered_by_sale`), 'expected' (deve ancora venire) o 'unpaid'. La visita
+ *  chiusa nel conto dell'altra risultava «non incassato». */
+export function visitPaidState(entry, upcoming) {
+  if (entry?.sale) return 'paid';
+  if (entry?.covered_by_sale) return 'shared';
+  return upcoming ? 'expected' : 'unpaid';
+}
+
 /** Caparra di una visita come va mostrata nello storico, o null se non c'è.
  *  Prima si guardava solo «pagata» e se ne mostrava l'intero `deposit_amount`:
  *  dopo un rimborso parziale di 10 € su 30 la scheda diceva 30 €, e una

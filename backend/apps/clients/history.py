@@ -39,6 +39,18 @@ def client_appointments(ctx, client) -> list[dict]:
     return [_appointment_out(a, gifts, viewer=ctx) for a in appointments]
 
 
+def _covered_by(appointment, sales_by_id) -> dict | None:
+    """La vendita di un'altra visita in cui questa è stata incassata (conto unico).
+
+    None se la visita ha la sua vendita, non è incassata, o la vendita non si
+    può mostrare (senza il permesso «vendite» `sales_by_id` è vuoto).
+    """
+    sale = sales_by_id.get(appointment.paid_in_sale_id) if appointment.paid_in_sale_id else None
+    if sale is None:
+        return None
+    return {"id": sale.id, "appointment_id": sale.appointment_id, "total": sale.total}
+
+
 def build_history(ctx, client) -> dict:
     """La timeline della cliente, più recente prima (vedi l'endpoint GET …/history).
 
@@ -75,6 +87,12 @@ def build_history(ctx, client) -> dict:
     counter_sales = [
         s for s in all_sales if not s.appointment_id and s.deposit_appointment_id not in visit_ids
     ]
+    # Conto unico: mani e piedi in contemporanea sono due visite e una vendita
+    # sola, agganciata alla visita principale. L'altra ha `paid_in_sale` e la
+    # sua `sale` resta vuota: senza questo riferimento lo storico la mostrava
+    # «non incassato». Non si ripete la vendita (gli importi si sommerebbero
+    # due volte): si dice dove è stata incassata.
+    sales_by_id = {s.id: s for s in all_sales}
     notes = list(client.notes.select_related("author").prefetch_related("attachments"))
     sheets = list(client.sheets.select_related("author"))
     notes_by_appt: dict = {}
@@ -100,6 +118,7 @@ def build_history(ctx, client) -> dict:
                 "operator_name": a.operator.full_name if a.operator_id else "",
                 "sale": sale_out(sale) if sale else None,
                 "deposit_sale": sale_out(deposit) if deposit else None,
+                "covered_by_sale": _covered_by(a, sales_by_id),
                 "notes": [note_out(n) for n in notes_by_appt.get(a.id, [])],
                 "sheets": [sheet_out(sh) for sh in sheets_by_appt.get(a.id, [])],
             }

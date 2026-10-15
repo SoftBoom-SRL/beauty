@@ -117,6 +117,23 @@ class SingleBillTests(SingleBillBase):
         main = self.client.get(f"/api/agenda/appointments/{self.mani.id}", **self.auth).json()
         self.assertIsNone(main["paid_in_sale_id"])
 
+    def test_the_client_history_says_where_the_other_visit_was_paid(self):
+        """Lo storico non mostra «non incassato» per la visita chiusa nel conto dell'altra."""
+        from apps.accounts.models import Membership, User
+
+        self._checkout()
+        sale = Sale.objects.get()
+        owner = User.objects.create_user(email="titolare@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=owner, salon=self.salon, is_owner=True)
+        res = self.client.get(f"/api/clients/{self.sofia.id}/history", **bearer(owner, self.salon))
+        self.assertEqual(res.status_code, 200, res.content)
+        visits = {e["appointment"]["id"]: e for e in res.json()["entries"] if e["kind"] == "visit"}
+        self.assertEqual(visits[self.mani.id]["sale"]["id"], sale.id)
+        self.assertIsNone(visits[self.mani.id]["covered_by_sale"])
+        self.assertIsNone(visits[self.piedi.id]["sale"])
+        self.assertEqual(visits[self.piedi.id]["covered_by_sale"]["id"], sale.id)
+        self.assertEqual(visits[self.piedi.id]["covered_by_sale"]["appointment_id"], self.mani.id)
+
     def test_the_deposits_of_every_visit_are_deducted(self):
         self.mani.deposit_status, self.mani.deposit_amount = "paid", Decimal("20.00")
         self.mani.save()
