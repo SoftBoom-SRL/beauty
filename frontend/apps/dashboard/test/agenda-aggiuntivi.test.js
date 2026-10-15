@@ -24,7 +24,7 @@ const { default: SvcEditModal } = await loadComponent('apps/dashboard/src/sectio
 const { default: ServiziSub } = await loadComponent('apps/dashboard/src/sections/servizi/ServiziSub.jsx');
 const { default: NewApptModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/NewApptModal.jsx', {
   stubs: ['ClientPicker.jsx'],
-  expand: ['BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
+  expand: ['BookingShell', 'BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
 });
 const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/ApptDetailModal.jsx', {
   expand: [

@@ -6,6 +6,7 @@
 // schermata. Senza hook: gli spostamenti sono di useMoveFromPanel.
 import { Avatar, Icon, fmtDateIt, fmtDur, timeLabel } from '@youty/shared';
 import { initialsOf, LAST_START_MIN } from '../../lib.js';
+import { pillVars } from '../../../../ui/colorTools.js';
 
 export default function WhoWhenCard({
   appt, o, col, t, lang, canMove, movingBusy, stepMin, startMin, endMin, dateStr, timeDraft, setTimeDraft, commitTime,
@@ -77,7 +78,7 @@ export default function WhoWhenCard({
               return (
                 <button key={op.id} type="button" disabled={movingBusy || on} onClick={() => applyMove({ operatorId: op.id })}
                   className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')}
-                  style={{ '--pill-c': opColors[op.id] || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12, cursor: on ? 'default' : 'pointer' }}>
+                  style={{ ...pillVars(opColors[op.id] || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12, cursor: on ? 'default' : 'pointer' }}>
                   <Avatar initials={op.initials} size={20} color={opColors[op.id] || 'var(--clay)'} ring={on} />
                   <span>{op.first_name}</span>
                   {on && <Icon name="check" size={12} stroke={2.6} />}

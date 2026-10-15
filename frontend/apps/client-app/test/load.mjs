@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const APP = join(dirname(fileURLToPath(import.meta.url)), '..');   // apps/client-app/
+const BRAND_COLOR = join(APP, '..', '..', 'packages', 'shared', 'src', 'brandColor.js');
 
 /* React finto: stato per istanza (una per renderHook), slot in ordine di
  * chiamata come il React vero; gli effetti girano subito dopo il render, e
@@ -97,7 +98,11 @@ export async function loadModule(entry, { shared = '', react = false, jsx = fals
         } else {
           b.onResolve({ filter: /\.jsx$/ }, (a) => (entryPoint(a) ? undefined : muto(a)));
         }
-        const SRC = { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared, ctx };
+        // Il testo sopra il brand (onColor) lo importa theme.js, cioè quasi
+        // ogni modulo dell'app: va nel finto sempre, vero, senza ripeterlo in
+        // ogni SHARED dei test.
+        const brand = /\bonColor\b/.test(shared) ? '' : `\nexport { onColor } from ${JSON.stringify(BRAND_COLOR)};`;
+        const SRC = { react: REACT, 'jsx-runtime': JSX_RUNTIME, shared: shared + brand, ctx };
         b.onLoad({ filter: /.*/, namespace: 'finto' }, (a) => ({ contents: SRC[a.path], loader: 'js', resolveDir: APP }));
         b.onLoad({ filter: /.*/, namespace: 'muto' }, (a) => {
           const name = a.path.replace(/\W/g, '_');

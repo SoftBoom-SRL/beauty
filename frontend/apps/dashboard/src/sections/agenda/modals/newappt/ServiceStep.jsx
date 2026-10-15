@@ -1,15 +1,17 @@
-// ServiceStep — il passo 2 del drawer: i servizi (pillole nel colore della
-// loro categoria, filtro oltre dieci) e, per ognuno scelto, chi lo fa
-// («Prima disponibile» o un'operatrice abilitata), il trattamento già pagato
-// che lo copre (regalo, pagato in anticipo, seduta di un pacchetto) e i suoi
-// aggiuntivi (la nail art durante la manicure: col prezzo, senza tempo), che si
-// aggiungono col «+» sotto il servizio. Gli aggiuntivi non sono fra le
-// pillole: da soli non si prenotano.
+// ServiceStep — il passo 2 di «Nuova prenotazione» e di ogni cliente della
+// prenotazione di gruppo: i servizi (pillole nel colore del servizio, filtro
+// oltre dieci) e, per ognuno scelto, chi lo fa («Prima disponibile» o
+// un'operatrice abilitata), il trattamento già pagato che lo copre (regalo,
+// pagato in anticipo, seduta di un pacchetto) e i suoi aggiuntivi (la nail art
+// durante la manicure: col prezzo, senza tempo), che si aggiungono col «+»
+// sotto il servizio. Gli aggiuntivi non sono fra le pillole: da soli non si
+// prenotano.
 // `stepRef` è la ref del passo (la checklist del piede ci porta).
 import { Avatar, Icon, fmtDur, fmtEur } from '@youty/shared';
 import { addonGroups, firstName, isAddonRow } from '../../lib.js';
 import { creditIcon, creditLabel, creditTitle } from '../../../fedelta/credits.js';
 import StepLabel from './StepLabel.jsx';
+import { inkOn, pillVars } from '../../../../ui/colorTools.js';
 
 export default function ServiceStep({
   stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, svcColor, svcOf,
@@ -34,20 +36,22 @@ export default function ServiceStep({
           const noOps = !eligibleOps(s.id).length;
           const cat = svcColor(s);
           const gift = giftFor(s.id);
+          // scelta, la pillola è quasi piena: sui colori scuri testo e icone bianchi
+          const ink = inkOn(cat, on ? 0.7 : 0.26);
           return (
             <button key={s.id} type="button" onClick={() => toggleService(s.id)} className="dk-pill"
               title={noOps ? t('Nessuna operatrice abilitata', 'No stylist enabled')
                 : [`${fmtDur(s.duration_min, lang)} · ${fmtEur(Number(s.price), lang)}`, gift ? creditLabel(gift, t) : ''].filter(Boolean).join(' · ')}
               style={{
-                padding: '5px 11px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1, color: 'var(--ink)',
+                padding: '5px 11px', fontSize: 12.5, opacity: noOps && !on ? 0.55 : 1, color: ink.ink,
                 borderWidth: 2, fontWeight: on ? 700 : 600,
                 background: on ? `color-mix(in srgb, ${cat} 70%, #FFFFFF)` : `color-mix(in srgb, ${cat} 26%, var(--surface))`,
                 borderColor: on ? `color-mix(in srgb, ${cat} 60%, var(--ink))` : `color-mix(in srgb, ${cat} 50%, transparent)`,
                 boxShadow: on ? `0 0 0 3px color-mix(in srgb, ${cat} 32%, transparent)` : 'none',
               }}>
               {svcName(s, lang)}
-              {gift && <Icon name={creditIcon(gift)} size={12} color="var(--clay-ink)" />}
-              <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? 'var(--ink)' : 'var(--ink-2)'} />
+              {gift && <Icon name={creditIcon(gift)} size={12} color={ink.ink === '#FFFFFF' ? ink.ink : 'var(--clay-ink)'} />}
+              <Icon name={on ? 'check' : 'plus'} size={12} stroke={2.6} color={on ? ink.ink : ink.sub} />
             </button>
           );
         })}
@@ -89,7 +93,7 @@ export default function ServiceStep({
                   {eligible.map((o) => {
                     const on = o.id === it.operator_id;
                     return (
-                      <button key={o.id} type="button" onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ '--pill-c': o.color || 'var(--clay)', padding: '3px 10px 3px 4px', fontSize: 12 }}>
+                      <button key={o.id} type="button" onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')} style={{ ...pillVars(o.color || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12 }}>
                         <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
                         <span>{o.first_name}</span>
                         {on && <Icon name="check" size={12} stroke={2.6} />}

@@ -3,7 +3,7 @@
 // con le sedute), le categorie e lo storico (se c'è), il telefono e il
 // bottone per aprirne la scheda.
 import { Avatar, Icon } from '@youty/shared';
-import { fmtMoney, initialsOf } from '../../lib.js';
+import { fmtMoney, initialsOf, inkOn } from '../../lib.js';
 import { creditIcon, creditLabel, creditTitle } from '../../../fedelta/credits.js';
 
 export default function ClientMetaBar({ appt, sm, clientDetail, t, lang, openClient }) {
@@ -18,7 +18,8 @@ export default function ClientMetaBar({ appt, sm, clientDetail, t, lang, openCli
             <span key={g.gift_card_id ?? g.code} title={creditTitle(g, t, lang)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', padding: '3px 9px', borderRadius: 99 }}><Icon name={creditIcon(g)} size={11} color="var(--clay-ink)" />{creditLabel(g, t)}</span>
           ))}
           {(clientDetail?.categories || []).slice(0, 2).map((c) => (
-            <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
+            // il colore pieno dell'etichetta: su una scura il testo bianco
+            <span key={c.id} style={{ fontSize: 11, fontWeight: 700, color: inkOn(c.color).sub, background: c.color || 'var(--surface-2)', padding: '3px 9px', borderRadius: 99 }}>{c.name}</span>
           ))}
           {/* Lo storico si scrive solo se c'è: «visite · €0» era una riga che
               non diceva niente, e sulla scheda di una cliente nuova sembrava

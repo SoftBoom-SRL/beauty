@@ -14,7 +14,7 @@
 .dk-pill--on:hover { background: var(--ink); border-color: var(--ink); }
 /* variante colorata (operatrici): bordo 2px del colore, sfondo tinta piena, ring */
 .dk-pill--tint { border-width: 2px; }
-.dk-pill--tint.dk-pill--on { color: var(--ink); background: var(--pill-c, var(--clay-tint)); border-color: color-mix(in srgb, var(--pill-c, var(--clay)) 55%, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pill-c, var(--clay)) 35%, transparent); }
+.dk-pill--tint.dk-pill--on { color: var(--pill-ink, var(--ink)); background: var(--pill-c, var(--clay-tint)); border-color: color-mix(in srgb, var(--pill-c, var(--clay)) 55%, var(--ink)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pill-c, var(--clay)) 35%, transparent); }
 .dk-pill--tint.dk-pill--on:hover { background: var(--pill-c, var(--clay-tint)); }
 .dk-pill--muted { opacity: 0.55; filter: grayscale(0.6); }
 .dk-pill--muted:hover { opacity: 0.85; filter: none; }

@@ -90,7 +90,7 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
           {/* il trattamento già pagato col suo tipo: regalo, pagato in
               anticipo, pacchetto (e le sedute nel tooltip) */}
-          {gifts > 0 && <span title={creditsTitle(a.gifts, t, null, { code: false })} style={{ display: 'grid' }}><Icon name={creditIcon(a.gifts[0])} size={10} color="var(--ink-2)" stroke={2.2} /></span>}
+          {gifts > 0 && <span title={creditsTitle(a.gifts, t, null, { code: false })} style={{ display: 'grid' }}><Icon name={creditIcon(a.gifts[0])} size={10} color={ink.sub} stroke={2.2} /></span>}
         </div>
       )}
       <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>

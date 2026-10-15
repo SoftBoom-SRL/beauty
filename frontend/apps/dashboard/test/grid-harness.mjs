@@ -89,6 +89,7 @@ export * from ${JSON.stringify(FORMAT)};
 export * from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'labels.js'))};
 // la copia negli appunti vera: usa navigator e document di globalThis, che il test imposta
 export { copyText } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'clipboard.js'))};
+export { onColor } from ${JSON.stringify(join(FRONT, 'packages', 'shared', 'src', 'brandColor.js'))};
 export const Avatar = () => null;
 export const EmptyState = () => null;
 export const Icon = () => null;

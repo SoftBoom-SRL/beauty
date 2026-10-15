@@ -10,6 +10,7 @@ import { Avatar, Icon, NumInput, fmtEur, nameIn } from '@youty/shared';
 import { addonGroups, fmtMoney, initialsOf, isAddonRow, nextTimedIndex, timedItems } from '../../lib.js';
 import { MAX_ITEM_MIN } from '../rules.js';
 import { creditIcon, creditTitle } from '../../../fedelta/credits.js';
+import { pillVars } from '../../../../ui/colorTools.js';
 
 /* campo orario di una riga servizio: stretto, tabellare, come gli altri numeri */
 const timeCellCss = {
@@ -151,7 +152,7 @@ export default function ServicesEditor({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 16, flexWrap: 'wrap' }}>
                   {holder && (
                     <React.Fragment>
-                      <span className="dk-pill dk-pill--tint dk-pill--on" style={{ '--pill-c': opColors[holder.id] || 'var(--muted-2)', padding: '2px 9px 2px 3px', fontSize: 11.5, cursor: 'default' }}>
+                      <span className="dk-pill dk-pill--tint dk-pill--on" style={{ ...pillVars(opColors[holder.id] || 'var(--muted-2)'), padding: '2px 9px 2px 3px', fontSize: 11.5, cursor: 'default' }}>
                         <Avatar initials={initialsOf(holder.name)} size={18} color={opColors[holder.id] || 'var(--muted-2)'} ring />
                         <span>{holder.name}</span>
                       </span>
@@ -167,7 +168,7 @@ export default function ServicesEditor({
                         return (
                           <button key={op.id} type="button" onClick={() => setItemOperator(it.key, op.id)}
                             className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')}
-                            style={{ '--pill-c': opColors[op.id] || 'var(--clay)', padding: '2px 9px 2px 3px', fontSize: 11.5 }}>
+                            style={{ ...pillVars(opColors[op.id] || 'var(--clay)'), padding: '2px 9px 2px 3px', fontSize: 11.5 }}>
                             <Avatar initials={op.initials} size={18} color={opColors[op.id] || 'var(--clay)'} ring={on} />
                             <span>{op.first_name}</span>
                           </button>

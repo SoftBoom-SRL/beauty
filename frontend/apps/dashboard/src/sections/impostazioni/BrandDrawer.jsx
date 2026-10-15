@@ -3,12 +3,13 @@
 // polite lock state for non-owners. No logo-delete endpoint: "remove" only
 // clears the locally selected file before saving.
 import { useRef, useState } from 'react';
-import { mediaUrl, Icon, toastApiError } from '@youty/shared';
+import { mediaUrl, Icon, onColor, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DrawerHead from '../../ui/DrawerHead.jsx';
 import HexInput from '../../ui/HexInput.jsx';
 import { useDash } from '../../ctx.jsx';
 import PaletteGrid from '../../ui/PaletteGrid.jsx';
+import ColorWheel from '../../ui/ColorWheel.jsx';
 import { inputCss, LockNote } from './lib.jsx';
 import { settingsApi } from '../../api/core.js';
 
@@ -49,7 +50,7 @@ export default function BrandDrawer({ onClose }) {
 
   const Logo = ({ size }) => logoSrc
     ? <img src={logoSrc} alt="logo" style={{ width: size, height: size, objectFit: 'cover', borderRadius: 10 }} />
-    : <div style={{ width: size, height: size, borderRadius: 10, background: color, display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontFamily: 'var(--serif)', fontSize: size * 0.42 }}>{(salon?.name || 'S')[0]}</div>;
+    : <div style={{ width: size, height: size, borderRadius: 10, background: color, display: 'grid', placeItems: 'center', color: onColor(color), fontWeight: 800, fontFamily: 'var(--serif)', fontSize: size * 0.42 }}>{(salon?.name || 'S')[0]}</div>;
 
   return (
     <DkDrawer open onClose={onClose}>
@@ -77,31 +78,32 @@ export default function BrandDrawer({ onClose }) {
         </div>
         <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 22 }}>{t('Compare nell’app cliente e nelle comunicazioni.', 'Shown in the client app and communications.')}</div>
 
-        {/* primary colour — wheel + hex + palette */}
+        {/* colore principale: codice, tavolozza e la ruota per sceglierlo
+            liberamente (il selettore del browser nascosto nel quadratino non
+            lo trovava nessuno) */}
         <div className="t-meta" style={{ marginBottom: 10 }}>{t('Colore principale', 'Primary colour')}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, opacity: isOwner ? 1 : 0.55, pointerEvents: isOwner ? 'auto' : 'none' }}>
-          <label title={t('Ruota dei colori', 'Colour wheel')} style={{ position: 'relative', width: 48, height: 48, borderRadius: 12, cursor: 'pointer', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--hair)', background: color }}>
-            <input type="color" value={color} onChange={(e) => setColor(e.target.value.toUpperCase())} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }} />
-          </label>
+          <span style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0, border: '1px solid var(--hair)', background: color }} />
           <div style={{ flex: 1 }}>
             <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 4 }}>{t('Codice esadecimale', 'Hex code')}</div>
             <HexInput value={color} onChange={setColor} />
           </div>
         </div>
-        <div style={{ opacity: isOwner ? 1 : 0.55, pointerEvents: isOwner ? 'auto' : 'none' }}>
-          <PaletteGrid value={color} onChange={setColor} style={{ marginBottom: 22 }} />
+        <div style={{ opacity: isOwner ? 1 : 0.55, pointerEvents: isOwner ? 'auto' : 'none', marginBottom: 22 }}>
+          <PaletteGrid value={color} onChange={setColor} style={{ marginBottom: 14 }} />
+          <ColorWheel value={color} onChange={setColor} t={t} disabled={!isOwner} />
         </div>
 
-        {/* live preview */}
+        {/* live preview: il testo bianco o scuro come nell'app cliente (onColor) */}
         <div className="t-meta" style={{ marginBottom: 10 }}>{t('Anteprima', 'Preview')}</div>
         <div style={{ borderRadius: 14, overflow: 'hidden', border: '1px solid var(--hair)', marginBottom: 16 }}>
           <div style={{ height: 70, background: color, display: 'flex', alignItems: 'flex-end', padding: 12, gap: 10 }}>
             {logoSrc && <img src={logoSrc} alt="" style={{ width: 30, height: 30, borderRadius: 8, objectFit: 'cover' }} />}
-            <span style={{ fontFamily: 'var(--serif)', fontSize: 20, fontWeight: 600, color: '#fff' }}>{salon?.name}</span>
+            <span style={{ fontFamily: 'var(--serif)', fontSize: 20, fontWeight: 600, color: onColor(color) }}>{salon?.name}</span>
           </div>
           <div style={{ padding: 12, background: 'var(--surface)' }}>
             <div style={{ height: 8, width: '60%', borderRadius: 4, background: 'var(--paper-2)', marginBottom: 8 }} />
-            <div style={{ height: 30, borderRadius: 99, background: color, display: 'grid', placeItems: 'center', color: '#fff', fontSize: 12, fontWeight: 700 }}>{t('Prenota', 'Book')}</div>
+            <div style={{ height: 30, borderRadius: 99, background: color, display: 'grid', placeItems: 'center', color: onColor(color), fontSize: 12, fontWeight: 700 }}>{t('Prenota', 'Book')}</div>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
-// DateBar — in cima al drawer: il giorno (frecce e calendario, mai nel
-// passato) e, se la prenotazione è partita da un clic in agenda,
-// l'operatrice e l'ora richieste, con la «x» per toglierle.
+// DateBar — in cima al drawer (e a ogni cliente della prenotazione di
+// gruppo): il giorno (frecce e calendario, mai nel passato) e, se la
+// prenotazione è partita da un clic in agenda, l'operatrice e l'ora
+// richieste, con la «x» per toglierle.
 import { Avatar, Icon, timeLabel, todayStr } from '@youty/shared';
 
 export default function DateBar({ date, dateLabel, shiftDate, setDate, choose, req, reqOp, setReq, setShowAll, setItems, t }) {

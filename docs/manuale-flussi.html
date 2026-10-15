@@ -93,7 +93,7 @@
     </ul>
   </li>
   <li><b>Pannello destro:</b> box <b>Vendite totali di oggi</b> (checkout servizi+prodotti + vendite del Punto Vendita) — cliccabile, porta al <b>Registro attività</b> filtrato su oggi; <b>Opportunità di oggi</b>; <b>Lista d'attesa</b>. La sidebar destra e quella sinistra sono collassabili; sugli schermi sotto i 1600 px (destra) e i 1366 px (sinistra) partono chiuse finché non le si apre. Chiuso, il pannello destro mostra i numeri che chiedono un'azione (slot liberati da richiamare, lista d'attesa); sotto i 1180 px, aperto, si mette sopra l'agenda.</li>
-  <li><b>Prenotazione di gruppo</b>: dal menu della freccia accanto a <b>Prenota</b> (in alto), insieme a «Nuovo cliente».</li>
+  <li><b>Prenotazione di gruppo</b>: dal menu della freccia accanto a <b>Prenota</b> (in alto), insieme a «Nuovo cliente». È fatta come «Nuova prenotazione»: una scheda per cliente con il giorno, gli stessi passi (1 cliente, 2 servizi e chi li fa, 3 orario, con i consigliati) e, scelto l'orario, la riga con «Cambia orario»; per ogni cliente anche la <b>nota</b> e <b>Cliente flessibile</b>; nel piede chi è pronta (un clic porta alla sua scheda) e «Crea N prenotazioni» col totale, che se manca qualcosa lo dice.</li>
   <li><b>Nuova prenotazione</b> e prenotazione di gruppo: accanto alla ricerca della cliente c'è sempre <b>Nuovo cliente</b>, anche prima di cercare; quello che si è scritto nella ricerca precompila nome e cognome della scheda veloce.</li>
 </ul>
 
@@ -151,7 +151,7 @@
 <ul>
   <li>Due famiglie distinte in due voci di menu: <b>Coupon &amp; Fedeltà</b> (sconti, nessun pagamento anticipato) e <b>Gift card</b> (denaro prepagato).</li>
   <li><b>Coupon</b>: sconto % o importo su acquisto futuro. Origine: <code>Manuale</code>, <code>Automatico (evento)</code> o <code>Fedeltà (riscatto punti)</code> — badge origine visibile.</li>
-  <li><b>Programmi fedeltà</b> — generici per coprire ogni esigenza beauty: tipi <b>A punti / A timbri / A livelli / Membership</b>; accumulo per € speso / visita / servizio; premio (Buono €, Sconto %, Servizio omaggio, Prodotto omaggio, Gift card); regole generali (iscrizione auto/su richiesta/a pagamento, scadenza punti, punti bonus: compleanno, referral, pre-prenotazione, recensione, giorni doppi). Al raggiungimento della soglia il premio <b>genera un coupon</b> con origine "Fedeltà". Presentazione visiva: colore dalla palette stile Google Docs + esadecimale (niente icone).</li>
+  <li><b>Programmi fedeltà</b> — generici per coprire ogni esigenza beauty: tipi <b>A punti / A timbri / A livelli / Membership</b>; accumulo per € speso / visita / servizio; premio (Buono €, Sconto %, Servizio omaggio, Prodotto omaggio, Gift card); regole generali (iscrizione auto/su richiesta/a pagamento, scadenza punti, punti bonus: compleanno, referral, pre-prenotazione, recensione, giorni doppi). Al raggiungimento della soglia il premio <b>genera un coupon</b> con origine "Fedeltà". Presentazione visiva: colore dalla palette, dalla ruota dei colori o col codice esadecimale (niente icone); nell'anteprima della tessera il testo diventa scuro sui colori chiari.</li>
   <li><b>Gift card</b> (denaro incassato subito): valore e codice/QR, acquirente e destinatario, stato pagamento (pagata con data e metodo / da pagare), consegna (programmata o a mano), scadenza, stato (attiva/riscattata/scaduta) con saldo residuo. Fascia di monitoraggio: venduto, riscattato, da riscattare.</li>
 </ul>
 
@@ -237,7 +237,7 @@
 
 <div class="flow"><b>Flusso 9 — Magazzino ↔ vendite.</b> I prodotti con natura "Vendita" o "Misto" possono essere venduti al checkout / POS e scaricano la giacenza; ogni movimento (scarico uso, vendita, rettifica, carico, trasferimento) è tracciato nello Storico con causale. Gli ordini fornitori nascono dai prodotti sotto soglia.</div>
 
-<div class="flow"><b>Flusso 10 — Branding white-label.</b> In Impostazioni → Brand &amp; app cliente si carica il <b>logo</b> e si sceglie il <b>colore</b> (palette stile Google Docs + esadecimale): logo e colore si applicano alla superficie dell'app cliente (cerchio logo in home, accento) e ai messaggi.</div>
+<div class="flow"><b>Flusso 10 — Branding white-label.</b> In Impostazioni → Brand &amp; app cliente si carica il <b>logo</b> e si sceglie il <b>colore</b> (palette stile Google Docs, ruota dei colori o codice esadecimale; l'anteprima mostra il testo bianco o scuro come lo vedrà la cliente): logo e colore si applicano alla superficie dell'app cliente (cerchio logo in home, accento) e ai messaggi.</div>
 
 <h2 id="ruoli">6 · Ruoli, permessi e registro attività</h2>
 <ul>
@@ -248,7 +248,7 @@
 
 <h2 id="branding">7 · Branding white-label e multi-sede</h2>
 <ul>
-  <li><b>Colori:</b> selezione uniforme in tutta la dashboard (categorie prodotti/servizi/clienti, colore operatrice, brand cliente, tessera fedeltà) con palette a griglia stile Google Docs + campo esadecimale. Hover viola coerente (nessuna ombra arancione).</li>
+  <li><b>Colori:</b> selezione uniforme in tutta la dashboard (categorie prodotti/servizi/clienti, colore del servizio, colore operatrice, brand cliente, tessera fedeltà): le tinte pronte, il campo esadecimale e la <b>ruota dei colori</b> per sceglierne uno qualsiasi senza conoscerne il codice — sulla ruota la tinta (verso il centro più tenue), sotto la barra <b>Scuro ↔ Chiaro</b> e un'anteprima del testo. Sui colori scuri testi e icone sopra diventano <b>bianchi da soli</b> (blocchi in agenda, pillole delle operatrici e dei servizi scelti, etichette delle clienti, anteprime). Hover viola coerente (nessuna ombra arancione).</li>
   <li><b>Notifiche:</b> ogni salvataggio/modifica mostra una notifica in basso a destra.</li>
   <li><b>Multi-sede:</b> selettore di sede in dashboard; profilo titolare con vista consolidata su tutte le location.</li>
 </ul>

@@ -265,7 +265,7 @@ test('anteprima e dettaglio: «Pacchetto · 3/5 sedute», «Regalo · da Carla R
 
 const { default: NewApptModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/NewApptModal.jsx', {
   stubs: ['ClientPicker.jsx'],
-  expand: ['BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
+  expand: ['BookingShell', 'BookingFoot', 'DateBar', 'ServiceStep', 'TimeStep', 'ManualTime'],
 });
 
 const flush = async () => { for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r)); };
