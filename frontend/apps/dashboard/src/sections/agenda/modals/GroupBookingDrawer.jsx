@@ -21,6 +21,7 @@ import DateBar from './newappt/DateBar.jsx';
 import StepLabel from './newappt/StepLabel.jsx';
 import ServiceStep from './newappt/ServiceStep.jsx';
 import TimeStep from './newappt/TimeStep.jsx';
+import NoteFlexible from './newappt/NoteFlexible.jsx';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 const rowPrice = (row, services) => row.items.reduce((sum, it) => sum + Number((services || []).find((s) => s.id === it.service_id)?.price || 0), 0);
@@ -38,6 +39,8 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
     items: [],          // [{ key, service_id, operator_id }]
     date: baseDate,
     selStart: null,     // ISO string of chosen slot
+    note: '',           // nota e «flessibile», come in «Nuova prenotazione»
+    flexible: false,
     reloadKey: 0,       // bump → force availability refetch
     status: 'pending',  // pending | creating | done | error
     error: '',
@@ -85,6 +88,8 @@ export default function GroupBookingDrawer({ date, onClose, onCreated }) {
           client_id: row.client.id,
           items: row.items.map((i) => ({ service_id: i.service_id, operator_id: i.operator_id })),
           start: row.selStart,
+          note: row.note,
+          flexible: row.flexible,
           location_id: locationId,
         });
         patchRow(row.key, { status: 'done', created: res });
@@ -370,6 +375,14 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove, rowRef, onCl
             setItems={setItems} eligibleOps={eligibleOps} shiftDate={shiftDate} operators={operators || []} t={t}
           />
         )}
+
+        {/* nota e cliente flessibile, come in «Nuova prenotazione» */}
+        <div style={{ marginBottom: 14 }}>
+          <NoteFlexible
+            note={row.note} setNote={(note) => onPatch({ note })} flexible={row.flexible} setFlexible={(flexible) => onPatch({ flexible })}
+            inputCss={inputCss} t={t}
+          />
+        </div>
       </div>
     </div>
   );

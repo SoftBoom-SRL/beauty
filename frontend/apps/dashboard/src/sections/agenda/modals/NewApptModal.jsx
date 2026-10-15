@@ -6,7 +6,7 @@
 // servizio, orario: se l'orario richiesto non è disponibile, spiega PERCHÉ e
 // propone le alternative più vicine. Il pulsante finale dice cosa manca.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { toastApiError, Icon, Toggle, addDays, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr } from '@youty/shared';
+import { toastApiError, addDays, nowMinutes, timeLabel, minutesOfDay, todayStr, toDateStr } from '@youty/shared';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { useEscLayer } from '../../../ui/layers.js';
 import { serviceColor } from '../../../ui/palette.js';
@@ -25,6 +25,7 @@ import TimeStep from './newappt/TimeStep.jsx';
 import ManualTime from './newappt/ManualTime.jsx';
 import BookingFoot from './newappt/BookingFoot.jsx';
 import BookingShell, { BOOKING_PANEL_W, ReadOnlyNote } from './newappt/BookingShell.jsx';
+import NoteFlexible from './newappt/NoteFlexible.jsx';
 
 const svcName = (s, lang) => (lang === 'en' && s?.name_en ? s.name_en : s?.name_it || '');
 
@@ -304,19 +305,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
           <ManualTime manualTime={manualTime} setManualTime={setManualTime} step={step} applyManualTime={applyManualTime} inputCss={inputCss} t={t} />
         )}
 
-        {/* ── nota + flessibile ── */}
-        <div style={{ marginBottom: 12 }}>
-          <div className="t-meta" style={{ marginBottom: 6 }}>{t('Nota (facoltativa)', 'Note (optional)')}</div>
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder={t('es. preferisce il tono più freddo…', 'e.g. prefers the cooler tone…')} style={{ ...inputCss, width: '100%', resize: 'vertical' }} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 13px', background: 'var(--surface-2)', borderRadius: 12 }}>
-          <Icon name="refresh" size={17} color="var(--clay-ink)" />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13.5 }}>{t('Cliente flessibile', 'Flexible client')}</div>
-            <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>{t('Disponibile a spostarsi per ottimizzare l’agenda', 'Open to being moved to optimise the agenda')}</div>
-          </div>
-          <Toggle on={flexible} onChange={setFlexible} />
-        </div>
+        {/* ── nota + flessibile (anche in ogni cliente del gruppo) ── */}
+        <NoteFlexible note={note} setNote={setNote} flexible={flexible} setFlexible={setFlexible} inputCss={inputCss} t={t} />
       </div>
     ),
   });

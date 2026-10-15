@@ -1,7 +1,8 @@
 // La prenotazione di gruppo (GroupBookingDrawer.jsx vero, montato con
 // test/grid-harness.mjs; il selettore della cliente è muto). 15/10: le due
 // prenotazioni mostravano le stesse cose in due modi diversi; ora ogni riga
-// del gruppo è fatta con i pezzi di «Nuova prenotazione» (newappt/).
+// del gruppo è fatta con i pezzi di «Nuova prenotazione» (newappt/), nota e
+// cliente flessibile compresi.
 // Le righe hanno degli hook: si montano a parte, con le props che il pannello
 // dà loro, e si ridisegnano dopo ogni cambio del pannello.
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ import { find, findAll, installDom, loadComponent, mount, spy, textOf } from './
 const { BOOKING_PANEL_W } = await loadComponent('apps/dashboard/src/sections/agenda/modals/newappt/BookingShell.jsx');
 const { default: GroupBookingDrawer } = await loadComponent('apps/dashboard/src/sections/agenda/modals/GroupBookingDrawer.jsx', {
   stubs: ['ClientPicker.jsx'],
-  expand: ['BookingShell', 'DateBar', 'StepLabel', 'ServiceStep', 'TimeStep'],
+  expand: ['BookingShell', 'DateBar', 'StepLabel', 'ServiceStep', 'TimeStep', 'NoteFlexible'],
 });
 
 const plus = (n) => { const d = parseISO(todayStr()); d.setDate(d.getDate() + n); return toDateStr(d); };
@@ -115,5 +116,30 @@ test('orari come in «Nuova prenotazione», scelto resta la riga con «Cambia or
   assert.match(textOf(g.createBtn()), /^Crea 1 prenotazione · /);
   g.createBtn().props.onClick();
   await flush();
-  assert.deepEqual(g.calls.post.map((p) => p.body), [{ client_id: 7, items: [{ service_id: 3, operator_id: null }], start: at(630), location_id: null }]);
+  assert.deepEqual(g.calls.post.map((p) => p.body), [{ client_id: 7, items: [{ service_id: 3, operator_id: null }], start: at(630), note: '', flexible: false, location_id: null }]);
+});
+
+test('nota e cliente flessibile anche per ogni cliente del gruppo, e vanno con la prenotazione', async () => {
+  const g = setup();
+  assert.ok(find(g.row.tree, (el) => el.type?.name === 'NoteFlexible'), 'lo stesso pezzo di «Nuova prenotazione»');
+  find(g.row.tree, (el) => el.type?.name === 'ClientPicker').props.onChange({ id: 7, full_name: 'Maria Russo' });
+  g.render();
+  find(g.row.tree, (el) => el.type === 'textarea').props.onChange({ target: { value: 'Arriva con la sorella' } });
+  g.render();
+  find(g.row.tree, (el) => el.type?.name === 'Toggle').props.onChange(true);
+  g.render();
+  assert.equal(find(g.row.tree, (el) => el.type === 'textarea').props.value, 'Arriva con la sorella');
+  assert.equal(find(g.row.tree, (el) => el.type?.name === 'Toggle').props.on, true);
+  g.pill('Taglio').props.onClick();
+  g.render();
+  await flush();
+  g.render();
+  const chip = findAll(g.row.tree, (el) => el.type?.name === 'SlotChip')[0];
+  chip.type(chip.props).props.onClick();
+  g.render();
+  g.createBtn().props.onClick();
+  await flush();
+  assert.equal(g.calls.post.length, 1);
+  assert.equal(g.calls.post[0].body.note, 'Arriva con la sorella');
+  assert.equal(g.calls.post[0].body.flexible, true);
 });
