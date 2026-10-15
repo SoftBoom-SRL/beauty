@@ -362,24 +362,50 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 **Models**
 - `Sale`: salon FK, location FK null/blank, kind checkout/pos, appointment OneToOne
   "agenda.Appointment" null/blank, client FK null/blank, total Decimal,
-  deposit_deducted Decimal default 0, created_by FK user null, created_at.
+  deposit_deducted Decimal default 0, amount_due Decimal default 0 (quanto la
+  cliente deve ancora: 0 = saldato), created_by FK user null, created_at.
+  Conto unico: le altre visite chiuse con la vendita la puntano con
+  `Appointment.paid_in_sale` (related_name `covered_appointments`).
 - `SaleLine`: sale FK related_name="lines", operator FK "staff.Operator" null/blank,
-  line_type service/product/gift_card, service FK null, product FK "inventory.Product" null,
-  gift_card FK "marketing.GiftCard" null (venduta), qty int default 1, unit_price Decimal,
+  line_type service/product/gift_card/package, service FK null, product FK "inventory.Product" null,
+  gift_card FK "marketing.GiftCard" null (venduta), package FK "catalog.Package" null
+  (venduto), qty int default 1, unit_price Decimal,
   discount_pct int default 0, is_gift bool default False, amount Decimal
   (= qty×unit_price×(1−discount/100), 0 se is_gift).
 - `Payment`: sale FK related_name="payments", method cash/card/other/gift_card,
-  amount Decimal, gift_card FK null (usata come pagamento).
+  amount Decimal, gift_card FK null (usata come pagamento), created_at (quando è
+  arrivato il denaro: al conto la data della vendita, per un saldo il giorno del saldo).
 
 **Servizi**
-- `finalize_sale(...)` core condiviso checkout/POS, in transazione:
+- `finalize_sale(..., allow_due=False)` core condiviso checkout/POS, in transazione:
   calcola amounts; total = Σ amounts; per gift_card in pagamento →
-  `marketing.gift_cards.redeem_gift_card(salon, code, amount)` (import nella funzione);
+  `marketing.gift_cards.redeem_gift_card(salon, code, amount)` (import nella funzione;
+  con `sessions` > 1 nel pagamento anche `sessions=`);
   valida Σ payments == total − deposit_deducted (tolleranza 0.01, altrimenti 422
-  "I pagamenti non corrispondono al totale"); crea Sale/lines/payments;
+  "I pagamenti non corrispondono al totale"). Con `allow_due` e una cliente i
+  pagamenti possono essere meno del dovuto: la differenza va in `amount_due`; più
+  del dovuto → 422 "I pagamenti superano il totale da pagare"; senza cliente →
+  422 "Per lasciare un conto da saldare scegli la cliente". Crea Sale/lines/payments
+  (i pagamenti con la data della vendita);
   righe product (anche is_gift) → `inventory.services.deduct_stock_for_sale(sale)`;
-  righe gift_card vendute → `marketing.gift_cards.create_gift_card(...)`;
+  righe gift_card vendute → `marketing.gift_cards.create_gift_card(...)` (con
+  `gift_service_id` e `sessions` è una carta «a trattamento»; `kind` gift | prepaid,
+  con prepaid la destinataria è la cliente stessa e serve la cliente);
+  righe package (`package_id`, del salone e attivo, prezzo di default quello del
+  pacchetto, sconto e omaggio ammessi, qty spezzata in righe da 1, serve la cliente) →
+  `marketing.credits.create_package_credits(salon, package, client, amount=line.amount,
+  sale, line, paid_method=<primo metodo>, actor)`: le sedute della cliente;
   `marketing.loyalty.accrue_loyalty(sale)`; log `sale.created`.
+- `settle_sale(salon, sale_id, payments)`: lock del salone, poi della vendita;
+  aggiunge i pagamenti con la data di adesso e riduce `amount_due` (400 se già
+  saldato, 422 se si paga più di quanto resta); log `sale.settled`.
+- `reports.cash_movements(salon, start, end)`: il denaro entra quando arriva.
+  `due_left` = parte delle vendite del periodo non pagata nel periodo (dovuto
+  ancora aperto + saldi arrivati dopo), `settled` = pagamenti del periodo per
+  vendite di prima, `gift_card_redeemed` = pagamenti con gift card del periodo,
+  `package_sold`. Lo usano il riepilogo di oggi e i KPI degli insight
+  (`cash_in` = venduto + caparre incassate − gift card − caparre detratte
+  − caparre restituite − due_left + settled).
 - Stripe (`stripe_service.py`): `_client()` → HttpError(503, "Stripe non configurato") se
   manca STRIPE_SECRET_KEY; `ensure_customer(client)`, `create_setup_intent(client)`,
   link di pagamento della caparra, rimborsi, `charge_full_amount(appointment)` (off-session sul
@@ -390,18 +416,44 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 
 **Endpoint staff** (/api/sales)
 - POST `/checkout/{appointment_id}` (scope sales)
-  body {blocks:[{operator_id, lines:[{line_type, service_id?, product_id?, qty, unit_price,
-  discount_pct?, is_gift?}]}], payments:[{method, amount, gift_card_code?}]} →
-  finalize_sale(kind=checkout, deposit_deducted = deposit se paid);
+  body {blocks:[{operator_id, lines:[{line_type, service_id?, product_id?, package_id?, qty,
+  unit_price, discount_pct?, is_gift?, value?, recipient_name?, gift_service_id?, sessions?,
+  kind?}]}], payments:[{method, amount, gift_card_code?, sessions?}], coupon_code?,
+  leave_due?, extra_appointment_ids?} →
+  finalize_sale(kind=checkout, deposit_deducted = caparre ancora in cassa, allow_due=leave_due);
   appuntamento → closed; emit `visit.completed` {client, services, total};
   response: sale + breakdown per operatrice.
-- POST `/pos` (scope sales) {client_id?, blocks, payments} → finalize_sale(kind=pos).
-  Vendita gift card dal POS: line_type gift_card con {value, recipient_name?}.
-- GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id;
-  response include KPI header {revenue, count, items_count} sul filtro corrente.
-- GET `/{id}` → dettaglio con righe e pagamenti.
-- GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total} di oggi
-  (il box dell'agenda).
+  Già incassato (400): la visita ha la sua vendita o `paid_in_sale`.
+  Conto unico: `extra_appointment_ids` (al più 10) sono altre visite della stessa
+  cliente, nello stesso giorno del salone, non annullate né no-show, non già
+  incassate, diverse dalla principale (altrimenti 400; 404 se non sono del salone);
+  rilette sotto gli stessi lock. Le loro righe le manda il frontend nei blocchi, con
+  la loro operatrice. Si detrae la somma delle caparre ancora in cassa di tutte le
+  visite; l'eccedenza torna alla cliente ripartita sulle visite (la principale per
+  prima) senza restituire a nessuna più di quanto ha versato. Dopo la vendita la
+  principale è `closed` e le altre `closed` con `paid_in_sale` = la vendita, ognuna
+  col suo `appointment.closed`. `visit.completed` è uno solo, per la visita
+  principale, con i servizi di tutto il conto.
+- GET `/checkout/{appointment_id}/other-visits` (scope sales) → [AppointmentOut]: le
+  altre visite aperte della cliente nello stesso giorno, ancora da incassare (la
+  sezione «Altre visite oggi» della cassa).
+- POST `/pos` (scope sales) {client_id?, blocks, payments, coupon_code?, leave_due?} →
+  finalize_sale(kind=pos). Vendita gift card dal POS: line_type gift_card con {value,
+  recipient_name?} (o a trattamento: gift_service_id, sessions, kind); pacchetto:
+  line_type package con {package_id}.
+- POST `/{id}/settle` (scope sales) {payments:[…]} → settle_sale; response: dettaglio vendita.
+- GET `/dues?client_id=` (scope sales) → {client_id, amount_due, sales:[SaleOut]}: i
+  conti da saldare della cliente, dal più vecchio.
+- GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id,
+  due (solo i conti da saldare);
+  response include KPI header {revenue, count, items_count, due_total} sul filtro corrente.
+  SaleOut porta `amount_due`; ogni pagamento la sua `created_at`.
+- GET `/{id}` → dettaglio con righe (anche `package_id`/`package_name`), pagamenti e
+  `covered_appointment_ids` (conto unico).
+- GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total,
+  gift_card_sold, package_sold, gift_card_redeemed, deposit_used, deposit_cashed,
+  deposit_refunded, due_left, settled, cash_in} di oggi (il box dell'agenda): il
+  venduto per data della vendita, `cash_in` il denaro arrivato oggi (vedi `cash_movements`).
 - POST `/appointments/{appointment_id}/charge-no-show` (scope sales) → charge_full_amount, log.
   Solo su appuntamenti no_show; un solo addebito per appuntamento (no_show_payment_intent_id +
   idempotency key Stripe), il secondo tentativo → 409.
@@ -422,7 +474,8 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   «in corso» da più di 10 minuti si riprende con la stessa chiave di idempotenza.
 
 **Tests**: finalize_sale ok e mismatch pagamenti → errore; sconto/omaggio amounts;
-deposito detratto; today-summary.
+deposito detratto; today-summary; conti da saldare e saldi (`test_dues`); conto
+unico (`test_single_bill`); pacchetti, trattamenti già pagati e sedute (`test_prepaid`).
 
 ---
 

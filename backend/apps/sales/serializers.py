@@ -27,6 +27,8 @@ def line_out(line: SaleLine) -> dict:
         "service_name": line.service.name_it if line.service_id else "",
         "product_id": line.product_id,
         "product_name": line.product.name if line.product_id else "",
+        "package_id": line.package_id,
+        "package_name": line.package.name if line.package_id else "",
         "gift_card_code": line.gift_card.code if line.gift_card_id else None,
         "qty": line.qty,
         "unit_price": line.unit_price,
@@ -43,6 +45,7 @@ def payment_out(payment) -> dict:
         "method": payment.method,
         "amount": payment.amount,
         "gift_card_code": payment.gift_card.code if payment.gift_card_id else None,
+        "created_at": payment.created_at,
     }
 
 
@@ -58,6 +61,7 @@ def sale_out(sale: Sale) -> dict:
         "total": sale.total,
         "coupon_discount": sale.coupon_discount,
         "deposit_deducted": sale.deposit_deducted,
+        "amount_due": sale.amount_due,
         "created_at": sale.created_at,
     }
 
@@ -66,9 +70,13 @@ def sale_detail(sale: Sale) -> dict:
     return {
         **sale_out(sale),
         "lines": [
-            line_out(line) for line in sale.lines.select_related("operator", "gift_card", "product", "service")
+            line_out(line)
+            for line in sale.lines.select_related("operator", "gift_card", "product", "service", "package")
         ],
         "payments": [payment_out(p) for p in sale.payments.select_related("gift_card")],
+        "covered_appointment_ids": list(
+            sale.covered_appointments.order_by("start", "id").values_list("id", flat=True)
+        ),
     }
 
 
