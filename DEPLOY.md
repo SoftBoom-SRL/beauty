@@ -565,6 +565,26 @@ Dopo il deploy:
   Fino ad allora il cron scrive sulla connessione «Nessun refresh token:
   riconnessione necessaria», e i webhook di quel salone rispondono 401.
 
+### 9.5 Trattamenti già pagati, conti da saldare, aggiuntivi, clienti senza telefono
+
+Le funzioni nate dall'import da altri gestionali portano sei migrazioni:
+`catalog.0006` (servizi aggiuntivi, validità dei pacchetti), `clients.0009`
+(telefono facoltativo: il vincolo di unicità vale solo per i numeri non vuoti,
+più «contatto tramite»), `core.0015` (riferimenti agli id di un altro
+gestionale), `sales.0006` (resto da pagare sulla vendita, riga pacchetto, data
+del pagamento), `marketing.0006` (tipo e sedute delle gift card) e
+`agenda.0012` (conto unico). `sales.0006` dà a ogni pagamento già registrato
+la data della sua vendita: su tabelle grandi è un UPDATE unico, nessuna pausa
+da prevedere oltre al tempo della query.
+
+Dopo il deploy:
+
+- Lancia una volta `python manage.py recompute_reliability`: l'affidabilità
+  delle clienti diventa quella calcolata da no-show e annullamenti tardivi
+  degli ultimi 12 mesi. Fino ad allora scheda e regole caparra la calcolano già
+  al momento, ma i filtri dell'elenco clienti leggono il valore scritto a mano.
+- Programma lo stesso comando ogni notte (vedi *Job schedulati*).
+
 ## Deploy automatico
 
 Ogni push su `main` fa partire il deploy dei tre servizi (`beauty-api`,
@@ -617,7 +637,7 @@ Con queste quattro `python manage.py check --deploy` non segnala più nulla.
 
 ## Job schedulati (Coolify → *Scheduled Tasks* sulla risorsa `beauty-api`)
 
-Tre comandi vanno programmati. Senza di loro il gestionale continua a funzionare
+Quattro comandi vanno programmati. Senza di loro il gestionale continua a funzionare
 ma alcune funzioni restano ferme, e il sintomo non punta alla causa.
 
 | Comando | Cadenza | Cosa succede se manca |
@@ -625,6 +645,7 @@ ma alcune funzioni restano ferme, e il sintomo non punta alla causa.
 | `python manage.py flush_outbox --loop --interval 5` | sempre acceso (worker) | Nessun messaggio parte: gli OTP dell'app cliente «non arrivano» e la cliente non riesce a entrare. **Va tenuto acceso come worker, non lanciato ogni minuto**: i messaggi sull'appuntamento restano trattenuti qualche secondo per fondere le correzioni ravvicinate, e un job al minuto li lascia fermi fino a un minuto — abbastanza perché ne partano due al posto di uno. Gira anche senza `YOURANG_API_URL` (fa scadenze e pulizie), ma allora non consegna niente e si limita a elencare i pendenti: stesso sintomo, causa diversa — controlla sempre tutte e due. |
 | `python manage.py process_deposit_holds` | ogni 5 minuti | Le caparre scadute non liberano mai lo slot. In dashboard sembra funzionare, perché ogni apertura dell'agenda esegue il controllo sul salone visualizzato — ma solo su quello, e solo finché qualcuno guarda. |
 | `python manage.py sync_yourang` | ogni ora | Clienti e servizi smettono di riallinearsi con Yourang quando un webhook va perso; anche la prima sincronizzazione interrotta da un riavvio si completa solo da qui. |
+| `python manage.py recompute_reliability` | ogni notte | L'affidabilità salvata non risale quando un no-show esce dalla finestra dei 12 mesi: i filtri dell'elenco clienti la leggono vecchia. Scheda e regole caparra la ricalcolano da sole, quindi il sintomo è solo nell'elenco. |
 
 Lo stato della consegna messaggi è visibile al titolare in
 *Impostazioni → Notifiche*, che legge `GET /api/core/outbox/status`: dice se
