@@ -17,7 +17,7 @@ import { communicationsApi, couponsApi, giftCardsApi, loyaltyApi } from '../src/
 import { automationsApi } from '../src/api/automations.js';
 import { insightsApi } from '../src/api/insights.js';
 import { invitationsApi, membersApi, rolesApi, staffAccountApi } from '../src/api/team.js';
-import { yourangApi } from '../src/api/integrations.js';
+import { voiceApi, yourangApi } from '../src/api/integrations.js';
 
 /* Registratore al posto di `api` (test/shared-shim.mjs passa ogni chiamata a
  * globalThis.__api): la chiamata diventa { method, path, params?, body?, form? }
@@ -207,6 +207,9 @@ const CASES = [
   [() => yourangApi.oauthStart(), ['GET', '/api/integrations/yourang/oauth/start']],
   [() => yourangApi.loginStart(), ['GET', '/api/integrations/yourang/oauth/login/start']],
   [() => yourangApi.exchange({ code: 'c', state: 's', nonce: 'n' }), ['POST', '/api/integrations/yourang/oauth/exchange', { body: { code: 'c', state: 's', nonce: 'n' } }]],
+  [() => voiceApi.status(), ['GET', '/api/integrations/voice/key']],
+  [() => voiceApi.generate(), ['POST', '/api/integrations/voice/key']],
+  [() => voiceApi.revoke(), ['DELETE', '/api/integrations/voice/key']],
 ];
 
 const expected = ([method, path, rest = {}]) => ({ method, path, ...rest });
@@ -238,7 +241,7 @@ test('la tabella copre ogni funzione esportata dai moduli di api/', () => {
     clientsApi, clientCategoriesApi, clientNotesApi, techSheetsApi,
     productsApi, productCategoriesApi, suppliersApi, movementsApi, ordersApi,
     salesApi, stripeConnectApi, couponsApi, giftCardsApi, loyaltyApi, communicationsApi,
-    automationsApi, insightsApi, membersApi, rolesApi, invitationsApi, staffAccountApi, yourangApi,
+    automationsApi, insightsApi, membersApi, rolesApi, invitationsApi, staffAccountApi, yourangApi, voiceApi,
   };
   // le funzioni che la tabella non può provare con una chiamata sola
   const apart = new Set(['activityApi.streamUrl', 'productsApi.listAll']);

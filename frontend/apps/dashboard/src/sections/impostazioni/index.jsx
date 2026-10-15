@@ -16,9 +16,10 @@ import RolesDrawer from './RolesDrawer.jsx';
 import PasswordDrawer from './PasswordDrawer.jsx';
 import PaymentsDrawer from './PaymentsDrawer.jsx';
 import ReasonsDrawer from './ReasonsDrawer.jsx';
+import VoiceDrawer from './VoiceDrawer.jsx';
 import { CopyField } from './lib.jsx';
 import { outboxApi } from '../../api/core.js';
-import { yourangApi } from '../../api/integrations.js';
+import { voiceApi, yourangApi } from '../../api/integrations.js';
 import { YOURANG_MSG, openYourangPopup, usePopupMessage } from '../../oauth/popup.js';
 
 /* Host dell'app cliente: la dashboard non può dedurlo (è un altro dominio),
@@ -65,6 +66,8 @@ export default function ImpostazioniSection() {
   const [payOpen, setPayOpen] = useState(false);
   const [reasonsOpen, setReasonsOpen] = useState(false);
   const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
+  const [voice, setVoice] = useState(null);       // assistente vocale: { active, created_at }
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [outbox, setOutbox] = useState(null);     // stato consegna messaggi (OTP, conferme, promemoria)
 
   // deep link from agenda cash-up → activity log filtered to today
@@ -86,9 +89,11 @@ export default function ImpostazioniSection() {
   // pagina) il toast diceva «Yourang collegato» con la pagina in inglese
   // (voce 44). `t` cambia solo con la lingua.
   const loadYourang = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
+  const loadVoice = () => voiceApi.status().then(setVoice).catch(() => setVoice(null));
   useEffect(() => {
     if (!isOwner) return;
     loadYourang();
+    loadVoice();
     outboxApi.status().then(setOutbox).catch(() => setOutbox(null));
   }, [isOwner]);
   usePopupMessage(YOURANG_MSG, (m) => {
@@ -252,6 +257,10 @@ export default function ImpostazioniSection() {
               </div>
             </div>
           )}
+          <Row icon="phone" label={t('Assistente vocale', 'Voice assistant')} tag="Yourang"
+            sub={t('L’agente Yourang prenota gli appuntamenti al telefono', 'The Yourang agent books appointments over the phone')}
+            value={voice?.active ? t('Attivo', 'Active') : t('Non attivo', 'Off')}
+            onClick={() => setVoiceOpen(true)} />
         </Group>
       )}
 
@@ -320,6 +329,7 @@ export default function ImpostazioniSection() {
       {pwOpen && <PasswordDrawer onClose={() => setPwOpen(false)} />}
       {payOpen && <PaymentsDrawer onClose={() => setPayOpen(false)} />}
       {reasonsOpen && <ReasonsDrawer onClose={() => setReasonsOpen(false)} />}
+      {voiceOpen && <VoiceDrawer onClose={() => setVoiceOpen(false)} onChange={loadVoice} />}
     </div>
   );
 }

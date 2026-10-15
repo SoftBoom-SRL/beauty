@@ -31,6 +31,15 @@ class Salon(TimeStampedModel):
     # vero chiamato «The Parlour» (slug `the-parlour`, come quelli nati da
     # «Accedi con Yourang») spariva con tutte le sue clienti.
     is_demo = models.BooleanField(default=False, editable=False)
+    # Chiave dell'agente vocale Yourang che prenota al telefono
+    # (integrations.voice): solo l'impronta sha256, la chiave in chiaro la vede
+    # il titolare una volta sola. Vuota = assistente vocale spento. Sul salone
+    # e non sulla connessione OAuth: scollegare Yourang non deve spegnere
+    # l'agente, che la connessione non la usa.
+    voice_api_key_hash = models.CharField(
+        max_length=64, null=True, blank=True, unique=True, editable=False
+    )
+    voice_api_key_created_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     def __str__(self):
         return self.name
