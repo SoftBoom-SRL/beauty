@@ -19,34 +19,59 @@ from .refunds import settle_deposit_refund
 
 
 @transaction.atomic
-def check_in(appointment: Appointment, *, actor=None) -> Appointment:
+def check_in(appointment: Appointment, *, actor=None, start: bool = False) -> Appointment:
+    """Check-in; con `start` anche l'inizio del trattamento, in un passo solo.
+
+    Molti centri non distinguono l'arrivo della cliente dall'inizio del lavoro:
+    i due bottoni uno dopo l'altro erano un passaggio in più a ogni visita.
+    Insieme restano due fatti (l'evento del check-in parte come sempre, il
+    registro attività li ha tutti e due) ma un solo «torna indietro», che
+    riporta la visita a «confermato».
+    """
     _lock_and_reload(appointment)
     # Una seconda postazione con la scheda vecchia riportava «in corso» a
     # «check-in»: lo stato tornava indietro a trattamento avviato e l'evento
     # ripartiva verso Yourang.
     if appointment.status == Appointment.Status.IN_PROGRESS:
+        if start:
+            # già fatto tutto (doppio clic, due postazioni)
+            return appointment
         raise HttpError(400, "Il trattamento è già iniziato: il check-in è già stato fatto")
-    if appointment.status == Appointment.Status.CHECKED_IN:
+    checked_in = appointment.status == Appointment.Status.CHECKED_IN
+    if checked_in and not start:
         # Già fatto (doppio clic, due postazioni): niente di nuovo da dire né
         # da annullare.
         return appointment
     before = undo_log.appointment_snapshot(appointment)
-    appointment.status = Appointment.Status.CHECKED_IN
-    appointment.save(update_fields=["status", "updated_at"])
-    log_activity(
-        appointment.salon,
-        "appointment.checked_in",
-        f"Check-in di {appointment.client.full_name}",
-        actor=actor,
-        payload={"appointment_id": appointment.id},
+    name = appointment.client.full_name
+    if not checked_in:
+        appointment.status = Appointment.Status.CHECKED_IN
+        appointment.save(update_fields=["status", "updated_at"])
+        log_activity(
+            appointment.salon,
+            "appointment.checked_in",
+            f"Check-in di {name}",
+            actor=actor,
+            payload={"appointment_id": appointment.id},
+        )
+        emit_appointment_event(appointment, "appointment.checked_in")
+    if start:
+        appointment.status = Appointment.Status.IN_PROGRESS
+        appointment.save(update_fields=["status", "updated_at"])
+        log_activity(
+            appointment.salon,
+            "appointment.started",
+            f"Trattamento iniziato per {name}",
+            actor=actor,
+            payload={"appointment_id": appointment.id},
+        )
+    label = (
+        f"Inizio trattamento di {name}" if checked_in
+        else f"Check-in e inizio trattamento di {name}" if start
+        else f"Check-in di {name}"
     )
-    emit_appointment_event(appointment, "appointment.checked_in")
     undo_log.record_appointment_change(
-        appointment,
-        kind=UndoEntry.Kind.STATUS,
-        label=f"Check-in di {appointment.client.full_name}",
-        actor=actor,
-        before=before,
+        appointment, kind=UndoEntry.Kind.STATUS, label=label, actor=actor, before=before,
     )
     return appointment
 

@@ -60,6 +60,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "agenda_fill": s.agenda_fill,
         "slot_recovery": s.slot_recovery,
         "slot_interval_min": s.slot_interval_min,
+        "checkin_starts_treatment": s.checkin_starts_treatment,
         "lastminute_discount_cap": s.lastminute_discount_cap,
         "lastminute_monthly_budget": s.lastminute_monthly_budget,
         "flexible_enabled": s.flexible_enabled,

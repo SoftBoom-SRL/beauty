@@ -36,7 +36,7 @@ export const moveAppointment = (id, body) => api.post(`${appt(id)}/move`, body);
 export const splitAppointment = (id, body) => api.post(`${appt(id)}/split`, body);
 export const restoreAppointment = (id, force) => api.post(`${appt(id)}/restore`, { force });
 /** check-in, start, no-show, cancel: il comando è l'ultimo pezzo del percorso. */
-export const appointmentAction = (id, action, body) => api.post(`${appt(id)}/${action}`, body);
+export const appointmentAction = (id, action, body, params) => api.post(`${appt(id)}/${action}`, body, params ? { params } : undefined);
 export const getMargin = (id) => api.get(`${appt(id)}/margin`);
 
 /* ---- caparra ---- */

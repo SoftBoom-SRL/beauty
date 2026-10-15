@@ -330,20 +330,26 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   const openNoShow = () => { setFlow('noshow'); setReason(noShowReasons[0][0]); setReasonNote(''); };
   const openCancel = () => { setFlow('cancel'); setReason(null); setReasonNote(''); setCancelByClient(false); };
 
-  async function lifecycle(action, body, toastMsg, icon) {
+  async function lifecycle(action, body, toastMsg, icon, params) {
     if (busy) return false;
     setBusy(true);
     try {
-      await agendaApi.appointmentAction(apptRef.current.id, action, body || {});
+      await agendaApi.appointmentAction(apptRef.current.id, action, body || {}, params);
       fireToast({ msg: toastMsg, icon });
       return true;
     } catch (err) { toastApiError(err, fireToast, t); return false; }
     finally { if (alive.current) setBusy(false); }
   }
 
-  const checkIn = async () => {
+  /* `start`: check-in e inizio del trattamento in un passo solo (per i centri
+   * che non distinguono l'arrivo dall'inizio del lavoro; vedi
+   * settings.checkin_starts_treatment e DetailFooter). */
+  const checkIn = async (start = false) => {
     if (!(await saveFirst()) || !alive.current) return;
-    if (await lifecycle('check-in', null, t('Check-in registrato', 'Checked in'), 'check') && alive.current) onClose();
+    const ok = start
+      ? await lifecycle('check-in', null, t('Check-in fatto · trattamento iniziato', 'Checked in · treatment started'), 'clock', { start: true })
+      : await lifecycle('check-in', null, t('Check-in registrato', 'Checked in'), 'check');
+    if (ok && alive.current) onClose();
   };
   const startAppt = async () => {
     if (!(await saveFirst()) || !alive.current) return;
@@ -461,7 +467,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
         <DetailFooter
           appt={appt} t={t} itemsEditable={itemsEditable} dirty={dirty} itemsDirty={itemsDirty} noteDirty={noteDirty}
           savingItems={savingItems} editItems={editItems} terminal={terminal} canWrite={canWrite} busy={busy}
-          saveChanges={saveChanges} checkIn={checkIn} startAppt={startAppt} checkout={checkout} startReschedule={startReschedule}
+          saveChanges={saveChanges} checkIn={checkIn} startAppt={startAppt} oneStepCheckIn={!!settings?.checkin_starts_treatment} checkout={checkout} startReschedule={startReschedule}
           onDiscard={discardDraft} onNoShow={openNoShow} onCancel={openCancel}
         />
       )}>

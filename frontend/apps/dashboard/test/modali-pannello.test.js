@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 
 import { fmtDateIt, isoAtMin, parseISO, toDateStr, todayStr } from '@youty/shared';
-import { find, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
+import { find, findAll, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
 const { default: ApptDetailModal } = await loadComponent('apps/dashboard/src/sections/agenda/modals/ApptDetailModal.jsx', {
   // i pezzi senza hook del dettaglio, che per i test fanno parte del pannello
@@ -331,4 +331,34 @@ test('«Riprogramma»: orari liberi per questa visita, e l\'orario preso nel fra
   assert.deepEqual(g.moves().map((p) => p.body), [{ start: s1, force: false }, { start: s1, force: false }, { start: s1, force: true }]);
   assert.deepEqual(g.lastToast(), { msg: 'Appuntamento riprogrammato alle 11:00 · forzato', icon: 'alert' });
   assert.equal(g.props.onClose.calls.length, 1, 'riprogrammato: il pannello si chiude');
+});
+
+test('check-in e inizio trattamento in un passo: la scorciatoia accanto al check-in, o un bottone solo se il salone lo vuole', async () => {
+  // Due passaggi (di partenza): «Check-in» com'era, e accanto «e inizia»
+  const g = setup();
+  await settle(g);
+  const sent = [];
+  const post = globalThis.__api.post;
+  globalThis.__api.post = (url, body, opts) => { sent.push({ url, params: opts?.params || null }); return post(url, body); };
+  assert.ok(g.footButton('Check-in'), 'il check-in di sempre');
+  g.footButton('e inizia').props.onClick();
+  await settle(g);
+  assert.deepEqual(sent, [{ url: '/api/agenda/appointments/41/check-in', params: { start: true } }]);
+  assert.equal(g.lastToast().msg, 'Check-in fatto · trattamento iniziato');
+  assert.equal(g.props.onClose.calls.length, 1);
+  // il check-in semplice resta senza parametri
+  const g2 = setup();
+  await settle(g2);
+  sent.length = 0;
+  globalThis.__api.post = (url, body, opts) => { sent.push({ url, params: opts?.params || null }); return post(url, body); };
+  find(g2.panel().props.foot, (el) => el.type === 'button' && textOf(el).trim() === 'Check-in').props.onClick();
+  await settle(g2);
+  assert.deepEqual(sent, [{ url: '/api/agenda/appointments/41/check-in', params: null }]);
+  // Un passaggio (Impostazioni): un bottone solo, nessun check-in separato
+  const g3 = setup(visit(), { settings: { slot_interval_min: 15, cancel_min_hours: 24, checkin_starts_treatment: true } });
+  await settle(g3);
+  assert.ok(g3.footButton('Check-in e inizia trattamento'));
+  assert.equal(find(g3.panel().props.foot, (el) => el.type === 'button' && textOf(el).trim() === 'Check-in'), null);
+  const starts = findAll(g3.panel().props.foot, (el) => el.type === 'button' && textOf(el).includes('inizia'));
+  assert.equal(starts.length, 1, 'nessuna scorciatoia a parte');
 });

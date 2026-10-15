@@ -29,6 +29,8 @@ class SettingsOut(Schema):
     agenda_fill: str
     slot_recovery: str
     slot_interval_min: int
+    # Un bottone solo per check-in e inizio del trattamento (dettaglio appuntamento).
+    checkin_starts_treatment: bool = False
     lastminute_discount_cap: int
     lastminute_monthly_budget: Decimal
     flexible_enabled: bool
@@ -67,6 +69,7 @@ class SettingsIn(Schema):
     agenda_fill: Optional[str] = None
     slot_recovery: Optional[str] = None
     slot_interval_min: Optional[int] = None
+    checkin_starts_treatment: Optional[bool] = None
     lastminute_discount_cap: Optional[int] = None
     lastminute_monthly_budget: Optional[Decimal] = None
     flexible_enabled: Optional[bool] = None

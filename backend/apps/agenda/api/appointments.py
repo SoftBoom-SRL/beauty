@@ -149,11 +149,19 @@ def restore_appointment(request, appointment_id: int, data: RestoreIn):
 
 
 @router.post("/appointments/{int:appointment_id}/check-in", auth=staff_auth, response=AppointmentOut)
-def check_in_appointment(request, appointment_id: int):
+def check_in_appointment(request, appointment_id: int, start: bool = False):
+    """Check-in della cliente; con `?start=true` parte anche il trattamento,
+    in un passo solo (per i centri che non distinguono l'arrivo dall'inizio
+    del lavoro).
+
+    `start` sta nell'indirizzo e non nel corpo: un corpo facoltativo vuoto la
+    libreria delle API lo rifiuta («Cannot parse request body»), e il check-in
+    di sempre arriva senza corpo.
+    """
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-    return _appointment_out(transitions.check_in(appointment, actor=ctx.user), viewer=ctx)
+    return _appointment_out(transitions.check_in(appointment, actor=ctx.user, start=start), viewer=ctx)
 
 
 @router.post("/appointments/{int:appointment_id}/start", auth=staff_auth, response=AppointmentOut)

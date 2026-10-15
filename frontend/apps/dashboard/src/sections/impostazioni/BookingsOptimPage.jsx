@@ -59,6 +59,7 @@ export default function BookingsOptimPage({ onBack }) {
   const s = settings || {};
 
   const [slotInterval, setSlotInterval] = useState(s.slot_interval_min || 15);
+  const [oneStep, setOneStep] = useState(!!s.checkin_starts_treatment);
   const [fill, setFill] = useState(s.agenda_fill || 'free');
   const [recovery, setRecovery] = useState(s.slot_recovery || 'notify');
   const [cap, setCap] = useState(s.lastminute_discount_cap || 0);
@@ -82,6 +83,7 @@ export default function BookingsOptimPage({ onBack }) {
     try {
       await settingsApi.update({
         slot_interval_min: slotInterval,
+        checkin_starts_treatment: oneStep,
         agenda_fill: fill,
         slot_recovery: recovery,
         lastminute_discount_cap: cap,
@@ -138,6 +140,14 @@ export default function BookingsOptimPage({ onBack }) {
             {t('Lo stesso valore determina la granularità della griglia dell’agenda interna (giorno e settimana) e la base delle disponibilità mostrate nella prenotazione online lato cliente.', 'The same value drives the granularity of the internal agenda grid (day and week) and the base of the availability shown in client-side online booking.')}
           </React.Fragment>}>
           <DkSeg value={slotInterval} onChange={(v) => !ro && setSlotInterval(v)} options={[{ value: 15, label: t('15 minuti', '15 minutes') }, { value: 20, label: t('20 minuti', '20 minutes') }, { value: 30, label: t('30 minuti', '30 minutes') }]} />
+        </AoCtrl>
+
+        <AoCtrl t={t} icon="play" title={t('Check-in e inizio trattamento', 'Check-in and treatment start')} micro={t('Due passaggi distinti, oppure uno solo per i centri che non separano l’arrivo dall’inizio del lavoro.', 'Two separate steps, or just one for salons that do not separate arrival from the start of the work.')}
+          how={<React.Fragment>
+            {t('Con «Due passaggi» il dettaglio dell’appuntamento propone prima «Check-in» e poi «Inizia trattamento»; accanto al check-in c’è comunque la scorciatoia «e inizia».', 'With «Two steps» the appointment detail offers «Check in» first and then «Start treatment»; next to check-in there is still the «and start» shortcut.')}<br /><br />
+            {t('Con «Un passaggio» c’è un bottone solo, «Check-in e inizia trattamento». Il check-in resta registrato (e le automazioni che partono dal check-in partono lo stesso); «Torna indietro» riporta l’appuntamento a confermato.', 'With «One step» there is a single button, «Check in and start treatment». The check-in is still recorded (and automations triggered by check-in still run); «Undo» takes the appointment back to confirmed.')}
+          </React.Fragment>}>
+          <DkSeg value={oneStep ? 'one' : 'two'} onChange={(v) => !ro && setOneStep(v === 'one')} options={[{ value: 'two', label: t('Due passaggi', 'Two steps') }, { value: 'one', label: t('Un passaggio', 'One step') }]} />
         </AoCtrl>
 
         <AoCtrl t={t} icon="grid" title={t('Riempimento del calendario', 'Calendar fill')} micro={t('Quanto il sistema ottimizza gli orari proposti in prenotazione online.', 'How much the system optimizes the times offered in online booking.')}

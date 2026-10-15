@@ -106,6 +106,11 @@ class SalonSettings(TimeStampedModel):
     slot_interval_min = models.PositiveSmallIntegerField(
         choices=SlotInterval.choices, default=SlotInterval.MIN_15
     )
+    # Il check-in avvia anche il trattamento: per i centri che non distinguono
+    # l'arrivo della cliente dall'inizio del lavoro, nel dettaglio
+    # dell'appuntamento c'è un bottone solo invece di due. `db_default`: vedi
+    # automation_delay_seconds.
+    checkin_starts_treatment = models.BooleanField(default=False, db_default=False)
     # Informativa privacy del SALONE: il titolare del trattamento dei dati delle
     # clienti è il salone, non la piattaforma. Mostrata nel form pubblico /<slug>/hook.
     privacy_policy_url = models.URLField(blank=True, default="")

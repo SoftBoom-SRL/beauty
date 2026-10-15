@@ -374,3 +374,76 @@ class LockOrderTests(_StaffMixin, AgendaTestBase):
             with transaction.atomic():
                 _lock_and_reload(appointment)
         self.assertEqual(calls, ["salon", "appointment"])
+
+
+class CheckInAndStartTogetherTests(_StaffMixin, AgendaTestBase):
+    """15/10: check-in e inizio del trattamento in un passo solo.
+
+    Molti centri non distinguono l'arrivo della cliente dall'inizio del
+    lavoro, e i due bottoni uno dopo l'altro erano un passaggio in più a ogni
+    visita.
+    """
+
+    def test_from_confirmed_both_facts_happen_with_one_undo(self):
+        from apps.agenda import undo as undo_log
+
+        user = self._staff()
+        appointment = self._visit(timezone.now(), actor=user)
+        # la conferma è già partita: il check-in non si fonde con lei
+        OutboxEvent.objects.update(status=OutboxEvent.Status.SENT)
+        entries = UndoEntry.objects.count()
+        check_in(appointment, actor=user, start=True)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.IN_PROGRESS)
+        # il check-in resta un fatto: il suo evento parte come sempre
+        types = list(OutboxEvent.objects.filter(salon=self.salon).values_list("event_type", flat=True))
+        self.assertIn("appointment.checked_in", types)
+        logged = set(ActivityLog.objects.filter(salon=self.salon).values_list("type", flat=True))
+        self.assertTrue({"appointment.checked_in", "appointment.started"} <= logged, logged)
+        # un solo «torna indietro», che riporta la visita a confermata
+        self.assertEqual(UndoEntry.objects.count(), entries + 1)
+        entry = UndoEntry.objects.latest("id")
+        self.assertIn("Check-in e inizio trattamento", entry.label)
+        undo_log.perform(entry, actor=user)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.CONFIRMED)
+
+    def test_from_checked_in_it_only_starts(self):
+        user = self._staff()
+        appointment = self._visit(timezone.now(), actor=user)
+        check_in(appointment, actor=user)
+        events = OutboxEvent.objects.filter(event_type="appointment.checked_in").count()
+        check_in(Appointment.objects.get(pk=appointment.pk), actor=user, start=True)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.status, Appointment.Status.IN_PROGRESS)
+        self.assertEqual(OutboxEvent.objects.filter(event_type="appointment.checked_in").count(), events)
+        self.assertIn("Inizio trattamento", UndoEntry.objects.latest("id").label)
+
+    def test_a_second_tap_changes_nothing(self):
+        user = self._staff()
+        appointment = self._visit(timezone.now(), actor=user)
+        check_in(appointment, actor=user, start=True)
+        entries = UndoEntry.objects.count()
+        events = OutboxEvent.objects.count()
+        check_in(Appointment.objects.get(pk=appointment.pk), actor=user, start=True)
+        self.assertEqual(UndoEntry.objects.count(), entries)
+        self.assertEqual(OutboxEvent.objects.count(), events)
+
+    def test_the_route_takes_start_and_works_without_a_body(self):
+        from common.testing import bearer, post_json
+
+        user = self._staff()
+        auth = bearer(user, self.salon)
+        both = self._visit(timezone.now(), actor=user)
+        resp = self.client.post(f"/api/agenda/appointments/{both.id}/check-in?start=true", **auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], "in_progress")
+        # senza corpo (e con quello vuoto) è il check-in di sempre
+        plain = self._visit(timezone.now() + dt.timedelta(hours=2), actor=user)
+        resp = self.client.post(f"/api/agenda/appointments/{plain.id}/check-in", **auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], "checked_in")
+        empty = self._visit(timezone.now() + dt.timedelta(hours=4), actor=user)
+        resp = post_json(self.client, f"/api/agenda/appointments/{empty.id}/check-in", {}, **auth)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["status"], "checked_in")

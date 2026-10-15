@@ -66,6 +66,16 @@ class SettingsApiTests(TestCase):
             SalonSettings.objects.get(salon=self.salon).slot_interval_min, 30
         )
 
+    def test_check_in_can_start_the_treatment(self):
+        # 15/10: per i centri che non distinguono arrivo e inizio del lavoro
+        self.assertFalse(self.client.get("/api/core/salon", **self.auth).json()["settings"]["checkin_starts_treatment"])
+        resp = self._put({"checkin_starts_treatment": True})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertTrue(resp.json()["checkin_starts_treatment"])
+        self.assertTrue(SalonSettings.objects.get(salon=self.salon).checkin_starts_treatment)
+        # un null non tocca niente
+        self.assertTrue(self._put({"checkin_starts_treatment": None}).json()["checkin_starts_treatment"])
+
     def test_invalid_slot_interval_rejected(self):
         resp = self._put({"slot_interval_min": 25})
         self.assertEqual(resp.status_code, 400, resp.content)

@@ -9,7 +9,7 @@ import { canMarkNoShow } from '../rules.js';
 
 export default function DetailFooter({
   appt, t, itemsEditable, dirty, itemsDirty, noteDirty, savingItems, editItems, terminal, canWrite, busy,
-  saveChanges, checkIn, startAppt, checkout, startReschedule, onDiscard, onNoShow, onCancel,
+  saveChanges, checkIn, startAppt, checkout, startReschedule, onDiscard, onNoShow, onCancel, oneStepCheckIn = false,
 }) {
   return (
     <React.Fragment>
@@ -36,10 +36,24 @@ export default function DetailFooter({
       )}
       {!terminal && canWrite && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {appt.status === 'confirmed' && (
-            <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, width: '100%' }} onClick={checkIn}>
-              <Icon name="check" size={18} color="#fff" />{t('Check-in', 'Check in')}
+          {/* Check-in e inizio del trattamento: dove il salone non li
+              distingue (Impostazioni → Prenotazioni) un bottone solo; altrimenti
+              il check-in, con accanto la scorciatoia per fare tutti e due. */}
+          {appt.status === 'confirmed' && oneStepCheckIn && (
+            <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, width: '100%' }} onClick={() => checkIn(true)}>
+              <Icon name="play" size={17} color="#fff" />{t('Check-in e inizia trattamento', 'Check in and start treatment')}
             </button>
+          )}
+          {appt.status === 'confirmed' && !oneStepCheckIn && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, flex: 1 }} onClick={() => checkIn(false)}>
+                <Icon name="check" size={18} color="#fff" />{t('Check-in', 'Check in')}
+              </button>
+              <button className="dk-btn dk-btn--soft" disabled={busy} style={{ height: 46, flexShrink: 0, padding: '0 14px' }} onClick={() => checkIn(true)}
+                title={t('Check-in e inizio del trattamento in un passo solo', 'Check in and start the treatment in one step')}>
+                <Icon name="play" size={16} />{t('e inizia', 'and start')}
+              </button>
+            </div>
           )}
           {appt.status === 'checked_in' && (
             <button className="dk-btn dk-btn--clay" disabled={busy} style={{ height: 46, width: '100%' }} onClick={startAppt}>
