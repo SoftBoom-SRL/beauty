@@ -29,8 +29,9 @@ export function renderReview(p) {
           {svcs.length > 1 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--hair)' }}>
               {svcs.map((sv) => (
-                <div key={sv.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
-                  <span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{svcLangName(sv, lang)}</span>
+                <div key={sv.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, paddingLeft: sv.is_addon ? 14 : 0 }}>
+                  {/* l'aggiuntivo sotto il suo servizio: si fa durante lui */}
+                  <span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{sv.is_addon ? '+ ' : ''}{svcLangName(sv, lang)}</span>
                   <span className="t-num" style={{ color: 'var(--muted)' }}>{fmtEur(Number(sv.price), lang)}</span>
                 </div>
               ))}

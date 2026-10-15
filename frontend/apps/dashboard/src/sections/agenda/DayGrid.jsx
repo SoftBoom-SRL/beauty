@@ -215,8 +215,10 @@ export default function DayGrid({
     if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    // Con un servizio solo «staccare» non vuol dire niente: è la visita.
-    const detach = !whole && (block.appt.items || []).length > 1;
+    // Con un servizio solo «staccare» non vuol dire niente: è la visita. Si
+    // contano i blocchi: manicure + nail art (un aggiuntivo, dentro la
+    // manicure) è un servizio solo, e il server rifiuterebbe lo stacco.
+    const detach = !whole && (block.total ?? (block.appt.items || []).length) > 1;
     beginDrag(e, {
       kind: 'item', apptId: block.apptId, itemId: block.item.id, block, detach,
       startY: e.clientY, orig: block.startMin, origOp: block.opId,

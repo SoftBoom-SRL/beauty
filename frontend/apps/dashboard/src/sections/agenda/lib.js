@@ -40,6 +40,13 @@ export { workingOperatorIds, visibleDayRows, restingIds, hiddenIdsOf, parseHidde
 
 export { wantsLightText, inkOn, opColumnTint } from './lib/colors.js';
 
+// Aggiuntivi (nail art durante la manicure): voci senza tempo, etichetta del
+// servizio a cui si appoggiano (vedi lib/addons.js).
+export {
+  isAddonItem, isAddonService, isAddonRow, timedItems, addonGroups, insertAddonRow, removeRowWithAddons,
+  setRowOperator, prevTimedIndex, nextTimedIndex, bookingRows,
+} from './lib/addons.js';
+
 /** "YYYY-MM-DD" + minuti → ISO8601 dell'istante, nel fuso del SALONE.
  *  Riesportato da @youty/shared: costruirlo con lo scarto del dispositivo
  *  faceva creare appuntamenti spostati di ore da una postazione su un altro

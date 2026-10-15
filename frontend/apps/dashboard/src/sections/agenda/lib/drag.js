@@ -142,11 +142,15 @@ export function canDo(operators, opId, serviceId) {
 
 export function skillVerdict(ctx, opId, blocks) {
   const { t } = ctx;
-  const bad = blocks.find((b) => !canDo(ctx.operators, opId, b.item.service_id));
+  // Con il servizio cambiano mano anche i suoi aggiuntivi che faceva la stessa
+  // persona (la nail art della manicure): il server li controlla tutti, e una
+  // collega che non fa la nail art non si prende la manicure con la nail art.
+  const moving = blocks.flatMap((b) => [b.item, ...(b.addons || []).filter((x) => x.operator_id === b.item.operator_id)]);
+  const bad = moving.find((it) => !canDo(ctx.operators, opId, it.service_id));
   if (!bad) return null;
   return {
     ok: false, code: 'skill',
-    label: t(`${opFirstName(ctx, opId)} non fa ${bad.item.service_name}`, `${opFirstName(ctx, opId)} does not do ${bad.item.service_name}`),
+    label: t(`${opFirstName(ctx, opId)} non fa ${bad.service_name}`, `${opFirstName(ctx, opId)} does not do ${bad.service_name}`),
     detail: t('Abilita il servizio in Staff', 'Enable the service in Staff'),
   };
 }
@@ -368,9 +372,9 @@ export function dragBadge(d) {
   // Quanti servizi cambiano mano: trascinando la spina di una visita
   // divisa fra due colleghe si muove il gruppo di QUESTA colonna, e senza
   // dirlo sembrava che partisse tutta la visita.
-  const group = d.kind === 'item' && !detach
-    ? itemBlocks(d.block.appt).filter((b) => b.opId === d.origOp).length
-    : 1;
-  const moving = d.kind === 'item' && !detach && group < (d.block.appt.items || []).length;
+  // Si contano i blocchi: gli aggiuntivi viaggiano dentro il loro servizio.
+  const blocks = d.kind === 'item' && !detach ? itemBlocks(d.block.appt) : [];
+  const group = d.kind === 'item' && !detach ? blocks.filter((b) => b.opId === d.origOp).length : 1;
+  const moving = d.kind === 'item' && !detach && group < blocks.length;
   return { detach, durMin, start, group, moving };
 }

@@ -1,15 +1,19 @@
 // ServiceStep — il passo 2 del drawer: i servizi (pillole nel colore della
 // loro categoria, filtro oltre dieci) e, per ognuno scelto, chi lo fa
-// («Prima disponibile» o un'operatrice abilitata) e il regalo che lo copre.
+// («Prima disponibile» o un'operatrice abilitata), il regalo che lo copre e i
+// suoi aggiuntivi (la nail art durante la manicure: col prezzo, senza tempo),
+// che si aggiungono col «+» sotto il servizio. Gli aggiuntivi non sono fra le
+// pillole: da soli non si prenotano.
 // `stepRef` è la ref del passo (la checklist del piede ci porta).
 import { Avatar, Icon, fmtDur, fmtEur } from '@youty/shared';
-import { firstName } from '../../lib.js';
+import { addonGroups, firstName, isAddonRow } from '../../lib.js';
 import { usableCode } from '../rules.js';
 import StepLabel from './StepLabel.jsx';
 
 export default function ServiceStep({
   stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, svcColor, svcOf,
   svcName, giftFor, selSlot, assignedName, removeItem, setItemOp, onClose, setTab, t, lang,
+  addonServices = [], addAddon = null, addonFor = null, setAddonFor = () => {},
 }) {
   return (
     <div ref={stepRef} style={{ marginBottom: 18 }}>
@@ -48,11 +52,12 @@ export default function ServiceStep({
 
       {items.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-          {items.map((it) => {
+          {addonGroups(items, isAddonRow).map(({ item: it, addons }) => {
             const s = svcOf(it.service_id);
             if (!s) return null;
             const eligible = eligibleOps(it.service_id);
             const assigned = it.operator_id === null && selSlot ? assignedName(it.service_id) : null;
+            const picking = addonFor === it.key;
             return (
               <div key={it.key} style={{ border: '1px solid var(--hair)', borderRadius: 12, overflow: 'hidden', background: 'var(--surface)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 11px', background: `color-mix(in srgb, ${svcColor(s)} 16%, var(--surface))`, borderBottom: '1px solid var(--hair)' }}>
@@ -93,6 +98,43 @@ export default function ServiceStep({
                     </span>
                   )}
                 </div>
+                {/* Gli aggiuntivi di questo servizio: si fanno durante lui,
+                    col loro prezzo e senza allungare la durata qui sopra. */}
+                {(addons.length > 0 || (addonServices.length > 0 && addAddon)) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '0 11px 9px' }}>
+                    {addons.map((x) => {
+                      const a = svcOf(x.service_id);
+                      return (
+                        <div key={x.key} data-addon-row={x.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span title={t('Aggiuntivo: si fa durante il servizio, aggiunge il prezzo e non il tempo', 'Add-on: done during the service, adds the price and not the time')}
+                            style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            + {a ? svcName(a, lang) : ''}
+                            {giftFor(x.service_id) && <Icon name="gift" size={11} color="var(--clay-ink)" title={t('Coperto da una gift card', 'Covered by a gift card')} style={{ marginLeft: 5, verticalAlign: '-2px' }} />}
+                          </span>
+                          <span className="t-num" style={{ fontSize: 12.5, fontWeight: 700, flexShrink: 0 }}>{fmtEur(Number(a?.price || 0), lang)}</span>
+                          <button type="button" className="dk-iconbtn" style={{ width: 22, height: 22, borderRadius: 7, flexShrink: 0 }} onClick={() => removeItem(x.key)} aria-label={t('Rimuovi aggiuntivo', 'Remove add-on')}><Icon name="x" size={11} /></button>
+                        </div>
+                      );
+                    })}
+                    {addonServices.length > 0 && addAddon && (picking ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingTop: 2 }}>
+                        {addonServices.map((a) => (
+                          <button key={a.id} type="button" onClick={() => { addAddon(it.key, a.id); setAddonFor(null); }} className="dk-pill"
+                            style={{ padding: '3px 9px', fontSize: 12, borderWidth: 1.5, borderColor: `color-mix(in srgb, ${svcColor(a)} 50%, transparent)`, background: `color-mix(in srgb, ${svcColor(a)} 20%, var(--surface))`, color: 'var(--ink)' }}>
+                            + {svcName(a, lang)}<span className="t-num" style={{ color: 'var(--muted)', fontWeight: 600 }}>{fmtEur(Number(a.price), lang)}</span>
+                          </button>
+                        ))}
+                        <button type="button" className="dk-iconbtn" style={{ width: 22, height: 22, borderRadius: 7 }} onClick={() => setAddonFor(null)} aria-label={t('Chiudi', 'Close')}><Icon name="x" size={11} /></button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={() => setAddonFor(it.key)}
+                        title={t('Un servizio che si fa durante questo: aggiunge il prezzo, non il tempo', 'A service done during this one: adds the price, not the time')}
+                        style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 700, color: 'var(--clay-ink)', cursor: 'pointer' }}>
+                        <Icon name="plus" size={12} color="var(--clay-ink)" />{t('Aggiuntivo', 'Add-on')}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

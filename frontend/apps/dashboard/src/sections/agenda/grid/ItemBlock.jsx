@@ -20,8 +20,11 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   // Visita con più servizi: senza un segno che li lega, in agenda si vedono
   // due riquadri identici a due appuntamenti diversi della stessa cliente, e
   // non si capisce né che sono una cosa sola né che si possono staccare.
-  const total = (appt.items || []).length;
+  // Si contano i blocchi: gli aggiuntivi (la nail art della manicure) non lo
+  // sono, stanno qui dentro come etichetta «+ Nail art».
+  const total = block.total ?? (appt.items || []).length;
   const grouped = total > 1;
+  const addons = block.addons || [];
   const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
   // testo scuro sui colori chiari, bianco su quelli scuri (vedi lib/colors.js)
   const ink = inkOn(color, 0.82);
@@ -100,6 +103,19 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
       {client && (
         <div style={{ ...textZ, fontSize: 11.5, fontWeight: 500, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? 1 : 'none', minWidth: 0, marginTop: compact ? 0 : 1 }}>
           {item.service_name}
+          {/* gli aggiuntivi di questo servizio: niente blocco (durano 0
+              minuti), un'etichetta accanto al servizio durante il quale si fanno */}
+          {addons.map((x) => (
+            <span key={x.id} data-addon={x.id} title={t('Aggiuntivo: si fa durante questo servizio', 'Add-on: done during this service')}
+              style={{ marginLeft: 5, fontSize: 10.5, fontWeight: 700, color: ink.ink, background: ink.chip, borderRadius: 5, padding: '0 4px' }}>
+              + {x.service_name}
+            </span>
+          ))}
+        </div>
+      )}
+      {!client && addons.length > 0 && (
+        <div style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, minWidth: 0 }}>
+          {addons.map((x) => '+ ' + x.service_name).join(' ')}
         </div>
       )}
       {showTime && <div style={{ ...textZ, display: 'flex', alignItems: 'center', gap: 5, marginTop: compact ? 0 : 2, flexShrink: 0 }}>

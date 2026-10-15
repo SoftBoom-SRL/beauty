@@ -216,7 +216,10 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove }) {
   const itemSeq = useRef(1);
   const locked = busy || row.status === 'creating' || row.status === 'done';
 
-  const activeServices = (services || []).filter((s) => s.active !== false);
+  // Gli aggiuntivi (nail art) no: in fila con gli altri finirebbero da soli o
+  // in testa, e il server li rifiuta. Si aggiungono poi dal dettaglio della
+  // visita, sotto il loro servizio.
+  const activeServices = (services || []).filter((s) => s.active !== false && !s.is_addon);
   const svcOf = (id) => (services || []).find((s) => s.id === id);
   const svcName = (s) => nameIn(s, lang);
   // il colore del servizio: il suo, o quello della categoria (ui/palette.js)

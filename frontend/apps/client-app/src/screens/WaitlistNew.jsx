@@ -68,13 +68,15 @@ export default function WaitlistNew() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 22 }}>
-            {cats.filter((c) => c.services.length).map((g) => (
+            {/* niente aggiuntivi (la nail art): da soli non si prenotano, e il
+                server rifiuta l'iscrizione */}
+            {cats.filter((c) => c.services.some((sv) => !sv.is_addon)).map((g) => (
               <React.Fragment key={g.id}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0 2px' }}>
                   <Icon name={catIcon(g.name_it)} size={14} color="var(--brand-ink)" />
                   <span className="t-meta">{svcLangName(g, lang)}</span>
                 </div>
-                {g.services.map((sv) => {
+                {g.services.filter((sv) => !sv.is_addon).map((sv) => {
                   const on = serviceId === sv.id;
                   return (
                     <button key={sv.id} className="press" onClick={() => setServiceId(sv.id)}

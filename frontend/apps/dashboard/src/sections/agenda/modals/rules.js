@@ -3,6 +3,7 @@
 // si prova con `node --test` (vedi apps/dashboard/test/modali-*.test.js) e le
 // regole che replicano il server stanno in un posto solo.
 import { fmtDur, isoAtMin, minutesOfDay, salonTzOpts, timeLabel, todayStr } from '@youty/shared';
+import { isAddonItem } from '../lib/addons.js';
 import { explainSlot } from '../lib/slots.js';
 
 /** Scadenza della caparra, letta sull'orologio del SALONE («24/09, 18:00»).
@@ -82,6 +83,8 @@ export const editRow = (it, key) => ({
   soak_min: it.soak_min || 0,       // solo per l'anteprima degli orari a destra
   price: Number(it.price) || 0,
   name: it.service_name,
+  // aggiuntivo (voce senza tempo): sotto il suo servizio, senza orari né durata
+  addon: isAddonItem(it),
 });
 
 const DRAFT_FIELDS = ['service_id', 'operator_id', 'duration_min', 'soak_min'];

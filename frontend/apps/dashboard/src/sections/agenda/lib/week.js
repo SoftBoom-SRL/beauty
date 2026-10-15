@@ -3,6 +3,7 @@
 // richiesta di spostamento, l'ombra dell'appuntamento aperto.
 // Logica pura: la caricano anche i test con `node --test`.
 import { isoAtMin, minutesOfDay, parseISO, timeLabel } from '@youty/shared';
+import { timedItems } from './addons.js';
 import { DOW_EN, DOW_IT } from './calendar.js';
 
 /** Sotto-colonne di un giorno in vista settimana.
@@ -143,11 +144,12 @@ export const movingBlock = (dg) => ({ ...dg.obj, operator_id: dg.nop, startMin: 
 /** I servizi dell'appuntamento aperto, in fila dalla sua ora: servono a
  *  disegnarne l'ombra sul giorno che si sta guardando. Nell'ordine in cui
  *  arrivano (itemBlocks invece li ordina per `order`), come sempre in
- *  settimana. */
+ *  settimana. Gli aggiuntivi no: senza tempo, col minimo di dieci minuti
+ *  sarebbero un'ombra di un servizio che non occupa niente. */
 export function weekGhostSpans(ghost) {
   if (!ghost) return [];
   let cursor = minutesOfDay(ghost.start);
-  return (ghost.items || []).map((it, i) => {
+  return timedItems(ghost.items).map((it, i) => {
     const dur = (it.duration_min || 0) + (it.soak_min || 0);
     const span = { key: it.id ?? i, opId: it.operator_id ?? ghost.operator_id, startMin: cursor, dur: Math.max(10, dur) };
     cursor += dur;

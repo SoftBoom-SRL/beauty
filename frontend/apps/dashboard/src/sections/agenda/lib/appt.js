@@ -2,6 +2,7 @@
 // nomi, importi e i blocchi per servizio in cui si disegna.
 // Logica pura: la caricano anche i test con `node --test`.
 import { fmtEur, minutesOfDay } from '@youty/shared';
+import { addonGroups, isAddonItem } from './addons.js';
 
 /* ---- appointment helpers (day/week payload objects) ---- */
 export const aStartMin = (a) => minutesOfDay(a.start);
@@ -31,20 +32,26 @@ export const fmtMoney = (n, lang) => (Number(n)
 
 /** Espande un appuntamento in blocchi per-servizio concatenati dallo `start`.
  *  Ogni servizio è un blocco nella colonna della sua operatrice, con orario e
- *  durata propri (la catena riflette chi fa cosa e quando). Ritorna:
- *  [{ item, appt, apptId, startMin, dur, opId, order, index, isFirst, isLast }] */
+ *  durata propri (la catena riflette chi fa cosa e quando). Gli aggiuntivi
+ *  (voci a 0 minuti: la nail art durante la manicure) non sono blocchi: stanno
+ *  in `addons` del servizio a cui si appoggiano, e lì si disegnano come
+ *  etichetta. Come blocchi alti zero non si vedrebbero, ma trascinamento,
+ *  «stacca» e conti degli slot li tratterebbero da servizi veri. `total` = i
+ *  blocchi della visita. Ritorna:
+ *  [{ item, addons, appt, apptId, startMin, dur, opId, order, index, total, isFirst, isLast }] */
 export function itemBlocks(appt) {
   const base = aStartMin(appt);
   const items = [...(appt.items || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const groups = addonGroups(items);
   let cursor = base;
-  return items.map((item, i) => {
+  return groups.map(({ item, addons }, i) => {
     const activeMin = item.duration_min || 0;   // fase attiva (operatrice al lavoro)
     const soakMin = item.soak_min || 0;          // fase di posa (operatrice non impegnata)
     const dur = activeMin + soakMin;             // durata totale per il cliente
     const block = {
-      item, appt, apptId: appt.id, startMin: cursor, dur, activeMin, soakMin,
-      opId: item.operator_id, order: item.order ?? i, index: i,
-      isFirst: i === 0, isLast: i === items.length - 1,
+      item, addons, appt, apptId: appt.id, startMin: cursor, dur, activeMin, soakMin,
+      opId: item.operator_id, order: item.order ?? i, index: i, total: groups.length,
+      isFirst: i === 0, isLast: i === groups.length - 1,
     };
     cursor += dur;
     return block;
@@ -74,9 +81,11 @@ export function apptRevenue(list) {
 
 /** Segmenti della striscia colorata di un blocco settimanale: uno per operatrice,
  *  in proporzione alla durata (attiva + posa), fondendo i consecutivi della stessa
- *  operatrice. Senza `items` (payload vecchio) → un solo segmento dell'operatrice. */
+ *  operatrice. Senza `items` (payload vecchio) → un solo segmento dell'operatrice.
+ *  Gli aggiuntivi non hanno tempo, quindi niente segmento: con la larghezza
+ *  minima di un minuto la collega della nail art avrebbe la sua fetta. */
 export function opSegments(a) {
-  const items = (a.items || []).filter((it) => it && it.operator_id != null);
+  const items = (a.items || []).filter((it) => it && it.operator_id != null && !isAddonItem(it));
   if (!items.length) return [{ opId: a.operator_id, w: 1 }];
   const segs = [];
   items.forEach((it) => {

@@ -128,11 +128,19 @@ export default function ServiziSub({ services, loading, categories, operators, c
                           <CategoryDot color={serviceColor(s, [cat])} size={9} />
                         </span>
                         <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{svcName(s, lang)}</span>
+                        {/* si fa durante un altro servizio: in agenda aggiunge il prezzo, non il tempo */}
+                        {s.is_addon && (
+                          <span title={t('Aggiuntivo: si fa durante un altro servizio, aggiunge il prezzo e non il tempo', 'Add-on: done during another service, adds the price and not the time')}
+                            style={{ alignSelf: 'center', flexShrink: 0, fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-tint)', borderRadius: 99, padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                            + {t('aggiuntivo', 'add-on')}
+                          </span>
+                        )}
                         {alt && <span className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{alt}</span>}
                       </div>
-                      <span className="t-sm tabnum" style={{ color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>
+                      <span className="t-sm tabnum" style={{ color: s.is_addon ? 'var(--muted-2)' : 'var(--ink-2)', whiteSpace: 'nowrap' }}
+                        title={s.is_addon ? t('Durata indicativa: in agenda l’aggiuntivo non occupa tempo', 'Indicative duration: in the agenda the add-on takes no time') : undefined}>
                         {fmtDur(s.duration_min, lang)}
-                        {s.soak_min > 0 && <span style={{ color: 'var(--muted-2)' }}> +{s.soak_min} {t('posa', 'soak')}</span>}
+                        {!s.is_addon && s.soak_min > 0 && <span style={{ color: 'var(--muted-2)' }}> +{s.soak_min} {t('posa', 'soak')}</span>}
                       </span>
                       <span className="t-num" style={{ fontSize: 15, textAlign: 'right', fontWeight: 600 }}>{fmtEur(Number(s.price), lang)}</span>
                       <span title={ops.map((o) => `${o.first_name} ${o.last_name}`).join(', ')}>
