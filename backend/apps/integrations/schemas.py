@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from ninja import Schema
 
@@ -35,3 +35,34 @@ class StatusOut(Schema):
     # Ultimo errore di sincronizzazione ("" se nessuno): la riga diceva
     # «Connesso · sincronizzati» anche con la sync ferma o parziale.
     last_error: str = ""
+
+
+class VoiceKeyStatusOut(Schema):
+    """Stato dell'assistente vocale: attivo se il salone ha una chiave."""
+
+    active: bool
+    created_at: Optional[datetime] = None
+
+
+class VoiceKeyOut(Schema):
+    """La chiave in chiaro, mostrata una volta sola: a database resta solo l'impronta."""
+
+    key: str
+    created_at: datetime
+
+
+class VoiceAppointmentIn(Schema):
+    """Prenotazione dell'agente vocale.
+
+    Campi tutti facoltativi e di tipo largo per scelta: un campo mancante o del
+    tipo sbagliato deve arrivare all'agente come `success: false` con un
+    messaggio che sa correggere, non come un 422 che Yourang gli nasconde.
+    `services` sono gli id di `list_services`, separati da virgola («12,15»).
+    """
+
+    date: str = ""
+    time: str = ""
+    services: Union[str, int, list[Union[int, str]]] = ""
+    customer_name: str = ""
+    customer_phone: Union[str, int] = ""
+    notes: str = ""

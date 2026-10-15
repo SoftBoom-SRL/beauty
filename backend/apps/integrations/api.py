@@ -24,12 +24,19 @@ from common.permissions import require_owner
 from common.schemas import OkOut
 
 from . import client as yc
-from . import crypto, sync, webhooks
+from . import crypto, sync, voice, webhooks
 from .connection import OrgConflict, attach_tokens, link_org, reset_remote_refs
 from .login import login_with_yourang
 from .models import YourangConnection
 from .oauth import consume_state, start_flow
-from .schemas import AuthorizeOut, ExchangeIn, StatusOut
+from .schemas import (
+    AuthorizeOut,
+    ExchangeIn,
+    StatusOut,
+    VoiceAppointmentIn,
+    VoiceKeyOut,
+    VoiceKeyStatusOut,
+)
 
 logger = logging.getLogger("youty.integrations")
 router = Router(tags=["integrations"])
@@ -220,4 +227,63 @@ def webhook(request):
         )
         raise HttpError(503, "Elaborazione non riuscita: riprova")
 
+    return OkOut()
+
+
+# ---- Assistente vocale: l'agente Yourang prenota al telefono (voice.py) ------
+# Le risposte all'agente sono 200 anche quando la prenotazione non riesce: vedi
+# la nota in cima a voice.py.
+
+
+@router.get("/voice/services", auth=voice.voice_auth)
+def voice_services(request):
+    """Servizi prenotabili: id, nome, categoria, durata in minuti e prezzo."""
+    return voice.services_reply(request.auth)
+
+
+@router.get("/voice/availability", auth=voice.voice_auth)
+def voice_availability(request, date: str = "", services: str = ""):
+    """Orari liberi («HH:MM») in quel giorno per i servizi indicati (id separati da virgola).
+
+    `times` vuoto: salone pieno o chiuso. `date_label` è la data da leggere alla cliente.
+    """
+    return voice.availability_reply(request.auth, date, services)
+
+
+@router.post("/voice/appointments", auth=voice.voice_auth)
+def voice_book(request, data: VoiceAppointmentIn):
+    """Prenota per la cliente al telefono (trovata o creata dal numero).
+
+    `success: false` con `error`: `unavailable` (orario preso, proporre
+    `alternatives`) o `invalid_request` (correggere quanto dice `message`).
+    """
+    return voice.booking_reply(request.auth, data)
+
+
+@router.get("/voice/key", auth=staff_auth, response=VoiceKeyStatusOut)
+def voice_key_status(request):
+    """Se l'assistente vocale ha una chiave attiva, e da quando."""
+    ctx = request.auth
+    require_owner(ctx)
+    return {
+        "active": bool(ctx.salon.voice_api_key_hash),
+        "created_at": ctx.salon.voice_api_key_created_at,
+    }
+
+
+@router.post("/voice/key", auth=staff_auth, response=VoiceKeyOut)
+def voice_key_rotate(request):
+    """Genera la chiave dell'assistente vocale (sostituisce la precedente, che smette di valere)."""
+    ctx = request.auth
+    require_owner(ctx)
+    key = voice.rotate_key(ctx.salon, ctx.user)
+    return {"key": key, "created_at": ctx.salon.voice_api_key_created_at}
+
+
+@router.delete("/voice/key", auth=staff_auth, response=OkOut)
+def voice_key_revoke(request):
+    """Revoca la chiave: l'agente non può più leggere la disponibilità né prenotare."""
+    ctx = request.auth
+    require_owner(ctx)
+    voice.revoke_key(ctx.salon, ctx.user)
     return OkOut()
