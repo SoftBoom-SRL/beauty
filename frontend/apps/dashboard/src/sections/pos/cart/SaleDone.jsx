@@ -23,7 +23,7 @@ export default function SaleDone({ done, seller, onNew, onGoHistory, t, lang }) 
       </div>
       {hasGift && (
         <div className="t-sm" style={{ color: 'var(--ok)', marginTop: 10, fontWeight: 600 }}>
-          <Icon name="gift" size={15} color="var(--ok)" style={{ verticalAlign: '-2px', marginRight: 5 }} />
+          <Icon name="gift" size={15} color="var(--ok)" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 5 }} />
           {t('Gift card emessa', 'Gift card issued')}{done.lines.filter((l) => l.line_type === 'gift_card').map((l) => l.gift_card_code).filter(Boolean).map((c) => ' · ' + c).join('')}
         </div>
       )}
