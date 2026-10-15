@@ -17,6 +17,7 @@ from ninja.errors import HttpError
 
 from apps.core.services import log_activity
 from apps.sales.models import Payment
+from common.money import MAX_MONEY
 
 from .codes import GIFT_CARD_CODE_LENGTH, mark_expired_if_past, not_expired_q, unique_code
 from .models import GiftCard
@@ -87,8 +88,10 @@ def create_gift_card(
     registro attività non compare un incasso che non c'è stato."""
     value = Decimal(value)
     # Zero solo per un trattamento (pacchetto o seduta in omaggio): una carta a
-    # importo da zero euro non serve a niente.
-    if value < 0 or (value == 0 and gift_service is None):
+    # importo da zero euro non serve a niente. Oltre MAX_MONEY il valore non
+    # entra nella colonna: la carta venduta dallo staff non aveva tetto, e un
+    # miliardo diventava un 500 di PostgreSQL invece di un errore.
+    if value < 0 or value > MAX_MONEY or (value == 0 and gift_service is None):
         raise HttpError(422, "Valore della gift card non valido")
     if kind not in GiftCard.Kind.values:
         raise HttpError(422, "Tipo di gift card non valido")
