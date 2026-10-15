@@ -3,7 +3,7 @@
 // trascinamento). Senza hook: i test lo disegnano chiamandolo come una
 // funzione.
 import { Icon, timeLabel } from '@youty/shared';
-import { DK_START, PXM, opSegments, serviceBands } from '../lib.js';
+import { DK_START, PXM, inkOn, opSegments, serviceBands } from '../lib.js';
 
 /* ---------- blocco appuntamento della settimana ----------
  * Sfondo nel colore del SERVIZIO (categoria), come in vista giorno: il colore
@@ -30,14 +30,16 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
    * giornate perfettamente normali. Resta scritto nel pannello di dettaglio,
    * dove serve davvero (e dove la vista giorno lo lascia da tempo). */
   const flags = !!(depositDue || gifts);
-  const svcTint = (it) => {
-    const col = it && itemColor
-      ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
-      : null;
-    // stessa resa della vista giorno (82%): un colore mezzo slavato qui e pieno
-    // là non si riconosce come lo stesso trattamento
-    return `color-mix(in srgb, ${col || colorOf(a.operator_id)} 82%, #FFFFFF)`;
-  };
+  const svcColor = (it) => (it && itemColor
+    ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
+    : null) || colorOf(a.operator_id);
+  // stessa resa della vista giorno (82%): un colore mezzo slavato qui e pieno
+  // là non si riconosce come lo stesso trattamento
+  const svcTint = (it) => `color-mix(in srgb, ${svcColor(it)} 82%, #FFFFFF)`;
+  /* Il testo sta in cima, sul colore del primo servizio: bianco sui colori
+   * scuri, come in vista giorno (lib/colors.js). Sempre scuro, sulle tinte
+   * scure dei trattamenti non si leggeva. */
+  const ink = inkOn(svcColor((a.items || [])[0]), 0.82);
   const textZ = { position: 'relative', zIndex: 2 };
   return (
     <div
@@ -84,10 +86,10 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
           {gifts > 0 && <span title={t('Gift card', 'Gift card')} style={{ display: 'grid' }}><Icon name="gift" size={10} color="var(--ink-2)" stroke={2.2} /></span>}
         </div>
       )}
-      <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
-      {last && h > 30 && lc < 3 && <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
+      <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10.5, fontWeight: 700, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none', paddingRight: flags ? 14 : 0 }}>{first}</div>
+      {last && h > 30 && lc < 3 && <div className="dk-wblock__txt" style={{ ...textZ, fontSize: 10, fontWeight: 600, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.2, pointerEvents: 'none' }}>{last}</div>}
       {h > 44 && (
-        <div className="tabnum dk-wblock__txt" style={{ ...textZ, fontSize: 9.5, color: 'var(--ink-2)', marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div className="tabnum dk-wblock__txt" style={{ ...textZ, fontSize: 9.5, color: ink.sub, marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
           <span>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</span>
           {multi && (
             <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}

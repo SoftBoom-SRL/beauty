@@ -5,7 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { Icon, Avatar, Toggle, fmtEur, NumInput, nameIn } from '@youty/shared';
 import { DkModal } from '../../ui/index.js';
 import { FRow, PriceBox, DurationInput, CategoryDot } from './parts.jsx';
-import { CAT_SWATCHES } from '../../ui/palette.js';
+import SwatchRows from '../../ui/SwatchRows.jsx';
 
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
@@ -162,12 +162,10 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
               <span className="t-sm" style={{ color: 'var(--muted-2)', flexShrink: 0 }}>{t('richiede permesso prezzi', 'requires pricing permission')}</span>
             )}
           </div>
+          {/* vivaci, scure e tenui: le sole pastello si confondevano in agenda */}
           {onCatColor && canPricing && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-              {CAT_SWATCHES.map((c) => {
-                const on = String(catColor || '').toLowerCase() === c.toLowerCase();
-                return <button key={c} type="button" onClick={() => { setCatColorLocal(c); commitCatColor(c); }} title={c} style={{ width: 22, height: 22, borderRadius: 6, background: c, cursor: 'pointer', border: '1px solid var(--hair)', outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: 1 }} />;
-              })}
+            <div style={{ marginTop: 10 }}>
+              <SwatchRows value={catColor} onChange={(c) => { setCatColorLocal(c); commitCatColor(c); }} t={t} />
             </div>
           )}
         </div>

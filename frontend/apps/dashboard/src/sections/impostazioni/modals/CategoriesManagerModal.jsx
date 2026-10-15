@@ -12,7 +12,7 @@ import { Icon, EmptyState, nameIn, toastApiError } from '@youty/shared';
 import DkDrawer from '../../../ui/DkDrawer.jsx';
 import DkConfirm from '../../../ui/DkConfirm.jsx';
 import { useDash } from '../../../ctx.jsx';
-import { GD_PALETTE } from '../../../ui/palette.js';
+import { GD_PALETTE, nextTreatmentColor } from '../../../ui/palette.js';
 import { LockNote } from '../lib.jsx';
 import { serviceCategoriesApi } from '../../../api/catalog.js';
 import { clientCategoriesApi, clientsApi } from '../../../api/clients.js';
@@ -21,7 +21,8 @@ import CatEditModal from './CatEditModal.jsx';
 
 const KINDS = {
   clienti: { endpoints: clientCategoriesApi, scope: 'clients', hasColor: true, bilingual: false },
-  servizi: { endpoints: serviceCategoriesApi, scope: 'pricing', hasColor: true, bilingual: true, reorder: true },
+  // `treatment`: le tinte dei trattamenti (vivaci, scure, tenui) al posto della griglia generica
+  servizi: { endpoints: serviceCategoriesApi, scope: 'pricing', hasColor: true, bilingual: true, reorder: true, treatment: true },
   magazzino: { endpoints: productCategoriesApi, scope: 'inventory', hasColor: false, bilingual: false },
 };
 const flatPalette = GD_PALETTE.flat().filter((c) => !['#000000', '#FFFFFF', '#F3F3F3', '#EFEFEF'].includes(c));
@@ -168,7 +169,7 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
   };
 
   const blank = () => (kind === 'servizi'
-    ? { _new: true, name_it: '', name_en: '', color: randColor() }
+    ? { _new: true, name_it: '', name_en: '', color: cfg.treatment ? nextTreatmentColor(list) : randColor() }
     : { _new: true, name: '', color: randColor() });
 
   const types = [

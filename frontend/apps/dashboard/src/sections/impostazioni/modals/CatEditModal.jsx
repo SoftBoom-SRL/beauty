@@ -5,6 +5,7 @@ import { Icon } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import HexInput from '../../../ui/HexInput.jsx';
 import PaletteGrid from '../../../ui/PaletteGrid.jsx';
+import SwatchRows from '../../../ui/SwatchRows.jsx';
 import { inputCss } from '../lib.jsx';
 
 export default function CatEditModal({ draft, setDraft, cfg, onSave, saving, onDelete, onClose, t }) {
@@ -42,7 +43,11 @@ export default function CatEditModal({ draft, setDraft, cfg, onSave, saving, onD
               <HexInput value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />
             </div>
           </div>
-          <PaletteGrid value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />
+          {/* i trattamenti: tinte scelte per distinguersi in agenda (vivaci,
+              scure, tenui); le altre categorie la griglia completa */}
+          {cfg.treatment
+            ? <SwatchRows value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} t={t} />
+            : <PaletteGrid value={draft.color} onChange={(c) => setDraft((d) => ({ ...d, color: c }))} />}
         </React.Fragment>
       )}
     </DkModal>
