@@ -12,3 +12,12 @@ export const yourangApi = {
   loginStart: () => api.get('/api/integrations/yourang/oauth/login/start'),
   exchange: (body) => api.post('/api/integrations/yourang/oauth/exchange', body),
 };
+
+/* Assistente vocale (prenotazioni al telefono): la chiave Bearer che l'agente
+ * Yourang usa sulle rotte /voice/... `generate` risponde { key, created_at }:
+ * la chiave in chiaro arriva solo lì. */
+export const voiceApi = {
+  status: () => api.get('/api/integrations/voice/key'),
+  generate: () => api.post('/api/integrations/voice/key'),
+  revoke: () => api.del('/api/integrations/voice/key'),
+};
