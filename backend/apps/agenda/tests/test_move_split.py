@@ -147,6 +147,68 @@ class SplitAppointmentTests(AgendaTestBase):
         self.assertEqual(Appointment.objects.count(), 3)
 
 
+class SplitColleaguePartTests(AgendaTestBase):
+    """La parte di una collega (più servizi in fila) si stacca in un colpo, come in vista settimana."""
+
+    def setUp(self):
+        self.op2.services.add(self.svc60, self.svc30)
+        self.wide = {self.op1.id: [(8 * 60, 20 * 60)], self.op2.id: [(8 * 60, 20 * 60)]}
+
+    def _visit(self):
+        with self._windows(self.wide):
+            return create_appointment(
+                self.salon, self.client_obj,
+                [
+                    {"service_id": self.svc60.id, "operator_id": self.op1.id},
+                    {"service_id": self.svc30.id, "operator_id": self.op2.id},
+                    {"service_id": self.svc60.id, "operator_id": self.op2.id},
+                ],
+                _aware(self.day, 10), via="dashboard",
+            )
+
+    def test_the_colleague_part_leaves_together_and_in_order(self):
+        appointment = self._visit()
+        first, second, third = appointment.items.order_by("order")
+        with self._windows(self.wide):
+            original, created = S.split_appointment(
+                appointment, second.id, _aware(self.day, 15), item_ids=[second.id, third.id]
+            )
+        self.assertEqual(list(original.items.values_list("id", flat=True)), [first.id])
+        self.assertEqual(
+            list(created.items.order_by("order").values_list("service_id", "operator_id", "duration_min")),
+            [(self.svc30.id, self.op2.id, 30), (self.svc60.id, self.op2.id, 60)],
+        )
+        self.assertEqual(created.operator_id, self.op2.id)
+        self.assertEqual(hm(created.start.isoformat()), "15:00")
+        self.assertEqual(original.total_duration_min, 60)
+
+    def test_services_not_in_a_row_are_refused(self):
+        appointment = self._visit()
+        first, _second, third = appointment.items.order_by("order")
+        with self._windows(self.wide), self.assertRaises(HttpError) as caught:
+            S.split_appointment(appointment, first.id, _aware(self.day, 15), item_ids=[first.id, third.id])
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(appointment.items.count(), 3)
+
+    def test_the_endpoint_takes_the_whole_part(self):
+        from apps.accounts.models import Membership, User
+
+        appointment = self._visit()
+        _first, second, third = appointment.items.order_by("order")
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        Membership.objects.create(user=user, salon=self.salon, is_owner=True)
+        with self._windows(self.wide):
+            res = self.client.post(
+                f"/api/agenda/appointments/{appointment.id}/split",
+                data=json.dumps({"item_id": second.id, "item_ids": [second.id, third.id], "start": _aware(self.day, 16).isoformat()}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {create_staff_tokens(user, self.salon)['access']}",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(len(res.json()["created"]["items"]), 2)
+        self.assertEqual(len(res.json()["original"]["items"]), 1)
+
+
 class SplitCollisionTests(AgendaTestBase):
     """Lo stacca-e-sposta non deve creare sovrapposizioni: né con i servizi che
     restano nella visita, né con altre clienti quando la catena residua scala."""

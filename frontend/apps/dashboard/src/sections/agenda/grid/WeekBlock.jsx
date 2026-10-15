@@ -1,7 +1,9 @@
 // WeekBlock — un appuntamento in vista settimana, nella sotto-colonna della
 // sua operatrice (anche la copia che segue il puntatore durante il
-// trascinamento). Senza hook: i test lo disegnano chiamandolo come una
-// funzione.
+// trascinamento), oppure una PARTE di una visita con più operatrici
+// (`a.parts` > 1): allora a sinistra c'è la barra scura della visita, che la
+// sposta tutta, e il corpo stacca solo questa parte. Senza hook: i test lo
+// disegnano chiamandolo come una funzione.
 import { Icon, timeLabel } from '@youty/shared';
 import { DK_START, PXM, addonGroups, inkOn, opSegments, serviceBands } from '../lib.js';
 import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
@@ -35,6 +37,12 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
    * giornate perfettamente normali. Resta scritto nel pannello di dettaglio,
    * dove serve davvero (e dove la vista giorno lo lascia da tempo). */
   const flags = !!(depositDue || gifts);
+  // una parte di una visita con più operatrici: «1/2», e la barra per spostarla tutta
+  const isPart = (a.parts || 1) > 1;
+  const partTitle = isPart && t(
+    `Parte ${a.part} di ${a.parts} della visita di ${first}: trascina il blocco per staccarla, la barra scura per spostare tutta la visita`,
+    `Part ${a.part} of ${a.parts} of ${first}'s visit: drag the block to detach it, the dark bar to move the whole visit`,
+  );
   const svcColor = (it) => (it && itemColor
     ? itemColor({ service_id: it.service_id, operator_id: it.operator_id ?? it.opId ?? a.operator_id })
     : null) || colorOf(a.operator_id);
@@ -66,12 +74,20 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
         pointerEvents: moving ? 'none' : 'auto', zIndex: moving ? 20 : 2,
       }}
     >
-      {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi. */}
-      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none', zIndex: 2 }}>
-        {segs.map((s, k) => (
-          <div key={k} style={{ flex: s.w, background: colorOf(s.opId), borderTop: multi && k > 0 ? '1.5px solid var(--surface)' : 'none' }} />
-        ))}
-      </div>
+      {/* Striscia operatrice: segmenti in proporzione alla durata dei servizi.
+          Su una parte è la barra della visita: premendo qui si spostano tutte
+          le parti insieme, come la spina in vista giorno. */}
+      {isPart ? (
+        <div title={partTitle}
+          onPointerDown={canWrite && !moving ? (e) => { e.stopPropagation(); onDown && onDown(e, { whole: true }); } : undefined}
+          style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 6, background: 'rgba(17,24,39,0.55)', cursor: canWrite ? 'grab' : 'default', touchAction: 'none', zIndex: 4 }} />
+      ) : (
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: multi ? 4 : 3, display: 'flex', flexDirection: 'column', pointerEvents: 'none', zIndex: 2 }}>
+          {segs.map((s, k) => (
+            <div key={k} style={{ flex: s.w, background: colorOf(s.opId), borderTop: multi && k > 0 ? '1.5px solid var(--surface)' : 'none' }} />
+          ))}
+        </div>
+      )}
       {/* La visita divisa nei suoi servizi: in settimana è UN riquadro, e due o
           tre servizi dentro restavano un blocco unico. Ogni fascia prende il
           colore della sua categoria, in proporzione alla durata: si legge a
@@ -80,7 +96,7 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
           cliente — stanno nell'anteprima al passaggio del mouse. */}
       {bands.map((b, k) => (
         <div key={k} style={{
-          position: 'absolute', left: multi ? 4 : 3, right: 0, top: `${b.fromPct}%`, height: `${b.toPct - b.fromPct}%`,
+          position: 'absolute', left: isPart ? 6 : multi ? 4 : 3, right: 0, top: `${b.fromPct}%`, height: `${b.toPct - b.fromPct}%`,
           background: svcTint(b), borderTop: k > 0 ? '1px dashed rgba(17,24,39,0.35)' : 'none',
           pointerEvents: 'none', zIndex: 1,
         }} />
@@ -98,10 +114,10 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
       {h > 44 && (
         <div className="tabnum dk-wblock__txt" style={{ ...textZ, fontSize: 9.5, color: ink.sub, marginTop: 1, pointerEvents: 'none', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
           <span>{timeLabel(a.startMin)}{moving ? '–' + timeLabel(a.endMin) : ''}</span>
-          {multi && (
-            <span title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
+          {(isPart || multi) && (
+            <span title={isPart ? partTitle : t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
               style={{ fontWeight: 800, fontSize: 9, letterSpacing: '0.02em', color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px' }}>
-              ×{nServices}
+              {isPart ? `${a.part}/${a.parts}` : `×${nServices}`}
             </span>
           )}
         </div>
@@ -115,10 +131,10 @@ export default function WeekBlock({ a, lc = 1, left, width, colorOf, itemColor, 
         </div>
       )}
       {/* blocco troppo basso per la riga dell'orario: il conteggio va comunque detto */}
-      {multi && h <= 44 && (
-        <span className="dk-wblock__txt" title={t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
+      {(isPart || multi) && h <= 44 && (
+        <span className="dk-wblock__txt" title={isPart ? partTitle : t(`${nServices} servizi in un'unica visita`, `${nServices} services in one visit`)}
           style={{ position: 'absolute', bottom: 2, right: 3, zIndex: 3, fontWeight: 800, fontSize: 9, color: 'var(--ink-2)', background: 'rgba(255,255,255,0.72)', borderRadius: 4, padding: '0 3px', pointerEvents: 'none' }}>
-          ×{nServices}
+          {isPart ? `${a.part}/${a.parts}` : `×${nServices}`}
         </span>
       )}
     </div>

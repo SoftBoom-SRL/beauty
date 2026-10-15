@@ -195,6 +195,12 @@ def agenda_week(request, start: str, location_id: int = None):
                                 # dell'operatrice e i trattamenti diventavano
                                 # tutti uguali.
                                 "service_id": it.service_id,
+                                # `id` e `order`: in settimana una visita con più
+                                # operatrici si disegna a pezzi, uno per colonna,
+                                # e il pezzo trascinato si stacca (split con
+                                # `item_ids`) come in vista giorno.
+                                "id": it.id,
+                                "order": it.order,
                                 "operator_id": it.operator_id,
                                 "duration_min": it.duration_min,
                                 "soak_min": it.soak_min,

@@ -72,14 +72,16 @@ export default function WeekDayColumn({
                * la sua traccia lì: tolto dal calcolo, i vicini cambiavano
                * corsia (e larghezza) appena si cominciava a trascinare. La
                * copia che segue il puntatore viaggia sopra (`moving`). */
-              if (dragging && a.id === dg.id) {
-                return <div key={a.id} className="dk-drag-ghost" style={{ top: (a.startMin - g0) * pxm + 1, height: (a.endMin - a.startMin) * pxm - 2, left: `calc(${(lane / lc) * 100}% + 1px)`, width: `calc(${100 / lc}% - 2px)`, right: 'auto', borderRadius: 6 }} />;
+              // la traccia: la parte trascinata, o tutte le parti se si sposta la visita
+              const key = a.key ?? a.id;
+              if (dragging && (key === dg.key || (dg.whole && a.id === dg.id))) {
+                return <div key={key} className="dk-drag-ghost" style={{ top: (a.startMin - g0) * pxm + 1, height: (a.endMin - a.startMin) * pxm - 2, left: `calc(${(lane / lc) * 100}% + 1px)`, width: `calc(${100 / lc}% - 2px)`, right: 'auto', borderRadius: 6 }} />;
               }
               return (
                 <WeekBlock pxm={pxm} g0={g0}
-                  key={a.id} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
+                  key={key} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                   left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
-                  onDown={(e) => onBlockDown(e, a, index)}
+                  onDown={(e, opts) => onBlockDown(e, a, index, opts)}
                   onHover={onHover} onLeave={onLeave}
                 />
               );

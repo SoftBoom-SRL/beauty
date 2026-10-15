@@ -10,7 +10,8 @@ import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, 
  *  mostra il nome intero dell'operatrice sopra la sua sotto-colonna; `grip`
  *  = i gestori della maniglia sul bordo destro (useGridWidth), o null. */
 export default function WeekDayHeader({ day, index, width, isToday, isTargetDay, showRevenue, t, lang, onOpenDay, colorOf, opFirsts, setOpTip, grip = null, last = false }) {
-  const rev = apptRevenue(day.list);   // il no-show non entra, come nel mese
+  // le visite, non i blocchi: una visita a più parti si somma una volta sola
+  const rev = apptRevenue(day.visits ?? day.list);   // il no-show non entra, come nel mese
   const num = parseISO(day.date).getDate();
   const statuses = Object.entries(day.by_status || {});
   return (

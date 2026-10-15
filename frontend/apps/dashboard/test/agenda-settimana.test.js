@@ -368,3 +368,48 @@ test('in settimana l\'appuntamento trascinato in fondo finisce entro la mezzanot
   assert.equal(g.api.posts.length, 1);
   assert.equal(g.api.posts[0].body.start, isoAtMin(W1[3], 24 * 60 - 30), 'Sara (30\') alle 23:30');
 });
+
+/* Una visita con due colleghe: manicure con Anna alle 10:00, piega con Giulia
+ * alle 10:30. In settimana è una parte per colonna (15/10). */
+const mista = (date) => ({
+  id: 50, start: `${date}T10:00:00+02:00`, client_name: 'Marta Rossi', client_phone: '', operator_id: 1,
+  status: 'confirmed', duration_min: 90, total_price: '95.00', deposit_status: 'none', note: '', gifts: [],
+  items: [
+    { id: 501, service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' },
+    { id: 502, service_id: 2, operator_id: 2, duration_min: 60, soak_min: 0, service_name: 'Piega' },
+  ],
+});
+async function loadMista(g) {
+  g.api.weekGets().at(-1).resolve(W1.map((date, i) => ({ date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [mista(date)] : [] })));
+  await tick();
+  g.m.render();
+}
+const partOf = (g, n) => find(g.m.tree, (el) => typeof el.type === 'function' && el.props.a?.id === 50 && el.props.a?.part === n && !el.props.moving);
+
+test('in settimana la parte di una collega sta nella sua colonna e trascinata si stacca da sola', async () => {
+  const g = setup();
+  await loadMista(g);
+  assert.equal(partOf(g, 1).props.a.colOp, undefined, 'la manicure da Anna');
+  assert.equal(partOf(g, 2).props.a.colOp, 2, 'la piega da Giulia');
+  partOf(g, 2).props.onDown(ptr(490, 300, { id: 1 }));
+  g.root().props.onPointerMove(ptr(490, 381, { id: 1 }));   // +60'
+  g.m.render();
+  g.root().props.onPointerUp(ptr(490, 381, { id: 1 }));
+  await tick();
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].url, '/api/agenda/appointments/50/split');
+  assert.deepEqual(g.api.posts[0].body, { item_id: 502, item_ids: [502], start: isoAtMin(W1[3], 11 * 60 + 30) });
+});
+
+test('in settimana la barra di una parte sposta tutta la visita', async () => {
+  const g = setup();
+  await loadMista(g);
+  partOf(g, 2).props.onDown(ptr(490, 300, { id: 1 }), { whole: true });
+  g.root().props.onPointerMove(ptr(490, 381, { id: 1 }));   // +60'
+  g.m.render();
+  g.root().props.onPointerUp(ptr(490, 381, { id: 1 }));
+  await tick();
+  assert.equal(g.api.posts.length, 1);
+  assert.equal(g.api.posts[0].url, '/api/agenda/appointments/50/move');
+  assert.deepEqual(g.api.posts[0].body, { start: isoAtMin(W1[3], 11 * 60) });
+});

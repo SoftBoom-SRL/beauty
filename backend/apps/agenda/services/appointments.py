@@ -474,9 +474,16 @@ def split_appointment(
     actor=None,
     force: bool = False,
     client_overlap_ok: bool = False,
+    item_ids=None,
 ) -> tuple[Appointment, Appointment]:
     """Stacca UN servizio da un appuntamento multi-servizio e lo sposta altrove
     (anche in un altro giorno), come appuntamento a sé della stessa cliente.
+
+    Con `item_ids` si staccano insieme più servizi IN FILA, ognuno con i suoi
+    aggiuntivi: la parte di una collega trascinata in vista settimana (manicure
+    e pedicure di Nori dentro la visita che comincia con Ilaria). Se non sono
+    in fila è un 400: staccandoli resterebbe un buco in mezzo che nessuno ha
+    chiesto.
 
     Il servizio staccato mantiene durata, posa e prezzo dello snapshot. Gli altri
     NON si spostano, come mostra l'anteprima del trascinamento: staccando il
@@ -515,6 +522,20 @@ def split_appointment(
     if is_timeless(item.duration_min, item.soak_min):
         raise HttpError(422, ADDON_SPLIT_MESSAGE)
     group = with_addons(items, item)
+    wanted = set(item_ids or []) - {item.id}
+    if wanted:
+        by_id = {it.id: it for it in items}
+        if not wanted <= set(by_id):
+            raise HttpError(404, "Servizio non trovato nell'appuntamento")
+        for extra_id in wanted:
+            extra = by_id[extra_id]
+            if not is_timeless(extra.duration_min, extra.soak_min):
+                group += [row for row in with_addons(items, extra) if row not in group]
+        group.sort(key=items.index)
+        positions = [items.index(row) for row in group]
+        if positions != list(range(positions[0], positions[0] + len(positions))):
+            raise HttpError(400, "I servizi da staccare insieme devono essere in fila")
+        item = group[0]
     if len(group) == len(items):
         raise HttpError(400, "L'appuntamento ha un solo servizio: usa «Sposta»")
     target = operator or item.operator

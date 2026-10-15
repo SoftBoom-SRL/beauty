@@ -1,6 +1,9 @@
 // WeekView — 7-day overview from GET /api/agenda/week (per-op sub-columns, lane packing)
 // Interactions mirror the day view (DayGrid): drag a block to reschedule/reassign,
 // click a block to open its detail, click an empty slot to create a new appointment.
+// Una visita con più operatrici è una parte per colonna (lib/week.js, weekParts):
+// il corpo di una parte la STACCA (split), la barra scura a sinistra sposta
+// tutta la visita, come la spina in vista giorno.
 //
 // Drag: il contenitore cattura il puntatore (setPointerCapture) così il rilascio
 // arriva anche fuori dall'area; il blocco trascinato viene tolto dalla sua corsia e
@@ -9,7 +12,7 @@
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { toastApiError, nowMinutes, todayStr } from '@youty/shared';
+import { toastApiError, minutesOfDay, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
 import WeekDayHeader from './grid/WeekDayHeader.jsx';
@@ -22,11 +25,12 @@ import {
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
 import { retryForced } from './lib/retry.js';
-import { weekMovedText } from './lib/toastText.js';
+import { splitText, weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
-  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
+  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
 } from './lib/week.js';
+
 import { useWeekData } from './hooks/useWeekData.js';
 import { useGridZoom } from './hooks/useGridZoom.js';
 import { useGridWidth } from './hooks/useGridWidth.js';
@@ -48,7 +52,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const step = slotStep(settings);   // granularità fasce orarie (Impostazioni)
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
   const [opTip, setOpTip] = useState(null); // { name, x, y }
-  const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop }: il blocco resta dove è stato lasciato durante la POST
+  const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop, fromOp }: la visita resta dove è stata lasciata durante la POST
   // Anteprima al passaggio del mouse, come nella vista giorno: in settimana i
   // blocchi sono stretti e il solo `title` del browser arriva tardi e dice poco.
   const [hover, setHover] = useState(null);
@@ -173,7 +177,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     return { dayIdx, opId };
   }
 
-  function onBlockDown(e, appt, dayIdx) {
+  /* `appt` è il blocco premuto: la visita, o una sua parte (`parts` > 1).
+   * `whole`: premuto sulla barra della visita, che sposta tutte le parti. */
+  function onBlockDown(e, appt, dayIdx, { whole = false } = {}) {
     if (e.button !== undefined && e.button !== 0) return;   // solo tasto sinistro
     // un secondo dito sul tablet non ruba il trascinamento in corso
     if (e.isPrimary === false) return;
@@ -181,7 +187,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     startGesture();
     setHover(null);                                         // la scheda di anteprima si chiude appena si preme
     drag.current = {
-      id: appt.id, obj: appt, pointerId: e.pointerId,
+      id: appt.id, key: appt.key ?? appt.id, obj: appt, pointerId: e.pointerId,
+      isPart: (appt.parts || 1) > 1, whole, apptStart: minutesOfDay(appt.start),
       startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
       startScroll: scrollRef.current?.scrollTop || 0,
       // la colonna da cui parte, quella in cui è disegnato (weekColOf): con la
@@ -238,7 +245,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (!d) return;
     if (!d.moved) { openDetail(d.obj); return; }   // click semplice → dettaglio; il drag no
     markDropped();   // il click nativo che segue non apre niente
-    if (weekDropChanged(d) && canWrite) commitMove(d);
+    if (weekDropChanged(d) && canWrite) {
+      if (d.isPart && !d.whole) commitSplit(d);
+      else commitMove(d);
+    }
   }
   onUpRef.current = onUp;
 
@@ -253,7 +263,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (!day) return;
     const body = weekMoveBody(day, d, opts.force);
     const mark = undoMark();   // voce più recente di «torna indietro» prima del gesto
-    setPending({ id: d.id, dayIdx: d.dayIdx, ns: d.ns, nop: d.nop });
+    // la visita intera, al suo inizio nuovo (spostando una parte scala di altrettanto)
+    const startMin = d.isPart ? d.apptStart + (d.ns - d.orig) : d.ns;
+    setPending({ id: d.id, dayIdx: d.dayIdx, ns: startMin, nop: d.nop, fromOp: d.origOp });
     try {
       await agendaApi.moveAppointment(d.id, body);
       fireToast({
@@ -277,6 +289,36 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       toastApiError(err, fireToast, t);
     } finally {
       setPending(null);
+    }
+  }
+
+  /* Stacco di una parte (i servizi di una collega dentro una visita): diventa
+   * un appuntamento a sé dove è stata lasciata, come le forbici in vista
+   * giorno. Uno slot occupato non ferma nessuno: si prova prima senza forzare,
+   * poi si forza. Niente ritocco ottimistico: si ricarica la settimana. */
+  async function commitSplit(d, opts = {}) {
+    const day = dayData[d.dayIdx];
+    if (!day) return;
+    const body = weekSplitBody(day, d, opts.force);
+    if (!body) { commitMove({ ...d, whole: true }); return; }
+    const mark = undoMark();
+    const names = (d.obj.items || []).filter((it) => it.service_name).map((it) => it.service_name).join(' + ');
+    try {
+      await agendaApi.splitAppointment(d.id, body);
+      fireToast({
+        msg: splitText(t, names || t('Servizio', 'Service'), { otherDay: d.dayIdx !== d.origDayIdx, date: day.date, startMin: d.ns }),
+        icon: 'scissors',
+        undo: t('Annulla', 'Undo'),
+        undoFn: undoAfter(mark, () => refetchWeekRef.current()),
+      });
+      await refetchWeek();
+    } catch (err) {
+      if (retryForced(err, opts.force, canWrite)) {
+        await commitSplit(d, { ...opts, force: true });
+        return;
+      }
+      await refetchWeek();
+      toastApiError(err, fireToast, t);
     }
   }
 

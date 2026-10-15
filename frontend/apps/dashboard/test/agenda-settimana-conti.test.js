@@ -6,7 +6,8 @@ import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
 import {
-  hoverShape, movingBlock, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans, weekMoveBody, whereLabel,
+  hoverShape, movingBlock, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans, weekMoveBody, weekParts,
+  weekSplitBody, whereLabel,
 } from '../src/sections/agenda/lib/week.js';
 
 const t = (it) => it;
@@ -143,11 +144,13 @@ test('filtro «Team» in settimana: la visita di una spenta resta nella colonna 
 test('filtro «Team» in settimana: la colonna di disegno esiste sempre, e una collega della sede viene prima', () => {
   const visita = (items) => ({ ...sara, id: 45, start: '2026-10-01T10:00:00+02:00', operator_id: 1, duration_min: 90,
     items: items.map((op) => ({ service_id: 1, operator_id: op, duration_min: 30, soak_min: 0 })) });
-  // Anna spenta; prima un'operatrice non più in team (99), poi Giulia accesa: si disegna da Giulia
+  // Anna spenta; una parte di un'operatrice non più in team (99) e una di
+  // Giulia: ognuna nella colonna di chi la fa, la visita contata una volta
   let d = weekDays(payload([visita([1, 99, 2])]), null, OPS, 1, 'Non più in team', [1])[3];
-  let v = d.list.find((a) => a.id === 45);
-  assert.equal(weekColOf(v), 2, 'nella colonna di Giulia, che c\'è già');
-  assert.ok(d.dayOps.some((o) => o.id === weekColOf(v)));
+  assert.deepEqual(d.list.filter((a) => a.id === 45).map(weekColOf), [99, 2]);
+  assert.ok(d.dayOps.some((o) => o.id === 2) && d.dayOps.some((o) => o.id === 99));
+  assert.equal(d.count, 1, 'la visita conta una volta, non due blocchi (Sara è di Anna, spenta)');
+  let v;
   // solo Bea dell'altra sede oltre ad Anna: Bea riceve la sua colonna in coda
   d = weekDays(payload([visita([1, 3])]), null, OPS, 1, 'Non più in team', [1])[3];
   v = d.list.find((a) => a.id === 45);
@@ -156,4 +159,65 @@ test('filtro «Team» in settimana: la colonna di disegno esiste sempre, e una c
   // solo un'operatrice non più in team: la colonna «non più in team» in coda
   d = weekDays(payload([visita([1, 99])]), null, OPS, 1, 'Non più in team', [1])[3];
   assert.ok(d.dayOps.some((o) => o.id === 99 && o.first_name === 'Non più in team'));
+});
+
+/* Una visita con più colleghe: in settimana una parte per colonna (15/10). */
+const visitaMista = {
+  ...sara, id: 50, start: '2026-10-01T10:00:00+02:00', operator_id: 1, duration_min: 120, total_price: '120.00',
+  items: [
+    { id: 501, service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' },
+    { id: 502, service_id: 9, operator_id: 1, duration_min: 0, soak_min: 0, service_name: 'Nail art' },
+    { id: 503, service_id: 2, operator_id: 2, duration_min: 60, soak_min: 0, service_name: 'Piega' },
+    { id: 504, service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' },
+  ],
+};
+
+test('le parti di una visita: una per fila di servizi della stessa operatrice, gli aggiuntivi col loro servizio', () => {
+  assert.deepEqual(weekParts(visitaMista).map((p) => [p.opId, p.startMin, p.endMin, p.items.map((it) => it.id)]), [
+    [1, 600, 630, [501, 502]], [2, 630, 690, [503]], [1, 690, 720, [504]],
+  ]);
+  assert.equal(weekParts(sara).length, 1);
+});
+
+test('in settimana ogni parte sta nella colonna di chi la fa; la testata conta e somma la visita una volta', () => {
+  const day = weekDays(payload([visitaMista]), null, OPS, 1, '', [])[3];
+  const parts = day.list.filter((a) => a.id === 50);
+  assert.deepEqual(parts.map((a) => [a.key, weekColOf(a), a.startMin, a.endMin, a.part, a.parts]), [
+    ['50:0', 1, 600, 630, 1, 3], ['50:1', 2, 630, 690, 2, 3], ['50:2', 1, 690, 720, 3, 3],
+  ]);
+  assert.equal(parts[1].operator_id, 1, 'la principale resta Anna: serve agli spostamenti');
+  assert.equal(parts[1].visitItems.length, 4);
+  assert.deepEqual(day.visits.map((a) => a.id), [42, 50]);
+  assert.equal(hoverShape(parts[1]).items.length, 4, 'l\'anteprima mostra tutta la visita');
+  // con Anna spenta resta solo la parte di Giulia
+  const off = weekDays(payload([visitaMista]), null, OPS, 1, '', [1])[3];
+  assert.deepEqual(off.list.map((a) => a.key), ['50:1']);
+  assert.equal(off.count, 1);
+});
+
+test('staccare una parte: i suoi servizi in un colpo, l\'operatrice solo se cambia', () => {
+  const day = { date: W1[3] };
+  const part = weekDays(payload([visitaMista]), null, OPS, 1, '', [])[3].list.find((a) => a.key === '50:0');
+  const d = { obj: part, ns: 900, origOp: 1, nop: 1 };
+  assert.deepEqual(weekSplitBody(day, d, false), { item_id: 501, item_ids: [501], start: isoAtMin(W1[3], 900) });
+  assert.deepEqual(weekSplitBody(day, { ...d, nop: 2 }, true), { item_id: 501, item_ids: [501], start: isoAtMin(W1[3], 900), operator_id: 2, force: true });
+  assert.equal(weekSplitBody(day, { ...d, obj: { ...part, items: [{ duration_min: 30 }] } }, false), null, 'senza id si sposta la visita');
+});
+
+test('spostare tutta la visita dalla barra di una parte: l\'inizio scala di quanto si è mossa la parte', () => {
+  const day = { date: W1[3] };
+  // la parte di Giulia (10:30) portata alle 11:30: la visita parte alle 11:00
+  const d = { isPart: true, whole: true, apptStart: 600, orig: 630, ns: 690, origOp: 2, nop: 2 };
+  assert.deepEqual(weekMoveBody(day, d, false), { start: isoAtMin(W1[3], 660) });
+  // e durante la POST la visita compare già lì, con le parti al loro posto
+  const days = weekDays(payload([visitaMista]), { id: 50, dayIdx: 3, ns: 660, nop: 2, fromOp: 2 }, OPS, 1, '');
+  assert.deepEqual(days[3].list.filter((a) => a.id === 50).map((a) => [weekColOf(a), a.startMin]), [[1, 660], [2, 690], [1, 750]]);
+});
+
+test('staccando una parte ci si aggancia anche alle altre parti della visita; spostandola tutta no', () => {
+  const day = weekDays(payload([visitaMista]), null, OPS, 1, '', [])[3];
+  const part = day.list.find((a) => a.key === '50:2');
+  const d = { id: 50, key: '50:2', obj: part, isPart: true, whole: false };
+  assert.deepEqual(weekBestSnap(632, day, 1, d, 6), { min: 630, dist: 2, label: 'Sara Bianchi' });
+  assert.equal(weekBestSnap(632, day, 1, { ...d, whole: true }, 6), null);
 });

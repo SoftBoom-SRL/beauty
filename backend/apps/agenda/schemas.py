@@ -115,9 +115,15 @@ class MoveIn(Schema):
 
 
 class SplitIn(Schema):
-    """Stacca un servizio da un appuntamento multi-servizio e lo sposta altrove."""
+    """Stacca un servizio da un appuntamento multi-servizio e lo sposta altrove.
+
+    `item_ids`: più servizi IN FILA da staccare insieme (con i loro
+    aggiuntivi), come la parte di una collega trascinata in vista settimana.
+    Il primo è `item_id`.
+    """
 
     item_id: int
+    item_ids: list[int] = Field(default_factory=list, max_length=MAX_ITEMS_PER_REQUEST)
     start: dt.datetime
     operator_id: Optional[int] = None
     force: bool = False
