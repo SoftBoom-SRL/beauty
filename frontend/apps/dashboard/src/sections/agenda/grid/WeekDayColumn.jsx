@@ -12,18 +12,30 @@ import GridLines from './GridLines.jsx';
 import NowLine from './NowLine.jsx';
 import WeekBlock from './WeekBlock.jsx';
 
+/** Dove si disegna un blocco nella sua sotto-colonna: corsia, corsie in cui
+ *  si allarga (`_span`, weekLayout) e i bordi attaccati ai servizi della
+ *  stessa visita sopra e sotto (`_joinTop`/`_joinBottom`). */
+const lanePos = (a) => {
+  const lc = a._laneCount || 1, lane = a._lane || 0, span = a._span || 1;
+  return { left: `calc(${(lane / lc) * 100}% + 1px)`, width: `calc(${(span / lc) * 100}% - 2px)` };
+};
+
 /** `day` = il giorno di weekDays (lib/week.js), `index` = 0 lunedì … 6
  *  domenica; `dg` = il trascinamento in corso (drag.current), `dragging` se
- *  il blocco si è già mosso; `looseTarget`: arrivo in un giorno senza
- *  sotto-colonna per l'operatrice (il blocco si mostra a tutta larghezza);
+ *  il blocco si è già mosso; `movingObjs` = i blocchi che seguono il
+ *  puntatore (movingBlocks), già nel giorno d'arrivo: chi cade in una
+ *  colonna che quel giorno non c'è si mostra a tutta larghezza;
  *  `nowMin`: l'ora attuale se il giorno è oggi, altrimenti null; `opening` =
  *  gli orari del centro quel giorno ([["09:00","19:00"]], [] se chiuso), o
  *  null se il salone non li ha impostati. */
 export default function WeekDayColumn({
-  day, index, width, isToday, isTargetDay, looseTarget, dragging, dg, movingObj, marks, g0, g1, pxm, nowMin, opening = null,
+  day, index, width, isToday, isTargetDay, dragging, dg, movingObjs = [], marks, g0, g1, pxm, nowMin, opening = null,
   ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null,
   onDayAreaClick, onEmptyClick, onBlockDown, onHover, onLeave,
 }) {
+  const arriving = isTargetDay ? movingObjs : [];
+  const loose = arriving.filter((m) => !day.dayOps.some((o) => o.id === weekColOf(m)));
+  const looseTarget = isTargetDay && !day.dayOps.some((o) => o.id === dg.nop);
   return (
     <div data-daycol={index} className={looseTarget ? 'dk-col--target' : ''}
       onClick={(e) => { if (e.target === e.currentTarget) onDayAreaClick(e, day.date); }}
@@ -36,7 +48,7 @@ export default function WeekDayColumn({
           di notte sembravano un orario come un altro */}
       {opening && <ClosedHours windows={opening} g0={g0} g1={g1} pxm={pxm} t={t} labels={{ some: null, none: t('Chiuso', 'Closed') }} />}
       <NowLine nowMin={nowMin} g0={g0} g1={g1} pxm={pxm} variant="week" />
-      {day.dayOps.map((o) => {
+      {day.dayOps.map((o, k) => {
         // la colonna del disegno: col filtro «Team» può non essere la principale (weekColOf)
         const opList = day.list.filter((a) => weekColOf(a) === o.id);
         const isTarget = isTargetDay && dg.nop === o.id;
@@ -49,8 +61,10 @@ export default function WeekDayColumn({
             className={isTarget ? 'dk-col--target' : ''}
             onClick={(e) => onEmptyClick(e, o.id, day.date)}
             // il colore dell'operatrice, come in vista giorno; su trasparente,
-            // perché sotto resti la tinta di oggi
-            style={{ flex: 1, minWidth: 0, position: 'relative', borderLeft: '1px solid var(--hair-2)', background: opColumnTint(colorOf(o.id), 'transparent'), cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0 }}
+            // perché sotto resti la tinta di oggi. Larga quanto il suo lavoro
+            // del giorno (`weight`, subcolWeight), come la sua testata; la
+            // prima non ripete il bordo del giorno
+            style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, position: 'relative', borderLeft: k ? '1px solid var(--hair-2)' : 'none', background: opColumnTint(colorOf(o.id), 'transparent'), cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0, transition: dragging ? 'none' : 'flex-grow 200ms var(--ease)' }}
           >
             {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
                 che si sta guardando: dove finirebbe, alla sua ora. Non
@@ -67,7 +81,6 @@ export default function WeekDayColumn({
               </div>
             ))}
             {weekLayout(opList).map((a) => {
-              const lc = a._laneCount || 1, lane = a._lane || 0;
               /* Il blocco trascinato resta nel calcolo delle corsie e lascia
                * la sua traccia lì: tolto dal calcolo, i vicini cambiavano
                * corsia (e larghezza) appena si cominciava a trascinare. La
@@ -75,23 +88,29 @@ export default function WeekDayColumn({
               // la traccia: la parte trascinata, o tutte le parti se si sposta la visita
               const key = a.key ?? a.id;
               if (dragging && (key === dg.key || (dg.whole && a.id === dg.id))) {
-                return <div key={key} className="dk-drag-ghost" style={{ top: (a.startMin - g0) * pxm + 1, height: (a.endMin - a.startMin) * pxm - 2, left: `calc(${(lane / lc) * 100}% + 1px)`, width: `calc(${100 / lc}% - 2px)`, right: 'auto', borderRadius: 6 }} />;
+                return <div key={key} className="dk-drag-ghost" style={{ top: (a.startMin - g0) * pxm + 1, height: (a.endMin - a.startMin) * pxm - 2, ...lanePos(a), right: 'auto', borderRadius: 6 }} />;
               }
               return (
                 <WeekBlock pxm={pxm} g0={g0}
-                  key={key} a={a} lc={lc} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
+                  key={key} a={a} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                   stay={stays?.get(a.id)} linked={!!linked?.has(a.id) && a.id !== openApptId}
-                  left={`calc(${(lane / lc) * 100}% + 1px)`} width={`calc(${100 / lc}% - 2px)`}
+                  joinTop={a._joinTop} joinBottom={a._joinBottom} {...lanePos(a)}
                   onDown={(e, opts) => onBlockDown(e, a, index, opts)}
                   onHover={onHover} onLeave={onLeave}
                 />
               );
             })}
-            {isTarget && <WeekBlock pxm={pxm} g0={g0} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="calc(100% - 2px)" />}
+            {/* chi arriva qui: sopra tutti, a tutta larghezza (almeno 56 px:
+                in una colonna vuota, stretta, deve restare leggibile) */}
+            {arriving.filter((m) => weekColOf(m) === o.id).map((m) => (
+              <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving joinTop={!!m._joinTop} joinBottom={!!m._joinBottom} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="max(calc(100% - 2px), 56px)" />
+            ))}
           </div>
         );
       })}
-      {looseTarget && <WeekBlock pxm={pxm} g0={g0} a={movingObj} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />}
+      {loose.map((m) => (
+        <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />
+      ))}
     </div>
   );
 }

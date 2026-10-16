@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 import { parseISO, timeLabel, toDateStr, todayStr } from '@youty/shared';
 import {
-  DOW_EN, DOW_IT, MONTHS_EN, MONTHS_IT, addMonths, closedIntervals, dayLabel, dayTimeLabel, dowIndex, gridMarks,
+  DOW_EN, DOW_IT, MONTHS_EN, MONTHS_IT, addMonths, avoidRect, closedIntervals, dayLabel, dayTimeLabel, dowIndex, gridMarks,
   hmToMin, hoverPlacement, isTodayInWeek, mondayOf, openApptIdOf, periodLabel, shiftAnchor, slotStep, visibleMarks,
   weekDaysOf,
 } from '../src/sections/agenda/lib.js';
@@ -70,6 +70,40 @@ test('hoverPlacement: a destra se ci sta, mai troppo in basso', () => {
   ];
   for (const r of rects) for (const clear of [260, 280]) assert.deepEqual(hoverPlacement(r, view, clear), was(r, clear));
   assert.deepEqual(hoverPlacement({ left: 1200, right: 1390, top: 700 }, view, 260), { x: 1190, y: 640, side: 'left' });
+});
+
+/* 16/10: la scheda si apriva accanto al blocco e copriva proprio
+ * l'appuntamento collegato (la parte dopo, la permanenza) che l'agenda
+ * evidenziava nella colonna accanto. */
+test('hoverPlacement: fuori dal riquadro degli appuntamenti collegati', () => {
+  const view = { innerWidth: 1400, innerHeight: 900 };
+  const block = { left: 300, right: 340, top: 400 };
+  const linked = { left: 300, right: 520, top: 380, bottom: 600 };
+  assert.deepEqual(hoverPlacement(block, view, 280, linked), { x: 530, y: 400, side: 'right' });
+  // a destra non ci sta: a sinistra del riquadro, non del blocco
+  assert.deepEqual(hoverPlacement({ left: 1000, right: 1040, top: 400 }, view, 280, { left: 1000, right: 1200, top: 0, bottom: 0 }), { x: 990, y: 400, side: 'left' });
+  // un riquadro largo quanto lo schermo: si torna al blocco
+  assert.deepEqual(hoverPlacement(block, view, 280, { left: 100, right: 1300, top: 0, bottom: 0 }), { x: 350, y: 400, side: 'right' });
+  // mai sopra la finestra
+  assert.equal(hoverPlacement({ left: 300, right: 340, top: -60 }, view, 280).y, 8);
+});
+
+test('avoidRect: i blocchi collegati visibili, tagliati alla griglia', () => {
+  const el = (appt, r) => ({ dataset: { appt: String(appt) }, getBoundingClientRect: () => r });
+  const root = {
+    getBoundingClientRect: () => ({ left: 100, right: 1100, top: 150, bottom: 850 }),
+    querySelectorAll: (sel) => (sel === '[data-appt]' ? [
+      el(5, { left: 300, right: 340, top: 400, bottom: 460 }),
+      el(5, { left: 380, right: 420, top: 460, bottom: 520 }),       // un'altra parte della visita
+      el(6, { left: 500, right: 540, top: 300, bottom: 900 }),       // la permanenza, tagliata in fondo
+      el(7, { left: 600, right: 640, top: 300, bottom: 340 }),       // un estraneo
+      el(6, { left: 1200, right: 1240, top: 300, bottom: 340 }),     // fuori dalla griglia, a destra
+    ] : []),
+  };
+  assert.deepEqual(avoidRect(root, new Set([5, 6])), { left: 300, right: 540, top: 300, bottom: 850 });
+  assert.deepEqual(avoidRect(root, new Set([5])), { left: 300, right: 420, top: 400, bottom: 520 });
+  assert.equal(avoidRect(root, new Set([99])), null);
+  assert.equal(avoidRect(null, new Set([5])), null);
 });
 
 test('visibleMarks: rimpicciolendo restano solo le ore', () => {

@@ -2,7 +2,7 @@
 // nomi, importi e i blocchi per servizio in cui si disegna.
 // Logica pura: la caricano anche i test con `node --test`.
 import { fmtEur, minutesOfDay } from '@youty/shared';
-import { addonGroups, isAddonItem } from './addons.js';
+import { addonGroups } from './addons.js';
 
 /* ---- appointment helpers (day/week payload objects) ---- */
 export const aStartMin = (a) => minutesOfDay(a.start);
@@ -77,22 +77,4 @@ export function apptRevenue(list) {
     cents += Math.round(Number(a.total_price || 0) * 100);
   }
   return cents / 100;
-}
-
-/** Segmenti della striscia colorata di un blocco settimanale: uno per operatrice,
- *  in proporzione alla durata (attiva + posa), fondendo i consecutivi della stessa
- *  operatrice. Senza `items` (payload vecchio) → un solo segmento dell'operatrice.
- *  Gli aggiuntivi non hanno tempo, quindi niente segmento: con la larghezza
- *  minima di un minuto la collega della nail art avrebbe la sua fetta. */
-export function opSegments(a) {
-  const items = (a.items || []).filter((it) => it && it.operator_id != null && !isAddonItem(it));
-  if (!items.length) return [{ opId: a.operator_id, w: 1 }];
-  const segs = [];
-  items.forEach((it) => {
-    const w = Math.max(1, (it.duration_min || 0) + (it.soak_min || 0));
-    const last = segs[segs.length - 1];
-    if (last && last.opId === it.operator_id) last.w += w;
-    else segs.push({ opId: it.operator_id, w });
-  });
-  return segs;
 }

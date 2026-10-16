@@ -3,7 +3,7 @@
 // le testate delle sotto-colonne delle operatrici, con la stessa tinta dei
 // blocchi. Senza hook: nei test fa parte di WeekView.
 import { parseISO, statusMeta } from '@youty/shared';
-import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, opColumnTint, opDisplay } from '../lib.js';
+import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, initialsOf, opColumnTint, opDisplay } from '../lib.js';
 
 /** `day` = il giorno di weekDays (lib/week.js), `index` = 0 lunedì … 6
  *  domenica; `isTargetDay`: il giorno d'arrivo del trascinamento; `setOpTip`
@@ -40,12 +40,16 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
           })}
         </div>
       </button>
-      {/* operator sub-column headers: striscia colorata in alto, stessa tinta dei blocchi */}
+      {/* Testate delle sotto-colonne: striscia colorata in alto, stessa tinta
+          dei blocchi, larghe come la loro colonna (`weight`). Stretta, la
+          testata dice le iniziali, e sotto i 16 px solo il colore (CSS
+          .dk-wsub): «Gi…» non diceva chi fosse. */}
       {day.dayOps.length > 0 && (
         <div style={{ display: 'flex' }}>
-          {day.dayOps.map((o) => (
-            <div key={o.id} title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: 1, minWidth: 0, padding: '3px 2px 4px', textAlign: 'center', borderLeft: '1px solid var(--hair-2)', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)') }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
+          {day.dayOps.map((o, k) => (
+            <div key={o.id} className="dk-wsub" title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, padding: '3px 0 4px', textAlign: 'center', borderLeft: k ? '1px solid var(--hair-2)' : 'none', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)'), transition: 'flex-grow 200ms var(--ease)' }}>
+              <div className="dk-wsub__name" style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
+              <div className="dk-wsub__ini" style={{ fontSize: 9.5, fontWeight: 800, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden' }}>{initialsOf(`${o.first_name} ${o.last_name || ''}`)}</div>
             </div>
           ))}
         </div>

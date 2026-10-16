@@ -6,9 +6,10 @@ import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
 import {
-  hoverShape, movingBlock, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans, weekMoveBody, weekParts,
-  weekSplitBody, whereLabel,
+  hoverShape, movingBlock, movingBlocks, subcolWeight, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans,
+  weekMoveBody, weekParts, weekSplitBody, whereLabel,
 } from '../src/sections/agenda/lib/week.js';
+import { weekLayout } from '../src/sections/agenda/lib/grid.js';
 
 const t = (it) => it;
 const W1 = ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
@@ -172,7 +173,7 @@ const visitaMista = {
   ],
 };
 
-test('le parti di una visita: una per fila di servizi della stessa operatrice, gli aggiuntivi col loro servizio', () => {
+test('le parti di una visita: una per servizio, gli aggiuntivi col loro servizio', () => {
   assert.deepEqual(weekParts(visitaMista).map((p) => [p.opId, p.startMin, p.endMin, p.items.map((it) => it.id)]), [
     [1, 600, 630, [501, 502]], [2, 630, 690, [503]], [1, 690, 720, [504]],
   ]);
@@ -220,4 +221,90 @@ test('staccando una parte ci si aggancia anche alle altre parti della visita; sp
   const d = { id: 50, key: '50:2', obj: part, isPart: true, whole: false };
   assert.deepEqual(weekBestSnap(632, day, 1, d, 6), { min: 630, dist: 2, label: 'Sara Bianchi' });
   assert.equal(weekBestSnap(632, day, 1, { ...d, whole: true }, 6), null);
+});
+
+/* 16/10: i servizi accorpati della STESSA operatrice (le visite importate da
+ * AreaBeauty) erano un blocco solo, e trascinandolo si spostava sempre tutta
+ * la visita. Ora ogni servizio è una parte, come in vista giorno. */
+const accorpata = {
+  ...sara, id: 60, start: '2026-10-01T15:00:00+02:00', client_name: 'Sarah Mac', operator_id: 1, duration_min: 150,
+  deposit_status: 'required',
+  items: [
+    { id: 601, service_id: 1, operator_id: 1, duration_min: 60, soak_min: 20, service_name: 'Colore' },
+    { id: 602, service_id: 2, operator_id: 1, duration_min: 40, soak_min: 0, service_name: 'Piega' },
+    { id: 603, service_id: 9, operator_id: 1, duration_min: 0, soak_min: 0, service_name: 'Nail art' },
+    { id: 604, service_id: 3, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' },
+  ],
+};
+
+test('una visita accorpata della stessa operatrice: una parte per servizio, con la sua posa', () => {
+  assert.deepEqual(weekParts(accorpata).map((p) => [p.opId, p.startMin, p.endMin, p.items.map((it) => it.id)]), [
+    [1, 900, 980, [601]], [1, 980, 1020, [602, 603]], [1, 1020, 1050, [604]],
+  ]);
+  const day = weekDays(payload([accorpata]).map((d, i) => (i === 3 ? { ...d, appointments: [accorpata] } : d)), null, OPS, 1, '', [])[3];
+  assert.deepEqual(day.list.map((a) => [a.key, weekColOf(a), a.part, a.parts, a.soakMin]), [
+    ['60:0', 1, 1, 3, 20], ['60:1', 1, 2, 3, 0], ['60:2', 1, 3, 3, 0],
+  ]);
+  // il corpo della seconda stacca la piega con la sua nail art, da sola
+  const d = { obj: day.list[1], ns: 1080, origOp: 1, nop: 1 };
+  assert.deepEqual(weekSplitBody({ date: W1[3] }, d, false), { item_id: 602, item_ids: [602], start: isoAtMin(W1[3], 1080) });
+  // l'anteprima di una parte: tutta la visita, con il suo servizio in evidenza
+  assert.deepEqual(hoverShape(day.list[1]).focus_item_ids, [602, 603]);
+  assert.equal(hoverShape(day.list[1]).items.length, 4);
+  assert.equal(hoverShape(sara).focus_item_ids, undefined, 'una visita di un servizio non ne ha');
+});
+
+test('le parti attaccate stanno nella stessa corsia e si disegnano unite', () => {
+  const day = weekDays(payload([accorpata]).map((d, i) => (i === 3 ? { ...d, appointments: [accorpata] } : d)), null, OPS, 1, '', [])[3];
+  const out = weekLayout(day.list.filter((a) => weekColOf(a) === 1));
+  const by = (key) => out.find((a) => a.key === key);
+  assert.deepEqual(['60:0', '60:1', '60:2'].map((k) => [by(k)._lane, by(k)._joinTop, by(k)._joinBottom]), [
+    [0, false, true], [0, true, true], [0, true, false],
+  ]);
+  // un altro appuntamento a metà visita non la spezza in due corsie
+  const rita = { id: 70, startMin: 990, endMin: 1050 };
+  const mixed = weekLayout([...day.list, rita]);
+  assert.deepEqual(new Set(mixed.filter((a) => a.id === 60).map((a) => a._lane)).size, 1);
+  assert.notEqual(mixed.find((a) => a.id === 70)._lane, mixed.find((a) => a.id === 60)._lane);
+});
+
+test('un blocco si allarga sulle corsie libere alla sua destra', () => {
+  // 10:00–11:30, 10:15–10:45, 10:30–10:50 si sovrappongono; 11:00–11:15 tocca solo il primo
+  const out = weekLayout([
+    { id: 1, startMin: 600, endMin: 690 }, { id: 2, startMin: 615, endMin: 645 },
+    { id: 3, startMin: 630, endMin: 650 }, { id: 4, startMin: 660, endMin: 675 },
+  ]);
+  const by = (id) => out.find((a) => a.id === id);
+  assert.deepEqual([1, 2, 3, 4].map((id) => [by(id)._lane, by(id)._laneCount, by(id)._span]), [
+    [0, 3, 1], [1, 3, 1], [2, 3, 1], [1, 3, 2],
+  ]);
+  // da solo: tutta la colonna
+  assert.deepEqual(weekLayout([{ id: 9, startMin: 600, endMin: 630 }]).map((a) => [a._laneCount, a._span]), [[1, 1]]);
+});
+
+test('le sotto-colonne si allargano col lavoro del giorno; vuote restano cliccabili', () => {
+  assert.equal(subcolWeight([]), 1);
+  assert.equal(subcolWeight([{ id: 1, startMin: 600, endMin: 630 }]), 3);
+  assert.equal(subcolWeight([{ id: 1, startMin: 600, endMin: 690 }, { id: 2, startMin: 615, endMin: 645 }, { id: 3, startMin: 630, endMin: 650 }]), 7);
+  const days = weekDays(payload(), null, OPS, 1, '');
+  // giovedì Sara è di Anna; Giulia è libera
+  assert.deepEqual(days[3].dayOps.map((o) => [o.id, o.weight]), [[1, 3], [2, 1]]);
+  // un giorno vuoto: tutte uguali
+  assert.deepEqual(days[0].dayOps.map((o) => o.weight), [1, 1]);
+});
+
+test('trascinando la barra viaggiano tutte le parti, unite; la colonna di partenza passa a quella d\'arrivo', () => {
+  const day = weekDays(payload([visitaMista]), null, OPS, 1, '', [])[3];
+  const giulia = day.list.find((a) => a.key === '50:1');
+  // la parte di Giulia (10:30) presa per la barra e portata da Anna, un'ora dopo
+  const dg = { id: 50, obj: giulia, isPart: true, whole: true, orig: 630, ns: 690, origOp: 2, nop: 1, origDayIdx: 3, dayIdx: 3 };
+  assert.deepEqual(movingBlocks(dg, [0, 1, 2, day]).map((m) => [m.key, m.colOp, m.startMin, m.endMin, m._joinTop, m._joinBottom]), [
+    ['50:0', 1, 660, 690, false, true], ['50:1', 1, 690, 750, true, true], ['50:2', 1, 750, 780, true, false],
+  ]);
+  // senza cambio di colonna le parti restano alle loro operatrici, staccate
+  assert.deepEqual(movingBlocks({ ...dg, nop: 2 }, [0, 1, 2, day]).map((m) => [m.colOp, m._joinTop]), [[1, false], [2, false], [1, false]]);
+  // il corpo di una parte: viaggia lei sola, senza i segni della corsia di partenza
+  const single = movingBlocks({ ...dg, whole: false, obj: { ...giulia, _joinTop: true } }, [0, 1, 2, day]);
+  assert.equal(single.length, 1);
+  assert.equal(single[0]._joinTop, undefined);
 });

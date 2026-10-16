@@ -1,7 +1,7 @@
 // Aggiuntivi in agenda (15/10): servizi che si fanno durante un altro — la
 // nail art durante la manicure. La loro voce dura 0 minuti: niente blocco in
 // griglia ma un'etichetta «+ Nail art» dentro il blocco del servizio, nessuna
-// spina, fascia o segmento in settimana, niente «occupata» negli slot; nel
+// spina né parte in più in settimana, niente «occupata» negli slot; nel
 // dettaglio e nella nuova prenotazione stanno sotto il servizio col prezzo, e
 // non cambiano la durata. Prima le voci senza tempo sarebbero state blocchi
 // alti zero, contati come servizi veri da trascinamento, stacco e slot.
@@ -10,11 +10,11 @@ import { afterEach, test } from 'node:test';
 
 import { isoAtMin, parseISO, toDateStr, todayStr } from '@youty/shared';
 import {
-  addonGroups, bookingRows, explainSlot, insertAddonRow, isAddonItem, isAddonRow, itemBlocks, nextTimedIndex, opSegments,
-  prevTimedIndex, removeRowWithAddons, serviceBands, setRowOperator, visitSpines,
+  addonGroups, bookingRows, explainSlot, insertAddonRow, isAddonItem, isAddonRow, itemBlocks, nextTimedIndex,
+  prevTimedIndex, removeRowWithAddons, setRowOperator, visitSpines,
 } from '../src/sections/agenda/lib.js';
 import { dayDragContext, skillVerdict } from '../src/sections/agenda/lib/drag.js';
-import { weekGhostSpans } from '../src/sections/agenda/lib/week.js';
+import { weekGhostSpans, weekParts } from '../src/sections/agenda/lib/week.js';
 import { find, findAll, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
 const { default: ItemBlock } = await loadComponent('apps/dashboard/src/sections/agenda/grid/ItemBlock.jsx');
@@ -89,14 +89,14 @@ test('la nail art di una collega non la rende occupata in quel momento', () => {
   assert.equal(verdict.code, 'ok', verdict.label);
 });
 
-test('manicure + nail art è una visita da un servizio: niente spina, fasce né segmenti in più', () => {
+test('manicure + nail art è una visita da un servizio: niente spina né parti in più', () => {
   const v = visit([row(1, 10, 'Manicure', 1, 60, 0, '40.00', 0), row(2, 20, 'Nail art', 4, 0, 0, '10.00', 1)]);
   const placed = itemBlocks(v).map((b) => ({ b, pos: { startMin: b.startMin, activeMin: b.activeMin, soakMin: b.soakMin } }));
   assert.deepEqual(visitSpines(placed), []);
-  assert.deepEqual(serviceBands(v), []);
-  assert.deepEqual(opSegments(v), [{ opId: 1, w: 60 }]);
-  // con un servizio vero in più le fasce sono due, senza la nail art
-  assert.deepEqual(serviceBands(visit()).map((b) => [b.name, b.minutes]), [['Manicure', 60], ['Taglio', 30]]);
+  // in settimana un blocco solo, anche se la nail art la fa Bea
+  assert.deepEqual(weekParts(v).map((p) => p.items.map((it) => it.id)), [[1, 2]]);
+  // con un servizio vero in più le parti sono due, la nail art con la manicure
+  assert.deepEqual(weekParts(visit()).map((p) => [p.startMin, p.endMin, p.items.map((it) => it.service_name)]), [[600, 660, ['Manicure', 'Nail art']], [660, 690, ['Taglio']]]);
   // e in settimana l'ombra della visita aperta non ha un pezzo per lei
   assert.deepEqual(weekGhostSpans(visit()).map((s) => [s.startMin, s.dur]), [[600, 60], [660, 30]]);
 });
@@ -155,19 +155,23 @@ test('in giornata la nail art è un\'etichetta nel blocco della manicure', () =>
   assert.ok(textOf(tree).includes('1/2'));
 });
 
-test('in settimana: «×2» conta i servizi, e la nail art si legge dove c\'è posto', () => {
-  const a = { ...visit(), client_name: 'Maria Russo', startMin: 600, endMin: 690 };
+test('in settimana: «1/2» conta i servizi, e la nail art si legge col suo servizio dove c\'è posto', () => {
+  const v = visit();
+  const [manicure] = weekParts(v);
+  const a = { ...v, client_name: 'Maria Russo', key: '77:0', part: 1, parts: 2, items: manicure.items, visitItems: v.items, startMin: 600, endMin: 660 };
   const tree = WeekBlock({ a, colorOf: () => '#AACCEE', t, canWrite: true, pxm: 2 });
   const text = textOf(tree);
-  assert.ok(text.includes('×2'));
-  assert.ok(text.includes('+ Nail art'));
+  assert.ok(text.includes('1/2'), text);
+  assert.ok(text.includes('Manicure + Nail art'), text);
 });
 
 test('nella scheda al passaggio del mouse la nail art è accanto alla manicure', () => {
   installDom();
   const tree = ApptHoverCard({ hover: { a: visit(), x: 0, y: 0, side: 'right' }, t, lang: 'it', operators: [], colorOf: () => '#ccc' });
   const text = textOf(tree);
-  assert.ok(text.includes('Manicure+ Nail art + Taglio'), text);
+  // un servizio per riga, con la sua ora e chi lo fa: la nail art non sposta il taglio
+  assert.ok(text.includes('10:00Manicure+ Nail artAnna'), text);
+  assert.ok(text.includes('11:00TaglioBea'), text);
 });
 
 /* ---- listino ------------------------------------------------------------ */

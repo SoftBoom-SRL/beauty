@@ -5,6 +5,7 @@
 import { isoAtMin, minutesOfDay, parseISO, timeLabel } from '@youty/shared';
 import { timedItems } from './addons.js';
 import { DOW_EN, DOW_IT } from './calendar.js';
+import { weekLayout } from './grid.js';
 
 /** Sotto-colonne di un giorno in vista settimana.
  *
@@ -45,22 +46,25 @@ export function weekColumnFor(a, off, known = null) {
 /** La sotto-colonna in cui una visita (o una sua parte) è disegnata. */
 export const weekColOf = (a) => a.colOp ?? a.operator_id;
 
-/** Le parti di una visita, una per ogni fila di servizi della stessa
- *  operatrice: [{ opId, startMin, endMin, items }], in ordine di catena.
- *  Gli aggiuntivi (senza tempo) restano con il servizio prima. Una visita con
- *  una sola operatrice è una parte sola.
+/** Le parti di una visita, una per servizio con tempo (con i suoi
+ *  aggiuntivi, che restano col servizio prima): [{ opId, startMin, endMin,
+ *  items }], in ordine di catena. Una visita con un servizio solo è una parte
+ *  sola.
  *
  *  In settimana una visita con più colleghe era UN blocco nella colonna della
  *  prima: la piega di Giulia dentro la visita di Anna si leggeva sotto Anna, e
- *  si spostava solo tutta insieme (il titolare, 15/10). Ora ogni parte sta
- *  nella colonna di chi la fa, come in vista giorno. */
+ *  si spostava solo tutta insieme (il titolare, 15/10). Poi una parte per
+ *  operatrice; ma i servizi accorpati della stessa operatrice (le visite
+ *  importate da AreaBeauty, per esempio) restavano un blocco solo, e
+ *  trascinandolo si spostava sempre tutta la visita (il titolare, 16/10). Ora
+ *  ogni servizio è una parte, nella colonna di chi lo fa, come in vista
+ *  giorno: il corpo sposta quel servizio, la barra scura tutta la visita. */
 export function weekParts(a) {
   const runs = [];
   let cursor = minutesOfDay(a.start);
   for (const it of a.items || []) {
     const dur = (it.duration_min || 0) + (it.soak_min || 0);
-    const last = runs[runs.length - 1];
-    if (!last || (dur > 0 && it.operator_id != null && it.operator_id !== last.opId)) {
+    if (!runs.length || dur > 0) {
       runs.push({ opId: it.operator_id ?? a.operator_id, startMin: cursor, endMin: cursor, items: [] });
     }
     const run = runs[runs.length - 1];
@@ -71,26 +75,32 @@ export function weekParts(a) {
   return runs;
 }
 
+/** I minuti di posa (o di attesa) in fondo a un blocco: quelli del suo
+ *  servizio con tempo. In settimana non si vedevano, e la visita sembrava
+ *  occupare l'operatrice anche mentre il colore è in posa. */
+const soakOf = (items) => timedItems(items).reduce((sum, it) => sum + (it.soak_min || 0), 0);
+
 /** I blocchi da disegnare per la visita `a` del giorno: la visita intera se
- *  ha una sola operatrice (nella colonna di weekColumnFor), altrimenti una
- *  parte per colonna (weekParts), saltando quelle delle operatrici spente.
+ *  ha un servizio solo (nella colonna di weekColumnFor), altrimenti una
+ *  parte per servizio (weekParts), saltando quelle delle operatrici spente.
  *  Una parte tiene l'id e l'operatrice principale della visita (servono a
  *  spostarla e ad aprirla), e porta `key`, `part`/`parts`, i suoi servizi in
- *  `items` e quelli di tutta la visita in `visitItems`. */
+ *  `items` e quelli di tutta la visita in `visitItems`. `soakMin` = la posa
+ *  in fondo al blocco. */
 function visitBlocks(a, off, known) {
   const s = minutesOfDay(a.start);
   const runs = weekParts(a);
   if (runs.length < 2) {
     const col = weekColumnFor(a, off, known);
     if (col == null) return [];                         // nessuna delle sue operatrici è accesa
-    return [{ ...a, ...(col !== a.operator_id ? { colOp: col } : {}), startMin: s, endMin: s + (a.duration_min || 0) }];
+    return [{ ...a, ...(col !== a.operator_id ? { colOp: col } : {}), startMin: s, endMin: s + (a.duration_min || 0), soakMin: soakOf(a.items) }];
   }
   return runs.flatMap((run, k) => (off.has(run.opId) ? [] : [{
     ...a,
     ...(run.opId !== a.operator_id ? { colOp: run.opId } : {}),
     key: `${a.id}:${k}`, part: k + 1, parts: runs.length,
     items: run.items, visitItems: a.items,
-    startMin: run.startMin, endMin: run.endMin,
+    startMin: run.startMin, endMin: run.endMin, soakMin: soakOf(run.items),
   }]));
 }
 
@@ -147,13 +157,27 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
     // sede o non più in team finiva in una colonna che non c'era, contata
     // nella testata e invisibile.
     const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName)
-      .filter((o) => !off.has(o.id));
+      .filter((o) => !off.has(o.id))
+      .map((o) => ({ ...o, weight: subcolWeight(list.filter((a) => weekColOf(a) === o.id)) }));
     if (!off.size) return { ...d, list, visits, dayOps };
     // con il filtro la testata del giorno conta quello che si vede
     const by_status = {};
     visits.forEach((a) => { by_status[a.status] = (by_status[a.status] || 0) + 1; });
     return { ...d, list, visits, dayOps, count: visits.length, by_status };
   });
+}
+
+/** Quanto si allarga la sotto-colonna di un'operatrice rispetto alle altre
+ *  del giorno (flex-grow): 1 se quel giorno non ha appuntamenti, altrimenti
+ *  1 + 2 per corsia. Tutte larghe uguali, con nove operatrici e due sole al
+ *  lavoro gli appuntamenti stavano in 44 px e i sovrapposti in strisce da
+ *  dieci, senza nome, accanto a sette colonne vuote (il titolare, 16/10). Una
+ *  colonna vuota resta larga abbastanza per cliccarci e prenotare; in una
+ *  giornata piena sono tutte uguali, come prima. */
+export function subcolWeight(blocks) {
+  if (!blocks?.length) return 1;
+  const lanes = Math.max(1, ...weekLayout(blocks).map((a) => a._laneCount || 1));
+  return 1 + 2 * lanes;
 }
 
 /* Aggancio al vicino, come in vista giorno: con trattamenti che non cadono
@@ -216,11 +240,34 @@ export function whereLabel(dayData, operators, dayIdx, opId, ns, t) {
   return `${day ? `${t(DOW_IT[dayIdx], DOW_EN[dayIdx])} ${parseISO(day.date).getDate()} · ` : ''}${op ? op.first_name + ' · ' : ''}${timeLabel(ns)}`;
 }
 
-/** Il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo. */
+/** Il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo.
+ *  Da solo: non è attaccato a niente (`_join…` vengono dalla corsia di
+ *  partenza). */
 export const movingBlock = (dg) => {
-  const { colOp, ...obj } = dg.obj;   // la copia si disegna nella colonna d'arrivo
+  // la copia si disegna nella colonna d'arrivo
+  const { colOp, _joinTop, _joinBottom, ...obj } = dg.obj;
   return { ...obj, operator_id: dg.nop, startMin: dg.ns, endMin: dg.ns + (dg.obj.endMin - dg.obj.startMin) };
 };
+
+/** I blocchi che seguono il puntatore: quello premuto o, trascinando la
+ *  barra di una visita a più parti, tutte le sue parti, spostate di quanto
+ *  si è mossa quella premuta. Le parti della colonna di partenza passano a
+ *  quella d'arrivo (come farà il server con `from_operator_id`), le altre
+ *  restano alla loro operatrice. Prima viaggiava solo la parte premuta, e
+ *  sembrava di spostare un servizio solo. `dayData` = i giorni di weekDays. */
+export function movingBlocks(dg, dayData) {
+  if (!(dg.whole && dg.isPart)) return [movingBlock(dg)];
+  const delta = dg.ns - dg.orig;
+  const parts = (dayData[dg.origDayIdx]?.list || []).filter((a) => a.id === dg.id);
+  if (!parts.length) return [movingBlock(dg)];
+  const moved = parts.map((p) => {
+    const col = weekColOf(p);
+    return { ...p, colOp: col === dg.origOp ? dg.nop : col, startMin: p.startMin + delta, endMin: p.endMin + delta };
+  });
+  // attaccate come a riposo: il servizio prima, nella stessa colonna, finisce dove comincia questo
+  const touches = (x, y) => x.colOp === y.colOp && x.endMin === y.startMin;
+  return moved.map((p) => ({ ...p, _joinTop: moved.some((q) => touches(q, p)), _joinBottom: moved.some((q) => touches(p, q)) }));
+}
 
 /** I servizi dell'appuntamento aperto, in fila dalla sua ora: servono a
  *  disegnarne l'ombra sul giorno che si sta guardando. Nell'ordine in cui
@@ -243,8 +290,8 @@ export function weekGhostSpans(ghost) {
  * scheda resta una sola per le due viste. */
 export const hoverShape = (a) => ({
   ...a,
-  // di una parte si mostra tutta la visita
-  ...(a.visitItems ? { items: a.visitItems } : {}),
+  // di una parte si mostra tutta la visita, col servizio indicato in evidenza
+  ...(a.visitItems ? { items: a.visitItems, focus_item_ids: (a.items || []).map((it) => it.id).filter((id) => id != null) } : {}),
   client: { full_name: a.client_name, phone: a.client_phone },
   total_duration_min: a.duration_min,
 });

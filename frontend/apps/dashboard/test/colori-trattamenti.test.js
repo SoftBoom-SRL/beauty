@@ -64,9 +64,13 @@ test('in settimana il testo del blocco è bianco sulle tinte scure, scuro sulle 
     id: 1, startMin: 600, endMin: 660, client_name: 'Sara Bianchi', operator_id: 1, status: 'confirmed',
     items: [{ service_id: 5, operator_id: 1, duration_min: 60, soak_min: 0, service_name: 'Colore' }],
   };
+  // il colore sta sulle righe e, per i blocchi stretti, sul nome per lungo e sulle iniziali
   const nameColor = (col) => {
     const tree = WeekBlock({ a, colorOf: () => '#C9B8F2', itemColor: () => col, t: (it) => it, canWrite: true, left: 0, width: '100%' });
-    return find(tree, (el) => el.type === 'div' && textOf(el) === 'Sara').props.style.color;
+    const [rows, vertical, ini] = ['dk-wblock__h', 'dk-wblock__v', 'dk-wblock__ini'].map((c) => find(tree, (el) => el.props?.className === c).props.style.color);
+    assert.equal(vertical, rows);
+    assert.equal(ini, rows);
+    return rows;
   };
   assert.equal(nameColor(TREATMENT_SWATCHES[1].colors[0]), '#FFFFFF', 'prima restava scuro sul rosso scuro');
   assert.equal(nameColor('#FDE2E4'), 'var(--ink)');

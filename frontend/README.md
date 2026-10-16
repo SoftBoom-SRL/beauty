@@ -57,7 +57,10 @@ settimana, testi degli avvisi, «409 → riprova forzando», colonne del filtro
 «Team» in `team.js`, sfondo delle colonne e testo leggibile sui colori in `colors.js`, che riesporta `ui/colorTools.js`), `constants.js`,
 `hooks/` (dati, live, undo, gesti, zoom in altezza e in larghezza, scroll,
 trascinamento comune a giorno e settimana), `grid/` e `parts/` (pezzi della griglia e della barra; la barra
-sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`), `month/`,
+sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`; il testo dei
+blocchi della settimana segue la loro larghezza vera con le container query di
+`.dk-wblock`, e le sotto-colonne si allargano col lavoro del giorno, `subcolWeight`
+in `lib/week.js`), `month/`,
 `modals/` (dettaglio appuntamento con `detail/`, nuova prenotazione con
 `newappt/`, `rules.js` con le regole pure dei pannelli).
 

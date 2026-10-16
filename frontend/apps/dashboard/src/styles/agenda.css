@@ -136,13 +136,47 @@
   .dk-ophead__row .dk-ophead__text { display: none; }
 }
 
-/* blocco della settimana stretto (sotto-colonne strette, «Tutte in vista»
-   con tante operatrici): solo il colore, niente pezzi di nome o di ora
-   tagliati a metà; chi è lo dice la scheda al passaggio del mouse */
-.dk-wblock { container-type: inline-size; }
-@container (max-width: 26px) {
-  /* !important: la riga dell'orario ha display:flex nello stile in linea */
-  .dk-wblock .dk-wblock__txt { display: none !important; }
+/* Blocco della settimana (WeekBlock): il testo segue lo spazio che il
+   blocco ha davvero sullo schermo. La larghezza la decidono la colonna, il
+   lavoro del giorno e lo zoom di lato, e solo il CSS la conosce: il blocco è
+   un contenitore (posizione e misure fissate, il testo non lo allarga).
+   - largo: le righe (nome, cognome, ora, servizio) finché ci stanno;
+   - stretto e alto (--tall): nome e ora per lungo, dall'alto in basso;
+   - stretto e basso: le iniziali.
+   Prima, sotto i 26 px restava solo il colore e sopra «Gre…» o i puntini
+   (il titolare, 16/10). `--wb-l` = la barra o la striscia a sinistra. */
+.dk-wblock { container-type: size; }
+.dk-wblock__v, .dk-wblock__ini { display: none; pointer-events: none; z-index: 2; font-weight: 800; white-space: nowrap; overflow: hidden; }
+.dk-wblock__v { position: absolute; top: 3px; bottom: 3px; left: calc(50% + var(--wb-l) / 2); transform: translateX(-50%); writing-mode: vertical-rl; text-overflow: ellipsis; font-size: 10px; line-height: 1.1; letter-spacing: 0.01em; }
+.dk-wblock__ini { position: absolute; top: 2px; left: var(--wb-l); right: 0; text-align: center; font-size: 9.5px; line-height: 1.15; letter-spacing: -0.02em; }
+.dk-wblock__ini--svc { text-align: left; padding-left: 2px; font-weight: 700; }
+@container (max-width: 40px) {
+  /* !important: le righe hanno display in linea */
+  .dk-wblock .dk-wblock__h, .dk-wblock .dk-wblock__badges, .dk-wblock .dk-wblock__gift { display: none !important; }
+  .dk-wblock .dk-wblock__ini { display: block; }
+  .dk-wblock.dk-wblock--tall .dk-wblock__ini { display: none; }
+  .dk-wblock.dk-wblock--tall .dk-wblock__v { display: block; }
+}
+@container (max-width: 22px) {
+  .dk-wblock .dk-wblock__ini { font-size: 8px; letter-spacing: -0.04em; }
+  .dk-wblock .dk-wblock__v { font-size: 9px; }
+}
+/* basso (dieci minuti, zoom piccolo): una riga sola, senza margine in alto */
+@container (max-height: 17px) {
+  .dk-wblock .dk-wblock__h { padding-top: 1px !important; }
+  .dk-wblock .dk-wblock__l1 { font-size: 9.5px !important; line-height: 1.05; }
+  .dk-wblock .dk-wblock__ini { top: 0; font-size: 8.5px; }
+}
+
+/* testata della sotto-colonna stretta: le iniziali, poi solo il colore */
+.dk-wsub { container-type: inline-size; }
+.dk-wsub__ini { display: none; }
+@container (max-width: 40px) {
+  .dk-wsub .dk-wsub__name { display: none; }
+  .dk-wsub .dk-wsub__ini { display: block; }
+}
+@container (max-width: 15px) {
+  .dk-wsub .dk-wsub__ini { display: none; }
 }
 
 /* popover del filtro Team */

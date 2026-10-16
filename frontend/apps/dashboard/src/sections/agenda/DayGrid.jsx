@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useDash } from '../../ctx.jsx';
 import {
   PXM, COLW, DAY_HOURS_W, aStartMin, firstName, itemBlocks, explainSlot, gridMarks,
-  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin, fitColumns, opColumnTint,
+  ghostBlockAt, dayGridRange, openingFor, slotStep, openApptIdOf, GRID_DAY, firstScrollMin, fitColumns, opColumnTint, avoidRect,
 } from './lib.js';
 import {
   dayDragContext, opFirstName, visitVerdict, validateDrag, bestSnap, snapStart, dragReach, resizeStep, dragDy, dropIntent,
@@ -134,10 +134,15 @@ export default function DayGrid({
   const dayAppts = dataRows.flatMap((r) => r.appointments || []);
   const stays = dayStays(dayAppts);
   const [hoverId, setHoverId] = useState(null);
-  const hoverIfOk = (a, el) => {
+  /* `focusId` = il servizio indicato, che l'anteprima mette in evidenza fra
+   * quelli della visita. La scheda si apre fuori dal riquadro della visita e
+   * della sua permanenza (avoidRect): le copriva proprio mentre l'agenda le
+   * evidenzia. */
+  const hoverIfOk = (a, el, focusId = null) => {
     if (!onHover || !hoverOk()) return;
     setHoverId(a.id);
-    onHover({ ...a, stay_mates: stayMatesLabels(stays, dayAppts, a.id) }, el);
+    const avoid = avoidRect(scrollRef.current, linkedIds(stays, a.id).add(a.id));
+    onHover({ ...a, stay_mates: stayMatesLabels(stays, dayAppts, a.id), focus_item_ids: focusId != null ? [focusId] : [] }, el, avoid);
   };
   const leave = () => { setHoverId(null); onLeave && onLeave(); };
   const linked = linkedIds(stays, openApptId, hoverId);

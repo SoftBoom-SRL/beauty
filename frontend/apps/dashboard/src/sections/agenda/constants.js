@@ -54,9 +54,13 @@ export const DAY_HOURS_W = 64;
 export const WEEK_HOURS_W = 46;
 
 /** Vista settimana: la tinta di oggi (discreta, derivata dal tema: era
- *  #D6E4F7 fisso) e il bordo fra un giorno e l'altro, più leggero di --clay. */
+ *  #D6E4F7 fisso) e il bordo fra un giorno e l'altro. Era una riga di 1 px
+ *  del colore di quelle fra le operatrici: con nove sotto-colonne per giorno
+ *  non si capiva dove finisse il lunedì (il titolare, 16/10). Ora è doppio e
+ *  scuro quanto basta per leggere i giorni a colpo d'occhio, dalla testata
+ *  fino in fondo. */
 export const WEEK_TODAY_BG = 'color-mix(in srgb, var(--clay) 12%, var(--paper))';
-export const WEEK_DAY_BORDER = '1px solid var(--hair)';
+export const WEEK_DAY_BORDER = '2px solid color-mix(in srgb, var(--ink) 34%, var(--paper))';
 
 /** La riga rossa dell'ora attuale, in giorno e settimana. */
 export const NOW_LINE_COLOR = '#F4708A';

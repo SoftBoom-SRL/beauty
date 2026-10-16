@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
-import { WHEEL_ZOOM_FACTOR, weekDayOps } from '../src/sections/agenda/lib.js';
+import { WEEK_DAY_BORDER, WHEEL_ZOOM_FACTOR, weekDayOps } from '../src/sections/agenda/lib.js';
 import { EDGE_DELAY_FRAMES } from '../src/sections/agenda/lib/drag.js';
-import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, tick } from './grid-harness.mjs';
+import { find, findAll, installDom, loadComponent, mount, ptr, rect, spy, textOf, tick } from './grid-harness.mjs';
 
 // i pezzi senza hook della griglia, che per i test fanno parte di WeekView
 const WEEK_PARTS = ['WeekDayHeader', 'HourGutter', 'WeekDayColumn', 'GridLines', 'NowLine', 'WeekDragBadge'];
@@ -305,12 +305,12 @@ test('in settimana trascinando un blocco i vicini non cambiano corsia', async ()
   await tick();
   g.m.render();
   const ritaEl = () => find(g.root(), (el) => typeof el.type === 'function' && el.props.a?.id === 43 && !el.props.moving);
-  assert.equal(ritaEl().props.lc, 2);
+  assert.equal(ritaEl().props.width, 'calc(50% - 2px)', 'metà sotto-colonna: accanto c\'è Sara');
   g.block().props.onDown(ptr(430, 400));
   g.root().props.onPointerMove(ptr(430, 481));
   g.m.render();
   // prima Sara usciva dal calcolo e Rita si allargava a tutta la sotto-colonna
-  assert.equal(ritaEl().props.lc, 2, 'Rita resta nella sua corsia');
+  assert.equal(ritaEl().props.width, 'calc(50% - 2px)', 'Rita resta nella sua corsia');
   assert.ok(find(g.root(), (el) => el.key === 42 && el.props?.className === 'dk-drag-ghost'), 'la traccia di Sara nella sua corsia');
   assert.ok(find(g.root(), (el) => el.props?.moving && el.props.a?.id === 42), 'la copia che segue il puntatore');
 });
@@ -412,4 +412,139 @@ test('in settimana la barra di una parte sposta tutta la visita', async () => {
   assert.equal(g.api.posts.length, 1);
   assert.equal(g.api.posts[0].url, '/api/agenda/appointments/50/move');
   assert.deepEqual(g.api.posts[0].body, { start: isoAtMin(W1[3], 11 * 60) });
+});
+
+/* 16/10: una visita accorpata della STESSA operatrice (colore e piega con
+ * Anna) era un blocco solo e si spostava sempre tutta. Ora ogni servizio è
+ * una parte, attaccata alla precedente: il corpo sposta quel servizio, la
+ * barra scura tutta la visita. */
+const accorpata = (date) => ({
+  id: 60, start: `${date}T10:00:00+02:00`, client_name: 'Sarah Mac', client_phone: '', operator_id: 1, client_id: 9,
+  status: 'closed', duration_min: 90, total_price: '80.00', deposit_status: 'none', note: '', gifts: [],
+  items: [
+    { id: 601, service_id: 1, operator_id: 1, duration_min: 60, soak_min: 0, service_name: 'Colore' },
+    { id: 602, service_id: 2, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Piega' },
+  ],
+});
+async function loadAccorpata(g) {
+  g.api.weekGets().at(-1).resolve(W1.map((date, i) => ({ date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [accorpata(date)] : [] })));
+  await tick();
+  g.m.render();
+}
+const partOf60 = (g, n) => find(g.m.tree, (el) => typeof el.type === 'function' && el.props.a?.id === 60 && el.props.a?.part === n && !el.props.moving);
+
+test('in settimana un servizio di una visita accorpata si sposta da solo', async () => {
+  const g = setup();
+  await loadAccorpata(g);
+  // attaccati: la piega continua il colore, nella stessa corsia
+  assert.equal(partOf60(g, 1).props.joinBottom, true);
+  assert.equal(partOf60(g, 2).props.joinTop, true);
+  assert.equal(partOf60(g, 2).props.left, partOf60(g, 1).props.left);
+  partOf60(g, 2).props.onDown(ptr(430, 300, { id: 1 }));
+  g.root().props.onPointerMove(ptr(430, 381, { id: 1 }));   // +60'
+  g.m.render();
+  const moving = findAll(g.root(), (el) => el.props?.moving && el.props.a?.id === 60);
+  assert.deepEqual(moving.map((m) => m.props.a.key), ['60:1'], 'viaggia solo la piega');
+  g.root().props.onPointerUp(ptr(430, 381, { id: 1 }));
+  await tick();
+  assert.equal(g.api.posts[0].url, '/api/agenda/appointments/60/split');
+  assert.deepEqual(g.api.posts[0].body, { item_id: 602, item_ids: [602], start: isoAtMin(W1[3], 12 * 60) });
+});
+
+test('in settimana la barra di una visita accorpata la sposta tutta, e si vede viaggiare intera', async () => {
+  const g = setup();
+  await loadAccorpata(g);
+  partOf60(g, 2).props.onDown(ptr(430, 300, { id: 1 }), { whole: true });
+  g.root().props.onPointerMove(ptr(430, 381, { id: 1 }));   // +60'
+  g.m.render();
+  const moving = findAll(g.root(), (el) => el.props?.moving && el.props.a?.id === 60);
+  assert.deepEqual(moving.map((m) => [m.props.a.key, m.props.a.startMin, m.props.joinTop, m.props.joinBottom]), [['60:0', 660, false, true], ['60:1', 720, true, false]]);
+  // il badge dice l'orario di tutta la visita
+  assert.ok(textOf(find(g.root(), (el) => el.props?.className === 'dk-drag-badge')).includes('11:00–12:30'));
+  g.root().props.onPointerUp(ptr(430, 381, { id: 1 }));
+  await tick();
+  assert.equal(g.api.posts[0].url, '/api/agenda/appointments/60/move');
+  assert.deepEqual(g.api.posts[0].body, { start: isoAtMin(W1[3], 11 * 60) });
+});
+
+test('in settimana l\'anteprima si apre fuori dalle altre parti della visita, con il servizio indicato in evidenza', async () => {
+  const g = setup();
+  await loadAccorpata(g);
+  // le due parti a schermo, e un estraneo più a destra che non conta
+  const el = (appt, r) => ({ dataset: { appt: String(appt) }, getBoundingClientRect: () => r });
+  g.scrollEl.querySelectorAll = (sel) => (sel === '[data-appt]'
+    ? [el(60, rect(410, 240, 50, 81)), el(60, rect(410, 321, 120, 40)), el(61, rect(700, 240, 50, 40))]
+    : []);
+  const p1 = partOf60(g, 1);
+  p1.props.onHover(p1.props.a, { getBoundingClientRect: () => rect(410, 240, 50, 81) });
+  g.m.render();
+  const card = find(g.root(), (x) => x.props?.hover && x.props.hints === 'week');
+  assert.equal(card.props.hover.x, 540, 'a destra della piega, non sopra');
+  assert.deepEqual(card.props.hover.a.focus_item_ids, [601]);
+  // con la scheda aperta l'altra parte si evidenzia
+  assert.equal(partOf60(g, 2).props.linked, true);
+  // nella scheda: un servizio per riga con la sua ora, il colore in evidenza; lo stato; i gesti delle parti
+  const drawn = card.type(card.props);
+  const rows = findAll(drawn, (x) => x.props?.style?.margin === '0 -6px');
+  assert.deepEqual(rows.map((r) => [textOf(r), r.props['data-focus']]), [['10:00Colore', ''], ['11:00Piega', undefined]]);
+  const text = textOf(drawn);
+  assert.ok(text.includes('closed'), 'lo stato della visita (statusMeta finto: l\'etichetta è lo stato)');
+  assert.ok(text.includes('Trascina: sposta questo servizio, anche su un altro giorno · Barra scura: tutta la visita'));
+});
+
+test('in settimana i giorni hanno il loro bordo, e la sotto-colonna con lavoro è più larga', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const day = find(g.root(), (el) => el.props?.['data-daycol'] === 3);
+  assert.equal(day.props.style.borderLeft, WEEK_DAY_BORDER);
+  const subs = findAll(day, (el) => el.props?.['data-subcol'] === '');
+  // Sara è di Anna: Anna 3, Giulia 1; la prima non ripete il bordo del giorno
+  assert.deepEqual(subs.map((s) => [s.props['data-op'], s.props.style.flex, s.props.style.borderLeft]), [[1, '3 1 0', 'none'], [2, '1 1 0', '1px solid var(--hair-2)']]);
+  // la testata ha le stesse larghezze del corpo
+  const heads = findAll(g.root(), (el) => el.props?.className === 'dk-wsub');
+  assert.deepEqual(heads.slice(6, 8).map((h) => h.props.style.flex), ['3 1 0', '1 1 0']);
+});
+
+test('in settimana il blocco dice sempre qualcosa: righe, nome per lungo o iniziali', async () => {
+  const g = setup();
+  await loadAccorpata(g);
+  const draw = (el, extra = {}) => el.type({ ...el.props, ...extra });
+  const cls = (tree, c) => find(tree, (x) => x.props?.className === c);
+  // il colore: 60' alti 81 px → righe, e per lungo se la colonna è stretta
+  const first = draw(partOf60(g, 1));
+  assert.ok(first.props.className.includes('dk-wblock--tall'));
+  assert.equal(textOf(cls(first, 'dk-wblock__l1')), 'Sarah');
+  assert.ok(textOf(cls(first, 'dk-wblock__h')).includes('Mac'));
+  assert.equal(textOf(cls(first, 'dk-wblock__v')), 'Sarah Mac · 10:00');
+  assert.equal(textOf(cls(first, 'dk-wblock__ini')), 'SM');
+  // la piega attaccata: il suo servizio, non di nuovo il nome
+  const second = draw(partOf60(g, 2));
+  assert.equal(textOf(cls(second, 'dk-wblock__l1')), 'Piega');
+  assert.equal(textOf(cls(second, 'dk-wblock__ini dk-wblock__ini--svc')), 'Piega');
+  // alta abbastanza, per lungo: il servizio e la sua ora
+  assert.equal(textOf(cls(draw(partOf60(g, 2), { pxm: 2 }), 'dk-wblock__v')), 'Piega · 11:00');
+  // bassa (30' = 40 px): niente scritta per lungo, le iniziali
+  assert.ok(!second.props.className.includes('dk-wblock--tall'));
+  assert.equal(cls(second, 'dk-wblock__v'), null);
+  // attaccate: niente stacco né angoli fra le due
+  assert.equal(second.props.style.top, 11 * 60 * 1.35, 'GRID_DAY parte da mezzanotte');
+  assert.match(first.props.style.borderRadius, /^6px 6px 0px 0px$/);
+});
+
+test('in settimana posa e caparra: il tratteggio in fondo al servizio, il pallino sulla prima parte', async () => {
+  const g = setup();
+  const conPosa = (date) => ({ ...accorpata(date), deposit_status: 'required', items: [
+    { id: 601, service_id: 1, operator_id: 1, duration_min: 40, soak_min: 20, service_name: 'Colore' },
+    { id: 602, service_id: 2, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Piega' },
+  ] });
+  g.api.weekGets().at(-1).resolve(W1.map((date, i) => ({ date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [conPosa(date)] : [] })));
+  await tick();
+  g.m.render();
+  const draw = (n) => { const el = partOf60(g, n); return el.type(el.props); };
+  const hatch = (tree) => find(tree, (x) => x.props?.title === 'Posa o attesa: l’operatrice è libera');
+  assert.equal(hatch(draw(1)).props.style.height, 20 * 1.35);
+  assert.equal(hatch(draw(2)), null);
+  const dot = (tree) => find(tree, (x) => x.props?.title === 'Caparra da versare');
+  assert.ok(dot(draw(1)));
+  assert.equal(dot(draw(2)), null, 'la caparra è della visita: una volta sola');
 });

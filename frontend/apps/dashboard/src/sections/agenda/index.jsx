@@ -142,9 +142,10 @@ export default function AgendaSection() {
    * mouseleave. */
   useEffect(() => { setSlotMenu(null); setHover(null); }, [date, calView]);
 
-  const onHover = (a, el) => {
+  // `avoid`: il riquadro degli appuntamenti collegati, che la scheda non copre (DayGrid)
+  const onHover = (a, el, avoid = null) => {
     if (!a) { setHover(null); return; }
-    setHover({ a, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_DAY) });
+    setHover({ a, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_DAY, avoid) });
   };
 
   /* ---- nuova prenotazione: UN solo drawer (modale 'newappt'), da qualunque punto si parta ----

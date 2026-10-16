@@ -20,7 +20,7 @@ import HourGutter from './grid/HourGutter.jsx';
 import WeekDayColumn from './grid/WeekDayColumn.jsx';
 import WeekDragBadge from './grid/WeekDragBadge.jsx';
 import {
-  PXM, WEEK_HOURS_W, HOVER_CLEAR_WEEK, isoAtMin, gridMarks, weekGridRange, slotStep, openApptIdOf, hoverPlacement,
+  PXM, WEEK_HOURS_W, HOVER_CLEAR_WEEK, isoAtMin, gridMarks, weekGridRange, slotStep, openApptIdOf, hoverPlacement, avoidRect,
   GRID_DAY, firstScrollMin, openingFor, fitColumns,
 } from './lib.js';
 import { dragDy, snapStart, snapTolerance } from './lib/drag.js';
@@ -28,7 +28,7 @@ import { retryForced } from './lib/retry.js';
 import { splitText, weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
-  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlock, weekGhostSpans, hoverShape,
+  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
 } from './lib/week.js';
 
 import { useWeekData } from './hooks/useWeekData.js';
@@ -376,8 +376,9 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   const dg = drag.current;
   const dragging = !!(dg && dg.moved);
-  // il blocco in trascinamento, già nel giorno/operatrice/orario di arrivo
-  const movingObj = dragging ? movingBlock(dg) : null;
+  // i blocchi in trascinamento, già nel giorno/operatrice/orario di arrivo:
+  // quello premuto, o tutta la visita se la si prende per la barra
+  const movingObjs = dragging ? movingBlocks(dg, dayData) : [];
 
   /* La permanenza (lib/stay.js), giorno per giorno: gli appuntamenti della
    * stessa cliente uno dopo l'altro portano il segno del collegamento, si
@@ -387,13 +388,19 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const stays = new Map();
   dayData.forEach((d) => dayStays(d.visits || d.list).forEach((v, id) => stays.set(id, v)));
   const opNameOf = (id) => operators.find((o) => o.id === id)?.first_name || '';
+  // con l'appuntamento indicato si evidenziano anche le sue altre parti
   const linked = linkedIds(stays, openApptId, hover?.a?.id);
+  if (hover?.a?.parts > 1) linked.add(hover.a.id);
 
-  // anteprima al passaggio del mouse, con la scheda della vista giorno (hoverShape)
+  /* Anteprima al passaggio del mouse, con la scheda della vista giorno
+   * (hoverShape), fuori dal riquadro degli appuntamenti collegati: le altre
+   * parti della visita e la permanenza, che l'agenda evidenzia proprio
+   * mentre la scheda è aperta (avoidRect). */
   const openHover = (a, el) => {
     if (!hoverOk()) return;
     const shaped = { ...hoverShape(a), stay_mates: stayMatesLabels(stays, weekVisits, a.id, opNameOf) };
-    setHover({ a: shaped, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK) });
+    const avoid = avoidRect(scrollRef.current, linkedIds(stays, a.id).add(a.id));
+    setHover({ a: shaped, ...hoverPlacement(el.getBoundingClientRect(), window, HOVER_CLEAR_WEEK, avoid) });
   };
   const closeHover = () => setHover(null);
 
@@ -428,12 +435,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
           const isToday = d.date === today;
           const dayW = dayWidth(d);
           const isTargetDay = dragging && dg.dayIdx === i;
-          // destinazione senza sotto-colonna per l'operatrice (giorno vuoto): il blocco si mostra a tutta larghezza
-          const looseTarget = isTargetDay && !d.dayOps.some((o) => o.id === dg.nop);
           return (
             <WeekDayColumn
-              key={i} day={d} index={i} width={dayW} isToday={isToday} isTargetDay={isTargetDay} looseTarget={looseTarget}
-              dragging={dragging} dg={dg} movingObj={movingObj} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
+              key={i} day={d} index={i} width={dayW} isToday={isToday} isTargetDay={isTargetDay}
+              dragging={dragging} dg={dg} movingObjs={movingObjs} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
               opening={hoursSet ? openingFor(settings, d.date) : null}
               ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
               colorOf={colorOf} itemColor={itemColor} stays={stays} linked={linked}
@@ -445,7 +450,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       {hover && <ApptHoverCard hover={hover} t={t} lang={lang} operators={operators} colorOf={colorOf} hints="week" />}
       {opTip && <div style={{ position: 'fixed', top: opTip.y, left: opTip.x, transform: 'translateX(-50%)', zIndex: 90, background: 'var(--ink)', color: '#fff', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: 'var(--sh-pop)' }}>{opTip.name}</div>}
       {/* badge che segue il cursore: giorno + operatrice + orario di arrivo */}
-      {dragging && <WeekDragBadge dg={dg} dayData={dayData} operators={operators} movingObj={movingObj} t={t} />}
+      {dragging && <WeekDragBadge dg={dg} dayData={dayData} operators={operators} movingObjs={movingObjs} t={t} />}
     </div>
   );
 }

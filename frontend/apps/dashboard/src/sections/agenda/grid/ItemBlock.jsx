@@ -62,7 +62,7 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         ? t(`Visita di ${appt.client?.full_name || ''} · servizio ${index + 1} di ${total}: trascina per spostare solo questo, o trascina la barra scura a sinistra per spostare tutta la visita, anche a un'altra operatrice`,
             `${appt.client?.full_name || ''}'s visit · service ${index + 1} of ${total}: drag to move just this one, or drag the dark bar on the left to move the whole visit, to another stylist too`)
         : undefined}
-      onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget)} onMouseLeave={() => onLeave && onLeave()}
+      onMouseEnter={(e) => onHover && onHover(appt, e.currentTarget, item.id)} onMouseLeave={() => onLeave && onLeave()}
       style={{
         position: 'absolute', top: (startMin - g0) * pxm + 1.5, height: h - 3,
         // Mentre si trascina il blocco torna a tutta larghezza: deve restare

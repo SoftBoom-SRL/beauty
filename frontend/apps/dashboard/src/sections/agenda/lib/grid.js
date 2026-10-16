@@ -13,13 +13,51 @@ export const slotStep = (settings) => settings?.slot_interval_min || DEFAULT_SLO
  *  cerchiato in agenda, così si vede sempre su cosa si sta intervenendo. */
 export const openApptIdOf = (modal) => (modal?.name === 'apptdetail' ? (modal.props?.appointment?.id ?? null) : null);
 
+/** Larghezza della scheda di anteprima (ApptHoverCard), con 10 px di stacco
+ *  dal blocco e 10 di margine dal bordo della finestra. */
+export const HOVER_CARD_W = 300;
+const HOVER_ROOM = HOVER_CARD_W + 20;
+
 /** Dove si apre l'anteprima di un appuntamento al passaggio del mouse: a
- *  destra del blocco se c'è posto (320 px), altrimenti a sinistra; in alto
- *  alla sua altezza, ma mai così in basso da lasciare sotto meno di `clear`
- *  px. `rect` = getBoundingClientRect() del blocco, `view` = la finestra. */
-export function hoverPlacement(rect, view, clear) {
-  const right = rect.right + 320 < view.innerWidth;
-  return { x: right ? rect.right + 10 : rect.left - 10, y: Math.min(rect.top, view.innerHeight - clear), side: right ? 'right' : 'left' };
+ *  destra se c'è posto, altrimenti a sinistra; in alto alla sua altezza, ma
+ *  mai così in basso da lasciare sotto meno di `clear` px. `rect` =
+ *  getBoundingClientRect() del blocco, `view` = la finestra.
+ *  `avoid` = il riquadro degli appuntamenti collegati a quello indicato (le
+ *  altre parti della visita, la permanenza: avoidRect): la scheda si apre
+ *  fuori da lì. Accanto al blocco copriva proprio l'appuntamento collegato
+ *  che l'agenda stava evidenziando, nella colonna dopo (il titolare, 16/10).
+ *  Se il riquadro non lascia posto né a destra né a sinistra, si torna al
+ *  blocco. */
+export function hoverPlacement(rect, view, clear, avoid = null) {
+  const y = Math.max(8, Math.min(rect.top, view.innerHeight - clear));
+  for (const box of avoid ? [avoid, rect] : [rect]) {
+    if (box.right + HOVER_ROOM < view.innerWidth) return { x: box.right + 10, y, side: 'right' };
+    if (box.left - HOVER_ROOM > 0) return { x: box.left - 10, y, side: 'left' };
+  }
+  return { x: rect.left - 10, y, side: 'left' };
+}
+
+/** Il riquadro che contiene i blocchi degli appuntamenti `ids` dentro `root`
+ *  (`[data-appt]`), tagliato alla parte visibile di `root`: un collegato
+ *  fuori schermo non deve spingere la scheda fuori dalla finestra. null se
+ *  non se ne vede nessuno. */
+export function avoidRect(root, ids) {
+  if (!root?.querySelectorAll || !ids?.size) return null;
+  const clip = root.getBoundingClientRect?.();
+  let box = null;
+  for (const el of root.querySelectorAll('[data-appt]')) {
+    if (!ids.has(Number(el.dataset?.appt))) continue;
+    const r = el.getBoundingClientRect();
+    const left = clip ? Math.max(r.left, clip.left) : r.left;
+    const right = clip ? Math.min(r.right, clip.right) : r.right;
+    const top = clip ? Math.max(r.top, clip.top) : r.top;
+    const bottom = clip ? Math.min(r.bottom, clip.bottom) : r.bottom;
+    if (right <= left || bottom <= top) continue;   // fuori dalla parte visibile
+    box = box
+      ? { left: Math.min(box.left, left), right: Math.max(box.right, right), top: Math.min(box.top, top), bottom: Math.max(box.bottom, bottom) }
+      : { left, right, top, bottom };
+  }
+  return box;
 }
 
 /* Zoom: vedi ZOOM_STEPS in constants.js. */
@@ -49,26 +87,48 @@ export function fitColumns(avail, n, base, gap = 0) {
   return clampWidth(Math.min(1, (avail - gap * (n - 1)) / (n * base)));
 }
 
-/** pack overlapping blocks into side-by-side lanes (week view) — blocks need startMin/endMin */
+/** Corsie della vista settimana, per i blocchi sovrapposti di una
+ *  sotto-colonna (ognuno con startMin/endMin): `_lane`, `_laneCount` e
+ *  `_span`, le corsie che il blocco occupa verso destra.
+ *  - I servizi della stessa visita uno dopo l'altro (le parti attaccate, vedi
+ *    weekParts) stanno nella stessa corsia, segnati `_joinTop`/`_joinBottom`:
+ *    si disegnano attaccati, come una visita sola.
+ *  - Un blocco si allarga sulle corsie alla sua destra che nel suo orario sono
+ *    libere. Prima tutti i blocchi di un gruppo di sovrapposti avevano la
+ *    larghezza di una corsia, anche quello delle 11 che non toccava più
+ *    nessuno: nelle sotto-colonne strette restava una striscia senza nome
+ *    (il titolare, 16/10). */
 export function weekLayout(list) {
-  const sorted = list.map((a) => ({ ...a })).sort((x, y) => x.startMin - y.startMin || y.endMin - x.endMin);
+  const units = [];
+  for (const b of list.map((a) => ({ ...a })).sort((x, y) => x.startMin - y.startMin || y.endMin - x.endMin)) {
+    const u = units.find((v) => v.id === b.id && v.endMin === b.startMin && b.id != null);
+    if (u) { u.members.push(b); u.endMin = b.endMin; } else units.push({ id: b.id, startMin: b.startMin, endMin: b.endMin, members: [b] });
+  }
+  units.sort((x, y) => x.startMin - y.startMin || y.endMin - x.endMin);
   const out = [];
   let cluster = [], clusterEnd = -1;
   const flush = () => {
     const laneEnds = [];
-    cluster.forEach((a) => {
-      let l = laneEnds.findIndex((e) => e <= a.startMin);
-      if (l === -1) { l = laneEnds.length; laneEnds.push(a.endMin); } else laneEnds[l] = a.endMin;
-      a._lane = l;
+    cluster.forEach((u) => {
+      let l = laneEnds.findIndex((e) => e <= u.startMin);
+      if (l === -1) { l = laneEnds.length; laneEnds.push(u.endMin); } else laneEnds[l] = u.endMin;
+      u.lane = l;
     });
     const lc = Math.max(1, laneEnds.length);
-    cluster.forEach((a) => { a._laneCount = lc; out.push(a); });
+    cluster.forEach((u) => {
+      let span = 1;
+      while (u.lane + span < lc && !cluster.some((v) => v.lane === u.lane + span && v.startMin < u.endMin && v.endMin > u.startMin)) span += 1;
+      u.members.forEach((a, k) => {
+        Object.assign(a, { _lane: u.lane, _laneCount: lc, _span: span, _joinTop: k > 0, _joinBottom: k < u.members.length - 1 });
+        out.push(a);
+      });
+    });
     cluster = [];
   };
-  sorted.forEach((a) => {
-    if (cluster.length && a.startMin >= clusterEnd) { flush(); clusterEnd = -1; }
-    cluster.push(a);
-    clusterEnd = Math.max(clusterEnd, a.endMin);
+  units.forEach((u) => {
+    if (cluster.length && u.startMin >= clusterEnd) { flush(); clusterEnd = -1; }
+    cluster.push(u);
+    clusterEnd = Math.max(clusterEnd, u.endMin);
   });
   flush();
   return out;

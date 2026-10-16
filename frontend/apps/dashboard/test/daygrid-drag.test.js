@@ -533,3 +533,19 @@ test('lo scorrimento automatico vuole il puntatore dentro la griglia su tutti e 
   assert.ok(g.scrollEl.scrollLeft > 0);
   g.root().props.onPointerUp(ptr(995, 500));
 });
+
+/* 16/10: la scheda copriva la piega di Maria nella colonna di Giulia, proprio
+ * mentre l'agenda la evidenziava. DayGrid passa il riquadro della visita (e
+ * della permanenza) da evitare, e il servizio indicato. */
+test('al passaggio del mouse: il servizio indicato e il riquadro della visita da non coprire', () => {
+  const g = setup();
+  const el = (appt, r) => ({ dataset: { appt: String(appt) }, getBoundingClientRect: () => r });
+  g.scrollEl.querySelectorAll = (sel) => (sel === '[data-appt]'
+    ? [el(41, rect(68, 400, 460, 81)), el(41, rect(536, 481, 460, 40)), el(42, rect(68, 800, 460, 40))]
+    : []);
+  const b = g.block(411);
+  b.type(b.props).props.onMouseEnter({ currentTarget: { getBoundingClientRect: () => rect(68, 400, 460, 81) } });
+  const [a, , avoid] = g.cb.onHover.calls.at(-1);
+  assert.deepEqual(a.focus_item_ids, [411]);
+  assert.deepEqual(avoid, { left: 68, right: 996, top: 400, bottom: 521 }, 'manicure e piega, non Sara');
+});

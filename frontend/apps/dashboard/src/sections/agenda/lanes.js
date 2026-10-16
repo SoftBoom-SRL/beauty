@@ -124,36 +124,3 @@ export function visitSpines(placed) {
   }
   return [...byAppt.values()];
 }
-
-/** Bande di un blocco settimana, una per servizio della visita.
- *
- *  In vista settimana una visita è UN riquadro: due o tre servizi dentro non si
- *  vedevano, e un contatore da solo non basta a farli leggere. Qui si ricavano
- *  le fasce in percentuale sull'altezza del blocco, così il riquadro si può
- *  dividere come nella vista giorno.
- *
- *  Ritorna [] quando i servizi sono meno di due: non c'è niente da dividere.
- *  Gli aggiuntivi non hanno una fascia: col minimo di un minuto la nail art
- *  diventerebbe una riga del suo colore in fondo alla manicure.
- */
-export function serviceBands(appt) {
-  const items = timedItems(appt?.items);
-  if (items.length < 2) return [];
-  const spans = items.map((it) => Math.max(1, (it.duration_min || 0) + (it.soak_min || 0)));
-  const total = spans.reduce((s, x) => s + x, 0);
-  const bands = [];
-  let acc = 0;
-  items.forEach((it, i) => {
-    const from = (acc / total) * 100;
-    acc += spans[i];
-    bands.push({
-      name: it.service_name || '',
-      service_id: it.service_id ?? null,   // per tingere la fascia col colore della categoria
-      opId: it.operator_id ?? null,
-      fromPct: from,
-      toPct: (acc / total) * 100,
-      minutes: spans[i],
-    });
-  });
-  return bands;
-}

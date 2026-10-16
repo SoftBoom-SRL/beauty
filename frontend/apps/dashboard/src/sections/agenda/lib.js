@@ -15,7 +15,7 @@ export {
 
 export {
   aStartMin, aDur, aEndMin, svcLabel, firstName, lastName, opDisplay, initialsOf, fmtMoney,
-  itemBlocks, apptRevenue, opSegments,
+  itemBlocks, apptRevenue,
 } from './lib/appt.js';
 
 export {
@@ -24,7 +24,7 @@ export {
 } from './lib/calendar.js';
 
 export {
-  clampZoom, zoomStep, clampWidth, widthStep, fitColumns, slotStep, openApptIdOf, hoverPlacement, weekLayout, GRID_LINE_STYLE, GRID_DAY, gridRange, dayGridRange,
+  clampZoom, zoomStep, clampWidth, widthStep, fitColumns, slotStep, openApptIdOf, hoverPlacement, avoidRect, HOVER_CARD_W, weekLayout, GRID_LINE_STYLE, GRID_DAY, gridRange, dayGridRange,
   weekGridRange, firstScrollMin, openingFor, gridMarks, visibleMarks, closedIntervals,
 } from './lib/grid.js';
 
@@ -55,4 +55,4 @@ export { isoAtMin } from '@youty/shared';
 
 // Geometria delle corsie e delle spine: sta in lanes.js, senza import, per
 // poterla provare da sola (vedi apps/dashboard/test/lanes.test.js).
-export { laneLayout, laneCss, visitSpines, serviceBands, COL_GUTTER } from './lanes.js';
+export { laneLayout, laneCss, visitSpines, COL_GUTTER } from './lanes.js';
