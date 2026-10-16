@@ -60,7 +60,9 @@ trascinamento comune a giorno e settimana), `grid/` e `parts/` (pezzi della grig
 sta su una riga con i gradini di `.dk-agbar` in `styles/agenda.css`; il testo dei
 blocchi della settimana segue la loro larghezza vera con le container query di
 `.dk-wblock`, e le sotto-colonne si allargano col lavoro del giorno, `subcolWeight`
-in `lib/week.js`), `month/`,
+in `lib/week.js`; le preferenze della rotella, `parts/ViewPrefs.jsx`, tolgono chi
+non è in turno e i giorni di chiusura con `trimWeek`: i giorni nascosti restano
+nell'elenco con `hidden`, così gli indici del trascinamento non cambiano), `month/`,
 `modals/` (dettaglio appuntamento con `detail/`, nuova prenotazione con
 `newappt/`, `rules.js` con le regole pure dei pannelli).
 

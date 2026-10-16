@@ -29,7 +29,7 @@ import { retryForced } from './lib/retry.js';
 import { splitText, weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
-  weekDays, fixedColumns, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
+  weekDays, fixedColumns, trimWeek, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
 } from './lib/week.js';
 
 import { useWeekData } from './hooks/useWeekData.js';
@@ -46,10 +46,12 @@ import { useGridDrag } from './hooks/useGridDrag.js';
 const SUBCOL_W = 44;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 112;
 
-/** `dynamicCols`, `verticalText`: le preferenze di visualizzazione
- *  (ViewPrefs): sotto-colonne larghe col lavoro del giorno o tutte uguali,
- *  scritte nei blocchi anche per lungo o solo orizzontali. */
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, hiddenOps = [], dynamicCols = true, verticalText = true }) {
+/** `dynamicCols`, `verticalText`, `hideOffShift`, `hideClosed`: le
+ *  preferenze di visualizzazione (ViewPrefs): sotto-colonne larghe col lavoro
+ *  del giorno o tutte uguali, scritte nei blocchi anche per lungo o solo
+ *  orizzontali, senza le colonne di chi non è in turno, senza i giorni di
+ *  chiusura (trimWeek). */
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, hiddenOps = [], dynamicCols = true, verticalText = true, hideOffShift = false, hideClosed = false }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = openApptIdOf(modal);
@@ -182,15 +184,29 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // l'appuntamento in POST già dove è stato lasciato (vedi weekDays)
   // (le operatrici spente nel filtro «Team» non hanno sotto-colonna: `hiddenOps`)
   const shown = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'), hiddenOps);
-  const dayData = dynamicCols ? shown : fixedColumns(shown);
+  // l'ombra dell'appuntamento aperto, servizio per servizio (weekGhostSpans):
+  // le sue operatrici tengono la colonna anche a riposo
+  const ghostSpans = weekGhostSpans(ghost);
+  const ghostOps = [...new Set(ghostSpans.map((g) => g.opId))];
+  /* Chi non è in turno e i giorni di chiusura, nascosti se lo si è scelto
+   * (trimWeek). I giorni nascosti restano in `dayData` con `hidden`: gli
+   * indici (trascinamento, data-daycol, nome del giorno) restano quelli dei
+   * sette giorni, e semplicemente non si disegnano. */
+  const dayData = trimWeek(dynamicCols ? shown : fixedColumns(shown), {
+    hideResting: hideOffShift, hideClosed,
+    closedByHours: (date) => hoursSet && !openingFor(settings, date).length,
+    keep: (date) => (ghost && date === ghostDate ? ghostOps : []),
+  });
+  const visibleDays = dayData.filter((d) => !d.hidden);
+  const lastVisible = dayData.reduce((last, d, i) => (d.hidden ? last : i), -1);
   // larghezza minima di un giorno a larghezza 1, e con lo zoom di lato
   const dayBase = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
   const dayWidth = (d) => dayBase(d) * (widthZoom || 1);
-  /* «Tutte in vista»: i sette giorni nello schermo, senza scorrere di lato
-   * (sul giorno più largo, così ci stanno tutti). */
+  /* «Tutte in vista»: i giorni disegnati nello schermo, senza scorrere di
+   * lato (sul giorno più largo, così ci stanno tutti). */
   function fitWidth() {
     const el = scrollRef.current;
-    if (el && onWidthZoom) onWidthZoom(fitColumns((el.clientWidth || 0) - WEEK_HOURS_W, dayData.length, Math.max(...dayData.map(dayBase))));
+    if (el && onWidthZoom) onWidthZoom(fitColumns((el.clientWidth || 0) - WEEK_HOURS_W, visibleDays.length, Math.max(...visibleDays.map(dayBase))));
   }
   if (widthApi) widthApi.current = { fit: fitWidth };
 
@@ -406,9 +422,6 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     openAt(dayIso, minutesFrom(e.clientY, e.currentTarget), targetFromX(e.clientX).opId);
   }
 
-  // l'ombra dell'appuntamento aperto, servizio per servizio (weekGhostSpans)
-  const ghostSpans = weekGhostSpans(ghost);
-
   const dg = drag.current;
   const dragging = !!(dg && dg.moved);
   // i blocchi in trascinamento, già nel giorno/operatrice/orario di arrivo:
@@ -452,14 +465,14 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
       {/* sticky header: day + per-operator sub-columns */}
       <div ref={headRef} style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 9, background: 'var(--paper)', borderBottom: '1px solid var(--hair)', width: 'max-content', minWidth: '100%' }}>
         <div style={{ width: WEEK_HOURS_W, flexShrink: 0, position: 'sticky', left: 0, background: 'var(--paper)', zIndex: 10 }} />
-        {dayData.map((d, i) => (
+        {dayData.map((d, i) => (d.hidden ? null : (
           <WeekDayHeader
-            key={i} day={d} index={i} width={dayWidth(d)} last={i === dayData.length - 1}
-            grip={onWidthZoom ? gripProps(dayData.slice(0, i + 1).reduce((s, x) => s + dayBase(x), 0), 0, fitWidth) : null} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
+            key={i} day={d} index={i} width={dayWidth(d)} last={i === lastVisible}
+            grip={onWidthZoom ? gripProps(dayData.slice(0, i + 1).reduce((s, x) => s + (x.hidden ? 0 : dayBase(x)), 0), 0, fitWidth) : null} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
             showRevenue={showRevenue} t={t} lang={lang} onOpenDay={onOpenDay} colorOf={colorOf} opFirsts={opFirsts} setOpTip={setOpTip}
             onMoney={showRevenue ? openMoney : null} onMoneyLeave={closeMoney}
           />
-        ))}
+        )))}
       </div>
       {/* grid — `data-g0` e `data-work-*`: da dove parte la griglia e la
           giornata di lavoro, per «Adatta» (useAgendaZoom). zIndex 0: sotto
@@ -468,6 +481,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
         {/* colonna delle ore: etichette in grassetto centrate sulla riga, ":30" in piccolo, tacca allineata */}
         <HourGutter g0={G0} g1={G1} pxm={pxm} variant="week" />
         {dayData.map((d, i) => {
+          if (d.hidden) return null;
           const isToday = d.date === today;
           const dayW = dayWidth(d);
           const isTargetDay = dragging && dg.dayIdx === i;

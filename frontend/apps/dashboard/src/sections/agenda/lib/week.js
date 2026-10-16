@@ -196,6 +196,41 @@ export function subcolWeight(blocks, resting = false) {
  *  larghe uguali ogni giorno, qualunque sia il lavoro. */
 export const fixedColumns = (days) => days.map((d) => ({ ...d, dayOps: d.dayOps.map((o) => ({ ...o, weight: 1 })) }));
 
+/** Chi quel giorno non lavora: un turno senza orari (riposo, ferie…). */
+const offShift = (o) => !!o.shift && !o.shift.windows.length;
+
+/** Le preferenze «Chi non è in turno» e «Giorni di chiusura» (ViewPrefs)
+ *  sui giorni di weekDays. Con nove operatrici e tre a riposo, le colonne
+ *  spente e la domenica chiusa si prendevano lo spazio di chi lavora (il
+ *  titolare, 16/10).
+ *  - `hideResting`: via le sotto-colonne di chi quel giorno non lavora e
+ *    non ha niente in agenda (con i turni, come «Solo chi lavora oggi» in
+ *    vista giorno). Restano in `offOps`: l'avviso dello spostamento le
+ *    conosce ancora, la testata le conta.
+ *  - `hideClosed`: un giorno chiuso (`closedByHours(date)`: gli orari del
+ *    centro non hanno fasce; o, con i turni, nessuna in turno) e senza
+ *    appuntamenti è `hidden`. Non si disegna ma resta al suo posto
+ *    nell'elenco: indici del trascinamento, `data-daycol` e nomi dei giorni
+ *    restano quelli dei sette giorni. Se fossero chiusi tutti, si vedono
+ *    tutti: una settimana vuota non direbbe niente.
+ *  `keep(date)` = gli id delle operatrici che quel giorno restano comunque:
+ *  quelle dell'ombra dell'appuntamento aperto, che deve avere dove cadere.
+ *  Ogni giorno porta anche `closedHours` e `nobody` per la testata. */
+export function trimWeek(days, { hideResting = false, hideClosed = false, closedByHours = () => false, keep = () => [] } = {}) {
+  const out = days.map((d) => {
+    const kept = new Set(keep(d.date));
+    const nobody = !!d.usesShifts && d.dayOps.length > 0 && d.dayOps.every(offShift);
+    const closedHours = !!closedByHours(d.date);
+    const hidden = hideClosed && (closedHours || nobody) && !d.list.length && !kept.size;
+    if (!hideResting || !d.usesShifts) return { ...d, closedHours, nobody, hidden, offOps: [] };
+    const busy = new Set(d.list.map(weekColOf));
+    const offOps = d.dayOps.filter((o) => offShift(o) && !busy.has(o.id) && !kept.has(o.id));
+    const dayOps = offOps.length ? d.dayOps.filter((o) => !offOps.includes(o)) : d.dayOps;
+    return { ...d, dayOps, closedHours, nobody, hidden, offOps };
+  });
+  return out.every((d) => d.hidden) ? out.map((d) => ({ ...d, hidden: false })) : out;
+}
+
 /* Aggancio al vicino, come in vista giorno: con trattamenti che non cadono
  * sulle fasce (venti minuti, venticinque) lo scatto alla griglia lasciava
  * sempre un ritaglio invendibile fra un appuntamento e l'altro. Qui i vicini
@@ -274,8 +309,10 @@ export function shiftText(shift, t) {
  *  vista giorno): l'avviso c'è perché non lo si faccia senza accorgersene. */
 export function weekShiftWarning(blocks, day, t) {
   if (!day?.usesShifts) return null;
+  // anche chi a riposo non ha la colonna (trimWeek): il suo turno si sa
+  const ops = day.offOps?.length ? day.dayOps.concat(day.offOps) : day.dayOps;
   for (const b of blocks || []) {
-    const shift = day.dayOps.find((o) => o.id === weekColOf(b))?.shift;
+    const shift = ops.find((o) => o.id === weekColOf(b))?.shift;
     if (!shift) continue;
     if (!shift.windows.length) return offLabel(shift, t);
     const inside = shift.windows.some(([a, z]) => hmToMin(a) <= b.startMin && b.endMin <= hmToMin(z));

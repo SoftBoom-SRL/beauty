@@ -577,26 +577,37 @@ test('larghezza delle colonne: la barra comanda la vista a video, una per vista,
 });
 
 /* 16/10: le preferenze di visualizzazione della settimana (ViewPrefs):
- * colonne dinamiche o fisse, scritte anche verticali o solo orizzontali. */
+ * colonne dinamiche o fisse, scritte anche verticali o solo orizzontali, chi
+ * non è in turno (lo stesso interruttore di «Solo chi lavora oggi» del
+ * filtro Team in vista giorno), i giorni di chiusura. */
 test('le preferenze di visualizzazione: solo in settimana, arrivano alla griglia e restano sulla postazione', async () => {
   const storage = {};
   const g = setup({ storage });
   await ready(g);
   const prefs = () => find(g.m.tree, (el) => el.type?.name === 'ViewPrefs');
-  assert.equal(prefs(), null, 'in giornata non c\'è: le colonne e le scritte sono della settimana');
+  const team = () => find(g.m.tree, (el) => el.type?.name === 'TeamFilter');
+  assert.equal(prefs(), null, 'in giornata non c\'è: la barra andava a capo; chi non è in turno lì è nel filtro Team');
+  // «Solo chi lavora oggi» del giorno è la stessa preferenza della settimana
+  assert.equal(team().props.onlyWorking, true);
+  team().props.setOnlyWorking(false);
+  g.render();
+  assert.equal(storage['dk-agenda-only-working'], '0');
   g.button('Settimana').props.onClick();
   g.render();
-  assert.deepEqual([prefs().props.dynamicCols, prefs().props.verticalText], [true, true], 'di partenza come prima');
-  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText], [true, true]);
+  assert.deepEqual([prefs().props.dynamicCols, prefs().props.verticalText, prefs().props.hideOffShift, prefs().props.hideClosed], [true, true, false, false], 'di partenza come prima, e chi non è in turno come nel giorno');
+  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText, g.wv().props.hideOffShift, g.wv().props.hideClosed], [true, true, false, false]);
   prefs().props.setDynamicCols(false);
   prefs().props.setVerticalText(false);
+  prefs().props.setHideOffShift(true);
+  prefs().props.setHideClosed(true);
   g.render();
-  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText], [false, false]);
-  assert.deepEqual([storage['dk-agenda-week-dynamic-cols'], storage['dk-agenda-week-vertical-text']], ['0', '0']);
+  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText, g.wv().props.hideOffShift, g.wv().props.hideClosed], [false, false, true, true]);
+  assert.deepEqual([storage['dk-agenda-week-dynamic-cols'], storage['dk-agenda-week-vertical-text'], storage['dk-agenda-only-working'], storage['dk-agenda-week-hide-closed']], ['0', '0', '1', '1']);
   g.m.unmount();
   const again = setup({ storage });                  // la pagina ricaricata
   await ready(again);
+  assert.equal(find(again.m.tree, (el) => el.type?.name === 'TeamFilter').props.onlyWorking, true, 'scelto in settimana, vale anche nel giorno');
   again.button('Settimana').props.onClick();
   again.render();
-  assert.deepEqual([again.wv().props.dynamicCols, again.wv().props.verticalText], [false, false]);
+  assert.deepEqual([again.wv().props.dynamicCols, again.wv().props.verticalText, again.wv().props.hideOffShift, again.wv().props.hideClosed], [false, false, true, true]);
 });

@@ -1,9 +1,13 @@
 // ViewPrefs — le preferenze di visualizzazione della settimana, in un
-// pannellino che si apre dalla rotella nella barra: la larghezza delle
-// colonne delle operatrici (dinamica, col lavoro del giorno, o fissa) e le
-// scritte nei blocchi (anche per lungo, o solo orizzontali). Valgono per la
+// pannellino che si apre dalla rotella nella barra: chi non è in turno
+// (mostrata o nascosta), i giorni di chiusura, la larghezza delle colonne
+// delle operatrici (dinamica, col lavoro del giorno, o fissa) e le scritte
+// nei blocchi (anche per lungo, o solo orizzontali). Valgono per la
 // postazione, come lo zoom: chi lavora su un monitor grande e chi su un
-// portatile le vuole diverse (il titolare, 16/10).
+// portatile le vuole diverse (il titolare, 16/10). In vista giorno la
+// rotella non c'è: la barra, con la striscia dei giorni, andava a capo fino
+// a 1600 px; chi non è in turno lì si sceglie dal filtro Team («Solo chi
+// lavora oggi»), che è la stessa preferenza.
 import { useCallback, useRef, useState } from 'react';
 import { Icon } from '@youty/shared';
 import { useClickAway } from '../../../hooks/useClickAway.js';
@@ -28,9 +32,12 @@ function Choice({ label, value, onChange, options, hint }) {
   );
 }
 
-/** `dynamicCols`/`setDynamicCols`, `verticalText`/`setVerticalText`: le due
- *  preferenze (useStoredFlag nella sezione). */
-export default function ViewPrefs({ dynamicCols, setDynamicCols, verticalText, setVerticalText, t }) {
+const SHOW_HIDE = (t) => [{ value: false, label: t('Mostra', 'Show') }, { value: true, label: t('Nascondi', 'Hide') }];
+
+/** Le preferenze (useStoredFlag nella sezione), ognuna col suo setter:
+ *  `hideOffShift` (la stessa di «Solo chi lavora oggi» nel filtro Team della
+ *  vista giorno), `hideClosed`, `dynamicCols`, `verticalText`. */
+export default function ViewPrefs({ hideOffShift, setHideOffShift, hideClosed, setHideClosed, dynamicCols, setDynamicCols, verticalText, setVerticalText, t }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const close = useCallback(() => setOpen(false), []);
@@ -47,6 +54,20 @@ export default function ViewPrefs({ dynamicCols, setDynamicCols, verticalText, s
           <div className="dk-card dk-widthpop" role="dialog" aria-label={label} style={{ width: 300 }}>
             <div style={{ fontWeight: 700, fontSize: 13.5 }}>{label}</div>
             <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>{t('Vista settimana · su questa postazione', 'Week view · on this workstation')}</div>
+            <Choice
+              label={t('Chi non è in turno', 'Who is not on shift')}
+              value={hideOffShift} onChange={setHideOffShift} options={SHOW_HIDE(t)}
+              hint={hideOffShift
+                ? t('Chi quel giorno è a riposo o in ferie e non ha appuntamenti non ha la colonna: più spazio a chi lavora. Vale con i turni impostati in Staff, e anche in vista giorno («Solo chi lavora oggi»).', 'Whoever is off or on holiday that day with no appointments gets no column: more room for those working. Applies with shifts set in Staff, and in the day view too («Only who works today»).')
+                : t('Anche chi è a riposo o in ferie ha la sua colonna, spenta.', 'Stylists who are off or on holiday keep their column, dimmed.')}
+            />
+            <Choice
+              label={t('Giorni di chiusura', 'Closed days')}
+              value={hideClosed} onChange={setHideClosed} options={SHOW_HIDE(t)}
+              hint={hideClosed
+                ? t('I giorni in cui il centro è chiuso, o nessuna è in turno, spariscono se non hanno appuntamenti.', 'Days when the salon is closed, or nobody is on shift, disappear if they have no appointments.')
+                : t('Tutti e sette i giorni, anche quelli di chiusura.', 'All seven days, closed ones too.')}
+            />
             <Choice
               label={t('Larghezza delle colonne', 'Column width')}
               value={dynamicCols} onChange={setDynamicCols}

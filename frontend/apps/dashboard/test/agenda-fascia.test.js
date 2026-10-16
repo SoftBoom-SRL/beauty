@@ -311,10 +311,11 @@ test('vista settimana: ogni operatrice col suo turno, chi non lavora col motivo'
   assert.deepEqual(heads.slice(0, 2).map((h) => [h.props.title, h.props['data-resting'], h.props.style.flex]), [
     ['Anna Neri · 09:00–13:00 · 14:00–19:00', undefined, '1 1 0'], ['Bea Blu · Riposo', '', '0.6 1 0'],
   ]);
-  // la domenica non lavora nessuna: la testata non dice «Libero»
+  // la domenica il centro è chiuso: la testata non dice «Libero» (né
+  // «Nessuna in turno», che vale per un giorno aperto: vedi agenda-preferenze)
   const dayHead = (i) => find(m.tree, (el) => el.type?.name === 'WeekDayHeader' && el.props.index === i);
   const headText = (i) => textOf(dayHead(i).type(dayHead(i).props));
-  assert.ok(headText(6).includes('Nessuna in turno'));
+  assert.ok(headText(6).includes('Chiuso'));
   assert.ok(headText(0).includes('Libero'));
 });
 

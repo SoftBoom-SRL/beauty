@@ -130,8 +130,11 @@ export default function AgendaSection() {
   const { vis, toggleVis, setAll, only } = useOperatorVisibility(operators);
   const [onlyWorking, setOnlyWorking] = useStoredFlag('dk-agenda-only-working');
   /* Preferenze di visualizzazione della settimana (ViewPrefs), sulla
-   * postazione: sotto-colonne larghe col lavoro del giorno o tutte uguali,
-   * scritte anche per lungo o solo orizzontali. */
+   * postazione: chi non è in turno (`onlyWorking`, lo stesso interruttore di
+   * «Solo chi lavora oggi» in vista giorno), i giorni di chiusura,
+   * sotto-colonne larghe col lavoro del giorno o tutte uguali, scritte anche
+   * per lungo o solo orizzontali. */
+  const [hideClosedDays, setHideClosedDays] = useStoredFlag('dk-agenda-week-hide-closed', false);
   const [dynamicCols, setDynamicCols] = useStoredFlag('dk-agenda-week-dynamic-cols');
   const [verticalText, setVerticalText] = useStoredFlag('dk-agenda-week-vertical-text');
 
@@ -314,7 +317,8 @@ export default function AgendaSection() {
             )}
             {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
             {calView === 'week' && (
-              <ViewPrefs dynamicCols={dynamicCols} setDynamicCols={setDynamicCols} verticalText={verticalText} setVerticalText={setVerticalText} t={t} />
+              <ViewPrefs hideOffShift={onlyWorking} setHideOffShift={setOnlyWorking} hideClosed={hideClosedDays} setHideClosed={setHideClosedDays}
+                dynamicCols={dynamicCols} setDynamicCols={setDynamicCols} verticalText={verticalText} setVerticalText={setVerticalText} t={t} />
             )}
             {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
                 stirare, e il comando sparisce invece di restare lì a non fare
@@ -332,7 +336,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} widthZoom={width.week} onWidthZoom={setWeekWidth} widthApi={widthApi} hiddenOps={hiddenOps} dynamicCols={dynamicCols} verticalText={verticalText} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} widthZoom={width.week} onWidthZoom={setWeekWidth} widthApi={widthApi} hiddenOps={hiddenOps} dynamicCols={dynamicCols} verticalText={verticalText} hideOffShift={onlyWorking} hideClosed={hideClosedDays} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />

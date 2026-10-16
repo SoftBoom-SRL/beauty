@@ -2,7 +2,7 @@
 // (il clic apre il giorno), appuntamenti e incasso, i pallini degli stati e
 // le testate delle sotto-colonne delle operatrici, con la stessa tinta dei
 // blocchi. Senza hook: nei test fa parte di WeekView.
-import { parseISO, statusMeta } from '@youty/shared';
+import { Icon, parseISO, statusMeta } from '@youty/shared';
 import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, initialsOf, opColumnTint, opDisplay } from '../lib.js';
 import { shiftText } from '../lib/week.js';
 
@@ -17,8 +17,14 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
   const rev = apptRevenue(day.visits ?? day.list);   // il no-show non entra, come nel mese
   const num = parseISO(day.date).getDate();
   const statuses = Object.entries(day.by_status || {});
-  // nessuna in turno (con i turni): «Libero» faceva pensare a un giorno da prenotare
-  const nobody = !!day.usesShifts && day.dayOps.length > 0 && day.dayOps.every((o) => o.shift && !o.shift.windows.length);
+  // nessuna in turno (con i turni): «Libero» faceva pensare a un giorno da
+  // prenotare. Lo calcola trimWeek prima di togliere le colonne di chi è a riposo.
+  const nobody = day.nobody ?? (!!day.usesShifts && day.dayOps.length > 0 && day.dayOps.every((o) => o.shift && !o.shift.windows.length));
+  // le colonne nascoste di chi non è in turno («Chi non è in turno»:
+  // Nascondi). Non in un giorno chiuso o senza nessuna in turno: lì lo dice
+  // già la testata, e «9» sopra la domenica copriva la data.
+  const off = day.closedHours || nobody ? [] : day.offOps || [];
+  const offTip = off.length ? `${t('Non in turno', 'Not on shift')}: ${off.map((o) => `${o.first_name} (${shiftText(o.shift, t)})`).join(', ')}` : '';
   return (
     // `contain: inline-size`: i nomi delle sotto-colonne (su una riga sola) non
     // allargano il giorno; con i giorni stretti la testata restava più larga
@@ -37,7 +43,7 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
         {/* conteggio e pallini degli stati sulla stessa riga: prima erano due righe */}
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap', minHeight: 13 }}>
           <span className="t-sm tabnum" style={{ color: 'var(--muted-2)', fontSize: 10 }}>
-            {day.count ? `${day.count}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}` : nobody ? t('Nessuna in turno', 'Nobody on shift') : t('Libero', 'Free')}
+            {day.count ? `${day.count}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}` : day.closedHours ? t('Chiuso', 'Closed') : nobody ? t('Nessuna in turno', 'Nobody on shift') : t('Libero', 'Free')}
           </span>
           {statuses.map(([st, n]) => {
             const sm = statusMeta(st, t);
@@ -50,6 +56,16 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
           })}
         </div>
       </button>
+      {/* quante colonne mancano perché a riposo: senza, una collega sparita
+          sembrava un errore; passandoci sopra si legge chi e perché */}
+      {off.length > 0 && (
+        <span data-off-ops={off.length} aria-label={offTip}
+          onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: offTip, x: r.left + r.width / 2, y: r.bottom + 6 }); }}
+          onMouseLeave={() => setOpTip(null)}
+          style={{ position: 'absolute', top: 5, right: 6, display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 10, fontWeight: 700, color: 'var(--muted-2)', cursor: 'default' }}>
+          <Icon name="moon" size={11} color="var(--muted-2)" />{off.length}
+        </span>
+      )}
       {/* Testate delle sotto-colonne: striscia colorata in alto, stessa tinta
           dei blocchi, larghe come la loro colonna (`weight`). Stretta, la
           testata dice le iniziali, e sotto i 16 px solo il colore (CSS
