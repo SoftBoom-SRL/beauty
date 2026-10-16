@@ -74,6 +74,39 @@ class ContactPushTests(TestCase):
         self.assertEqual(client.yourang_contact_id, "c-9")
         self.assertEqual(report.errors, [])
 
+    def test_a_number_that_cannot_exist_is_not_pushed(self):
+        """Yourang rifiuta con un 400 i numeri che libphonenumber non riconosce
+        (create e by-phone): a ogni sync il riquadro si riempiva di errori HTTP.
+        Non si chiama Yourang, e l'errore dice quale scheda correggere."""
+        from apps.clients.models import Client
+        from apps.integrations.sync import summarize_errors, sync_clients
+
+        Client.objects.create(salon=self.salon, first_name="Anna", last_name="Demo", phone="+399876543211")
+        Client.objects.create(salon=self.salon, first_name="Bea", phone="+393331234567")
+        resp = Mock()
+        resp.json.return_value = {"ok": True, "data": {"id": "c-bea"}}
+        req = Mock(return_value=resp)
+        with patch("apps.integrations.client.YourangClient.list_contacts", return_value=[]), \
+             patch("apps.integrations.client.YourangClient._request", req):
+            report = sync_clients(self.conn)
+
+        self.assertEqual(req.call_count, 1)
+        self.assertEqual(req.call_args.kwargs["json"]["phone_number"], "+393331234567")
+        self.assertEqual(report.pushed, 1)
+        self.assertEqual(len(report.errors), 1)
+        self.assertIn("1 clienti con un numero di telefono inesistente (Anna Demo)", report.errors[0])
+        self.assertNotIn("http", summarize_errors(report.errors))
+
+    def test_a_refused_push_reports_the_yourang_detail_not_the_url(self):
+        import httpx
+
+        response = Mock(status_code=403)
+        response.json.return_value = {"detail": "Missing scope contacts:write"}
+        refused = httpx.HTTPStatusError("Client error '403 Forbidden' for url 'https://…'",
+                                        request=Mock(), response=response)
+        report, _client = self._push(Mock(side_effect=refused))
+        self.assertEqual(report.errors, ["push +393331234567: Yourang ha risposto 403: Missing scope contacts:write"])
+
     def test_two_spellings_of_the_same_phone_do_not_break_the_sync(self):
         """Due contatti remoti che normalizzano sullo stesso numero ricevono lo
         stesso contact-id: la seconda riga violava uniq_client_salon_yourang_contact
