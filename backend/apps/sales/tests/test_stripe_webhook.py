@@ -147,8 +147,13 @@ class DuplicateDepositPaymentTests(TestCase):
     def test_a_resend_closes_the_previous_checkout_session(self):
         from unittest.mock import Mock
 
+        from apps.agenda.models import Appointment
+        from apps.core.models import SalonSettings
+
         from .. import stripe_service
 
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
+        self.appointment = Appointment.objects.select_related("salon", "client").get(pk=self.appointment.pk)
         stripe = Mock()
         stripe.checkout.Session.create.side_effect = [
             {"id": "cs_1", "url": "https://checkout.test/1"},
@@ -159,7 +164,7 @@ class DuplicateDepositPaymentTests(TestCase):
             self.appointment.refresh_from_db()
             self.assertEqual(self.appointment.deposit_checkout_session_id, "cs_1")
             stripe_service.ensure_deposit_link(self.appointment, resend=True)
-        stripe.checkout.Session.expire.assert_called_once_with("cs_1")
+        stripe.checkout.Session.expire.assert_called_once_with("cs_1", stripe_account="acct_salon")
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.deposit_checkout_session_id, "cs_2")
 
@@ -528,28 +533,113 @@ class SavedCardAccountTests(StripeTestBase):
     def test_the_setup_intent_carries_the_salon_and_the_signed_account(self):
         from .. import stripe_service
 
+        self.connect_stripe()
         metadata = self._setup_intent_metadata()
         self.assertEqual(metadata.get("client_id"), str(self.client_obj.id))
         self.assertEqual(metadata.get("salon_id"), str(self.salon.id))
-        self.assertTrue(stripe_service.account_token_matches(self.salon, metadata.get("acct", ""), ""))
+        self.assertTrue(stripe_service.account_token_matches(self.salon, metadata.get("acct", ""), "acct_salon"))
 
-    def test_a_card_saved_while_the_owner_connects_stripe_is_kept(self):
-        from apps.core.models import SalonSettings
-
-        metadata = self._setup_intent_metadata()  # sull'account della piattaforma
-        # Il titolare collega il suo account prima che arrivi l'evento.
-        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": "acct_nuovo"})
-        self.assertEqual(self._card_saved(metadata).status_code, 200)
+    def test_a_card_saved_while_the_owner_changes_account_is_kept(self):
+        self.connect_stripe("acct_vecchio")
+        metadata = self._setup_intent_metadata()  # sull'account di prima
+        # Il titolare passa a un altro account prima che arrivi l'evento.
+        self.connect_stripe("acct_nuovo")
+        self.assertEqual(self._card_saved(metadata, account="acct_vecchio").status_code, 200)
         self.client_obj.refresh_from_db()
         self.assertEqual(self.client_obj.stripe_payment_method_id, "pm_1")
-        # La carta vale sull'account dove è stata salvata, come ogni carta
-        # salvata prima del collegamento.
-        self.assertEqual(self.client_obj.stripe_account_id, "")
+        # La carta vale sull'account dove è stata salvata.
+        self.assertEqual(self.client_obj.stripe_account_id, "acct_vecchio")
         self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="client.card_saved").exists())
 
     def test_a_foreign_account_stays_out_even_with_a_copied_signature(self):
+        self.connect_stripe()
         metadata = self._setup_intent_metadata()
         self.assertEqual(self._card_saved(metadata, account="acct_estraneo").status_code, 200)
         self.client_obj.refresh_from_db()
         self.assertEqual(self.client_obj.stripe_payment_method_id, "")
         self.assertFalse(ActivityLog.objects.filter(type="client.card_saved").exists())
+
+
+@override_settings(
+    STRIPE_SECRET_KEY="sk_test_x", STRIPE_WEBHOOK_SECRET="whsec_platform", STRIPE_CONNECT_CLIENT_ID="ca_ours",
+)
+class AccountRevokedTests(StripeTestBase):
+    """Revoca di Stripe: dal pulsante «Scollega» o dalla dashboard Stripe del titolare."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.core.models import SalonSettings
+
+        self.connect_stripe()
+        SalonSettings.objects.filter(salon=self.salon).update(deposit_hold_minutes=60)
+        self.salon.refresh_from_db()
+        due = timezone.now() + dt.timedelta(minutes=40)
+        from apps.agenda.models import Appointment
+
+        Appointment.objects.filter(pk=self.appointment.pk).update(
+            deposit_due_at=due, deposit_hold_until=due,
+            deposit_payment_link="https://checkout.stripe.com/c/pay/cs_open",
+            deposit_checkout_session_id="cs_open", deposit_stripe_account="acct_salon",
+        )
+
+    def _revoked(self, *, application="ca_ours", account="acct_salon"):
+        return self.post_event(event_payload("account.application.deauthorized", {
+            "id": application, "object": "application", "name": "Youty",
+        }, account=account))
+
+    def _account(self):
+        from apps.core.models import SalonSettings
+
+        return SalonSettings.objects.get(salon=self.salon).stripe_account_id
+
+    def test_a_revocation_from_the_stripe_dashboard_disconnects_the_salon(self):
+        from apps.agenda.services.deposit_holds import process_deposit_holds
+
+        from .. import stripe_service
+
+        self.assertEqual(self._revoked().status_code, 200)
+        self.assertEqual(self._account(), "")
+        self.salon.refresh_from_db()
+        self.assertIsNone(self.salon.settings.stripe_connected_at)
+        self.assertFalse(stripe_service.payments_enabled(self.salon))
+        # La caparra resta da pagare, ma senza scadenza: un pagamento sul conto
+        # del titolare non ci arriverebbe più, e lo slot si libererebbe da solo.
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.deposit_status, "required")
+        self.assertIsNone(self.appointment.deposit_due_at)
+        result = process_deposit_holds(self.salon, now=timezone.now() + dt.timedelta(hours=2))
+        self.assertEqual(result["released"], 0)
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, "confirmed")
+        log = ActivityLog.objects.get(salon=self.salon, type="settings.stripe_disconnected")
+        self.assertEqual(log.payload["source"], "stripe")
+        self.assertEqual(log.payload["deposits_suspended"], 1)
+
+    def test_another_application_or_an_unknown_account_changes_nothing(self):
+        self.assertEqual(self._revoked(application="ca_altra").status_code, 200)
+        self.assertEqual(self._revoked(account="acct_ignoto").status_code, 200)
+        self.assertEqual(self._account(), "acct_salon")
+        self.appointment.refresh_from_db()
+        self.assertIsNotNone(self.appointment.deposit_due_at)
+        self.assertFalse(ActivityLog.objects.filter(type="settings.stripe_disconnected").exists())
+
+    def test_the_disconnect_button_closes_the_open_links_before_revoking(self):
+        from .. import stripe_service
+
+        http = self.fake([
+            ("POST", "/v1/checkout/sessions/cs_open/expire", {"id": "cs_open", "object": "checkout.session"}),
+            ("POST", "/oauth/deauthorize", {"stripe_user_id": "acct_salon"}),
+        ])
+        self.assertEqual(stripe_service.connect_disconnect(self.salon), 1)
+        expire = http.calls_to("/v1/checkout/sessions/cs_open/expire")
+        self.assertEqual(len(expire), 1)
+        self.assertEqual(expire[0]["headers"].get("Stripe-Account"), "acct_salon")
+        # prima si chiude il link, poi si revoca: dopo non avremmo più accesso
+        urls = [c["url"] for c in http.calls]
+        self.assertLess(
+            next(i for i, u in enumerate(urls) if "/expire" in u),
+            next(i for i, u in enumerate(urls) if "/oauth/deauthorize" in u),
+        )
+        self.assertEqual(self._account(), "")
+        self.appointment.refresh_from_db()
+        self.assertIsNone(self.appointment.deposit_due_at)

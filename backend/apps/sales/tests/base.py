@@ -20,7 +20,7 @@ from stripe import _http_client
 from apps.agenda.models import Appointment, AppointmentService
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
-from apps.core.models import Salon
+from apps.core.models import Salon, SalonSettings
 from apps.staff.models import Operator
 from common.auth import create_staff_tokens
 
@@ -128,6 +128,11 @@ class StripeTestBase(TestCase):
 
     def _restore_http(self):
         stripe.default_http_client = self._previous_http
+
+    def connect_stripe(self, account="acct_salon"):
+        """Il titolare collega il suo account: senza, nessun pagamento online parte."""
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": account})
+        self.salon.refresh_from_db()
 
     def make_appointment(self, price="100.00", start=None, **fields):
         values = {

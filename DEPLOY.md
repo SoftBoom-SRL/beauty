@@ -192,16 +192,24 @@ STRIPE_CONNECT_CLIENT_ID=ca_...
 Con Connect i webhook arrivano da **due** endpoint Stripe (vedi §8), ognuno col
 suo segreto di firma: `STRIPE_WEBHOOK_SECRET` per quello dell'account della
 piattaforma, `STRIPE_CONNECT_WEBHOOK_SECRET` per quello degli account collegati.
-Con uno solo dei due, gli eventi dell'altra famiglia vengono rifiutati come
+Quello che conta è il secondo: i pagamenti avvengono tutti sugli account
+collegati. Con uno solo dei due, gli eventi dell'altra famiglia vengono rifiutati come
 «Firma webhook non valida»: la cliente paga e la caparra resta «richiesta» fino
 al rilascio dello slot. In alternativa, o durante la rotazione di un segreto,
 `STRIPE_WEBHOOK_SECRETS=whsec_a,whsec_b` elenca tutti quelli validi.
 
 `STRIPE_CONNECT_CLIENT_ID` è il client_id della piattaforma
-(dashboard.stripe.com → *Connect* → *Impostazioni*): serve a far collegare al
-titolare il **proprio** account Stripe, così le caparre arrivano a lui e non a
-noi. Senza, il pulsante «Collega Stripe» in *Impostazioni → Pagamenti* risponde
-503. Il `redirect_uri` da whitelistare su Stripe è
+(dashboard.stripe.com → *Impostazioni → Connect → Opzioni di onboarding → OAuth*):
+serve a far collegare al titolare il **proprio** account Stripe. Senza, il
+pulsante «Collega Stripe» in *Impostazioni → Pagamenti* non compare.
+
+**I soldi vanno solo al salone.** Ogni incasso (link caparra, carta salvata,
+addebito no-show) nasce sull'account collegato dal titolare, come *direct
+charge*: la piattaforma non riceve niente e non prende commissioni. Un salone
+che non ha collegato Stripe non ha pagamenti online (la caparra si paga in
+salone): la sola `STRIPE_SECRET_KEY` non basta, e non fa mai incassare
+l'account della piattaforma. La chiave serve solo a parlare con Stripe per
+conto degli account collegati. Il `redirect_uri` da whitelistare su Stripe è
 `https://beauty.yourang.ai/stripe-connect/done`, cioè
 `<FRONTEND_ORIGIN>/stripe-connect/done`: se non combacia, Stripe rifiuta.
 
@@ -367,6 +375,13 @@ Eventi da selezionare su entrambi: `checkout.session.completed`,
 Gli eventi `refund.*` non sono facoltativi: portano ogni rimborso con il suo
 stato, e senza di loro una caparra con un rimborso ancora in corso (o fallito)
 può risultare detraibile per l'importo sbagliato al checkout.
+Solo sull'endpoint degli account collegati va aggiunto anche
+`account.application.deauthorized`: arriva quando il titolare scollega la
+piattaforma dalla **sua** dashboard Stripe invece che da *Impostazioni →
+Pagamenti*. Il salone torna «non collegato» e le caparre in attesa perdono la
+scadenza: un pagamento su quell'account non ci arriverebbe più, e lo slot non
+deve liberarsi da solo. Senza l'evento il pannello resta su «Collegato» e ogni
+link caparra fallisce.
 
 **Yourang** — abilita sia il "login con Yourang" dalla pagina di login (che
 provisiona/collega il salone e conia la sessione staff) sia il "collega" dalle
