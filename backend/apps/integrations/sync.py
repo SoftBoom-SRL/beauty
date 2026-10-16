@@ -30,7 +30,7 @@ from apps.staff.models import Operator
 # common.phone: è la stessa usata da login, registrazione, form pubblico e
 # import CSV, così il telefono che è la chiave naturale dei contatti Yourang
 # coincide con quello con cui il cliente accede all'app.
-from common.phone import find_client_by_phone, normalize_phone, phone_key
+from common.phone import find_client_by_phone, is_real_number, normalize_phone, phone_key
 
 from .client import YourangClient
 from .connection import same_link
@@ -253,11 +253,19 @@ def _sync_clients(conn: YourangConnection, client: YourangClient, *, push: bool)
     # lei, e il by-phone remoto la fonderebbe con la mamma; quella senza
     # contatto non ha niente da mandare. Restano fuori dalla query, e non
     # contano fra gli errori della sync.
+    invalid: list[str] = []
     for local in Client.objects.filter(salon=salon, is_active=True).exclude(phone=""):
         if local.yourang_contact_id:
             continue
         phone = normalize_phone(local.phone)
         if not phone:
+            continue
+        # Un numero che non può esistere Yourang lo rifiuta (400 sulla create e
+        # sulla ricerca per telefono): mandarlo dava due chiamate a vuoto a ogni
+        # giro e un errore HTTP per scheda. Si salta e lo si dice una volta sola,
+        # con il nome della cliente, così il salone sa quale scheda correggere.
+        if not is_real_number(phone):
+            invalid.append(f"{local.first_name} {local.last_name}".strip() or phone)
             continue
         _ensure_linked(conn)
         try:
@@ -270,7 +278,7 @@ def _sync_clients(conn: YourangConnection, client: YourangClient, *, push: bool)
                 },
             )
         except Exception as exc:  # 403 senza scope contacts:write → degrada
-            report.errors.append(f"push {phone}: {exc}")
+            report.errors.append(f"push {phone}: {_describe(exc)}")
             continue
         if created.get("id"):
             try:
@@ -285,7 +293,34 @@ def _sync_clients(conn: YourangConnection, client: YourangClient, *, push: bool)
                 continue
             report.pushed += 1
 
+    if invalid:
+        # In testa: summarize_errors tiene i primi tre, e questo è l'unico che
+        # il salone può correggere da sé.
+        names = ", ".join(invalid[:3]) + (f" e altri {len(invalid) - 3}" if len(invalid) > 3 else "")
+        report.errors.insert(
+            0,
+            f"{len(invalid)} clienti con un numero di telefono inesistente ({names}) "
+            "non sono stati inviati a Yourang: correggi il numero nella scheda",
+        )
     return report
+
+
+def _describe(exc: Exception) -> str:
+    """L'errore di una chiamata a Yourang in una riga leggibile dal titolare.
+
+    `str()` di un HTTPStatusError è «Client error '400 Bad Request' for url …
+    For more information check: https://developer.mozilla.org/…»: nel riquadro
+    delle impostazioni erano tre righe di URL per scheda, e il motivo vero (il
+    `detail` della risposta) non c'era.
+    """
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return str(exc)
+    response = exc.response
+    try:
+        detail = response.json().get("detail")
+    except Exception:  # noqa: BLE001 — corpo non JSON: basta il codice
+        detail = None
+    return f"Yourang ha risposto {response.status_code}" + (f": {detail}" if isinstance(detail, str) else "")
 
 
 def sync_contact(conn: YourangConnection, contact_id: str) -> SyncReport:

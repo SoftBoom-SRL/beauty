@@ -9,6 +9,8 @@ e lo stesso telefono scritto in due modi diventava due identità.
 
 import re
 
+import phonenumbers
+
 # Prefissi internazionali assegnati dall'ITU (E.164), elenco completo. Serve a
 # sapere dove finisce il country code, che ha lunghezza variabile: la tabella
 # corta di prima (i dodici paesi «da cui arrivano le clienti») lasciava fuori
@@ -136,6 +138,22 @@ def normalize_phone(raw: str, default_cc: str = "39") -> str | None:
     if not re.fullmatch(r"[1-9]\d{6,14}", digits):
         return None
     return "+" + digits
+
+
+def is_real_number(e164: str) -> bool:
+    """True se il numero E.164 può esistere davvero (lunghezza e prefissi del paese).
+
+    `normalize_phone` mette solo in forma: «+39 987 6543211» passa, ma in Italia
+    nessun numero comincia per 9. Yourang valida con libphonenumber e rifiuta
+    quei numeri con un 400, sia sulla creazione del contatto sia sulla ricerca
+    per telefono: a ogni sync le schede con numeri finti (dati demo, numeri
+    scritti male) riempivano «Ultimo errore di sincronizzazione» di errori
+    HTTP illeggibili. Stessa libreria di Yourang, così il giudizio coincide.
+    """
+    try:
+        return phonenumbers.is_valid_number(phonenumbers.parse(e164, None))
+    except phonenumbers.NumberParseException:
+        return False
 
 
 def canonical_phone(raw: str) -> str:
