@@ -3,16 +3,26 @@
 // { date_from, date_to, type: vacation|holiday|other, note } instead of the
 // prototype's per-date map; clicking a covered day selects its absence,
 // clicking a free day starts a new single-day one.
-import { useMemo, useState } from 'react';
+// Ogni giorno dice anche che cosa prevede il pattern dei turni (`weeks`, quello
+// nell'editor sopra, anche non ancora salvato): l'orario, «Riposo» o «Chiuso»
+// se il centro è chiuso; con un ciclo di più settimane, a sinistra di ogni
+// riga la settimana del ciclo che vale. Prima il calendario mostrava solo le
+// assenze, e come sarebbe venuto un giorno libero che scorre non si vedeva
+// (il titolare, 16/10).
+import React, { useMemo, useState } from 'react';
 import { Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss } from './lib.js';
+import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss, patternDay } from './lib.js';
 import { absencesApi } from '../../api/staff.js';
 
 const fmtDM = (iso) => iso.split('-').slice(1).reverse().join('/'); // "2026-07-04" → "04/07"
 
-export default function AbsenceCalendar({ operatorId, absences, onChanged, canEdit }) {
-  const { t, lang, fireToast } = useDash();
+/** `weeks` = il pattern dell'editor (useOperatorEditor), `draft` = ha
+ *  modifiche non salvate: il calendario lo dice. */
+export default function AbsenceCalendar({ operatorId, absences, onChanged, canEdit, weeks = null, draft = false }) {
+  const { t, lang, fireToast, settings } = useDash();
+  const openingWeek = settings?.opening_hours_week || null;
+  const cycle = (weeks || []).length;
   // Il mese di partenza è quello del SALONE: a cavallo della mezzanotte del
   // primo del mese una postazione su un altro fuso apriva il mese sbagliato.
   const [cursor, setCursor] = useState(() => { const [ty, tm] = todayStr().split('-').map(Number); return new Date(ty, tm - 1, 1); });
@@ -137,25 +147,52 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
           <div style={{ fontFamily: 'var(--serif)', fontSize: 20, fontWeight: 500, flex: 1, textAlign: 'center' }}>{months[m]} {y}</div>
           <button className="dk-iconbtn" onClick={() => setCursor(new Date(y, m + 1, 1))}><Icon name="chevR" size={18} /></button>
         </div>
-        {/* dow header */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 6, marginBottom: 6 }}>
+        {draft && (
+          <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, color: 'var(--clay-ink)', fontWeight: 600 }}>
+            <Icon name="info" size={13} color="var(--clay-ink)" />{t('Anteprima con i turni non ancora salvati', 'Preview with unsaved shifts')}
+          </div>
+        )}
+        {/* dow header (con un ciclo, la prima colonna è la settimana del ciclo) */}
+        <div style={{ display: 'grid', gridTemplateColumns: (cycle > 1 ? '30px ' : '') + 'repeat(7,1fr)', gap: 6, marginBottom: 6 }}>
+          {cycle > 1 && <div className="t-meta" title={t('Settimana del ciclo dei turni', 'Week of the shift cycle')} style={{ textAlign: 'center' }}>{t('Sett.', 'Wk')}</div>}
           {dows.map((d) => <div key={d} className="t-meta" style={{ textAlign: 'center' }}>{d}</div>)}
         </div>
         {/* day grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: (cycle > 1 ? '30px ' : '') + 'repeat(7,1fr)', gap: 6 }}>
           {cells.map((d, i) => {
-            if (d == null) return <div key={'e' + i} />;
+            // con un ciclo, in testa a ogni riga la settimana del ciclo che vale
+            let rowLabel = null;
+            if (cycle > 1 && i % 7 === 0) {
+              const first = cells.slice(i, i + 7).find((x) => x != null);
+              const w = patternDay(weeks, key(first), null).week;
+              rowLabel = <div data-cycle-week={w + 1} title={t(`Settimana ${w + 1} del ciclo`, `Week ${w + 1} of the cycle`)} style={{ display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 800, color: 'var(--clay-ink)', background: 'var(--clay-tint)', borderRadius: 8 }}>{w + 1}</div>;
+            }
+            if (d == null) return <React.Fragment key={'e' + i}>{rowLabel}<div /></React.Fragment>;
             const k = key(d);
             const ab = coverage[d];
             const st = ab && (AVAIL_META[ab.type] || AVAIL_META.other);
+            // senza assenza, quello che prevede il pattern
+            const pd = !ab && weeks ? patternDay(weeks, k, openingWeek) : null;
+            const look = st ? { bg: st.bg, c: st.c, label: st[lang === 'en' ? 'en' : 'it'] }
+              : pd?.kind === 'work' ? { bg: AVAIL_META.work.bg, c: AVAIL_META.work.c, label: pd.label }
+                : pd?.kind === 'off' ? { bg: AVAIL_META.off.bg, c: AVAIL_META.off.c, label: t('Riposo', 'Day off') }
+                  : pd?.kind === 'closed' ? { bg: 'var(--paper-2)', c: 'var(--muted-2)', label: t('Chiuso', 'Closed') }
+                    : pd?.kind === 'bad' ? { bg: 'var(--warn-tint)', c: 'var(--warn)', label: '?' }
+                      : null;
+            const tip = st ? (ab.note || look.label)
+              : pd?.kind === 'work' ? `${pd.label}${pd.brk ? ' · ' + t('pausa', 'break') + ' ' + pd.brk : ''}`
+                : pd?.kind === 'bad' ? t(`Orario non valido: «${pd.label}»`, `Invalid hours: “${pd.label}”`) : look?.label;
             const isToday = k === today;
             const selected = edit && edit.id && ab && ab.id === edit.id;
             return (
-              <button key={k} onClick={() => openDay(d)}
-                style={{ aspectRatio: '1', borderRadius: 10, cursor: canEdit ? 'pointer' : 'default', border: '1px solid ' + (selected ? 'var(--ink)' : isToday ? 'var(--clay)' : 'var(--hair)'), background: st ? st.bg : 'var(--surface)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: 4, position: 'relative' }}>
-                <span style={{ fontWeight: isToday ? 800 : 600, fontSize: 13.5, color: st ? st.c : 'var(--ink)' }}>{d}</span>
-                {st && <span style={{ fontSize: 8.5, fontWeight: 700, color: st.c, lineHeight: 1, textAlign: 'center' }}>{st[lang === 'en' ? 'en' : 'it']}</span>}
-              </button>
+              <React.Fragment key={k}>
+                {rowLabel}
+                <button data-day={k} data-kind={st ? 'absence' : pd?.kind} onClick={() => openDay(d)} title={tip}
+                  style={{ aspectRatio: '1', borderRadius: 10, cursor: canEdit ? 'pointer' : 'default', border: '1px solid ' + (selected ? 'var(--ink)' : isToday ? 'var(--clay)' : 'var(--hair)'), background: look ? look.bg : 'var(--surface)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: 4, position: 'relative', minWidth: 0 }}>
+                  <span style={{ fontWeight: isToday ? 800 : 600, fontSize: 13.5, color: st ? st.c : 'var(--ink)' }}>{d}</span>
+                  {look && <span className="tabnum" style={{ fontSize: 8.5, fontWeight: 700, color: look.c, lineHeight: 1, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{look.label}</span>}
+                </button>
+              </React.Fragment>
             );
           })}
         </div>
@@ -199,12 +236,15 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
         <div className="dk-card" style={{ padding: 18 }}>
           <div className="t-meta" style={{ marginBottom: 12 }}>{t('Legenda', 'Legend')}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {ABSENCE_TYPES.map((k) => {
+            {(weeks ? ['work', 'off', ...ABSENCE_TYPES] : ABSENCE_TYPES).map((k) => {
               const meta = AVAIL_META[k];
               return (
                 <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ width: 14, height: 14, borderRadius: 4, background: meta.bg, border: '1px solid ' + meta.c, flexShrink: 0 }} />
-                  <span className="t-sm" style={{ fontWeight: 600 }}>{meta[lang === 'en' ? 'en' : 'it']}</span>
+                  <span className="t-sm" style={{ fontWeight: 600 }}>
+                    {/* le parole dei giorni del calendario */}
+                    {k === 'work' ? t('In turno (con l’orario)', 'On shift (with hours)') : k === 'off' ? t('Riposo', 'Day off') : meta[lang === 'en' ? 'en' : 'it']}
+                  </span>
                 </div>
               );
             })}

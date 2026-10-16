@@ -164,3 +164,43 @@ class ServedClientOut(Schema):
     last_visit: Optional[datetime] = None
     total_spent: Optional[Decimal] = None
     cash_hidden: bool = False
+
+
+# ---- Turni del team --------------------------------------------------------------
+
+
+class RosterOperatorOut(Schema):
+    id: int
+    first_name: str
+    last_name: str
+    initials: str
+    color: str
+    location_id: Optional[int] = None
+    cycle_weeks: int
+
+
+class RosterCellOut(Schema):
+    """Un'operatrice in un giorno: finestre di turno («HH:MM», già con pause,
+    assenze e orari del centro), la settimana del suo ciclo (0 = la prima) e
+    l'assenza che copre il giorno, se c'è (allora le finestre sono vuote)."""
+
+    operator_id: int
+    windows: list[tuple[str, str]]
+    week_index: int
+    absence: Optional[AbsenceOut] = None
+
+
+class RosterDayOut(Schema):
+    """Un giorno: gli orari del centro (null se non impostati, [] se chiuso) e
+    una cella per operatrice, nell'ordine di `operators`."""
+
+    date: date
+    opening: Optional[list[tuple[str, str]]] = None
+    cells: list[RosterCellOut]
+
+
+class RosterOut(Schema):
+    """I turni del team giorno per giorno (GET /api/staff/roster)."""
+
+    operators: list[RosterOperatorOut]
+    days: list[RosterDayOut]

@@ -163,6 +163,71 @@ export function currentWeekIndex(cycleWeeks) {
   return cycleWeekIndex(todayStr(), cycleWeeks);
 }
 
+/* ---- il pattern su un giorno vero ----
+ * Il calendario della scheda mostrava solo le assenze: come sarebbe venuto il
+ * ciclo (il giorno libero che scorre di settimana in settimana) non si vedeva
+ * da nessuna parte, prima di salvarlo e andare in agenda (il titolare, 16/10). */
+
+/** Che cosa dice il pattern `weeks` (anche non salvato) per il giorno
+ *  `dateStr`: { kind, week, label, brk } con kind ∈ work | off | closed | bad.
+ *  `week` = la settimana del ciclo (0 = la prima, come cycleWeekIndex);
+ *  `closed`: il centro quel giorno è chiuso (`openingWeek` = gli orari del
+ *  centro, {} se non impostati), e allora il turno non conta; `bad`: l'orario
+ *  scritto non si legge (`label` = il testo). */
+export function patternDay(weeks, dateStr, openingWeek = null) {
+  const n = Math.max(1, (weeks || []).length);
+  const week = cycleWeekIndex(dateStr, n);
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dow = (new Date(y, m - 1, d).getDay() + 6) % 7;   // 0 = lunedì
+  if (openingWeek && Object.keys(openingWeek).length && !(openingWeek[String(dow)] || []).length) return { kind: 'closed', week };
+  const day = weeks?.[week]?.days?.[dow];
+  const range = parseRange(day?.hours);
+  if (range === undefined) return { kind: 'bad', week, label: day.hours };
+  if (range === null) return { kind: 'off', week };
+  const brk = parseRange(day.brk);
+  return { kind: 'work', week, label: fmtRange(range[0], range[1]), brk: brk ? fmtRange(brk[0], brk[1]) : '' };
+}
+
+/* ---- turni del team: la copertura di un giorno ----
+ * Ognuna si controllava sulla sua scheda: un sabato pomeriggio senza nessuna
+ * in turno si scopriva in agenda, quando una cliente non trovava posto. */
+
+const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + (m || 0); };
+
+/** La copertura di un giorno di GET /api/staff/roster: `working` = quante
+ *  sono in turno su `total`; `slots` = mezz'ora per mezz'ora quante ce ne
+ *  sono, negli orari del centro (senza orari impostati, dal primo inizio
+ *  all'ultima fine dei turni del giorno); `gaps` = le fasce [da, a] (minuti)
+ *  in cui il centro è aperto e non c'è nessuna. Centro chiuso: niente fasce.
+ *  `known` = gli orari del centro sono impostati: senza, non si sa se un'ora
+ *  senza nessuna è un buco o la chiusura per pranzo, e `gaps` resta vuoto
+ *  (ogni giorno in rosso per la pausa di tutte non diceva niente). */
+export function dayCoverage(day) {
+  const cells = day?.cells || [];
+  const wins = cells.map((c) => (c.windows || []).map(([a, b]) => [hm(a), hm(b)]));
+  const working = wins.filter((w) => w.length).length;
+  let open = (day?.opening || []).map(([a, b]) => [hm(a), hm(b)]);
+  if (day?.opening == null) {
+    const all = wins.flat();
+    open = all.length ? [[Math.min(...all.map((w) => w[0])), Math.max(...all.map((w) => w[1]))]] : [];
+  }
+  const slots = [];
+  for (const [a, b] of open) {
+    for (let m = a; m < b; m += 30) {
+      const to = Math.min(b, m + 30);
+      slots.push({ from: m, to, count: wins.filter((w) => w.some(([s, e]) => s <= m && to <= e)).length });
+    }
+  }
+  const known = day?.opening != null;
+  const gaps = [];
+  for (const sl of slots) {
+    if (sl.count || !known) continue;
+    const last = gaps[gaps.length - 1];
+    if (last && last[1] === sl.from) last[1] = sl.to; else gaps.push([sl.from, sl.to]);
+  }
+  return { working, total: cells.length, slots, gaps, known };
+}
+
 /* ---- misc ---- */
 export const inputCss = {
   border: '1px solid var(--hair)', borderRadius: 10, outline: 'none', fontSize: 14.5,

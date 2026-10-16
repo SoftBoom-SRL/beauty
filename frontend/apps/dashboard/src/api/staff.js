@@ -12,6 +12,8 @@ export const staffApi = {
   updateShifts: (id, body) => api.put(`/api/staff/${id}/shifts`, body),
   performance: (id, params) => api.get(`/api/staff/${id}/performance`, { params }),
   clients: (id, params) => api.get(`/api/staff/${id}/clients`, { params }),
+  /** I turni del team giorno per giorno: { start, days, location_id? }. */
+  roster: (params) => api.get('/api/staff/roster', { params }),
 };
 
 export const absencesApi = {

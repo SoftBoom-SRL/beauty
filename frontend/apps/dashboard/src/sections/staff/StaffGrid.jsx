@@ -8,7 +8,8 @@ import { HIDDEN, todayStatus, opName, eur } from './lib.js';
 import NewOperatorModal from './NewOperatorModal.jsx';
 import { staffApi } from '../../api/staff.js';
 
-export default function StaffGrid({ onOpen }) {
+/** `top` = la scelta fra le viste dello Staff (index.jsx). */
+export default function StaffGrid({ onOpen, top = null }) {
   const { t, lang, operators, reload, showRevenue, hasScope, opColors } = useDash();
   const [newOpen, setNewOpen] = useState(false);
   const canTeam = hasScope('team');
@@ -30,6 +31,7 @@ export default function StaffGrid({ onOpen }) {
 
   return (
     <div className="dk-page" style={{ maxWidth: 1080 }}>
+      {top}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
         <div style={{ flex: 1 }}>
           <div className="t-meta">{t('Team', 'Team')} · {operators.length} {t('operatrici', 'stylists')}</div>

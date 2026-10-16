@@ -14,8 +14,10 @@ import PerformancePanel from './PerformancePanel.jsx';
 import ServedClients from './ServedClients.jsx';
 import SubTabs from '../../ui/SubTabs.jsx';
 
-export default function StaffPage({ id, onBack }) {
-  const { t, lang, services, serviceCategories, locations, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette } = useDash();
+/** `initialTab`: la linguetta con cui si apre (da «Turni del team», i turni);
+ *  `onSwitch(id)`: passa a un'altra operatrice restando sulla stessa linguetta. */
+export default function StaffPage({ id, onBack, initialTab = null, onSwitch = null }) {
+  const { t, lang, services, serviceCategories, locations, fireToast, hasScope, showRevenue, setSelClient, setTab, opPalette, operators } = useDash();
   const canTeam = hasScope('team');
   const canPricing = hasScope('pricing'); // creare servizi dal profilo operatrice
   // null = importo non mandato dal server a chi non ha il permesso (C6)
@@ -25,7 +27,22 @@ export default function StaffPage({ id, onBack }) {
     detail, form, setForm, weeks, setWeeks, perf, absences, clients, clientQ, setClientQ,
     saving, basicsDirty, shiftsDirty, saveAll, saveShifts, reloadAbsences, toggleSvc, onServiceCreated,
   } = useOperatorEditor({ id, onBack, canTeam });
-  const [staffTab, setStaffTab] = useState('anagrafica');
+  const [staffTab, setStaffTab] = useState(initialTab || 'anagrafica');
+  /* Le operatrici attive in fila, per passare dall'una all'altra senza tornare
+   * all'elenco: controllare i turni del team voleva dire aprire e chiudere
+   * nove schede (il titolare, 16/10). Con modifiche in sospeso non si passa:
+   * andrebbero perse senza dirlo. */
+  const team = operators || [];
+  const at = team.findIndex((o) => o.id === id);
+  const neighbour = (step) => (at < 0 || team.length < 2 ? null : team[(at + step + team.length) % team.length]);
+  const switchTo = (o) => {
+    if (!o || !onSwitch) return;
+    if (basicsDirty || shiftsDirty) {
+      fireToast({ msg: t('Ci sono modifiche non salvate: salvale prima di passare a un’altra operatrice.', 'There are unsaved changes: save them before switching stylist.'), icon: 'alert' });
+      return;
+    }
+    onSwitch(o.id);
+  };
 
   const openClient = (cid) => { setSelClient(cid); setTab('clienti'); };
 
@@ -53,7 +70,7 @@ export default function StaffPage({ id, onBack }) {
     <div className="dk-page" style={{ maxWidth: 1180 }}>
       {/* header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
-        <button className="dk-iconbtn" onClick={onBack}><Icon name="chevL" size={20} /></button>
+        <button className="dk-iconbtn" onClick={onBack} aria-label={t('Torna all’elenco', 'Back to the list')}><Icon name="chevL" size={20} /></button>
         <Avatar initials={initials} size={56} color={color} ring />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--serif)', fontSize: 26, fontWeight: 500, lineHeight: 1.1 }}>{opName(form)}</div>
@@ -62,6 +79,14 @@ export default function StaffPage({ id, onBack }) {
             {!form.active && <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 700, color: 'var(--danger)', background: 'var(--danger-tint)', padding: '2px 8px', borderRadius: 99 }}>{t('Non attiva', 'Inactive')}</span>}
           </div>
         </div>
+        {/* l'operatrice prima e quella dopo, sulla stessa linguetta */}
+        {onSwitch && neighbour(1) && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <button type="button" className="dk-iconbtn" onClick={() => switchTo(neighbour(-1))} aria-label={t('Operatrice precedente', 'Previous stylist')} title={t('Prima: ', 'Previous: ') + opName(neighbour(-1))}><Icon name="chevL" size={17} /></button>
+            <span className="t-sm tabnum" style={{ color: 'var(--muted)', fontWeight: 600, minWidth: 34, textAlign: 'center' }}>{at + 1}/{team.length}</span>
+            <button type="button" className="dk-iconbtn" onClick={() => switchTo(neighbour(1))} aria-label={t('Operatrice successiva', 'Next stylist')} title={t('Dopo: ', 'Next: ') + opName(neighbour(1))}><Icon name="chevR" size={17} /></button>
+          </div>
+        )}
         {/* prototype clock in/out + commissions have no API backing yet */}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--muted)', background: 'var(--paper-2)', padding: '7px 13px', borderRadius: 99 }}>
           <Icon name="clock" size={13} color="var(--muted-2)" />{t('Timbrature e commissioni: fase 2', 'Time clock & commissions: phase 2')}
@@ -111,10 +136,10 @@ export default function StaffPage({ id, onBack }) {
           </div>
           <ShiftPattern weeks={weeks} setWeeks={setWeeks} onSave={saveShifts} saving={!!saving} canEdit={canTeam} t={t} />
           <div>
-            <div className="t-meta" style={{ marginBottom: 12 }}>{t('Calendario disponibilità · assenze', 'Availability calendar · time off')}</div>
+            <div className="t-meta" style={{ marginBottom: 12 }}>{t('Calendario · turni e assenze', 'Calendar · shifts and time off')}</div>
             {absences == null
               ? <div className="skel" style={{ height: 320, borderRadius: 16 }} />
-              : <AbsenceCalendar operatorId={id} absences={absences} onChanged={reloadAbsences} canEdit={canTeam} />}
+              : <AbsenceCalendar operatorId={id} absences={absences} onChanged={reloadAbsences} canEdit={canTeam} weeks={weeks} draft={shiftsDirty} />}
           </div>
         </div>
       )}

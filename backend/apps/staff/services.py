@@ -6,7 +6,7 @@ Agenda e insights la importano da qui e i test la patchano qui. I KPI
 dell'operatrice (incassi, clienti) stanno in stats.py.
 """
 
-from datetime import date as date_cls
+from datetime import date as date_cls, timedelta
 
 from django.utils import timezone
 
@@ -139,6 +139,42 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     if bounds is not None:
         windows = merge_intervals(_intersect(windows, bounds))
     return windows
+
+
+def roster(salon, operators, start: date_cls, days: int) -> list[dict]:
+    """Il calendario dei turni di `operators` per `days` giorni da `start`.
+
+    Per ogni giorno gli orari del centro (`opening`: None se non impostati, []
+    se chiuso) e per ogni operatrice le finestre di turno (`shift_windows`:
+    ciclo, pause, assenze e orari del centro), la settimana del suo ciclo e
+    l'assenza che copre il giorno. Serve a «Turni del team», dove si guarda se
+    i turni coprono l'apertura, e al calendario della scheda: prima ognuna si
+    controllava a parte, e un buco del sabato pomeriggio si scopriva in agenda.
+    `operators` deve avere turni e assenze già letti (prefetch).
+    """
+    out = []
+    for offset in range(days):
+        day = start + timedelta(days=offset)
+        opening = opening_windows(salon, day)
+        cells = []
+        for operator in operators:
+            absence = _current_absence(operator, day)
+            cells.append(
+                {
+                    "operator_id": operator.id,
+                    "windows": [(min_to_hm(a), min_to_hm(b)) for a, b in shift_windows(operator, day)],
+                    "week_index": _week_index(day, operator.cycle_weeks or 1),
+                    "absence": absence,
+                }
+            )
+        out.append(
+            {
+                "date": day,
+                "opening": None if opening is None else [(min_to_hm(a), min_to_hm(b)) for a, b in opening],
+                "cells": cells,
+            }
+        )
+    return out
 
 
 def today_status(operator, on_date: date_cls | None = None) -> dict:

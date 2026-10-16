@@ -349,3 +349,76 @@ class ReplaceShiftsTests(_StaffSetup):
             )
         self.assertEqual(res.status_code, 400, res.content)
         self.assertFalse(WeeklyShift.objects.filter(operator=self.bea).exists())
+
+
+class RosterTests(StaffApiTestCase):
+    """GET /api/staff/roster: i turni del team giorno per giorno (16/10). Il
+    calendario della scheda mostrava solo le assenze, e per sapere se il sabato
+    pomeriggio era coperto bisognava aprire le schede una per una."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.core.models import SalonSettings
+
+        SalonSettings.objects.create(salon=self.salon, opening_hours_week={str(d): [["09:00", "19:00"]] for d in range(6)} | {"6": []})
+        # Anna: ciclo di 3 settimane, il giorno libero scorre (lunedì, mercoledì, venerdì), la domenica sempre
+        self.anna = Operator.objects.create(salon=self.salon, first_name="Anna", last_name="A", cycle_weeks=3, order=0)
+        for week, free in enumerate((0, 2, 4)):
+            for weekday in range(6):
+                if weekday != free:
+                    WeeklyShift.objects.create(operator=self.anna, week_index=week, weekday=weekday, start_min=540, end_min=1140, break_start_min=780, break_end_min=840)
+        self.bea = Operator.objects.create(salon=self.salon, first_name="Bea", last_name="B", order=1)
+        for weekday in range(6):
+            WeeklyShift.objects.create(operator=self.bea, week_index=0, weekday=weekday, start_min=600, end_min=1080)
+        Operator.objects.create(salon=self.salon, first_name="Vecchia", last_name="V", active=False)
+        # un lunedì da cui il ciclo di Anna conta come prima settimana
+        self.monday = next(dt.date(2026, 10, 5) + dt.timedelta(days=7 * k) for k in range(3) if ((dt.date(2026, 10, 5) + dt.timedelta(days=7 * k)).toordinal() - 1) // 7 % 3 == 0)
+
+    def get(self, **params):
+        res = self.client.get("/api/staff/roster", {"start": self.monday.isoformat(), **params}, **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        return res.json()
+
+    def test_three_weeks_of_the_rotation_with_absences_and_closed_days(self):
+        Absence.objects.create(operator=self.bea, date_from=self.monday + dt.timedelta(days=1), date_to=self.monday + dt.timedelta(days=2), type="vacation", note="mare")
+        out = self.get(days=21)
+        self.assertEqual([o["first_name"] for o in out["operators"]], ["Anna", "Bea"], "solo le attive, in ordine")
+        self.assertEqual(len(out["days"]), 21)
+        anna = lambda i: out["days"][i]["cells"][0]  # noqa: E731
+        bea = lambda i: out["days"][i]["cells"][1]  # noqa: E731
+        # il giorno libero di Anna scorre: lunedì la 1ª settimana, mercoledì la 2ª, venerdì la 3ª
+        self.assertEqual([anna(i)["week_index"] for i in (0, 7, 14)], [0, 1, 2])
+        self.assertEqual([i for i in range(21) if not anna(i)["windows"]], [0, 6, 9, 13, 18, 20])
+        self.assertEqual(anna(1)["windows"], [["09:00", "13:00"], ["14:00", "19:00"]])
+        # la domenica il centro è chiuso
+        self.assertEqual((out["days"][6]["opening"], out["days"][0]["opening"]), ([], [["09:00", "19:00"]]))
+        # Bea in ferie martedì e mercoledì: niente turno, con l'assenza (per modificarla)
+        self.assertEqual(bea(1)["windows"], [])
+        self.assertEqual((bea(1)["absence"]["type"], bea(2)["absence"]["note"]), ("vacation", "mare"))
+        self.assertIsNone(bea(3)["absence"])
+
+    def test_location_limits_and_bad_requests(self):
+        from apps.core.models import Location
+
+        nord = Location.objects.create(salon=self.salon, name="Nord")
+        centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
+        self.bea.location = nord
+        self.bea.save(update_fields=["location"])
+        out = self.get(days=7, location_id=centro.id)
+        self.assertEqual([o["first_name"] for o in out["operators"]], ["Anna"])
+        for params in ({"days": 0}, {"days": 43}, {"start": "2026-02-30"}):
+            res = self.client.get("/api/staff/roster", {"start": self.monday.isoformat(), **params}, **self.auth)
+            self.assertEqual(res.status_code, 400, params)
+
+    def test_the_roster_does_not_cost_a_query_per_operator_or_day(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as short:
+            self.get(days=7)
+        for i in range(4):
+            extra = Operator.objects.create(salon=self.salon, first_name=f"Op{i}", last_name="X")
+            WeeklyShift.objects.create(operator=extra, week_index=0, weekday=0, start_min=540, end_min=1080)
+        with CaptureQueriesContext(connection) as long:
+            self.get(days=28)
+        self.assertEqual(len(long.captured_queries), len(short.captured_queries))

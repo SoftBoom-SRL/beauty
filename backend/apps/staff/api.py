@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.db.models import Q
 from django.utils import timezone
 from ninja import Router
+from ninja.errors import HttpError
 
 from apps.core.services import default_location, get_salon_by_slug, log_activity
 from common import ratelimit
@@ -32,11 +33,12 @@ from .schemas import (
     OperatorStatusOut,
     PerformanceOut,
     PublicOperatorOut,
+    RosterOut,
     ServedClientOut,
     ShiftsReplaceIn,
     WeeklyShiftOut,
 )
-from .services import min_to_hm, today_status
+from .services import min_to_hm, roster, today_status
 from .stats import (
     month_revenue_by_operator,
     performance_series,
@@ -140,6 +142,31 @@ def list_operators(request, include_inactive: bool = False):
         )
         result.append(out)
     return result
+
+
+# ---- Turni del team ------------------------------------------------------------
+
+ROSTER_MAX_DAYS = 42
+
+
+@router.get("/roster", auth=staff_auth, response=RosterOut)
+def get_roster(request, start: str, days: int = 14, location_id: int = None):
+    """I turni delle operatrici attive giorno per giorno, da `start` per `days`
+    giorni (al massimo 42): finestre di turno, settimana del ciclo e assenze, con
+    gli orari del centro. Con `location_id` le operatrici della sede e quelle
+    senza sede, come in agenda. Si legge come l'elenco operatrici, senza
+    permessi in più; le assenze si scrivono con i loro endpoint (permesso «team»)."""
+    from apps.agenda.api.params import _parse_day  # lazy: l'agenda dipende dallo staff
+
+    ctx = request.auth
+    first = _parse_day(start)
+    if not 1 <= days <= ROSTER_MAX_DAYS:
+        raise HttpError(400, f"Intervallo non valido (da 1 a {ROSTER_MAX_DAYS} giorni)")
+    operators = _operators_qs(ctx).filter(active=True).order_by("order", "id")
+    if location_id:
+        operators = operators.filter(Q(location__isnull=True) | Q(location_id=location_id))
+    operators = list(operators)
+    return {"operators": operators, "days": roster(ctx.salon, operators, first, days)}
 
 
 # ---- CRUD operatrici -----------------------------------------------------------

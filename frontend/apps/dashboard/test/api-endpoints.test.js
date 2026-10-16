@@ -81,6 +81,7 @@ const CASES = [
   [() => staffApi.updateShifts(7, { shifts: [] }), ['PUT', '/api/staff/7/shifts', { body: { shifts: [] } }]],
   [() => staffApi.performance(7, { months: 6 }), ['GET', '/api/staff/7/performance', { params: { months: 6 } }]],
   [() => staffApi.clients(7, { q: undefined }), ['GET', '/api/staff/7/clients', { params: { q: undefined } }]],
+  [() => staffApi.roster({ start: '2026-10-12', days: 14 }), ['GET', '/api/staff/roster', { params: { start: '2026-10-12', days: 14 } }]],
   [() => absencesApi.list(7), ['GET', '/api/staff/7/absences']],
   [() => absencesApi.create(7, B), ['POST', '/api/staff/7/absences', { body: B }]],
   [() => absencesApi.update(7, 9, B), ['PUT', '/api/staff/7/absences/9', { body: B }]],
