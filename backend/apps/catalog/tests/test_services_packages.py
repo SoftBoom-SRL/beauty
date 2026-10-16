@@ -8,13 +8,18 @@ Caccia del 22/09:
 
 15/10: ogni servizio può avere un colore suo, o prendere quello della categoria;
 e può essere un aggiuntivo (si fa durante un altro servizio).
+
+16/10: un servizio si archivia (esce dalla lista, resta per lo storico).
 """
 
 import json
 from decimal import Decimal
 from unittest import mock
 
-from apps.core.models import ActivityLog
+from ninja.errors import HttpError
+
+from apps.core.models import ActivityLog, Salon
+from common.testing import staff_context
 
 from .. import api as catalog_api
 from ..api import (
@@ -27,7 +32,7 @@ from ..api import (
 )
 from ..models import Package, PackageItem, Service, ServiceCategory
 from ..schemas import PackageIn, PackageItemIn, ServiceCategoryIn, ServiceIn
-from .base import CatalogTestCase, _CatalogSetup
+from .base import CatalogTestCase, _CatalogSetup, fake_request
 
 
 class PackageWithItemsTests(CatalogTestCase):
@@ -513,3 +518,88 @@ class ServiceAddonTests(_CatalogSetup):
         # della voce nell'appuntamento, non del listino
         res = self._send("post", "/api/catalog/services", is_addon=True, duration_min=0)
         self.assertEqual(res.status_code, 422)
+
+
+class ServiceArchiveTests(_CatalogSetup):
+    """16/10: un servizio che il salone non fa più si archivia, non solo si
+    mette in pausa. Esce dalla lista ma resta per lo storico; archiviato vuol
+    dire anche in pausa, così non si prenota più."""
+
+    def _post(self, service_id, action):
+        return self.client.post(f"/api/catalog/services/{service_id}/{action}", **self.auth)
+
+    def _listed(self):
+        return {s["id"]: s for s in self.client.get("/api/catalog/services", **self.auth).json()}
+
+    def test_archiving_pauses_it_and_keeps_it_for_the_history(self):
+        res = self._post(self.color.id, "archive")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(res.json()["active"])
+        self.assertIsNotNone(res.json()["archived_at"])
+        self.color.refresh_from_db()
+        self.assertFalse(self.color.active)
+        self.assertIsNotNone(self.color.archived_at)
+        # la lista del gestionale lo dà ancora: le visite passate ne leggono nome e colore
+        self.assertIsNotNone(self._listed()[self.color.id]["archived_at"])
+        self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="service.archived").exists())
+        # e il listino pubblico no
+        public = self.client.get("/api/catalog/public/services", {"salon": self.salon.slug}).json()
+        self.assertEqual([s["id"] for c in public for s in c["services"]], [])
+
+    def test_restoring_brings_it_back_paused(self):
+        self._post(self.color.id, "archive")
+        res = self._post(self.color.id, "restore")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertIsNone(res.json()["archived_at"])
+        self.color.refresh_from_db()
+        self.assertIsNone(self.color.archived_at)
+        # ripristinato non vuol dire prenotabile: lo si riattiva a mano
+        self.assertFalse(self.color.active)
+        self.assertTrue(ActivityLog.objects.filter(salon=self.salon, type="service.restored").exists())
+
+    def test_reactivating_it_from_its_card_takes_it_out_of_the_archive(self):
+        self._post(self.color.id, "archive")
+        body = {"category_id": self.cat.id, "name_it": "Colore", "duration_min": 60, "price": "60.00"}
+        url = f"/api/catalog/services/{self.color.id}"
+        # salvato ancora in pausa: resta in archivio
+        res = self.client.put(url, data=json.dumps({**body, "active": False}), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertIsNotNone(res.json()["archived_at"])
+        # riattivato: attivo e archiviato insieme sarebbe prenotabile ma nascosto
+        res = self.client.put(url, data=json.dumps({**body, "active": True}), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.color.refresh_from_db()
+        self.assertTrue(self.color.active)
+        self.assertIsNone(self.color.archived_at)
+
+    def test_archiving_twice_keeps_the_first_date(self):
+        self._post(self.color.id, "archive")
+        self.color.refresh_from_db()
+        first = self.color.archived_at
+        self._post(self.color.id, "archive")
+        self.color.refresh_from_db()
+        self.assertEqual(self.color.archived_at, first)
+
+    def test_it_needs_the_pricing_permission_and_the_salon_service(self):
+        request = fake_request(staff_context(self.salon, {"agenda"}))
+        for action in (catalog_api.archive_service, catalog_api.restore_service):
+            with self.assertRaises(HttpError) as err:
+                action(request, self.color.id)
+            self.assertEqual(err.exception.status_code, 403)
+        other = Salon.objects.create(name="Altro", slug="altro")
+        cat = ServiceCategory.objects.create(salon=other, name_it="Mani")
+        theirs = Service.objects.create(salon=other, category=cat, name_it="Manicure", duration_min=30, price=Decimal("20"))
+        self.assertEqual(self._post(theirs.id, "archive").status_code, 404)
+        theirs.refresh_from_db()
+        self.assertIsNone(theirs.archived_at)
+        self.assertTrue(theirs.active)
+
+    def test_a_category_with_only_archived_services_says_why_it_stays(self):
+        self._post(self.color.id, "archive")
+        res = self.client.delete(f"/api/catalog/categories/{self.cat.id}", **self.auth)
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("servizi archiviati", res.json()["detail"])
+        # con un servizio ancora in lista, il messaggio di sempre
+        Service.objects.create(salon=self.salon, category=self.cat, name_it="Piega", duration_min=30, price=Decimal("25"))
+        res = self.client.delete(f"/api/catalog/categories/{self.cat.id}", **self.auth)
+        self.assertIn("servizi collegati", res.json()["detail"])

@@ -1,4 +1,5 @@
-"""Logica del catalogo: righe dei pacchetti, ordine delle categorie, listino pubblico.
+"""Logica del catalogo: righe dei pacchetti, ordine delle categorie, archivio
+dei servizi, listino pubblico.
 
 api.py controlla permessi e tetti per IP e legge con `salon_get` la riga che
 l'endpoint modifica (i test sostituiscono quella lettura per simulare la
@@ -8,6 +9,7 @@ righe dei pacchetti e l'ordine delle categorie, e si compone l'uscita pubblica.
 
 from django.db import transaction
 from django.db.models import Prefetch
+from django.utils import timezone
 
 from common.utils import salon_get
 
@@ -63,6 +65,24 @@ def set_category_order(salon, ids: list[int]) -> None:
             if category.order != order:
                 category.order = order
                 category.save(update_fields=["order"])
+
+
+def set_service_archived(service: Service, archived: bool) -> None:
+    """Archivia il servizio (`archived=True`) o lo toglie dall'archivio.
+
+    Archiviandolo va anche in pausa: un servizio archiviato ma attivo sarebbe
+    prenotabile dall'app cliente pur essendo sparito dalla lista. Togliendolo
+    dall'archivio resta in pausa: torna fra i servizi del listino e si
+    riattiva a mano, quando si vuole, come ogni servizio in pausa.
+    """
+    if archived:
+        service.active = False
+        service.archived_at = service.archived_at or timezone.now()
+    else:
+        service.archived_at = None
+    # Solo queste due colonne: un save() completo riscriverebbe anche
+    # `yourang_item_id` letto a inizio richiesta (vedi update_service).
+    service.save(update_fields=["active", "archived_at"])
 
 
 def public_price_list(salon) -> list[dict]:

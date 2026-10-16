@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -55,6 +56,13 @@ class ServiceOut(Schema):
     product_cost: Decimal
     supplier_cost: Decimal
     active: bool
+    archived_at: Optional[datetime] = Field(
+        None,
+        description=(
+            "Quando è stato archiviato (un servizio che il salone non fa più); null = non "
+            "archiviato. Un servizio archiviato è anche in pausa (`active` falso)."
+        ),
+    )
     order: int
     # "" = il colore della categoria; "#RRGGBB" = un colore suo, personalizzato.
     color: str = Field(

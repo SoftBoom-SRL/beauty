@@ -7,6 +7,9 @@ export const servicesApi = {
   create: (body) => api.post('/api/catalog/services', body),
   update: (id, body) => api.put(`/api/catalog/services/${id}`, body),
   remove: (id) => api.del(`/api/catalog/services/${id}`),
+  // archiviato = fuori dalla lista e in pausa; ripristinato = di nuovo in lista, in pausa
+  archive: (id) => api.post(`/api/catalog/services/${id}/archive`),
+  restore: (id) => api.post(`/api/catalog/services/${id}/restore`),
 };
 
 export const packagesApi = {

@@ -14,8 +14,10 @@ import { pillVars } from '../../ui/colorTools.js';
 
 const catName = (cat, lang) => (cat ? nameIn(cat, lang) : '');
 
-export default function SvcEditModal({ service, categories, operators, canTeam, canPricing = true, onSave, onClose, onCats, onCatColor, t, lang }) {
+export default function SvcEditModal({ service, categories, operators, canTeam, canPricing = true, onSave, onArchive = null, onRestore = null, onClose, onCats, onCatColor, t, lang }) {
   const isNew = !service?.id;
+  // archiviato: fuori dalla lista e in pausa; riattivandolo e salvando esce dall'archivio
+  const archived = !isNew && !!service.archived_at;
   const [draft, setDraft] = useState(() => ({
     name_it: service?.name_it || '',
     name_en: service?.name_en || '',
@@ -100,6 +102,12 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
       width={580}
       foot={(
         <React.Fragment>
+          {!isNew && !archived && onArchive && (
+            <button data-archive className="dk-btn dk-btn--ghost" style={{ marginRight: 'auto' }} onClick={onArchive}
+              title={t('Non lo fai più: esce dalla lista e non si prenota, resta nelle visite passate', 'You no longer offer it: it leaves the list and cannot be booked, it stays in past visits')}>
+              <Icon name="archive" size={15} />{t('Archivia', 'Archive')}
+            </button>
+          )}
           <button className="dk-btn dk-btn--ghost" onClick={onClose}>{t('Annulla', 'Cancel')}</button>
           <button className="dk-btn dk-btn--clay" disabled={!canSave} style={{ opacity: canSave ? 1 : 0.5 }} onClick={submit}>
             <Icon name="check" size={17} color="#fff" />{saving ? t('Salvataggio…', 'Saving…') : t('Salva', 'Save')}
@@ -107,6 +115,20 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
         </React.Fragment>
       )}
     >
+      {archived && (
+        <div data-archived-banner style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 14, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--hair)' }}>
+          <Icon name="archive" size={18} color="var(--muted)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>{t('Servizio archiviato', 'Archived service')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>{t('Fuori dalla lista e non prenotabile; resta nelle visite passate e nei pacchetti.', 'Not listed and not bookable; it stays in past visits and packages.')}</div>
+          </div>
+          {onRestore && (
+            <button data-restore className="dk-btn dk-btn--soft" style={{ flexShrink: 0 }} onClick={onRestore}>
+              <Icon name="undo" size={14} />{t('Ripristina', 'Restore')}
+            </button>
+          )}
+        </div>
+      )}
       {/* bilingual name */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <div>
@@ -286,7 +308,9 @@ export default function SvcEditModal({ service, categories, operators, canTeam, 
         </div>
       </div>
 
-      <FRow label={t('Servizio attivo', 'Service active')} hint={draft.active ? t('Prenotabile', 'Bookable') : t('In pausa, non prenotabile', 'Paused, not bookable')}>
+      <FRow label={t('Servizio attivo', 'Service active')} hint={draft.active
+        ? (archived ? t('Prenotabile: salvando esce dall’archivio', 'Bookable: saving takes it out of the archive') : t('Prenotabile', 'Bookable'))
+        : (archived ? t('Archiviato, non prenotabile', 'Archived, not bookable') : t('In pausa, non prenotabile', 'Paused, not bookable'))}>
         <Toggle on={draft.active} onChange={(v) => set({ active: v })} />
       </FRow>
 

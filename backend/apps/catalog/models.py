@@ -56,6 +56,13 @@ class Service(models.Model):
     product_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     supplier_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     active = models.BooleanField(default=True)
+    # Archiviato: un servizio che il salone non fa più. Esce dalla lista dei
+    # servizi (la pausa lo lasciava lì fra gli attivi, e dopo qualche stagione
+    # la lista era piena di servizi spenti) ma resta nel database: le visite
+    # passate e i pacchetti venduti lo citano col suo nome e il suo colore.
+    # Archiviato vuol dire anche in pausa (`active` falso), così ogni filtro
+    # `active=True` (prenotazioni, app cliente, listino) lo esclude già.
+    archived_at = models.DateTimeField(null=True, blank=True)
     order = models.PositiveIntegerField(default=0)
     # Voce di catalogo Yourang collegata (sync push).
     yourang_item_id = models.CharField(max_length=64, blank=True, default="")

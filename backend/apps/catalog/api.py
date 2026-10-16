@@ -37,6 +37,7 @@ from .services import (
     public_package_list,
     public_price_list,
     set_category_order,
+    set_service_archived,
     sync_package_items,
 )
 
@@ -112,6 +113,15 @@ def delete_category(request, category_id: int):
     try:
         category.delete()
     except ProtectedError:
+        # Anche i servizi archiviati tengono la categoria (le visite passate li
+        # citano): «servizi collegati» su una categoria che nella lista sembra
+        # vuota, perché i suoi servizi sono tutti in archivio, non si capiva.
+        if not category.services.filter(archived_at__isnull=True).exists():
+            raise HttpError(
+                400,
+                "Impossibile eliminare: la categoria ha servizi archiviati; "
+                "spostali in un'altra categoria",
+            )
         raise HttpError(400, "Impossibile eliminare: categoria con servizi collegati")
     log_activity(
         ctx.salon,
@@ -197,11 +207,17 @@ def update_service(request, service_id: int, data: ServiceIn):
         del payload["is_addon"]
     for name, value in payload.items():
         setattr(service, name, value)
+    fields = [*payload.keys(), "category"]
+    if service.active and service.archived_at:
+        # Riattivato dalla sua scheda: esce anche dall'archivio. Attivo e
+        # archiviato insieme sarebbe prenotabile ma nascosto dalla lista.
+        service.archived_at = None
+        fields.append("archived_at")
     # Solo le colonne del modulo: il save() completo riscriveva anche
     # `yourang_item_id` con il valore letto a inizio richiesta, e la voce
     # collegata dalla sincronizzazione nel frattempo tornava vuota — al giro
     # dopo la sync ne creava una seconda su Yourang (18-07).
-    service.save(update_fields=[*payload.keys(), "category"])
+    service.save(update_fields=fields)
     log_activity(
         ctx.salon,
         "service.updated",
@@ -235,6 +251,46 @@ def delete_service(request, service_id: int):
         payload={"service_id": service.id},
     )
     return OkOut()
+
+
+@router.post("/services/{int:service_id}/archive", auth=staff_auth, response=ServiceOut)
+def archive_service(request, service_id: int):
+    """Archivia un servizio che il salone non fa più.
+
+    Esce dalla lista dei servizi (la si ritrova col filtro «Archiviati») e,
+    come uno in pausa, non si prenota più; le visite passate e i pacchetti
+    che lo contengono lo tengono, con il suo nome e il suo colore. Si
+    ripristina con `POST /services/{id}/restore`."""
+    ctx = request.auth
+    require_scope(ctx, "pricing")
+    service = salon_get(Service, ctx, service_id)
+    set_service_archived(service, True)
+    log_activity(
+        ctx.salon,
+        "service.archived",
+        f"Servizio archiviato: {service.name_it}",
+        actor=ctx.user,
+        payload={"service_id": service.id},
+    )
+    return service
+
+
+@router.post("/services/{int:service_id}/restore", auth=staff_auth, response=ServiceOut)
+def restore_service(request, service_id: int):
+    """Toglie un servizio dall'archivio: torna nella lista, in pausa, e si
+    riattiva quando si vuole."""
+    ctx = request.auth
+    require_scope(ctx, "pricing")
+    service = salon_get(Service, ctx, service_id)
+    set_service_archived(service, False)
+    log_activity(
+        ctx.salon,
+        "service.restored",
+        f"Servizio ripristinato dall'archivio: {service.name_it}",
+        actor=ctx.user,
+        payload={"service_id": service.id},
+    )
+    return service
 
 
 # ---- Pacchetti ------------------------------------------------------------------

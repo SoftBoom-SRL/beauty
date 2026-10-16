@@ -72,6 +72,8 @@ export const ICON_PATHS = {
   fitw: '<path d="M3 12h6.5M6.5 9l3 3-3 3M21 12h-6.5M17.5 9l-3 3 3 3M12 4v16"/>',
   // la larghezza delle colonne dell'agenda (lo zoom di lato)
   width: '<path d="M4 5v14M20 5v14M7.5 12h9M10 9.5 7.5 12l2.5 2.5M14 9.5l2.5 2.5-2.5 2.5"/>',
+  // archivia (una scatola col coperchio): i servizi che non si fanno più
+  archive: '<path d="M3.5 5.5h17v4h-17z"/><path d="M5 9.5v9h14v-9M10 13h4"/>',
 };
 
 export function Icon({ name, size = 22, color = 'currentColor', stroke = 1.7, style = {}, className }) {

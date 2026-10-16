@@ -95,18 +95,21 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
   /* Eliminare partiva al primo clic sulla «x» rossa accanto alla matita: «VIP»
    * spariva da trecento schede cliente, una categoria magazzino dai suoi
    * prodotti (15-08). Ora si chiede, dicendo quante schede la perdono. */
-  const [confirmDel, setConfirmDel] = useState(null); // { cat, kind, count: n|null }
+  const [confirmDel, setConfirmDel] = useState(null); // { cat, kind, count: n|null, archived: n }
   const [deleting, setDeleting] = useState(false);
   const askDelete = async (cat) => {
     const k = kind;
-    setConfirmDel({ cat, kind: k, count: null });
+    setConfirmDel({ cat, kind: k, count: null, archived: 0 });
     let count;
+    // i servizi archiviati tengono la categoria ma non sono in lista: detti a
+    // parte, se no «contiene 2 servizi» su una categoria che sembra vuota
+    const archived = k === 'servizi' ? (services || []).filter((sv) => sv.category_id === cat.id && sv.archived_at).length : 0;
     try {
       if (k === 'clienti') count = (await clientsApi.list({ category_id: cat.id, limit: 1 }))?.count;
       else if (k === 'magazzino') count = (await productsApi.list({ category_id: cat.id, include_inactive: true, limit: 1 }))?.count;
       else count = (services || []).filter((sv) => sv.category_id === cat.id).length;
     } catch { count = undefined; }
-    setConfirmDel((c) => (c && c.cat.id === cat.id ? { ...c, count: Number.isFinite(count) ? count : -1 } : c));
+    setConfirmDel((c) => (c && c.cat.id === cat.id ? { ...c, count: Number.isFinite(count) ? count : -1, archived } : c));
   };
   const del = async () => {
     const c = confirmDel;
@@ -143,8 +146,11 @@ export default function CategoriesManagerModal({ onClose, kind: kindProp, scope:
         ? t(`${c.count === 1 ? '1 prodotto resterà' : c.count + ' prodotti resteranno'} senza categoria.`, `${c.count === 1 ? '1 product' : c.count + ' products'} will be left without a category.`)
         : t('Nessun prodotto è in questa categoria.', 'No product is in this category.');
     }
+    const arch = c.archived
+      ? t(` (${c.archived === 1 ? '1 archiviato' : c.archived + ' archiviati'}: li trovi in Servizi col filtro Archiviati)`, ` (${c.archived} archived: find them in Services under the Archived filter)`)
+      : '';
     return c.count > 0
-      ? t(`Contiene ${c.count === 1 ? '1 servizio' : c.count + ' servizi'}: spostali prima in un’altra categoria, altrimenti non si può eliminare.`, `It holds ${c.count === 1 ? '1 service' : c.count + ' services'}: move them to another category first, otherwise it cannot be deleted.`)
+      ? t(`Contiene ${c.count === 1 ? '1 servizio' : c.count + ' servizi'}${arch}: spostali prima in un’altra categoria, altrimenti non si può eliminare.`, `It holds ${c.count === 1 ? '1 service' : c.count + ' services'}${arch}: move them to another category first, otherwise it cannot be deleted.`)
       : t('Nessun servizio è in questa categoria.', 'No service is in this category.');
   };
 

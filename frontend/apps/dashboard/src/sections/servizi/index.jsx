@@ -2,7 +2,7 @@
 // Owns its own fetch/refetch of /api/catalog/services and /api/catalog/packages
 // so edits show immediately; syncs the ctx base catalogs via reload.* after writes.
 import { useCallback, useEffect, useState } from 'react';
-import { toastApiError } from '@youty/shared';
+import { nameIn, toastApiError } from '@youty/shared';
 import { useDash, useLive } from '../../ctx.jsx';
 import ServiziSub from './ServiziSub.jsx';
 import PacchettiSub from './PacchettiSub.jsx';
@@ -11,6 +11,25 @@ import PkgEditModal from './PkgEditModal.jsx';
 import SubTabs from '../../ui/SubTabs.jsx';
 import { packagesApi, serviceCategoriesApi, servicesApi } from '../../api/catalog.js';
 import { staffApi } from '../../api/staff.js';
+
+/** Riattiva un servizio. PUT = sostituzione completa (ServiceIn ha i
+ *  default): i campi omessi venivano azzerati, quindi riattivare un servizio ne
+ *  cancellava descrizione e tempo di posa. Colore e «aggiuntivo» assenti =
+ *  invariati. Un servizio archiviato riattivato esce anche dall'archivio. */
+const reactivate = (s) => servicesApi.update(s.id, {
+  category_id: s.category_id,
+  name_it: s.name_it,
+  name_en: s.name_en,
+  description_it: s.description_it || '',
+  description_en: s.description_en || '',
+  duration_min: s.duration_min,
+  soak_min: s.soak_min || 0,
+  price: s.price,
+  product_cost: s.product_cost,
+  supplier_cost: s.supplier_cost,
+  active: true,
+  order: s.order,
+});
 
 export default function ServiziSection() {
   const {
@@ -109,23 +128,7 @@ export default function ServiziSection() {
       if (!active) {
         await servicesApi.remove(s.id);
       } else {
-        // PUT = sostituzione completa (ServiceIn ha i default): i campi omessi
-        // venivano azzerati, quindi riattivare un servizio ne cancellava
-        // descrizione e tempo di posa.
-        await servicesApi.update(s.id, {
-          category_id: s.category_id,
-          name_it: s.name_it,
-          name_en: s.name_en,
-          description_it: s.description_it || '',
-          description_en: s.description_en || '',
-          duration_min: s.duration_min,
-          soak_min: s.soak_min || 0,
-          price: s.price,
-          product_cost: s.product_cost,
-          supplier_cost: s.supplier_cost,
-          active: true,
-          order: s.order,
-        });
+        await reactivate(s);
       }
       reload?.services?.().catch(() => {});
       fireToast({
@@ -137,6 +140,45 @@ export default function ServiziSection() {
       toastErr(err);
     }
   }, [reload, fireToast, t, toastErr]);
+
+  /** Archivia: esce dalla lista e va in pausa (vedi ServiziSub). Si annulla dal
+   *  messaggio, e il servizio torna com'era: attivo o in pausa. */
+  const archiveService = useCallback(async (s) => {
+    const name = nameIn(s, lang);
+    try {
+      const saved = await servicesApi.archive(s.id);
+      setServices((l) => l.map((x) => (x.id === s.id ? { ...x, ...saved } : x)));
+      setEditSvc(null);
+      reload?.services?.().catch(() => {});
+      fireToast({
+        msg: t(`«${name}» archiviato: lo trovi col filtro Archiviati`, `“${name}” archived: find it under the Archived filter`),
+        icon: 'archive',
+        undo: t('Annulla', 'Undo'),
+        undoFn: async () => {
+          try {
+            await (s.active ? reactivate(s) : servicesApi.restore(s.id));
+            await fetchServices().catch(() => {});
+            reload?.services?.().catch(() => {});
+          } catch (err) { toastErr(err); }
+        },
+      });
+    } catch (err) {
+      toastErr(err);
+    }
+  }, [lang, reload, fireToast, fetchServices, t, toastErr]);
+
+  /** Ripristina dall'archivio: torna nella lista in pausa, si riattiva a mano. */
+  const restoreService = useCallback(async (s) => {
+    try {
+      const saved = await servicesApi.restore(s.id);
+      setServices((l) => l.map((x) => (x.id === s.id ? { ...x, ...saved } : x)));
+      setEditSvc(null);
+      reload?.services?.().catch(() => {});
+      fireToast({ msg: t(`«${nameIn(s, lang)}» è di nuovo in lista, in pausa: attivalo quando vuoi`, `“${nameIn(s, lang)}” is back in the list, paused: activate it whenever you like`), icon: 'check' });
+    } catch (err) {
+      toastErr(err);
+    }
+  }, [lang, reload, fireToast, t, toastErr]);
 
   /* ---- package mutations ---- */
   const savePackage = useCallback(async (payload) => {
@@ -193,6 +235,8 @@ export default function ServiziSection() {
           onEdit={setEditSvc}
           onNew={() => setEditSvc({})}
           onToggleActive={toggleServiceActive}
+          onArchive={archiveService}
+          onRestore={restoreService}
           t={t} lang={lang}
         />
       ) : (
@@ -213,6 +257,8 @@ export default function ServiziSection() {
           canTeam={canTeam}
           canPricing={canPricing}
           onSave={saveService}
+          onArchive={canPricing && editSvc.id ? () => archiveService(editSvc) : null}
+          onRestore={canPricing && editSvc.id ? () => restoreService(editSvc) : null}
           onClose={() => setEditSvc(null)}
           onCats={openCats}
           onCatColor={setCategoryColor}
