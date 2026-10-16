@@ -1,31 +1,20 @@
 // VoiceDrawer.jsx — assistente vocale: l'agente Yourang prenota al telefono
-// (backend: apps/integrations/voice.py). Il titolare genera la chiave e scarica
-// il file da importare su Yourang; la chiave in chiaro si vede una volta sola.
+// (backend: apps/integrations/voice.py). Un interruttore: il backend installa
+// gli strumenti sull'org Yourang da sé (anche appena il salone si collega).
+// Prima il titolare generava una chiave, scaricava un file JSON e lo importava
+// su Yourang a mano: troppi passi per chi gestisce un salone.
 import { useEffect, useState } from 'react';
-import { API_URL, Icon, fmtDateIt, toastApiError } from '@youty/shared';
+import { Icon, fmtDateIt, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { CopyField } from './lib.jsx';
 import { voiceApi } from '../../api/integrations.js';
-import { buildYourangImport } from './voiceTools.js';
 
-function download(key) {
-  const blob = new Blob([JSON.stringify(buildYourangImport(API_URL, key), null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'yourang-strumenti-prenotazioni.json';
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export default function VoiceDrawer({ onClose, onChange }) {
+export default function VoiceDrawer({ onClose, onChange, onReconnect }) {
   const { t, fireToast } = useDash();
-  const [status, setStatus] = useState(null);   // { active, created_at }
-  const [key, setKey] = useState('');           // in chiaro solo dopo «Genera»
-  const [confirm, setConfirm] = useState(null); // 'rotate' | 'revoke'
+  const [status, setStatus] = useState(null);   // { active, created_at, connected, needs_reconnect }
+  const [confirmOff, setConfirmOff] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { voiceApi.status().then(setStatus).catch(() => setStatus(null)); }, []);
@@ -33,23 +22,16 @@ export default function VoiceDrawer({ onClose, onChange }) {
   const run = async (action) => {
     setBusy(true);
     try {
-      if (action === 'revoke') {
-        await voiceApi.revoke();
-        setKey('');
-        setStatus({ active: false, created_at: null });
-        fireToast({ msg: t('Assistente vocale disattivato', 'Voice assistant switched off'), icon: 'check' });
-      } else {
-        const data = await voiceApi.generate();
-        setKey(data.key);
-        setStatus({ active: true, created_at: data.created_at });
-      }
+      setStatus(await (action === 'off' ? voiceApi.uninstall() : voiceApi.install()));
+      fireToast({ msg: action === 'off' ? t('Assistente vocale disattivato', 'Voice assistant switched off') : t('Assistente vocale attivo', 'Voice assistant active'), icon: 'check' });
       onChange?.();
-      setConfirm(null);
+      setConfirmOff(false);
     } catch (err) { toastApiError(err, fireToast, t); }
     finally { setBusy(false); }
   };
 
   const active = !!status?.active;
+  const reconnect = status && (!status.connected || status.needs_reconnect);
 
   return (
     <DkDrawer open onClose={onClose}>
@@ -61,55 +43,55 @@ export default function VoiceDrawer({ onClose, onChange }) {
           <span style={{ width: 8, height: 8, borderRadius: 99, background: active ? 'var(--ok)' : 'var(--muted-2)', flexShrink: 0 }} />
           <div style={{ fontWeight: 600, fontSize: 14.5, flex: 1 }}>
             {active
-              ? t('Attivo', 'Active') + (status.created_at ? ' · ' + t('chiave del', 'key from') + ' ' + fmtDateIt(status.created_at, { weekday: false }) : '')
-              : t('Nessuna chiave: l’agente non può prenotare', 'No key: the agent cannot book')}
+              ? t('Attivo', 'Active') + (status.created_at ? ' · ' + t('dal', 'since') + ' ' + fmtDateIt(status.created_at, { weekday: false }) : '')
+              : t('Non attivo', 'Off')}
           </div>
         </div>
 
         <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.5, marginBottom: 18 }}>
-          {t('Con la chiave, l’agente vocale di Yourang legge i servizi e gli orari liberi e prenota per la cliente durante la chiamata, come dall’app: stessa disponibilità, caparra e conferma su WhatsApp.',
-             'With the key, the Yourang voice agent reads services and free times and books for the client during the call, just like the app: same availability, deposit and WhatsApp confirmation.')}
+          {t('L’agente vocale di Yourang legge i servizi e gli orari liberi e prenota per la cliente durante la chiamata, come dall’app: stessa disponibilità, caparra e conferma su WhatsApp. Non devi configurare niente su Yourang.',
+             'The Yourang voice agent reads services and free times and books for the client during the call, just like the app: same availability, deposit and WhatsApp confirmation. Nothing to set up on Yourang.')}
         </div>
 
-        {key && (
-          <div style={{ marginBottom: 18 }}>
-            <div className="t-meta" style={{ marginBottom: 8 }}>{t('Chiave (copiala ora: non verrà più mostrata)', 'Key (copy it now: it will not be shown again)')}</div>
-            <CopyField value={key} t={t} fireToast={fireToast} />
+        {reconnect ? (
+          <>
+            <div className="t-sm" style={{ color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>
+              {status.connected
+                ? t('Il collegamento con Yourang è di prima che esistesse l’assistente: ricollegalo e si attiva da solo.', 'The Yourang connection predates the assistant: reconnect it and it switches on by itself.')
+                : t('Collega Yourang: l’assistente si attiva da solo.', 'Connect Yourang: the assistant switches on by itself.')}
+            </div>
+            <button className="dk-btn dk-btn--clay" onClick={() => { onReconnect?.(); onClose(); }}>
+              <Icon name="globe" size={16} color="#fff" />{status.connected ? t('Ricollega Yourang', 'Reconnect Yourang') : t('Collega Yourang', 'Connect Yourang')}
+            </button>
+          </>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {active ? (
+              <>
+                <button className="dk-btn dk-btn--soft" disabled={busy} onClick={() => run('on')}>
+                  {t('Reinstalla su Yourang', 'Reinstall on Yourang')}
+                </button>
+                <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={() => setConfirmOff(true)}>
+                  {t('Disattiva', 'Switch off')}
+                </button>
+              </>
+            ) : (
+              <button className="dk-btn dk-btn--clay" disabled={busy || !status} onClick={() => run('on')}>
+                <Icon name="check" size={16} color="#fff" />{t('Attiva', 'Switch on')}
+              </button>
+            )}
           </div>
         )}
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button className="dk-btn dk-btn--clay" disabled={busy} onClick={() => (active ? setConfirm('rotate') : run('rotate'))}>
-            <Icon name="check" size={16} color="#fff" />{active ? t('Genera una nuova chiave', 'Generate a new key') : t('Genera la chiave', 'Generate the key')}
-          </button>
-          {(active || key) && (
-            <button className="dk-btn dk-btn--soft" onClick={() => download(key)}>
-              {key ? t('Scarica il file per Yourang (con la chiave)', 'Download the Yourang file (with the key)') : t('Scarica il file per Yourang (senza chiave)', 'Download the Yourang file (without the key)')}
-            </button>
-          )}
-          {active && (
-            <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={() => setConfirm('revoke')}>
-              {t('Disattiva', 'Switch off')}
-            </button>
-          )}
-        </div>
-
-        <div className="t-sm" style={{ color: 'var(--muted-2)', lineHeight: 1.5, marginTop: 20 }}>
-          {t('Su Yourang: agente → Strumenti → Strumenti esterni → Importa, e scegli il file. Senza la chiave nel file, aggiungila a mano come Bearer token su ogni strumento. Spegni lo strumento di prenotazione interno di Yourang sull’agente: altrimenti la stessa prenotazione arriva due volte.',
-             'On Yourang: agent → Tools → External tools → Import, and pick the file. If the file has no key, add it by hand as a Bearer token on each tool. Turn off Yourang’s built-in booking tool on the agent: otherwise the same booking arrives twice.')}
-        </div>
       </div>
 
       <DkConfirm
-        open={!!confirm}
+        open={confirmOff}
         busy={busy}
-        onClose={() => setConfirm(null)}
-        onConfirm={() => run(confirm)}
-        title={confirm === 'revoke' ? t('Disattivare l’assistente vocale?', 'Switch off the voice assistant?') : t('Generare una nuova chiave?', 'Generate a new key?')}
-        message={confirm === 'revoke'
-          ? t('L’agente Yourang non potrà più leggere gli orari né prenotare.', 'The Yourang agent will no longer read times or book.')
-          : t('La chiave attuale smette subito di funzionare: dovrai mettere la nuova su Yourang.', 'The current key stops working right away: you will have to put the new one on Yourang.')}
-        confirmLabel={confirm === 'revoke' ? t('Disattiva', 'Switch off') : t('Genera', 'Generate')}
+        onClose={() => setConfirmOff(false)}
+        onConfirm={() => run('off')}
+        title={t('Disattivare l’assistente vocale?', 'Switch off the voice assistant?')}
+        message={t('L’agente Yourang non potrà più leggere gli orari né prenotare.', 'The Yourang agent will no longer read times or book.')}
+        confirmLabel={t('Disattiva', 'Switch off')}
         cancelLabel={t('Annulla', 'Cancel')} />
     </DkDrawer>
   );

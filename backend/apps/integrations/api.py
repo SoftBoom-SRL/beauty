@@ -34,8 +34,7 @@ from .schemas import (
     ExchangeIn,
     StatusOut,
     VoiceAppointmentIn,
-    VoiceKeyOut,
-    VoiceKeyStatusOut,
+    VoiceStatusOut,
 )
 
 logger = logging.getLogger("youty.integrations")
@@ -260,30 +259,33 @@ def voice_book(request, data: VoiceAppointmentIn):
     return voice.booking_reply(request.auth, data)
 
 
-@router.get("/voice/key", auth=staff_auth, response=VoiceKeyStatusOut)
-def voice_key_status(request):
-    """Se l'assistente vocale ha una chiave attiva, e da quando."""
+@router.get("/voice/assistant", auth=staff_auth, response=VoiceStatusOut)
+def voice_status(request):
+    """Se l'assistente vocale è attivo, e se il collegamento Yourang permette di attivarlo."""
     ctx = request.auth
     require_owner(ctx)
-    return {
-        "active": bool(ctx.salon.voice_api_key_hash),
-        "created_at": ctx.salon.voice_api_key_created_at,
-    }
+    return voice.status(ctx.salon)
 
 
-@router.post("/voice/key", auth=staff_auth, response=VoiceKeyOut)
-def voice_key_rotate(request):
-    """Genera la chiave dell'assistente vocale (sostituisce la precedente, che smette di valere)."""
+@router.post("/voice/assistant", auth=staff_auth, response=VoiceStatusOut)
+def voice_install(request):
+    """Attiva l'assistente vocale: installa gli strumenti di prenotazione sull'org Yourang.
+
+    Ripeterlo reinstalla con una chiave nuova (la precedente smette di valere).
+    """
     ctx = request.auth
     require_owner(ctx)
-    key = voice.rotate_key(ctx.salon, ctx.user)
-    return {"key": key, "created_at": ctx.salon.voice_api_key_created_at}
+    try:
+        voice.install(ctx.salon, ctx.user)
+    except voice.VoiceSetupError as exc:
+        raise HttpError(409, str(exc)) from exc
+    return voice.status(ctx.salon)
 
 
-@router.delete("/voice/key", auth=staff_auth, response=OkOut)
-def voice_key_revoke(request):
-    """Revoca la chiave: l'agente non può più leggere la disponibilità né prenotare."""
+@router.delete("/voice/assistant", auth=staff_auth, response=VoiceStatusOut)
+def voice_uninstall(request):
+    """Spegne l'assistente vocale: l'agente non può più leggere la disponibilità né prenotare."""
     ctx = request.auth
     require_owner(ctx)
-    voice.revoke_key(ctx.salon, ctx.user)
-    return OkOut()
+    voice.uninstall(ctx.salon, ctx.user)
+    return voice.status(ctx.salon)

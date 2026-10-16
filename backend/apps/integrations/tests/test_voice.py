@@ -1,14 +1,22 @@
 """Assistente vocale: l'agente Yourang legge servizi e orari e prenota al telefono."""
 
 from decimal import Decimal
+from unittest.mock import Mock, patch
+
+import httpx
+from django.test import override_settings
 
 from apps.agenda.models import Appointment
 from apps.agenda.tests.base import RealShiftsTestBase
 from apps.catalog.models import Service
 from apps.clients.models import Client
 from apps.core.models import OutboxEvent
-from apps.integrations import voice
+from apps.integrations import sync, voice
+from apps.integrations.models import YourangConnection
+from apps.integrations.sync import SyncReport
 from common.testing import aware, post_json
+
+from .base import API_SETTINGS, _connection
 
 
 class VoiceTestBase(RealShiftsTestBase):
@@ -53,18 +61,85 @@ class VoiceAuthTests(VoiceTestBase):
         voice.revoke_key(self.salon, None)
         self.assertEqual(self.services().status_code, 401)
 
-    def test_only_the_owner_manages_the_key(self):
+    def test_only_the_owner_manages_the_assistant(self):
         desk = self.staff_auth(("agenda", "settings"))
-        self.assertEqual(self.client.post("/api/integrations/voice/key", **desk).status_code, 403)
-        owner = self.staff_auth(email="titolare@caccia22.it", owner=True)
-        res = self.client.post("/api/integrations/voice/key", **owner)
+        self.assertEqual(self.client.post("/api/integrations/voice/assistant", **desk).status_code, 403)
+        self.assertEqual(self.client.get("/api/integrations/voice/assistant", **desk).status_code, 403)
+
+
+@override_settings(**API_SETTINGS, PUBLIC_API_URL="https://beautyapi.test")
+class VoiceInstallTests(VoiceTestBase):
+    """Il titolare non importa più file né copia chiavi: il backend installa da sé."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = _connection(
+            self.salon, "org-voce", status=YourangConnection.Status.CONNECTED,
+            scope="openid contacts:write agents:read agents:write",
+        )
+        self.owner = self.staff_auth(email="titolare@voce.it", owner=True)
+
+    def yourang(self, fail_on=None):
+        """`_request` finto: risponde come l'external API, o fallisce su un metodo."""
+        def answer(method, path, **kwargs):
+            if method == fail_on:
+                raise httpx.HTTPStatusError("x", request=Mock(), response=Mock(status_code=500))
+            resp = Mock()
+            resp.json.return_value = {"ok": True, "data": [{"id": "ag-1"}, {"id": "ag-2"}] if method == "GET" else {}}
+            return resp
+        return patch("apps.integrations.client.YourangClient._request", side_effect=answer)
+
+    def test_activating_installs_the_tools_and_switches_off_the_builtin_booking(self):
+        with self.yourang() as req:
+            res = self.client.post("/api/integrations/voice/assistant", **self.owner)
         self.assertEqual(res.status_code, 200, res.content)
-        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {res.json()['key']}"}
+        self.assertTrue(res.json()["active"])
+
+        puts = [c for c in req.call_args_list if c.args[0] == "PUT"]
+        self.assertEqual([c.args[1] for c in puts], [f"/external-tools/{n}" for n in voice.TOOL_NAMES])
+        tool = puts[1].kwargs["json"]
+        self.assertEqual(tool["webhook_url"], "https://beautyapi.test/api/integrations/voice/availability")
+        self.assertEqual(tool["parameter_routing"], {"date": {"location": "query"}, "services": {"location": "query"}})
+        self.assertEqual(
+            [c.args[1] for c in req.call_args_list if c.args[0] == "PATCH"],
+            ["/agents/ag-1/tools/make-reservation", "/agents/ag-2/tools/make-reservation"],
+        )
+        # La chiave installata su Yourang è quella che il backend accetta; la vecchia non più.
+        self.assertEqual(self.services().status_code, 401)
+        self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tool['auth_config']['token']}"}
         self.assertEqual(self.services().status_code, 200)
-        status = self.client.get("/api/integrations/voice/key", **owner).json()
-        self.assertTrue(status["active"])
-        self.assertEqual(self.client.delete("/api/integrations/voice/key", **owner).status_code, 200)
-        self.assertFalse(self.client.get("/api/integrations/voice/key", **owner).json()["active"])
+
+    def test_a_failed_upload_keeps_the_key_the_agent_already_has(self):
+        with self.yourang(fail_on="PUT"):
+            res = self.client.post("/api/integrations/voice/assistant", **self.owner)
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("riprova", res.json()["detail"])
+        self.assertEqual(self.services().status_code, 200)
+
+    def test_a_connection_from_before_the_agents_scope_asks_to_reconnect(self):
+        YourangConnection.objects.filter(pk=self.conn.pk).update(scope="openid contacts:write")
+        self.assertTrue(self.client.get("/api/integrations/voice/assistant", **self.owner).json()["needs_reconnect"])
+        with self.yourang() as req:
+            res = self.client.post("/api/integrations/voice/assistant", **self.owner)
+        self.assertEqual((res.status_code, res.json()["detail"]), (409, voice.RECONNECT))
+        req.assert_not_called()
+
+    def test_switching_off_revokes_the_key_and_removes_the_tools(self):
+        with self.yourang() as req:
+            res = self.client.delete("/api/integrations/voice/assistant", **self.owner)
+        self.assertFalse(res.json()["active"])
+        self.assertEqual(
+            [c.args[:2] for c in req.call_args_list],
+            [("DELETE", f"/external-tools/{n}") for n in voice.TOOL_NAMES],
+        )
+        self.assertEqual(self.services().status_code, 401)
+
+    def test_connecting_installs_it_without_the_owner_doing_anything(self):
+        with patch("apps.integrations.voice.auto_install") as auto, \
+             patch("apps.integrations.sync.sync_clients", return_value=SyncReport()), \
+             patch("apps.integrations.sync.sync_services", return_value=SyncReport()):
+            sync.initial_sync(self.conn.pk)
+        auto.assert_called_once_with(self.conn.pk)
 
 
 class VoiceAvailabilityTests(VoiceTestBase):

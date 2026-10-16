@@ -179,6 +179,7 @@ semplicemente non c'è.
 | `YOURANG_CLIENT_SECRET` | Autentica il backend sul token endpoint di Yourang, allo scambio del codice e a ogni rinnovo dei token. Senza, il consenso riesce ma lo scambio no: il popup risponde `502` («Scambio token con Yourang fallito» o «Login con Yourang fallito»). |
 | `ENCRYPTION_KEY` | Cifra a riposo (AES-256-GCM) i token di ogni salone e il segreto del suo webhook. 32 byte hex, `openssl rand -hex 32`. Senza, il collegamento si ferma con un errore. **Non va cambiata** una volta in uso: con una chiave nuova i token salvati non si leggono più e ogni salone va ricollegato. |
 | `YOURANG_WEBHOOK_RECEIVER_URL` | L'URL pubblico del webhook in ingresso, che il backend registra su Yourang a ogni collegamento. Senza, il collegamento riesce lo stesso ma Yourang non spinge niente: le prenotazioni fatte su Yourang non arrivano, e contatti e listino si allineano solo con `sync_yourang`. |
+| `PUBLIC_API_URL` | Facoltativa. L'origine pubblica del backend (es. `https://beautyapi.yourang.ai`), a cui chiamano gli strumenti dell'assistente vocale che il backend installa su Yourang. Se manca la si ricava da `YOURANG_WEBHOOK_RECEIVER_URL`; senza nessuna delle due l'assistente non si attiva («Manca l'indirizzo pubblico del backend»). Il client OAuth Yourang deve poter chiedere gli scope `agents:read agents:write`: senza, l'assistente non si installa. |
 
 Opzionali, da aggiungere quando servono:
 

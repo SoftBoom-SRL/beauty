@@ -13,11 +13,11 @@ export const yourangApi = {
   exchange: (body) => api.post('/api/integrations/yourang/oauth/exchange', body),
 };
 
-/* Assistente vocale (prenotazioni al telefono): la chiave Bearer che l'agente
- * Yourang usa sulle rotte /voice/... `generate` risponde { key, created_at }:
- * la chiave in chiaro arriva solo lì. */
+/* Assistente vocale (prenotazioni al telefono): il backend installa da sé gli
+ * strumenti sull'org Yourang. Tutte e tre rispondono
+ * { active, created_at, connected, needs_reconnect }. */
 export const voiceApi = {
-  status: () => api.get('/api/integrations/voice/key'),
-  generate: () => api.post('/api/integrations/voice/key'),
-  revoke: () => api.del('/api/integrations/voice/key'),
+  status: () => api.get('/api/integrations/voice/assistant'),
+  install: () => api.post('/api/integrations/voice/assistant'),
+  uninstall: () => api.del('/api/integrations/voice/assistant'),
 };

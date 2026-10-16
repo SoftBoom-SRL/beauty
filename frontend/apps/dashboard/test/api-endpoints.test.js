@@ -210,9 +210,9 @@ const CASES = [
   [() => yourangApi.oauthStart(), ['GET', '/api/integrations/yourang/oauth/start']],
   [() => yourangApi.loginStart(), ['GET', '/api/integrations/yourang/oauth/login/start']],
   [() => yourangApi.exchange({ code: 'c', state: 's', nonce: 'n' }), ['POST', '/api/integrations/yourang/oauth/exchange', { body: { code: 'c', state: 's', nonce: 'n' } }]],
-  [() => voiceApi.status(), ['GET', '/api/integrations/voice/key']],
-  [() => voiceApi.generate(), ['POST', '/api/integrations/voice/key']],
-  [() => voiceApi.revoke(), ['DELETE', '/api/integrations/voice/key']],
+  [() => voiceApi.status(), ['GET', '/api/integrations/voice/assistant']],
+  [() => voiceApi.install(), ['POST', '/api/integrations/voice/assistant']],
+  [() => voiceApi.uninstall(), ['DELETE', '/api/integrations/voice/assistant']],
 ];
 
 const expected = ([method, path, rest = {}]) => ({ method, path, ...rest });

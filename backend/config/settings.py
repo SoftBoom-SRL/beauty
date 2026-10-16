@@ -306,6 +306,12 @@ YOURANG_CLIENT_ID = os.getenv("YOURANG_CLIENT_ID", "")
 YOURANG_CLIENT_SECRET = os.getenv("YOURANG_CLIENT_SECRET", "")
 # URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook).
 YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
+# Origine pubblica di questo backend: gli strumenti dell'assistente vocale che
+# si installano su Yourang chiamano qui (/api/integrations/voice/...). Di
+# serie la si ricava dal webhook receiver, che sta sullo stesso backend.
+PUBLIC_API_URL = (
+    os.getenv("PUBLIC_API_URL", "") or YOURANG_WEBHOOK_RECEIVER_URL.split("/api/", 1)[0]
+).rstrip("/")
 # Cifratura token a riposo (AES-256-GCM, come food/real_estate): openssl rand -hex 32
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).

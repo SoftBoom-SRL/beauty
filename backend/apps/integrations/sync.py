@@ -421,6 +421,11 @@ def initial_sync(conn_id: int) -> None:
     conn = YourangConnection.objects.select_related("salon").filter(pk=conn_id).first()
     if conn is None:
         return
+    # Prima della sync, che su un salone grande dura minuti: l'assistente
+    # vocale è pronto appena collegato. Import qui: voice tira dentro l'agenda.
+    from .voice import auto_install
+
+    auto_install(conn_id)
     try:
         clients = sync_clients(conn)
         services = sync_services(conn)
