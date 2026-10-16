@@ -232,7 +232,7 @@ test('vista giorno: l\'ombra fuori vista viene portata in vista', () => {
 /* La settimana montata: `dates` = i sette giorni (la sposa delle 07:00 il
  * sabato 03/10, se c'è), `scroll` e `querySelector` = quello che serve del
  * contenitore (scorrimento di lato, colonne dei giorni). */
-async function week({ settings = { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, weekStart = '2026-09-28', dates = null, scroll = {}, querySelector = () => null, props = {} } = {}) {
+async function week({ settings = { slot_interval_min: 15, opening_hours_week: WEEK_HOURS }, weekStart = '2026-09-28', dates = null, scroll = {}, querySelector = () => null, props = {}, operators = null, shifts = null } = {}) {
   installDom();
   let resolveWeek = null;
   globalThis.__api = {
@@ -250,13 +250,13 @@ async function week({ settings = { slot_interval_min: 15, opening_hours_week: WE
     ...scroll,
   };
   const m = mount(WeekView, {
-    weekStart, operators: [{ id: 1, first_name: 'Anna', last_name: 'Neri' }], colorOf: () => '#C9B8F2',
+    weekStart, operators: operators || [{ id: 1, first_name: 'Anna', last_name: 'Neri' }], colorOf: () => '#C9B8F2',
     itemColor: null, nowMin: null, onOpenDay: spy(), onNewAppt: spy(), onOpenAppt: spy(), onShowDate: spy(),
     pickMode: false, ghost: null, ghostDate: weekStart, zoom: 1, onZoom: null, ...props,
   }, { attach: (tree) => { if (tree?.props?.ref) tree.props.ref.current = scrollEl; } });
   const days = dates || ['2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'];
-  resolveWeek(days.map((date) => ({
-    date, count: date === DATE ? 1 : 0, by_status: {},
+  resolveWeek(days.map((date, i) => ({
+    date, count: date === DATE ? 1 : 0, by_status: {}, ...(shifts ? { shifts: shifts(date, i) } : {}),
     appointments: date === DATE ? [{ id: 1, start: at('07:00'), client_name: 'Sposa', operator_id: 1, status: 'confirmed', duration_min: 90, total_price: '50.00', items: [] }] : [],
   })));
   await tick();
@@ -280,6 +280,50 @@ test('vista settimana: l\'appuntamento delle 07:00 è in griglia', async () => {
   assert.deepEqual(closedOf(0).props.windows, [['09:00', '19:00']]);
   assert.deepEqual(closedOf(6).props.windows, []);
   assert.deepEqual(closedOf(6).props.labels, { some: null, none: 'Chiuso' });
+});
+
+/* 16/10: la settimana tratteggiava solo gli orari del centro, e non si
+ * vedeva chi lavorava quel giorno. Ora ogni sotto-colonna ha il suo turno
+ * (`shifts` del payload), come in vista giorno. */
+const TEAM = [{ id: 1, first_name: 'Anna', last_name: 'Neri' }, { id: 2, first_name: 'Bea', last_name: 'Blu' }];
+const shiftsOf = (date, i) => [
+  { operator_id: 1, windows: i === 6 ? [] : [['09:00', '13:00'], ['14:00', '19:00']], absence: null },
+  { operator_id: 2, windows: i >= 2 && i < 6 ? [['09:00', '19:00']] : [], absence: i === 1 ? 'vacation' : null },
+];
+const subcols = (m, i) => findAll(find(m.tree, (el) => el.props?.['data-daycol'] === i), (el) => el.props?.['data-subcol'] === '');
+const closedIn = (el) => findAll(el, (x) => x.props?.windows !== undefined && x.props.labels);
+
+test('vista settimana: ogni operatrice col suo turno, chi non lavora col motivo', async () => {
+  const { m } = await week({ operators: TEAM, shifts: shiftsOf });
+  const [anna, bea] = subcols(m, 0);
+  assert.deepEqual(closedIn(anna).map((c) => c.props.windows), [[['09:00', '13:00'], ['14:00', '19:00']]], 'la pausa pranzo di Anna');
+  assert.deepEqual(closedIn(bea).map((c) => [c.props.windows, c.props.labels.none, c.props.vertical]), [[[], 'Riposo', true]]);
+  assert.equal(closedIn(subcols(m, 1)[1])[0].props.labels.none, 'Ferie');
+  // con i turni il giorno non ripete gli orari del centro: un tratteggio solo
+  const day0 = find(m.tree, (el) => el.props?.['data-daycol'] === 0);
+  assert.equal(day0.props.children.flat(Infinity).find((el) => el?.props?.labels?.none === 'Chiuso'), undefined);
+  // la domenica il centro è chiuso: lo dice il giorno, non le colonne
+  const day6 = find(m.tree, (el) => el.props?.['data-daycol'] === 6);
+  assert.equal(day6.props.children.flat(Infinity).find((el) => el?.props?.labels)?.props.labels.none, 'Chiuso');
+  assert.deepEqual(subcols(m, 6).flatMap(closedIn), []);
+  // testate: il turno al passaggio, il nome spento per chi riposa, e la sua colonna più stretta
+  const heads = findAll(m.tree, (el) => el.props?.className === 'dk-wsub');
+  assert.deepEqual(heads.slice(0, 2).map((h) => [h.props.title, h.props['data-resting'], h.props.style.flex]), [
+    ['Anna Neri · 09:00–13:00 · 14:00–19:00', undefined, '1 1 0'], ['Bea Blu · Riposo', '', '0.6 1 0'],
+  ]);
+  // la domenica non lavora nessuna: la testata non dice «Libero»
+  const dayHead = (i) => find(m.tree, (el) => el.type?.name === 'WeekDayHeader' && el.props.index === i);
+  const headText = (i) => textOf(dayHead(i).type(dayHead(i).props));
+  assert.ok(headText(6).includes('Nessuna in turno'));
+  assert.ok(headText(0).includes('Libero'));
+});
+
+test('vista settimana: un salone senza turni resta con gli orari del centro', async () => {
+  const { m } = await week({ operators: TEAM, shifts: () => [{ operator_id: 1, windows: [], absence: null }, { operator_id: 2, windows: [], absence: null }] });
+  const day0 = find(m.tree, (el) => el.props?.['data-daycol'] === 0);
+  assert.deepEqual(day0.props.children.flat(Infinity).find((el) => el?.props?.labels)?.props.windows, [['09:00', '19:00']]);
+  assert.deepEqual(subcols(m, 0).flatMap(closedIn), [], 'nessuna colonna «a riposo»');
+  assert.equal(findAll(m.tree, (el) => el.props?.['data-resting'] === '').length, 0);
 });
 
 test('vista settimana: senza orari del centro impostati niente tratteggio', async () => {

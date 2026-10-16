@@ -6,7 +6,7 @@
 // nei test fa parte di WeekView.
 import { timeLabel } from '@youty/shared';
 import { WEEK_DAY_BORDER, WEEK_TODAY_BG, opColumnTint, weekLayout } from '../lib.js';
-import { weekColOf } from '../lib/week.js';
+import { offLabel, weekColOf } from '../lib/week.js';
 import ClosedHours from './ClosedHours.jsx';
 import GridLines from './GridLines.jsx';
 import NowLine from './NowLine.jsx';
@@ -33,6 +33,10 @@ export default function WeekDayColumn({
   ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null,
   onDayAreaClick, onEmptyClick, onBlockDown, onHover, onLeave,
 }) {
+  // il centro chiuso quel giorno lo dice il giorno intero; aperto, con i
+  // turni, ogni operatrice ha il suo fuori turno (`o.shift`, lib/week.js)
+  const closedDay = !!opening && opening.length === 0;
+  const perOp = !!day.usesShifts && !closedDay;
   const arriving = isTargetDay ? movingObjs : [];
   const loose = arriving.filter((m) => !day.dayOps.some((o) => o.id === weekColOf(m)));
   const looseTarget = isTargetDay && !day.dayOps.some((o) => o.id === dg.nop);
@@ -46,7 +50,7 @@ export default function WeekDayColumn({
       {/* fuori dagli orari del centro, tratteggiato come il fuori turno della
           vista giorno: la griglia copre le 24 ore, e senza il tratteggio le 3
           di notte sembravano un orario come un altro */}
-      {opening && <ClosedHours windows={opening} g0={g0} g1={g1} pxm={pxm} t={t} labels={{ some: null, none: t('Chiuso', 'Closed') }} />}
+      {opening && !perOp && <ClosedHours windows={opening} g0={g0} g1={g1} pxm={pxm} t={t} labels={{ some: null, none: t('Chiuso', 'Closed') }} />}
       <NowLine nowMin={nowMin} g0={g0} g1={g1} pxm={pxm} variant="week" />
       {day.dayOps.map((o, k) => {
         // la colonna del disegno: col filtro «Team» può non essere la principale (weekColOf)
@@ -66,6 +70,14 @@ export default function WeekDayColumn({
             // prima non ripete il bordo del giorno
             style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, position: 'relative', borderLeft: k ? '1px solid var(--hair-2)' : 'none', background: opColumnTint(colorOf(o.id), 'transparent'), cursor: canWrite ? 'copy' : 'default', borderRadius: isTarget ? 4 : 0, transition: dragging ? 'none' : 'flex-grow 200ms var(--ease)' }}
           >
+            {/* Il fuori turno di lei, come in vista giorno; a riposo o
+                assente tutto il giorno, con il motivo scritto per lungo. Prima
+                la settimana tratteggiava solo gli orari del centro e non si
+                vedeva chi lavorava (il titolare, 16/10). */}
+            {perOp && o.shift && (
+              <ClosedHours windows={o.shift.windows} g0={g0} g1={g1} pxm={pxm} t={t} vertical
+                labels={{ some: null, none: offLabel(o.shift, t) }} />
+            )}
             {/* Ombra dell'appuntamento aperto nel pannello, sul giorno
                 che si sta guardando: dove finirebbe, alla sua ora. Non
                 intercetta il puntatore — il clic passa sotto. */}

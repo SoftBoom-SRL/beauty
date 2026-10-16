@@ -140,17 +140,26 @@ def agenda_day(request, date: str, location_id: int = None):
 
 @router.get("/week", auth=staff_auth)
 def agenda_week(request, start: str, location_id: int = None):
-    """Vista settimanale: per ogni giorno conteggi e appuntamenti compatti.
+    """Vista settimanale: per ogni giorno conteggi, turni e appuntamenti compatti.
 
     `location_id` filtra come nella vista giorno: senza, cambiare sede dalla
     barra in alto non cambiava nulla in settimana e i conteggi mescolavano le
     sedi.
+
+    `shifts`: per ogni operatrice le finestre di turno del giorno (HH:MM,
+    già tagliate sugli orari del centro, come in vista giorno) e il tipo di
+    assenza se quel giorno è assente. Senza, la settimana tratteggiava solo
+    gli orari del centro: non si vedeva chi lavorava, e si trascinava una
+    cliente sul giorno di riposo di un'operatrice senza accorgersene.
     """
     ctx = request.auth
     require_scope(ctx, "agenda")
     first_day = _parse_day(start)
     deposit_holds.process_deposit_holds(ctx.salon)
     days = [first_day + dt.timedelta(days=offset) for offset in range(7)]
+
+    from apps.staff.models import Operator  # lazy
+    from apps.staff.services import today_status  # lazy
 
     appointments = list(
         _visible_appointments(
@@ -161,6 +170,35 @@ def agenda_week(request, start: str, location_id: int = None):
     hide_codes = _codes_hidden(ctx)
     by_day = _by_local_day(appointments)
 
+    # Le operatrici della sede, con turni, assenze e orari del centro già letti
+    # (vedi agenda_day), più chi ha comunque un servizio in settimana (di
+    # un'altra sede, disattivata): la settimana dà una colonna anche a loro.
+    operators = list(_operators_qs(ctx.salon, location_id or None))
+    known = {operator.id for operator in operators}
+    wanted = {a.operator_id for a in appointments}
+    wanted.update(item.operator_id for a in appointments for item in a.items.all())
+    orphan_ids = {op_id for op_id in wanted if op_id and op_id not in known}
+    if orphan_ids:
+        operators += list(
+            Operator.objects.filter(salon=ctx.salon, id__in=orphan_ids)
+            .select_related("salon__settings")
+            .prefetch_related("shifts", "absences")
+            .order_by("order", "id")
+        )
+
+    def day_shifts(day):
+        shifts = []
+        for operator in operators:
+            status = today_status(operator, day)
+            shifts.append(
+                {
+                    "operator_id": operator.id,
+                    "windows": [[_fmt_min(s), _fmt_min(e)] for s, e in status["windows"]],
+                    "absence": status["absence_type"],
+                }
+            )
+        return shifts
+
     result = []
     for day in days:
         day_appointments = by_day.get(day, [])
@@ -169,6 +207,7 @@ def agenda_week(request, start: str, location_id: int = None):
                 "date": day.isoformat(),
                 "count": len(day_appointments),
                 "by_status": dict(Counter(a.status for a in day_appointments)),
+                "shifts": day_shifts(day),
                 "appointments": [
                     {
                         "id": a.id,

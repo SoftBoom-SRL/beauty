@@ -414,3 +414,72 @@ class GiftFromNameTests(RealShiftsTestBase):
                                 paid=True, paid_method="cash")
         names = {g["gift_card_id"]: g["from_name"] for g in _appointment_out(appt)["gifts"]}
         self.assertEqual(names, {own.id: "", gift.id: self.bea.full_name})
+
+
+# ---- 16/10: i turni in vista settimana -------------------------------------------
+
+
+class WeekShiftsTests(RealShiftsTestBase):
+    """`shifts` di /agenda/week: le finestre di turno di ogni operatrice, giorno
+    per giorno, e l'assenza. Prima la settimana tratteggiava solo gli orari del
+    centro: non si vedeva chi lavorava quel giorno."""
+
+    def _week(self, **params):
+        monday = self.day - dt.timedelta(days=self.day.weekday())
+        res = self.client.get(
+            "/api/agenda/week", {"start": monday.isoformat(), **params}, **self.staff_auth()
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        return {d["date"]: {s["operator_id"]: s for s in d["shifts"]} for d in res.json()}
+
+    def test_every_day_has_the_shift_and_the_absence_of_each_operator(self):
+        from apps.staff.models import Absence, WeeklyShift
+
+        monday = self.day - dt.timedelta(days=self.day.weekday())
+        tuesday, wednesday = monday + dt.timedelta(days=1), monday + dt.timedelta(days=2)
+        # Marta: il martedì pomeriggio, riposo gli altri giorni; il mercoledì in ferie
+        WeeklyShift.objects.filter(operator=self.marta).exclude(weekday=1).delete()
+        WeeklyShift.objects.filter(operator=self.marta).update(start_min=14 * 60)
+        Absence.objects.create(operator=self.marta, date_from=wednesday, date_to=wednesday, type=Absence.Type.VACATION)
+        Absence.objects.create(operator=self.giulia, date_from=wednesday, date_to=wednesday, type=Absence.Type.HOLIDAY)
+        week = self._week()
+        self.assertEqual(len(week), 7)
+        self.assertEqual(
+            week[tuesday.isoformat()][self.giulia.id],
+            {"operator_id": self.giulia.id, "windows": [["09:00", "19:00"]], "absence": None},
+        )
+        self.assertEqual(week[tuesday.isoformat()][self.marta.id]["windows"], [["14:00", "19:00"]])
+        # riposo: niente turno, nessuna assenza
+        self.assertEqual(week[monday.isoformat()][self.marta.id], {"operator_id": self.marta.id, "windows": [], "absence": None})
+        # assenti: niente turno, col tipo d'assenza (anche chi quel giorno avrebbe lavorato)
+        self.assertEqual(week[wednesday.isoformat()][self.marta.id]["absence"], "vacation")
+        self.assertEqual(week[wednesday.isoformat()][self.giulia.id], {"operator_id": self.giulia.id, "windows": [], "absence": "holiday"})
+
+    def test_shifts_follow_the_location_and_include_whoever_has_a_service(self):
+        centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
+        nord = Location.objects.create(salon=self.salon, name="Nord")
+        lia = self.operator("Lia", location=nord)
+        sara = self.operator("Sara", location=nord)
+        # Lia (sede Nord) fa la piega dentro una visita del Centro: la colonna c'è, col suo turno
+        visit = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0), (self.man60, 60, 0, lia)])
+        visit.location = centro
+        visit.save(update_fields=["location"])
+        today = self._week(location_id=centro.id)[self.day.isoformat()]
+        self.assertEqual(set(today), {self.giulia.id, self.marta.id, lia.id})
+        self.assertNotIn(sara.id, today)
+        self.assertEqual(today[lia.id]["windows"], [["09:00", "19:00"]])
+
+    def test_the_shifts_do_not_cost_a_query_per_operator(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        auth = self.staff_auth()
+        monday = (self.day - dt.timedelta(days=self.day.weekday())).isoformat()
+        with CaptureQueriesContext(connection) as two:
+            self.client.get("/api/agenda/week", {"start": monday}, **auth)
+        for name in ("Lia", "Sara", "Vera"):
+            self.operator(name)
+        with CaptureQueriesContext(connection) as five:
+            res = self.client.get("/api/agenda/week", {"start": monday}, **auth)
+        self.assertEqual(len(res.json()[0]["shifts"]), 5)
+        self.assertEqual(len(five.captured_queries), len(two.captured_queries))

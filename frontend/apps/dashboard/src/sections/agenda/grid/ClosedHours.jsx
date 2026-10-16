@@ -2,7 +2,9 @@
 // fuori dalle finestre di lavoro, grigie e a righe sottili, uguali per ogni
 // colore di colonna, con una scritta se c'è posto. In vista giorno le
 // finestre sono i turni dell'operatrice («Fuori turno», o «Non in turno»
-// senza turni quel giorno); in settimana gli orari del centro (`labels`).
+// senza turni quel giorno); in settimana i turni di ogni sotto-colonna, con
+// la scritta per lungo (`vertical`: la colonna è stretta), o gli orari del
+// centro (`labels`).
 // Senza hook: nei test fa parte di DayGrid e WeekView.
 import { closedIntervals } from '../lib.js';
 
@@ -21,7 +23,7 @@ function labelSpot(s, e2, g0, g1) {
 
 /** `labels` = { some, none }: la scritta quando ci sono finestre di lavoro e
  *  quando non ce n'è nessuna (null = niente scritta). */
-export default function ClosedHours({ windows, g0, g1, pxm, t, labels = null }) {
+export default function ClosedHours({ windows, g0, g1, pxm, t, labels = null, vertical = false }) {
   const has = (windows || []).length > 0;
   const text = labels
     ? (has ? labels.some : labels.none)
@@ -29,7 +31,7 @@ export default function ClosedHours({ windows, g0, g1, pxm, t, labels = null }) 
   return closedIntervals(windows, g0, g1).map(([s, e2], i) => (
     <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (s - g0) * pxm, height: (e2 - s) * pxm, pointerEvents: 'none', background: 'repeating-linear-gradient(135deg, rgba(17,24,39,0.07) 0 1px, transparent 1px 7px), rgba(17,24,39,0.035)', zIndex: 1 }}>
       {text && (e2 - s) * pxm > 46 && (
-        <span className="dk-closed-label" style={labelSpot(s, e2, g0, g1)}>{text}</span>
+        <span className={'dk-closed-label' + (vertical ? ' dk-closed-label--v' : '')} style={labelSpot(s, e2, g0, g1)}>{text}</span>
       )}
     </div>
   ));

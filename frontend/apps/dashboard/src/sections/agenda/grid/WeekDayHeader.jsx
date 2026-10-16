@@ -4,6 +4,7 @@
 // blocchi. Senza hook: nei test fa parte di WeekView.
 import { parseISO, statusMeta } from '@youty/shared';
 import { DOW_EN, DOW_IT, WEEK_DAY_BORDER, WEEK_TODAY_BG, apptRevenue, fmtMoney, initialsOf, opColumnTint, opDisplay } from '../lib.js';
+import { shiftText } from '../lib/week.js';
 
 /** `day` = il giorno di weekDays (lib/week.js), `index` = 0 lunedì … 6
  *  domenica; `isTargetDay`: il giorno d'arrivo del trascinamento; `setOpTip`
@@ -14,6 +15,8 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
   const rev = apptRevenue(day.visits ?? day.list);   // il no-show non entra, come nel mese
   const num = parseISO(day.date).getDate();
   const statuses = Object.entries(day.by_status || {});
+  // nessuna in turno (con i turni): «Libero» faceva pensare a un giorno da prenotare
+  const nobody = !!day.usesShifts && day.dayOps.length > 0 && day.dayOps.every((o) => o.shift && !o.shift.windows.length);
   return (
     // `contain: inline-size`: i nomi delle sotto-colonne (su una riga sola) non
     // allargano il giorno; con i giorni stretti la testata restava più larga
@@ -27,7 +30,7 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
         {/* conteggio e pallini degli stati sulla stessa riga: prima erano due righe */}
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap', minHeight: 13 }}>
           <span className="t-sm tabnum" style={{ color: 'var(--muted-2)', fontSize: 10 }}>
-            {day.count ? `${day.count}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}` : t('Libero', 'Free')}
+            {day.count ? `${day.count}${showRevenue ? ' · ' + fmtMoney(rev, lang) : ''}` : nobody ? t('Nessuna in turno', 'Nobody on shift') : t('Libero', 'Free')}
           </span>
           {statuses.map(([st, n]) => {
             const sm = statusMeta(st, t);
@@ -43,15 +46,24 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
       {/* Testate delle sotto-colonne: striscia colorata in alto, stessa tinta
           dei blocchi, larghe come la loro colonna (`weight`). Stretta, la
           testata dice le iniziali, e sotto i 16 px solo il colore (CSS
-          .dk-wsub): «Gi…» non diceva chi fosse. */}
+          .dk-wsub): «Gi…» non diceva chi fosse. Chi quel giorno non lavora
+          (riposo, ferie) ha il nome spento; passandoci sopra si legge il
+          turno, o il motivo. */}
       {day.dayOps.length > 0 && (
         <div style={{ display: 'flex' }}>
-          {day.dayOps.map((o, k) => (
-            <div key={o.id} className="dk-wsub" title={o.first_name + ' ' + o.last_name} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: o.first_name + ' ' + o.last_name, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, padding: '3px 0 4px', textAlign: 'center', borderLeft: k ? '1px solid var(--hair-2)' : 'none', borderTop: `3px solid ${colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)'), transition: 'flex-grow 200ms var(--ease)' }}>
-              <div className="dk-wsub__name" style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
-              <div className="dk-wsub__ini" style={{ fontSize: 9.5, fontWeight: 800, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden' }}>{initialsOf(`${o.first_name} ${o.last_name || ''}`)}</div>
-            </div>
-          ))}
+          {day.dayOps.map((o, k) => {
+            const full = `${o.first_name} ${o.last_name || ''}`.trim();
+            const shift = shiftText(o.shift, t);
+            const tip = shift ? `${full} · ${shift}` : full;
+            const resting = !!o.shift && !o.shift.windows.length;
+            const ink = resting ? 'var(--muted-2)' : 'var(--ink)';
+            return (
+              <div key={o.id} className="dk-wsub" title={tip} data-resting={resting ? '' : undefined} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: tip, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, padding: '3px 0 4px', textAlign: 'center', borderLeft: k ? '1px solid var(--hair-2)' : 'none', borderTop: `3px solid ${resting ? `color-mix(in srgb, ${colorOf(o.id)} 40%, var(--paper))` : colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)'), transition: 'flex-grow 200ms var(--ease)' }}>
+                <div className="dk-wsub__name" style={{ fontSize: 10, fontWeight: 700, color: ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
+                <div className="dk-wsub__ini" style={{ fontSize: 9.5, fontWeight: 800, color: ink, whiteSpace: 'nowrap', overflow: 'hidden' }}>{initialsOf(full)}</div>
+              </div>
+            );
+          })}
         </div>
       )}
       {/* il bordo destro del giorno si trascina: giorni e sotto-colonne più

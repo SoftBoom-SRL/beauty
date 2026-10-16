@@ -4,6 +4,7 @@
 import { Icon, parseISO, timeLabel } from '@youty/shared';
 import { DOW_EN, DOW_IT } from '../lib.js';
 import { badgeSpot } from '../lib/drag.js';
+import { weekShiftWarning } from '../lib/week.js';
 
 /** `dg` = il trascinamento in corso, `movingObjs` = i blocchi già nel
  *  giorno, nell'operatrice e all'orario d'arrivo (movingBlocks): l'orario è
@@ -13,13 +14,16 @@ export default function WeekDragBadge({ dg, dayData, operators, movingObjs, t })
   const op = operators.find((o) => o.id === dg.nop);
   const from = Math.min(...movingObjs.map((m) => m.startMin));
   const to = Math.max(...movingObjs.map((m) => m.endMin));
+  // fuori turno o nel giorno di riposo: ambra, come in vista giorno (si sposta lo stesso)
+  const warn = weekShiftWarning(movingObjs, day, t);
   return (
-    <div className="dk-drag-badge" style={badgeSpot(dg.cx, dg.cy, window)}>
+    <div className={'dk-drag-badge' + (warn ? ' dk-drag-badge--warn' : '')} style={badgeSpot(dg.cx, dg.cy, window)}>
       <Icon name="calendar" size={14} color="#fff" stroke={2.4} />
       {day && <span>{t(DOW_IT[dg.dayIdx], DOW_EN[dg.dayIdx])} {parseISO(day.date).getDate()}</span>}
       {op && <span>· {op.first_name}</span>}
       <span className="tabnum">· {timeLabel(from)}–{timeLabel(to)}</span>
       {dg.snap && <small>· {t(`attaccato a ${dg.snap.label}`, `snapped to ${dg.snap.label}`)}</small>}
+      {warn && <small>· {warn}</small>}
     </div>
   );
 }

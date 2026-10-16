@@ -548,3 +548,29 @@ test('in settimana posa e caparra: il tratteggio in fondo al servizio, il pallin
   assert.ok(dot(draw(1)));
   assert.equal(dot(draw(2)), null, 'la caparra è della visita: una volta sola');
 });
+
+test('in settimana il badge avvisa quando si trascina fuori turno, e lo spostamento parte lo stesso', async () => {
+  const g = setup();
+  // Anna 9–19, Giulia a riposo il giovedì
+  g.api.weekGets().at(-1).resolve(weekPayload(W1).map((d) => ({ ...d, shifts: [
+    { operator_id: 1, windows: [['09:00', '19:00']], absence: null },
+    { operator_id: 2, windows: d.date === W1[3] ? [] : [['09:00', '19:00']], absence: null },
+  ] })));
+  await tick();
+  g.m.render();
+  const badge = () => find(g.root(), (el) => el.props?.className?.startsWith?.('dk-drag-badge'));
+  g.block().props.onDown(ptr(430, 400));
+  g.root().props.onPointerMove(ptr(430, 481));   // 16:00 da Anna: in turno
+  g.m.render();
+  assert.equal(badge().props.className, 'dk-drag-badge');
+  g.root().props.onPointerMove(ptr(430, 400 + 4 * 81));   // 19:00: oltre la fine del turno
+  g.m.render();
+  assert.equal(badge().props.className, 'dk-drag-badge dk-drag-badge--warn');
+  assert.ok(textOf(badge()).includes('Fuori turno'));
+  g.root().props.onPointerMove(ptr(490, 481));   // da Giulia, che il giovedì riposa
+  g.m.render();
+  assert.ok(textOf(badge()).includes('Riposo'));
+  g.root().props.onPointerUp(ptr(490, 481));
+  await tick();
+  assert.equal(g.api.posts.length, 1, 'avvisa, non ferma');
+});

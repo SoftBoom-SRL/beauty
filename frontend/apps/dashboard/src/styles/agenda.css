@@ -16,6 +16,8 @@
    sempre fare, l'agenda lo segnala e basta. */
 .dk-col--target-warn { box-shadow: inset 0 0 0 2px var(--warn); }
 .dk-closed-label { position: absolute; left: 0; right: 0; text-align: center; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); pointer-events: none; z-index: 1; }
+/* nelle sotto-colonne della settimana (strette): per lungo, al centro */
+.dk-closed-label--v { right: auto; left: 50%; writing-mode: vertical-rl; translate: -50% 0; white-space: nowrap; font-size: 10px; letter-spacing: 0.12em; }
 
 /* pulsante primario "quasi disabilitato": cliccabile per spiegare cosa manca */
 .dk-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; transform: none !important; box-shadow: none !important; }

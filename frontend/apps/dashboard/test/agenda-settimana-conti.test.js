@@ -6,8 +6,8 @@ import { test } from 'node:test';
 
 import { isoAtMin } from '@youty/shared';
 import {
-  hoverShape, movingBlock, movingBlocks, subcolWeight, weekBestSnap, weekColOf, weekDays, weekDropChanged, weekGhostSpans,
-  weekMoveBody, weekParts, weekSplitBody, whereLabel,
+  hoverShape, movingBlock, movingBlocks, offLabel, shiftText, subcolWeight, weekBestSnap, weekColOf, weekDays, weekDropChanged,
+  weekGhostSpans, weekMoveBody, weekParts, weekShiftWarning, weekSplitBody, whereLabel,
 } from '../src/sections/agenda/lib/week.js';
 import { weekLayout } from '../src/sections/agenda/lib/grid.js';
 
@@ -307,4 +307,57 @@ test('trascinando la barra viaggiano tutte le parti, unite; la colonna di parten
   const single = movingBlocks({ ...dg, whole: false, obj: { ...giulia, _joinTop: true } }, [0, 1, 2, day]);
   assert.equal(single.length, 1);
   assert.equal(single[0]._joinTop, undefined);
+});
+
+/* 16/10: i turni in settimana (`shifts` di /agenda/week). */
+test('i turni: ogni sotto-colonna il suo, chi non ne ha a riposo o assente; senza turni in settimana niente', () => {
+  const shifts = (i) => [
+    { operator_id: 1, windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null },
+    { operator_id: 2, windows: [], absence: i === 3 ? 'holiday' : null },
+  ];
+  const days = weekDays(payload().map((d, i) => ({ ...d, shifts: shifts(i) })), null, OPS, 1, '');
+  assert.equal(days[3].usesShifts, true);
+  assert.deepEqual(days[3].dayOps.map((o) => [o.id, o.shift, o.weight]), [
+    [1, { windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null }, 3],
+    [2, { windows: [], absence: 'holiday' }, 0.6],
+  ]);
+  // un'operatrice che il server non elenca: turno sconosciuto, niente tratteggio
+  const noBea = weekDays(payload().map((d) => ({ ...d, shifts: [shifts(0)[0]] })), null, OPS, 1, '');
+  assert.equal(noBea[3].dayOps[1].shift, null);
+  // nessun turno in tutta la settimana: valgono gli orari del centro
+  const none = weekDays(payload().map((d) => ({ ...d, shifts: [{ operator_id: 1, windows: [], absence: null }] })), null, OPS, 1, '');
+  assert.equal(none[3].usesShifts, false);
+  assert.equal(none[3].dayOps[0].shift, null);
+  // payload senza turni (vecchio server): come prima
+  assert.equal(weekDays(payload(), null, OPS, 1, '')[3].usesShifts, false);
+});
+
+test('i turni a parole: riposo, assenze, fasce', () => {
+  assert.equal(offLabel({ windows: [], absence: null }, t), 'Riposo');
+  assert.equal(offLabel({ windows: [], absence: 'vacation' }, t), 'Ferie');
+  assert.equal(offLabel({ windows: [], absence: 'holiday' }, t), 'Festività');
+  assert.equal(offLabel({ windows: [], absence: 'other' }, t), 'Assente');
+  assert.equal(shiftText({ windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null }, t), '09:00–13:00 · 14:00–19:00');
+  assert.equal(shiftText({ windows: [], absence: 'vacation' }, t), 'Ferie');
+  assert.equal(shiftText(null, t), null);
+});
+
+test('trascinando fuori turno il badge avvisa; dentro, o senza turni, no', () => {
+  const day = {
+    usesShifts: true,
+    dayOps: [
+      { id: 1, shift: { windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null } },
+      { id: 2, shift: { windows: [], absence: 'vacation' } },
+      { id: 3, shift: null },
+    ],
+  };
+  const at = (op, s, e) => ({ operator_id: op, startMin: s, endMin: e });
+  assert.equal(weekShiftWarning([at(1, 600, 660)], day, t), null);
+  assert.equal(weekShiftWarning([at(1, 750, 810)], day, t), 'Fuori turno', 'a cavallo della pausa');
+  assert.equal(weekShiftWarning([at(1, 1110, 1170)], day, t), 'Fuori turno', 'sfora la fine');
+  assert.equal(weekShiftWarning([at(2, 600, 660)], day, t), 'Ferie');
+  assert.equal(weekShiftWarning([at(3, 0, 60)], day, t), null, 'turno sconosciuto');
+  // tutta la visita: basta una parte fuori, nella sua colonna (colOp)
+  assert.equal(weekShiftWarning([at(1, 600, 660), { ...at(1, 660, 720), colOp: 2 }], day, t), 'Ferie');
+  assert.equal(weekShiftWarning([at(1, 750, 810)], { ...day, usesShifts: false }, t), null);
 });

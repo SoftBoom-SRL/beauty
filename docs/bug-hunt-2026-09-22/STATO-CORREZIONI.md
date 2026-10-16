@@ -103,7 +103,7 @@ registrata dalla reception, con la caparra trattenuta se in ritardo — è stata
 - **Preesistente, fuori dai reperti.** Un utente nato da un'identità Yourang con email non verificata
   non riesce a rientrare (`_get_or_create_user` rifiuta l'account esistente).
 - **Facoltativi non fatti.** `undo_id` nelle risposte di sposta, stacca e pausa (oggi la dashboard lo
-  ricava rileggendo `GET /undo`); le finestre di turno in `/api/agenda/week`; tolleranza a orari
+  ricava rileggendo `GET /undo`); le finestre di turno in `/api/agenda/week` (fatte il 16/10: `shifts`); tolleranza a orari
   malformati salvati a database nel modulo staff.
 
 

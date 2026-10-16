@@ -4,7 +4,7 @@
 // Logica pura: la caricano anche i test con `node --test`.
 import { isoAtMin, minutesOfDay, parseISO, timeLabel } from '@youty/shared';
 import { timedItems } from './addons.js';
-import { DOW_EN, DOW_IT } from './calendar.js';
+import { DOW_EN, DOW_IT, hmToMin } from './calendar.js';
 import { weekLayout } from './grid.js';
 
 /** Sotto-colonne di un giorno in vista settimana.
@@ -130,6 +130,12 @@ function movedVisit(src, pending, date) {
  *  filtro con cinque operatrici la domenica usciva dallo schermo. */
 export function weekDays(days, pending, operators, locationId, orphanName, hidden = []) {
   const off = new Set(hidden);
+  /* I turni (`shifts` del payload): se in settimana qualcuna ha un turno, il
+   * salone li usa e ogni sotto-colonna ha il suo (`shift`, null se il server
+   * non lo dice); chi quel giorno non ne ha è a riposo o assente. Senza turni
+   * in tutta la settimana valgono gli orari del centro, come prima: un salone
+   * che i turni non li imposta non deve vedere tutte le colonne «a riposo». */
+  const usesShifts = days.some((d) => (d.shifts || []).some((sh) => (sh.windows || []).length > 0));
   // le operatrici della sede attiva: le sotto-colonne che ci sono comunque (weekDayOps)
   const known = new Set((operators || []).filter((o) => !locationId || o.location_id == null || o.location_id === locationId).map((o) => o.id));
   const pendingSrc = pending ? days.flatMap((d) => d.appointments).find((a) => a.id === pending.id) : null;
@@ -156,14 +162,18 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
     // principale: una visita spostata dal filtro su una collega di un'altra
     // sede o non più in team finiva in una colonna che non c'era, contata
     // nella testata e invisibile.
+    const shiftOf = new Map((d.shifts || []).map((sh) => [sh.operator_id, { windows: sh.windows || [], absence: sh.absence || null }]));
     const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName)
       .filter((o) => !off.has(o.id))
-      .map((o) => ({ ...o, weight: subcolWeight(list.filter((a) => weekColOf(a) === o.id)) }));
-    if (!off.size) return { ...d, list, visits, dayOps };
+      .map((o) => {
+        const shift = usesShifts ? shiftOf.get(o.id) ?? null : null;
+        return { ...o, shift, weight: subcolWeight(list.filter((a) => weekColOf(a) === o.id), !!shift && !shift.windows.length) };
+      });
+    if (!off.size) return { ...d, list, visits, dayOps, usesShifts };
     // con il filtro la testata del giorno conta quello che si vede
     const by_status = {};
     visits.forEach((a) => { by_status[a.status] = (by_status[a.status] || 0) + 1; });
-    return { ...d, list, visits, dayOps, count: visits.length, by_status };
+    return { ...d, list, visits, dayOps, usesShifts, count: visits.length, by_status };
   });
 }
 
@@ -173,9 +183,11 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
  *  lavoro gli appuntamenti stavano in 44 px e i sovrapposti in strisce da
  *  dieci, senza nome, accanto a sette colonne vuote (il titolare, 16/10). Una
  *  colonna vuota resta larga abbastanza per cliccarci e prenotare; in una
- *  giornata piena sono tutte uguali, come prima. */
-export function subcolWeight(blocks) {
-  if (!blocks?.length) return 1;
+ *  giornata piena sono tutte uguali, come prima. Chi quel giorno non lavora
+ *  (`resting`: riposo, ferie) e non ha niente in agenda lascia ancora più
+ *  posto: lì non si prenota. */
+export function subcolWeight(blocks, resting = false) {
+  if (!blocks?.length) return resting ? 0.6 : 1;
   const lanes = Math.max(1, ...weekLayout(blocks).map((a) => a._laneCount || 1));
   return 1 + 2 * lanes;
 }
@@ -231,6 +243,41 @@ export function weekSplitBody(day, d, force) {
   if (d.nop != null && d.nop !== d.origOp) body.operator_id = d.nop;
   if (force) body.force = true;
   return body;
+}
+
+/** Il motivo per cui un'operatrice quel giorno non lavora, detto in
+ *  colonna: le assenze con le parole del pannello Staff (AVAIL_META di
+ *  staff/lib.js), «Assente» per «Altro», che in agenda non direbbe niente. */
+export function offLabel(shift, t) {
+  if (shift?.absence === 'vacation') return t('Ferie', 'Vacation');
+  if (shift?.absence === 'holiday') return t('Festività', 'Holiday');
+  if (shift?.absence) return t('Assente', 'Away');
+  return t('Riposo', 'Day off');
+}
+
+/** «09:00–13:00 · 14:00–19:00», o il motivo dell'assenza: il turno nella
+ *  testata della sotto-colonna. null se il turno non si sa. */
+export function shiftText(shift, t) {
+  if (!shift) return null;
+  if (!shift.windows.length) return offLabel(shift, t);
+  return shift.windows.map(([a, b]) => `${a}–${b}`).join(' · ');
+}
+
+/** L'avviso del badge quando i blocchi trascinati (movingBlocks) finiscono
+ *  fuori dal turno della loro colonna d'arrivo: «Fuori turno», o perché
+ *  quel giorno lei non c'è («Riposo», «Ferie»…). null se va bene o se il
+ *  turno non si sa. Lo spostamento si fa lo stesso (il 409 si forza, come in
+ *  vista giorno): l'avviso c'è perché non lo si faccia senza accorgersene. */
+export function weekShiftWarning(blocks, day, t) {
+  if (!day?.usesShifts) return null;
+  for (const b of blocks || []) {
+    const shift = day.dayOps.find((o) => o.id === weekColOf(b))?.shift;
+    if (!shift) continue;
+    if (!shift.windows.length) return offLabel(shift, t);
+    const inside = shift.windows.some(([a, z]) => hmToMin(a) <= b.startMin && b.endMin <= hmToMin(z));
+    if (!inside) return t('Fuori turno', 'Off shift');
+  }
+  return null;
 }
 
 /** «Gio 1 · Anna · 10:00»: dove è arrivato lo spostamento (avviso). */
