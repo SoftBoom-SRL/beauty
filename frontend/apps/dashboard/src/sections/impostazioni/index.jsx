@@ -109,6 +109,7 @@ export default function ImpostazioniSection() {
     if (!isOwner || !firstSyncRunning) return undefined;
     const timer = setInterval(() => {
       yourangApi.status().then(setYourang).catch(() => {});
+      loadVoice(); // l'assistente vocale si installa all'inizio dello stesso giro
     }, 15000);
     return () => clearInterval(timer);
   }, [isOwner, firstSyncRunning]);
@@ -329,7 +330,7 @@ export default function ImpostazioniSection() {
       {pwOpen && <PasswordDrawer onClose={() => setPwOpen(false)} />}
       {payOpen && <PaymentsDrawer onClose={() => setPayOpen(false)} />}
       {reasonsOpen && <ReasonsDrawer onClose={() => setReasonsOpen(false)} />}
-      {voiceOpen && <VoiceDrawer onClose={() => setVoiceOpen(false)} onChange={loadVoice} />}
+      {voiceOpen && <VoiceDrawer onClose={() => setVoiceOpen(false)} onChange={loadVoice} onReconnect={connectYourang} />}
     </div>
   );
 }

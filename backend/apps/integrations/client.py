@@ -25,8 +25,13 @@ REFRESH_MARGIN = dt.timedelta(seconds=60)
 # `contacts:write` autorizza anche le scritture sul catalogo (qualsiasi scope
 # :write rende il token READ_WRITE lato Yourang; non esiste `catalogues:write`).
 # OAUTH_ e non SCOPES: SCOPES nel progetto sono i permessi dello staff
-# (common.permissions), un'altra cosa.
-OAUTH_SCOPES = "openid profile email offline_access contacts:read contacts:write events:read"
+# (common.permissions), un'altra cosa. `agents:*` serve all'assistente vocale
+# (voice.install): strumenti esterni sull'org e prenotazione interna spenta. Le
+# connessioni nate prima non li hanno: il cassetto chiede di ricollegare.
+OAUTH_SCOPES = (
+    "openid profile email offline_access contacts:read contacts:write events:read"
+    " agents:read agents:write"
+)
 
 
 def _issuer() -> str:
@@ -241,6 +246,41 @@ class YourangClient:
         # Stesso motivo dell'upsert: l'id arriva dal webhook, non è nostro.
         resp = self._request("GET", f"/events/{quote(str(event_id), safe='')}")
         return self._data(resp) or {}
+
+    # -- assistente vocale: strumenti esterni e agenti --
+    def upsert_external_tool(self, tool: dict) -> dict:
+        """Crea o aggiorna, per nome, uno strumento esterno dell'org (tutti gli agenti)."""
+        name = quote(tool["tool_name"], safe="")
+        resp = self._request("PUT", f"/external-tools/{name}", json=tool)
+        return self._data(resp) or {}
+
+    def delete_external_tool(self, tool_name: str) -> None:
+        try:
+            self._request("DELETE", f"/external-tools/{quote(tool_name, safe='')}")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:  # già tolto da Yourang: va bene così
+                raise
+
+    def list_inbound_agents(self) -> list[dict]:
+        # ponytail: una pagina da 100, un salone non ha più agenti al telefono
+        resp = self._request("GET", "/agents/?agent_type=inbound&limit=100")
+        return self._data(resp) or []
+
+    def disable_builtin_booking(self, agent_id: str) -> None:
+        """Spegne `make_reservation`, lo strumento di prenotazione interno di Yourang.
+
+        Acceso insieme agli strumenti del salone, la stessa prenotazione arrivava
+        due volte: una dall'agenda, una come evento Yourang importato dal webhook.
+        """
+        try:
+            self._request(
+                "PATCH",
+                f"/agents/{quote(str(agent_id), safe='')}/tools/make-reservation",
+                json={"is_enabled": False},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:  # agente senza quello strumento
+                raise
 
     # -- webhook --
     def register_webhook(self, target_url: str, event_types: list[str]) -> str:

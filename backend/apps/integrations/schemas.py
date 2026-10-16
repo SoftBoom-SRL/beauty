@@ -37,18 +37,19 @@ class StatusOut(Schema):
     last_error: str = ""
 
 
-class VoiceKeyStatusOut(Schema):
-    """Stato dell'assistente vocale: attivo se il salone ha una chiave."""
+class VoiceStatusOut(Schema):
+    """Stato dell'assistente vocale.
+
+    `active`: gli strumenti sono installati su Yourang e la chiave vale.
+    `connected`: il salone è collegato a Yourang (senza, non si può attivare).
+    `needs_reconnect`: collegato prima che servissero gli scope `agents:*`;
+    va ricollegato per attivarlo.
+    """
 
     active: bool
     created_at: Optional[datetime] = None
-
-
-class VoiceKeyOut(Schema):
-    """La chiave in chiaro, mostrata una volta sola: a database resta solo l'impronta."""
-
-    key: str
-    created_at: datetime
+    connected: bool
+    needs_reconnect: bool
 
 
 class VoiceAppointmentIn(Schema):

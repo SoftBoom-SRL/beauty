@@ -3,8 +3,8 @@
 Come in food (Impostazioni → Assistente vocale): l'agente ha tre «strumenti
 esterni» (servizi, disponibilità, prenotazione) che chiamano le rotte
 `/voice/...` con una chiave Bearer del salone. La chiave non passa dall'OAuth:
-il titolare la genera nelle impostazioni e la incolla (o la importa col file)
-su Yourang.
+il backend la genera e installa gli strumenti sull'org Yourang da sé, appena
+il salone si collega (`install`, più sotto); la chiave non esce dal server.
 
 Gli esiti che l'agente deve gestire nella conversazione (orario preso, dati
 sbagliati) sono risposte 200 con `success: false`: Yourang non fa leggere
@@ -19,9 +19,12 @@ lo strumento di prenotazione interno di Yourang.
 
 import datetime as dt
 import hashlib
+import logging
 import re
 import secrets
 
+import httpx
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from ninja.errors import HttpError
@@ -32,6 +35,11 @@ from apps.agenda.schemas import MAX_ITEMS_PER_REQUEST
 from apps.core.models import Salon
 from apps.core.services import default_location, log_activity
 from common.phone import normalize_phone
+
+from .client import YourangClient
+from .models import YourangConnection
+
+logger = logging.getLogger("youty.integrations")
 
 KEY_PREFIX = "yrb_"
 # Un ritentativo dell'agente (timeout, risposta persa) entro questa finestra
@@ -66,9 +74,9 @@ class VoiceKeyAuth(HttpBearer):
 voice_auth = VoiceKeyAuth()
 
 
-def rotate_key(salon, actor) -> str:
+def rotate_key(salon, actor, key: str | None = None) -> str:
     """Nuova chiave in chiaro (la si mostra una volta sola); la precedente smette subito di valere."""
-    key = generate_key()
+    key = key or generate_key()
     salon.voice_api_key_hash = hash_key(key)
     salon.voice_api_key_created_at = timezone.now()
     salon.save(update_fields=["voice_api_key_hash", "voice_api_key_created_at"])
@@ -81,6 +89,206 @@ def revoke_key(salon, actor) -> None:
     salon.voice_api_key_created_at = None
     salon.save(update_fields=["voice_api_key_hash", "voice_api_key_created_at"])
     log_activity(salon, "integration.voice_key", "Assistente vocale disattivato", actor=actor)
+
+
+# ---- Installazione automatica su Yourang ------------------------------------
+# Prima il titolare generava la chiave, scaricava un file JSON e lo importava
+# sull'agente (Strumenti → Strumenti esterni → Importa), poi spegneva a mano la
+# prenotazione interna: troppi passi, e la chiave passava per le sue mani. Ora
+# il backend installa i tre strumenti sull'org (valgono per tutti gli agenti)
+# con l'external API, e la chiave non esce mai dal server.
+
+_DATE = {
+    "type": "string",
+    "description": 'Data in formato YYYY-MM-DD, es. 2026-10-02. Converti "domani", "sabato" ecc. nella data esatta',
+}
+_SERVICES = {
+    "type": "string",
+    "description": "Id dei servizi scelti, presi da list_services, separati da virgola, es. 12,15",
+}
+
+# Le descrizioni le legge l'agente, non l'utente: per questo solo in italiano.
+# (nome, nome visibile, metodo, dove vanno i parametri, rotta, descrizione, schema)
+_TOOLS = (
+    (
+        "list_services", "Servizi del salone", "GET", "query", "services",
+        "Elenca i servizi prenotabili del salone con id, nome, categoria, durata in minuti e prezzo. "
+        "Usalo appena la cliente dice cosa vuole fare, per trovare gli id dei servizi: non inventare "
+        "servizi che non sono in elenco.",
+        {"type": "object", "properties": {}, "required": []},
+    ),
+    (
+        "check_availability", "Disponibilità salone", "GET", "query", "availability",
+        "Controlla gli orari liberi del salone in una data per i servizi scelti. Usalo SEMPRE prima di "
+        'prenotare. Proponi solo orari presenti in "times"; se "times" è vuoto il salone è pieno o chiuso '
+        "quel giorno: proponi un altro giorno. Se success è false, correggi i dati indicati in "
+        '"message" e riprova. Per dire la data alla cliente leggi "date_label".',
+        {"type": "object", "properties": {"date": _DATE, "services": _SERVICES}, "required": ["date", "services"]},
+    ),
+    (
+        "create_appointment", "Prenota appuntamento", "POST", "body", "appointments",
+        "Registra l'appuntamento. Chiamalo SOLO dopo aver letto alla cliente un riepilogo completo "
+        '(servizi, data da "date_label", orario, nome) e aver ricevuto un sì a QUEL riepilogo: dare il '
+        "nome non è una conferma. L'orario deve essere tra quelli di check_availability. Se success è "
+        'false: con "unavailable" proponi gli orari in "alternatives", con "invalid_request" correggi i '
+        'dati e riprova. Se "deposit_amount" è maggiore di zero, di\' che riceverà un messaggio con il '
+        "link per pagare la caparra.",
+        {
+            "type": "object",
+            "properties": {
+                "date": _DATE,
+                "time": {"type": "string", "description": "Orario HH:MM, es. 15:30: uno di quelli restituiti da check_availability"},
+                "services": _SERVICES,
+                "customer_name": {"type": "string", "description": "Nome e cognome della cliente"},
+                "customer_phone": {
+                    "type": "string",
+                    "description": "Telefono della cliente in formato internazionale, es. +393331234567. "
+                    "Se è d'accordo usa il numero da cui chiama",
+                },
+                "notes": {"type": "string", "description": "Richieste particolari della cliente, se ne fa"},
+            },
+            "required": ["date", "time", "services", "customer_name", "customer_phone"],
+        },
+    ),
+)
+TOOL_NAMES = tuple(tool[0] for tool in _TOOLS)
+
+RECONNECT = "Ricollega Yourang dalle Impostazioni per attivare l'assistente vocale"
+
+
+class VoiceSetupError(Exception):
+    """L'installazione non è riuscita; il messaggio è per il titolare."""
+
+
+def tool_specs(base_url: str, key: str) -> list[dict]:
+    """I tre strumenti nel formato dell'external API Yourang (PUT /external-tools/{nome}).
+
+    Il routing dei parametri va scritto: Yourang manda nel corpo ciò che non ha
+    routing, e una GET il corpo non lo invia.
+    """
+    return [
+        {
+            "tool_name": name,
+            "display_name": display,
+            "description": description,
+            "category": "external",
+            "category_display_name": "Prenotazioni",
+            "webhook_url": f"{base_url}/api/integrations/voice/{path}",
+            "webhook_method": method,
+            "timeout_seconds": 15,
+            "auth_method": "bearer",
+            "auth_config": {"token": key},
+            "custom_headers": {},
+            "parameters_schema": schema,
+            "parameter_routing": {param: {"location": where} for param in schema["properties"]},
+            "is_enabled": True,
+        }
+        for name, display, method, where, path, description, schema in _TOOLS
+    ]
+
+
+def _connection(salon) -> YourangConnection:
+    conn = YourangConnection.objects.filter(
+        salon=salon, status=YourangConnection.Status.CONNECTED
+    ).first()
+    if conn is None:
+        raise VoiceSetupError("Collega prima Yourang dalle Impostazioni")
+    return conn
+
+
+def needs_reconnect(conn: YourangConnection | None) -> bool:
+    """Connessione nata prima degli scope `agents:*`: il token non può installare."""
+    return conn is not None and "agents:write" not in (conn.scope or "").split()
+
+
+def status(salon) -> dict:
+    """Lo stato che mostra il cassetto (VoiceStatusOut)."""
+    conn = YourangConnection.objects.filter(
+        salon=salon, status=YourangConnection.Status.CONNECTED
+    ).first()
+    return {
+        "active": bool(salon.voice_api_key_hash),
+        "created_at": salon.voice_api_key_created_at,
+        "connected": conn is not None,
+        "needs_reconnect": needs_reconnect(conn),
+    }
+
+
+def _yourang_failure(exc: Exception) -> VoiceSetupError:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (401, 403):
+        return VoiceSetupError(RECONNECT)
+    return VoiceSetupError("Yourang non ha completato l'installazione: riprova tra qualche minuto")
+
+
+def install(salon, actor) -> None:
+    """Attiva l'assistente vocale: chiave nuova, strumenti su Yourang, prenotazione interna spenta.
+
+    La chiave si salva solo dopo che gli strumenti l'hanno ricevuta: salvata
+    prima, un'installazione a metà lasciava l'agente con la chiave vecchia,
+    che non vale più. Ripeterla è innocuo (PUT per nome).
+    """
+    conn = _connection(salon)
+    if needs_reconnect(conn):
+        raise VoiceSetupError(RECONNECT)
+    if not settings.PUBLIC_API_URL:
+        raise VoiceSetupError("Manca l'indirizzo pubblico del backend (PUBLIC_API_URL) sul server")
+    key = generate_key()
+    with YourangClient(conn) as client:
+        try:
+            for tool in tool_specs(settings.PUBLIC_API_URL, key):
+                client.upsert_external_tool(tool)
+        except Exception as exc:  # noqa: BLE001 — qualunque guasto è un'installazione da ripetere
+            raise _yourang_failure(exc) from exc
+        rotate_key(salon, actor, key)
+        try:
+            for agent in client.list_inbound_agents():
+                client.disable_builtin_booking(agent["id"])
+        except Exception as exc:  # noqa: BLE001
+            # Gli strumenti funzionano già: resta da spegnere a mano la
+            # prenotazione interna, o la stessa prenotazione arriva due volte.
+            raise VoiceSetupError(
+                "Assistente attivo, ma non è stato possibile spegnere la prenotazione interna "
+                "dell'agente Yourang: spegnila su Yourang (agente → Strumenti)"
+            ) from exc
+    log_activity(salon, "integration.voice_installed", "Assistente vocale installato su Yourang", actor=actor)
+
+
+def uninstall(salon, actor) -> None:
+    """Spegne l'assistente: via la chiave (subito) e gli strumenti da Yourang (se raggiungibile).
+
+    La chiave si revoca comunque: senza, gli strumenti rimasti su Yourang
+    rispondono 401 e l'agente non prenota più. La prenotazione interna di
+    Yourang resta spenta: riaccenderla è una scelta del titolare su Yourang.
+    """
+    revoke_key(salon, actor)
+    conn = YourangConnection.objects.filter(salon=salon).first()
+    if conn is None or needs_reconnect(conn):
+        return
+    try:
+        with YourangClient(conn) as client:
+            for name in TOOL_NAMES:
+                client.delete_external_tool(name)
+    except Exception:  # noqa: BLE001
+        logger.warning("Yourang: strumenti vocali non rimossi (salone %s)", salon.id, exc_info=True)
+
+
+def auto_install(conn_id: int) -> None:
+    """Dopo il collegamento: l'assistente si attiva da solo, senza che il titolare faccia nulla.
+
+    Best effort: un'org che non lo permette (scope mancanti, Yourang giù) lascia
+    il cassetto su «Non attivo» con il motivo al primo «Attiva».
+    """
+    conn = YourangConnection.objects.select_related("salon").filter(pk=conn_id).first()
+    if conn is None:
+        return
+    try:
+        install(conn.salon, None)
+    except VoiceSetupError as exc:  # motivo già leggibile: niente traceback, la causa basta
+        logger.warning(
+            "Yourang: assistente vocale non installato (salone %s): %s %r", conn.salon_id, exc, exc.__cause__
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Yourang: assistente vocale non installato (salone %s)", conn.salon_id, exc_info=True)
 
 
 def date_label(day: dt.date) -> str:
