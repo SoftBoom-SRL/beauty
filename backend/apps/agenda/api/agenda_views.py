@@ -14,7 +14,7 @@ from common.permissions import require_scope
 
 from ..models import Appointment, Pause
 from ..presenters import _appointment_out, _codes_hidden, _fmt_min, _gifts_out, _pause_out, gift_index
-from ..schemas import AppointmentOut
+from ..schemas import AppointmentOut, DayMoneyOut
 from ..services import deposit_holds
 from ..services.occupancy import _operators_qs
 from .params import _parse_day
@@ -259,6 +259,19 @@ def agenda_week(request, start: str, location_id: int = None):
             }
         )
     return result
+
+
+@router.get("/day-money", auth=staff_auth, response=DayMoneyOut)
+def agenda_day_money(request, date: str, location_id: int = None):
+    """I soldi del giorno, per la scheda sulla testata in vista settimana:
+    valore atteso, già fatto, entrato in cassa e ancora da incassare. Totali di
+    giornata, come il riepilogo di cassa dell'agenda: basta il permesso
+    «agenda»."""
+    from apps.sales.reports import day_money  # lazy: sales dipende da agenda
+
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    return day_money(ctx.salon, _parse_day(date), location_id or None)
 
 
 @router.get("/range", auth=staff_auth)

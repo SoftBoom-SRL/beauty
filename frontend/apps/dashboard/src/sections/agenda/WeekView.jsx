@@ -15,6 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toastApiError, minutesOfDay, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
+import DayMoneyCard from './grid/DayMoneyCard.jsx';
 import WeekDayHeader from './grid/WeekDayHeader.jsx';
 import HourGutter from './grid/HourGutter.jsx';
 import WeekDayColumn from './grid/WeekDayColumn.jsx';
@@ -72,6 +73,36 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
 
   // la settimana: scheletro al cambio, ricarico silenzioso dopo un gesto o un evento live
   const { days, refetchWeek, refetchWeekRef } = useWeekData({ weekStart, locationId, live, t, fireToast });
+
+  /* I soldi di un giorno al passaggio sulla sua testata (DayMoneyCard): si
+   * chiedono la prima volta che servono e si tengono finché la settimana non
+   * si ricarica (un gesto, un conto chiuso da un'altra postazione). Solo con
+   * gli importi accesi (showRevenue), come la cifra della testata. */
+  const [moneyTip, setMoneyTip] = useState(null);   // { date, x, y }
+  const [money, setMoney] = useState({});           // date → risposta | 'loading' | 'error'
+  const moneyRef = useRef(money);
+  moneyRef.current = money;
+  const tipRef = useRef(moneyTip);
+  tipRef.current = moneyTip;
+  const loadMoney = (date) => {
+    setMoney((m) => ({ ...m, [date]: 'loading' }));
+    agendaApi.getDayMoney(date, locationId)
+      .then((res) => setMoney((m) => (m[date] === 'loading' ? { ...m, [date]: res } : m)))
+      .catch(() => setMoney((m) => (m[date] === 'loading' ? { ...m, [date]: 'error' } : m)));
+  };
+  // settimana ricaricata: i conti di prima non valgono più; quello aperto si richiede
+  useEffect(() => {
+    setMoney({});
+    if (tipRef.current) loadMoney(tipRef.current.date);
+  }, [days, locationId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openMoney = (date, rect) => {
+    if (!showRevenue) return;
+    setMoneyTip({ date, x: rect.left + rect.width / 2, y: rect.bottom + 6 });
+    if (moneyRef.current[date] && moneyRef.current[date] !== 'error') return;
+    loadMoney(date);
+  };
+  const closeMoney = () => setMoneyTip(null);
+  useEffect(() => { setMoneyTip(null); }, [weekStart]);
   // la griglia è disegnata: lo scheletro non ha il contenitore (scrollRef)
   const ready = days !== null;
 
@@ -426,6 +457,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
             key={i} day={d} index={i} width={dayWidth(d)} last={i === dayData.length - 1}
             grip={onWidthZoom ? gripProps(dayData.slice(0, i + 1).reduce((s, x) => s + dayBase(x), 0), 0, fitWidth) : null} isToday={d.date === today} isTargetDay={dragging && dg.dayIdx === i}
             showRevenue={showRevenue} t={t} lang={lang} onOpenDay={onOpenDay} colorOf={colorOf} opFirsts={opFirsts} setOpTip={setOpTip}
+            onMoney={showRevenue ? openMoney : null} onMoneyLeave={closeMoney}
           />
         ))}
       </div>
@@ -452,6 +484,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
         })}
       </div>
       {hover && <ApptHoverCard hover={hover} t={t} lang={lang} operators={operators} colorOf={colorOf} hints="week" />}
+      {moneyTip && !dragging && <DayMoneyCard tip={moneyTip} money={money[moneyTip.date]} t={t} lang={lang} />}
       {opTip && <div style={{ position: 'fixed', top: opTip.y, left: opTip.x, transform: 'translateX(-50%)', zIndex: 90, background: 'var(--ink)', color: '#fff', fontSize: 12.5, fontWeight: 600, padding: '6px 11px', borderRadius: 8, whiteSpace: 'nowrap', pointerEvents: 'none', boxShadow: 'var(--sh-pop)' }}>{opTip.name}</div>}
       {/* badge che segue il cursore: giorno + operatrice + orario di arrivo */}
       {dragging && <WeekDragBadge dg={dg} dayData={dayData} operators={operators} movingObjs={movingObjs} t={t} />}

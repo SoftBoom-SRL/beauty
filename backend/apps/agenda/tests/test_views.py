@@ -483,3 +483,77 @@ class WeekShiftsTests(RealShiftsTestBase):
             res = self.client.get("/api/agenda/week", {"start": monday}, **auth)
         self.assertEqual(len(res.json()[0]["shifts"]), 5)
         self.assertEqual(len(five.captured_queries), len(two.captured_queries))
+
+
+# ---- 16/10: i soldi di un giorno, sulla testata in vista settimana ---------------
+
+
+class DayMoneyTests(RealShiftsTestBase):
+    """GET /agenda/day-money: valore atteso, già fatto, entrato in cassa e da
+    incassare. La testata del giorno aveva una cifra sola, e non si capiva se
+    fosse il venduto, l'incassato o il previsto."""
+
+    def _day(self):
+        from apps.agenda.models import Appointment
+        from apps.sales.models import Payment, Sale
+
+        # Anna: taglio + manicure (70), conclusa; ha pagato 50, 20 restano da saldare
+        anna = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0), (self.man60, 60, 0)])
+        anna.status = Appointment.Status.CLOSED
+        anna.save(update_fields=["status"])
+        sale = Sale.objects.create(salon=self.salon, kind=Sale.Kind.CHECKOUT, appointment=anna, client=self.anna, total=Decimal("70.00"), amount_due=Decimal("20.00"))
+        Payment.objects.create(sale=sale, method=Payment.Method.CASH, amount=Decimal("50.00"), created_at=aware(self.day, 11))
+        # Bea: colore (50) da fare, con 15 di caparra già in cassa
+        bea = self.book(self.bea, self.marta, aware(self.day, 15), [(self.color30s20, 30, 20)])
+        bea.deposit_status, bea.deposit_amount = "paid", Decimal("15.00")
+        bea.save(update_fields=["deposit_status", "deposit_amount"])
+        # non contano: il no-show e l'annullata
+        for status in (Appointment.Status.NO_SHOW, Appointment.Status.CANCELLED):
+            gone = self.book(self.bea, self.giulia, aware(self.day, 17), [(self.cut30, 30, 0)])
+            gone.status = status
+            gone.save(update_fields=["status"])
+        # al banco, un prodotto pagato con la carta: è cassa, non agenda
+        pos = Sale.objects.create(salon=self.salon, kind=Sale.Kind.POS, total=Decimal("25.00"))
+        Payment.objects.create(sale=pos, method=Payment.Method.CARD, amount=Decimal("25.00"), created_at=aware(self.day, 12))
+        Sale.objects.filter(pk__in=[sale.pk, pos.pk]).update(created_at=aware(self.day, 11))
+        return anna, bea
+
+    def test_expected_done_cash_and_still_to_collect(self):
+        from apps.sales.reports import day_money
+
+        self._day()
+        money = day_money(self.salon, self.day)
+        self.assertEqual(money["expected"], Decimal("120.00"), "70 di Anna + 50 di Bea: no-show e annullata no")
+        self.assertEqual(money["done"], Decimal("70.00"))
+        self.assertEqual(money["cash_in"], Decimal("75.00"), "i 50 di Anna e i 25 del banco: i 20 da saldare non sono entrati")
+        self.assertEqual(money["to_collect"], Decimal("55.00"), "i 20 di Anna e i 35 di Bea oltre la caparra")
+        self.assertEqual((money["visits"], money["closed"]), (2, 1))
+        # un altro giorno non ne sa niente
+        empty = day_money(self.salon, self.day + dt.timedelta(days=1))
+        self.assertEqual([empty[k] for k in ("expected", "done", "cash_in", "to_collect")], [Decimal("0.00")] * 4)
+
+    def test_the_visits_follow_the_location_the_cash_is_the_whole_salon(self):
+        from apps.sales.reports import day_money
+
+        _anna, bea = self._day()
+        nord = Location.objects.create(salon=self.salon, name="Nord")
+        bea.location = nord
+        bea.save(update_fields=["location"])
+        centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
+        money = day_money(self.salon, self.day, centro.id)
+        self.assertEqual((money["expected"], money["to_collect"], money["cash_in"]), (Decimal("70.00"), Decimal("20.00"), Decimal("75.00")))
+
+    def test_the_endpoint_needs_the_agenda_and_answers_with_the_four_figures(self):
+        self._day()
+        res = self.client.get("/api/agenda/day-money", {"date": self.day.isoformat()}, **self.staff_auth())
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(
+            {k: res.json()[k] for k in ("expected", "done", "cash_in", "to_collect", "visits", "closed")},
+            {"expected": "120.00", "done": "70.00", "cash_in": "75.00", "to_collect": "55.00", "visits": 2, "closed": 1},
+        )
+        res = self.client.get(
+            "/api/agenda/day-money", {"date": self.day.isoformat()}, **self.staff_auth(("inventory",), email="mag@caccia22.it"),
+        )
+        self.assertEqual(res.status_code, 403)
+        res = self.client.get("/api/agenda/day-money", {"date": "2026-13-01"}, **self.staff_auth())
+        self.assertEqual(res.status_code, 400)

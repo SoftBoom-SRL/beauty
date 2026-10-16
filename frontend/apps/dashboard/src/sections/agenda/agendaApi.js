@@ -14,6 +14,8 @@ export const getDay = (date, locationId) => api.get('/api/agenda/day', { params:
 /** La sede va nei parametri solo se c'è (senza, il server mostra tutte le sedi). */
 export const getWeek = (start, locationId) => api.get('/api/agenda/week', { params: { start, ...(locationId ? { location_id: locationId } : {}) } });
 export const getRange = (start, end, locationId) => api.get('/api/agenda/range', { params: { start, end, location_id: locationId } });
+/** I soldi di un giorno (atteso, fatto, entrato, da incassare): la scheda sulla testata in settimana. */
+export const getDayMoney = (date, locationId) => api.get('/api/agenda/day-money', { params: { date, ...(locationId ? { location_id: locationId } : {}) } });
 /** Orari liberi: `params` com'è, perché ogni pannello li scrive nel suo ordine. */
 export const getAvailability = (params) => api.get('/api/agenda/availability', { params });
 

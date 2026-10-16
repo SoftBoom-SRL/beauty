@@ -75,7 +75,13 @@ def cash_movements(salon, start, end) -> dict:
 
 
 def today_summary(salon) -> dict:
-    """Incassi di oggi (box agenda): {total, count, checkout_total, pos_total,
+    """Incassi di oggi (box agenda): vedi `day_summary`."""
+    return day_summary(salon, timezone.localdate())
+
+
+def day_summary(salon, today: dt.date) -> dict:
+    """Incassi del giorno `today` (box agenda, e al passaggio sulla testata di un
+    giorno in vista settimana): {total, count, checkout_total, pos_total,
     gift_card_sold, package_sold, gift_card_redeemed, deposit_used, deposit_cashed,
     deposit_refunded, due_left, settled, cash_in}.
 
@@ -98,7 +104,6 @@ def today_summary(salon) -> dict:
     giorno in cui la cliente lo paga.
     """
     zero = Decimal("0.00")
-    today = timezone.localdate()
     of_today = Sale.objects.filter(salon=salon, created_at__date=today)
     deposits = of_today.filter(deposit_appointment__isnull=False)
     qs = of_today.filter(deposit_appointment__isnull=True)
@@ -207,4 +212,61 @@ def sales_history(
             "due_total": (agg["due_total"] or Decimal("0.00")).quantize(CENT),
         },
         "items": [serializers.sale_out(s) for s in items],
+    }
+
+
+def day_money(salon, day: dt.date, location_id=None) -> dict:
+    """I soldi di un giorno dell'agenda, per la scheda sulla testata del giorno.
+
+    - `expected`: il valore delle visite del giorno a prezzo d'agenda (no-show
+      esclusi): la cifra della testata.
+    - `done`: quello delle visite concluse (conto chiuso).
+    - `cash_in`: il denaro entrato davvero quel giorno, con la regola della
+      cassa (`day_summary`): anche prodotti e caparre, al netto di gift card
+      usate, caparre già versate e restituite.
+    - `to_collect`: quello che manca ancora per le visite del giorno: le visite
+      non ancora chiuse, meno la caparra già in cassa, più quanto resta da
+      saldare sui loro conti chiusi.
+
+    La cifra della testata era una sola, e non si capiva se fosse il venduto,
+    l'incassato o il previsto (il titolare, 16/10). Le visite seguono la sede
+    come l'agenda; la cassa è quella di tutto il salone, come in Punto Vendita.
+    """
+    from django.db.models import Q
+
+    from apps.agenda.models import Appointment  # lazy: sales dipende da agenda
+
+    from .deposits import deposit_retained
+
+    zero = Decimal("0.00")
+    visits = (
+        Appointment.objects.filter(salon=salon, start__date=day)
+        .exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
+        .prefetch_related("items")
+    )
+    if location_id:
+        visits = visits.filter(Q(location_id=location_id) | Q(location__isnull=True))
+    visits = list(visits)
+    due_by_visit = dict(
+        Sale.objects.filter(appointment__in=visits, kind=Sale.Kind.CHECKOUT).values_list("appointment_id", "amount_due")
+    )
+    expected = done = to_collect = zero
+    closed = 0
+    for visit in visits:
+        price = Decimal(visit.total_price or 0)
+        expected += price
+        if visit.status == Appointment.Status.CLOSED:
+            closed += 1
+            done += price
+            to_collect += due_by_visit.get(visit.id) or zero
+        else:
+            to_collect += max(zero, price - deposit_retained(visit))
+    return {
+        "date": day,
+        "expected": expected.quantize(CENT),
+        "done": done.quantize(CENT),
+        "cash_in": day_summary(salon, day)["cash_in"],
+        "to_collect": to_collect.quantize(CENT),
+        "visits": len(visits),
+        "closed": closed,
     }

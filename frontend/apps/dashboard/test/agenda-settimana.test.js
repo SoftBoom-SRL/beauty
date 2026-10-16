@@ -586,3 +586,53 @@ test('in settimana con le preferenze «Fissa» e «Solo orizzontali»: colonne u
   assert.deepEqual(findAll(g.root(), (el) => el.props?.className === 'dk-wsub').slice(6, 8).map((h) => h.props.style.flex), ['1 1 0', '1 1 0']);
   assert.equal(g.block().props.vertical, false);
 });
+
+/* 16/10: la cifra della testata era una sola, e non si capiva se fosse il
+ * venduto, l'incassato o il previsto. Al passaggio la scheda dice i quattro
+ * conti del giorno (GET /api/agenda/day-money). */
+test('in settimana al passaggio sulla testata: valore atteso, già fatto, entrato e da incassare', async () => {
+  const g = setup();
+  globalThis.__dash.showRevenue = true;
+  await loadWeek(g, W1);
+  const head = () => find(g.root(), (el) => el.type?.name === 'WeekDayHeader' && el.props.index === 3);
+  const button = () => find(head().type(head().props), (el) => el.type === 'button' && el.props.onClick && !el.props.role);
+  assert.equal(button().props.title, undefined, 'la scheda prende il posto del suggerimento');
+  const moneyGets = () => g.api.gets.filter((x) => x.url === '/api/agenda/day-money');
+  button().props.onMouseEnter({ currentTarget: { getBoundingClientRect: () => rect(406, 110, 120, 50) } });
+  g.m.render();
+  assert.deepEqual(moneyGets().map((x) => x.opts.params), [{ date: W1[3], location_id: 1 }]);
+  const card = () => find(g.root(), (el) => el.type?.name === 'DayMoneyCard');
+  assert.equal(card().props.money, 'loading');
+  assert.deepEqual([card().props.tip.x, card().props.tip.y], [466, 166], 'sotto la testata, al centro del giorno');
+  moneyGets()[0].resolve({ date: W1[3], expected: '120.00', done: '70.00', cash_in: '75.00', to_collect: '55.00', visits: 2, closed: 1 });
+  await tick();
+  g.m.render();
+  const rows = findAll(card().type(card().props), (el) => el.type?.name === 'Row');
+  assert.deepEqual(rows.map((r) => [r.props.label, r.props.amount]), [
+    ['Valore atteso', '120.00'], ['Già fatto', '70.00'], ['Entrato in cassa', '75.00'], ['Da incassare', '55.00'],
+  ]);
+  // via e di nuovo sopra: niente seconda richiesta
+  head().props.onMoneyLeave();
+  g.m.render();
+  assert.equal(card(), null);
+  button().props.onMouseEnter({ currentTarget: { getBoundingClientRect: () => rect(406, 110, 120, 50) } });
+  g.m.render();
+  assert.equal(moneyGets().length, 1);
+  // la settimana si ricarica (un conto chiuso altrove): la scheda aperta si richiede
+  g.live([{ type: 'sale.created' }]);
+  await new Promise((r) => setTimeout(r, 400));
+  g.api.weekGets().at(-1).resolve(weekPayload(W1));
+  await tick();
+  g.m.render();
+  assert.equal(moneyGets().length, 2);
+});
+
+test('in settimana con gli importi nascosti la testata non apre i conti', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const head = find(g.root(), (el) => el.type?.name === 'WeekDayHeader' && el.props.index === 3);
+  assert.equal(head.props.onMoney, null);
+  const button = find(head.type(head.props), (el) => el.type === 'button' && el.props.onClick);
+  assert.equal(button.props.title, 'Apri il giorno');
+  assert.equal(button.props.onMouseEnter, undefined);
+});

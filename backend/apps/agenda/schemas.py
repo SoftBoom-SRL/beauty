@@ -456,3 +456,23 @@ class AppointmentImportOut(Schema):
     clients_created: int
     errors: list[ImportRowIssueOut] = []
     warnings: list[ImportRowIssueOut] = []
+
+
+class DayMoneyOut(Schema):
+    """I soldi di un giorno dell'agenda (scheda sulla testata del giorno).
+
+    `expected` = valore delle visite del giorno a prezzo d'agenda (no-show
+    esclusi); `done` = quello delle visite concluse; `cash_in` = denaro entrato
+    davvero quel giorno in tutto il salone, con la regola della cassa
+    (`/api/sales/today-summary`); `to_collect` = quanto manca per le visite del
+    giorno: le non chiuse meno la caparra già in cassa, più i saldi rimasti sui
+    loro conti. `visits` e `closed` = quante visite, e quante concluse.
+    """
+
+    date: dt.date
+    expected: Decimal
+    done: Decimal
+    cash_in: Decimal
+    to_collect: Decimal
+    visits: int
+    closed: int
