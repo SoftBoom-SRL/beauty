@@ -35,6 +35,7 @@ import UndoButton from './parts/UndoButton.jsx';
 import ZoomControls from './parts/ZoomControls.jsx';
 import ViewSelector from './parts/ViewSelector.jsx';
 import TeamFilter from './parts/TeamFilter.jsx';
+import ViewPrefs from './parts/ViewPrefs.jsx';
 import PickBanner from './parts/PickBanner.jsx';
 import RailPanel from './parts/RailPanel.jsx';
 import SlotMenu from './parts/SlotMenu.jsx';
@@ -128,6 +129,11 @@ export default function AgendaSection() {
   /* ---- filtro «Team»: quali colonne, e «Solo chi lavora oggi» ---- */
   const { vis, toggleVis, setAll, only } = useOperatorVisibility(operators);
   const [onlyWorking, setOnlyWorking] = useStoredFlag('dk-agenda-only-working');
+  /* Preferenze di visualizzazione della settimana (ViewPrefs), sulla
+   * postazione: sotto-colonne larghe col lavoro del giorno o tutte uguali,
+   * scritte anche per lungo o solo orizzontali. */
+  const [dynamicCols, setDynamicCols] = useStoredFlag('dk-agenda-week-dynamic-cols');
+  const [verticalText, setVerticalText] = useStoredFlag('dk-agenda-week-vertical-text');
 
   const { colorOf, itemColor } = useAgendaColors({ opColors, services, serviceCategories });
 
@@ -295,7 +301,7 @@ export default function AgendaSection() {
           <div className="dk-agbar__spacer" />
           <div className="dk-agbar__group">
             {/* In giorno e in settimana (nel mese c'è il suo filtro). «Solo chi
-                lavora oggi» è del giorno: la settimana non conosce i turni. */}
+                lavora oggi» è del giorno. */}
             {calView === 'day' && (
               <TeamFilter operators={locOps} vis={vis} toggleVis={toggleVis} setAll={(on) => setAll(on, locOps)} only={(id) => only(id, locOps)} colorOf={colorOf}
                 onlyWorking={onlyWorking} setOnlyWorking={setOnlyWorking} resting={resting}
@@ -307,6 +313,9 @@ export default function AgendaSection() {
                 shown={locOps.length - hiddenOps.length} total={locOps.length} t={t} />
             )}
             {canWrite && <UndoButton undoStack={undoStack} undoing={undoing} undoLast={undoLast} t={t} />}
+            {calView === 'week' && (
+              <ViewPrefs dynamicCols={dynamicCols} setDynamicCols={setDynamicCols} verticalText={verticalText} setVerticalText={setVerticalText} t={t} />
+            )}
             {/* Nel mese lo zoom non ha senso: lì non c'è una linea del tempo da
                 stirare, e il comando sparisce invece di restare lì a non fare
                 niente. */}
@@ -323,7 +332,7 @@ export default function AgendaSection() {
         {calView === 'week' ? (
           <React.Fragment>
             {pickBanner}
-            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} widthZoom={width.week} onWidthZoom={setWeekWidth} widthApi={widthApi} hiddenOps={hiddenOps} />
+            <WeekView weekStart={toDateStr(monday)} operators={operators} colorOf={colorOf} itemColor={itemColor} nowMin={isTodayInWeek(weekDays) ? nowMin : null} onOpenDay={openDay} onNewAppt={pickNewAppt} onOpenAppt={openApptDetail} pickMode={pickMode} undoMark={undoMark} undoAfter={undoAfter} ghost={ghostAppt} ghostDate={date} zoom={zoom} onZoom={setZoom} widthZoom={width.week} onWidthZoom={setWeekWidth} widthApi={widthApi} hiddenOps={hiddenOps} dynamicCols={dynamicCols} verticalText={verticalText} />
           </React.Fragment>
         ) : calView === 'month' ? (
           <MonthView anchor={date} onOpenDay={openDay} />

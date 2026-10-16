@@ -30,7 +30,7 @@ const lanePos = (a) => {
  *  null se il salone non li ha impostati. */
 export default function WeekDayColumn({
   day, index, width, isToday, isTargetDay, dragging, dg, movingObjs = [], marks, g0, g1, pxm, nowMin, opening = null,
-  ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null,
+  ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null, verticalText = true,
   onDayAreaClick, onEmptyClick, onBlockDown, onHover, onLeave,
 }) {
   // il centro chiuso quel giorno lo dice il giorno intero; aperto, con i
@@ -106,7 +106,7 @@ export default function WeekDayColumn({
                 <WeekBlock pxm={pxm} g0={g0}
                   key={key} a={a} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} highlight={a.id === openApptId}
                   stay={stays?.get(a.id)} linked={!!linked?.has(a.id) && a.id !== openApptId}
-                  joinTop={a._joinTop} joinBottom={a._joinBottom} {...lanePos(a)}
+                  joinTop={a._joinTop} joinBottom={a._joinBottom} vertical={verticalText} {...lanePos(a)}
                   onDown={(e, opts) => onBlockDown(e, a, index, opts)}
                   onHover={onHover} onLeave={onLeave}
                 />
@@ -115,13 +115,13 @@ export default function WeekDayColumn({
             {/* chi arriva qui: sopra tutti, a tutta larghezza (almeno 56 px:
                 in una colonna vuota, stretta, deve restare leggibile) */}
             {arriving.filter((m) => weekColOf(m) === o.id).map((m) => (
-              <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving joinTop={!!m._joinTop} joinBottom={!!m._joinBottom} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="max(calc(100% - 2px), 56px)" />
+              <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving joinTop={!!m._joinTop} joinBottom={!!m._joinBottom} vertical={verticalText} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={1} width="max(calc(100% - 2px), 56px)" />
             ))}
           </div>
         );
       })}
       {loose.map((m) => (
-        <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />
+        <WeekBlock key={'mv' + (m.key ?? m.id)} pxm={pxm} g0={g0} a={m} moving vertical={verticalText} colorOf={colorOf} itemColor={itemColor} canWrite={canWrite} t={t} left={2} width="calc(100% - 4px)" />
       ))}
     </div>
   );

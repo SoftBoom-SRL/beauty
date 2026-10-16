@@ -516,11 +516,13 @@ test('in settimana il blocco dice sempre qualcosa: righe, nome per lungo o inizi
   assert.equal(textOf(cls(first, 'dk-wblock__l1')), 'Sarah');
   assert.ok(textOf(cls(first, 'dk-wblock__h')).includes('Mac'));
   assert.equal(textOf(cls(first, 'dk-wblock__v')), 'Sarah Mac · 10:00');
-  assert.equal(textOf(cls(first, 'dk-wblock__ini')), 'SM');
+  assert.equal(textOf(cls(first, 'dk-wblock__ini')), 'SM10:00', 'le iniziali e, sotto, l\'ora');
   // la piega attaccata: il suo servizio, non di nuovo il nome
   const second = draw(partOf60(g, 2));
   assert.equal(textOf(cls(second, 'dk-wblock__l1')), 'Piega');
-  assert.equal(textOf(cls(second, 'dk-wblock__ini dk-wblock__ini--svc')), 'Piega');
+  assert.equal(textOf(cls(second, 'dk-wblock__ini dk-wblock__ini--svc')), 'Piega11:00');
+  // bassissimo (zoom piccolo): l'ora non ci sta, restano le iniziali
+  assert.equal(textOf(cls(draw(partOf60(g, 1), { pxm: 0.4 }), 'dk-wblock__ini')), 'SM');
   // alta abbastanza, per lungo: il servizio e la sua ora
   assert.equal(textOf(cls(draw(partOf60(g, 2), { pxm: 2 }), 'dk-wblock__v')), 'Piega · 11:00');
   // bassa (30' = 40 px): niente scritta per lungo, le iniziali
@@ -573,4 +575,14 @@ test('in settimana il badge avvisa quando si trascina fuori turno, e lo spostame
   g.root().props.onPointerUp(ptr(490, 481));
   await tick();
   assert.equal(g.api.posts.length, 1, 'avvisa, non ferma');
+});
+
+test('in settimana con le preferenze «Fissa» e «Solo orizzontali»: colonne uguali e niente scritte per lungo', async () => {
+  const g = setup({ dynamicCols: false, verticalText: false });
+  await loadWeek(g, W1);
+  const day = find(g.root(), (el) => el.props?.['data-daycol'] === 3);
+  // Sara è di Anna: con le colonne dinamiche Anna sarebbe 3 e Giulia 1
+  assert.deepEqual(findAll(day, (el) => el.props?.['data-subcol'] === '').map((s) => s.props.style.flex), ['1 1 0', '1 1 0']);
+  assert.deepEqual(findAll(g.root(), (el) => el.props?.className === 'dk-wsub').slice(6, 8).map((h) => h.props.style.flex), ['1 1 0', '1 1 0']);
+  assert.equal(g.block().props.vertical, false);
 });

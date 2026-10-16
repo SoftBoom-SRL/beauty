@@ -1,7 +1,7 @@
 // DayParts — i pezzi comuni alla cella del mese e al suo popover: la barra
 // di occupazione, la riga di un'operatrice e la riga di un appuntamento.
 import { Icon, fmtDur, minutesOfDay, timeLabel } from '@youty/shared';
-import { opDisplay } from '../lib.js';
+import { isDone, opDisplay } from '../lib.js';
 import { loadRatio } from '../monthLib.js';
 import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
 
@@ -41,11 +41,18 @@ export function OpRow({ o, op, color, opFirsts, compact }) {
  *  forzato/caparra e il trattamento già pagato (icona del suo tipo). */
 export function ApptLine({ a, color, t, detail }) {
   const noShow = a.status === 'no_show';
+  // conclusa: spunta, testo spento e striscia leggera, come in giorno e settimana
+  const done = isDone(a.status);
   const gifts = a.gifts || [];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, borderLeft: `3px solid ${color || 'var(--muted-2)'}`, paddingLeft: 5, opacity: noShow ? 0.5 : 1, lineHeight: 1.25 }}>
-      <span className="tabnum" style={{ fontSize: detail ? 11.5 : 10, fontWeight: 700, color: 'var(--ink-2)', flexShrink: 0 }}>{timeLabel(minutesOfDay(a.start))}</span>
-      <span style={{ fontSize: detail ? 12.5 : 10.5, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: noShow ? 'line-through' : 'none' }}>{a.client_name}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, borderLeft: `3px solid ${done ? `color-mix(in srgb, ${color || 'var(--muted-2)'} 35%, transparent)` : color || 'var(--muted-2)'}`, paddingLeft: 5, opacity: noShow ? 0.5 : 1, lineHeight: 1.25 }}>
+      {done && (
+        <span data-done="" role="img" aria-label={t('Conclusa', 'Done')} title={t('Conclusa: conto chiuso', 'Done: bill closed')} style={{ width: detail ? 13 : 11, height: detail ? 13 : 11, borderRadius: 99, background: 'var(--ok)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+          <Icon name="check" size={detail ? 9 : 7} color="#FFFFFF" stroke={3.4} />
+        </span>
+      )}
+      <span className="tabnum" style={{ fontSize: detail ? 11.5 : 10, fontWeight: 700, color: done ? 'var(--muted-2)' : 'var(--ink-2)', flexShrink: 0 }}>{timeLabel(minutesOfDay(a.start))}</span>
+      <span style={{ fontSize: detail ? 12.5 : 10.5, fontWeight: 600, color: done ? 'var(--muted)' : 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: noShow ? 'line-through' : 'none' }}>{a.client_name}</span>
       {a.forced && <span role="img" aria-label={t('Forzato', 'Forced')} title={t('Forzato', 'Forced')} style={{ fontSize: 12, fontWeight: 800, color: 'var(--clay-ink)', lineHeight: 1, flexShrink: 0 }}>*</span>}
       {a.deposit_status === 'required' && <span role="img" aria-label={t('Caparra richiesta', 'Deposit due')} title={t('Caparra richiesta', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)', flexShrink: 0 }} />}
       {gifts.length > 0 && (

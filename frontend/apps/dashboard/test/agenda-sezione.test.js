@@ -575,3 +575,28 @@ test('larghezza delle colonne: la barra comanda la vista a video, una per vista,
   g.render();
   assert.equal(wc(), null);
 });
+
+/* 16/10: le preferenze di visualizzazione della settimana (ViewPrefs):
+ * colonne dinamiche o fisse, scritte anche verticali o solo orizzontali. */
+test('le preferenze di visualizzazione: solo in settimana, arrivano alla griglia e restano sulla postazione', async () => {
+  const storage = {};
+  const g = setup({ storage });
+  await ready(g);
+  const prefs = () => find(g.m.tree, (el) => el.type?.name === 'ViewPrefs');
+  assert.equal(prefs(), null, 'in giornata non c\'è: le colonne e le scritte sono della settimana');
+  g.button('Settimana').props.onClick();
+  g.render();
+  assert.deepEqual([prefs().props.dynamicCols, prefs().props.verticalText], [true, true], 'di partenza come prima');
+  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText], [true, true]);
+  prefs().props.setDynamicCols(false);
+  prefs().props.setVerticalText(false);
+  g.render();
+  assert.deepEqual([g.wv().props.dynamicCols, g.wv().props.verticalText], [false, false]);
+  assert.deepEqual([storage['dk-agenda-week-dynamic-cols'], storage['dk-agenda-week-vertical-text']], ['0', '0']);
+  g.m.unmount();
+  const again = setup({ storage });                  // la pagina ricaricata
+  await ready(again);
+  again.button('Settimana').props.onClick();
+  again.render();
+  assert.deepEqual([again.wv().props.dynamicCols, again.wv().props.verticalText], [false, false]);
+});

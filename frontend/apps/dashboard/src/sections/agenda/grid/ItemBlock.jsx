@@ -4,7 +4,7 @@
 // (anche durante il trascinamento) e i gestori del puntatore.
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
-import { DK_START, PXM, TONE_BORDER, inkOn, laneCss } from '../lib.js';
+import { DK_START, PXM, TONE_BORDER, blockLook, laneCss } from '../lib.js';
 import { creditIcon, creditTitle } from '../../fedelta/credits.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
@@ -26,9 +26,11 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
   const total = block.total ?? (appt.items || []).length;
   const grouped = total > 1;
   const addons = block.addons || [];
-  const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
-  // testo scuro sui colori chiari, bianco su quelli scuri (vedi lib/colors.js)
-  const ink = inkOn(color, 0.82);
+  // testo scuro sui colori chiari, bianco su quelli scuri; conclusa, il
+  // colore appena accennato e il testo spento (blockLook, lib/colors.js)
+  const { bg, ink, done, ring } = blockLook(color, appt.status);
+  // in alto a destra: la spunta di una visita conclusa, o la caparra incassata
+  const badge = done ? 'done' : isFirst && appt.deposit_status === 'paid' ? 'deposit' : null;
   const client = appt.client?.full_name || appt.client_name || '';
   const sm = statusMeta(appt.status, t);
   const showStatusDot = appt.status === 'checked_in' || appt.status === 'in_progress';
@@ -71,7 +73,8 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         background: bg, borderRadius: 12, border: dragging ? `2px solid ${TONE_BORDER[tone] || 'var(--ink)'}` : 'none',
         // `linked`: un altro appuntamento della stessa permanenza di quello
         // aperto o indicato (lib/stay.js): si vede l'insieme
-        boxShadow: dragging || resizing ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : linked ? '0 0 0 2px var(--clay), 0 4px 12px rgba(17,24,39,0.14)' : '0 1px 3px rgba(17,24,39,0.12)',
+        // conclusa: niente ombra, che la stacca dalla griglia come le cose da fare
+        boxShadow: dragging || resizing ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink), 0 6px 18px rgba(17,24,39,0.18)' : linked ? '0 0 0 2px var(--clay), 0 4px 12px rgba(17,24,39,0.14)' : ring || '0 1px 3px rgba(17,24,39,0.12)',
         // Un solo zIndex: ce n'erano due nello stesso oggetto e vinceva il
         // secondo, così il blocco aperto nel pannello restava a 2 e il suo
         // contorno spariva sotto il vicino di corsia. Allungandolo, il blocco
@@ -86,7 +89,7 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
         // testo, e il bollino della caparra non copre l'ora nei blocchi bassi.
         paddingTop: compact ? 3 : 6, paddingBottom: compact ? 3 : 6,
         paddingLeft: grouped ? 21 : compact ? 9 : 10,
-        paddingRight: compact && isFirst && appt.deposit_status === 'paid' ? 30 : compact ? 9 : 10,
+        paddingRight: compact && badge ? 30 : compact ? 9 : 10,
         // Niente ingrandimento durante il trascinamento: `scale(1.03)` spostava
         // i bordi di qualche pixel (tre minuti su un blocco lungo) rispetto
         // all'orario d'arrivo, e staccava il blocco dalla spina che lo segue.
@@ -101,16 +104,21 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
           {soak * pxm > 20 && <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-2)', opacity: 0.7 }}>{soakLabel || t('POSA', 'SOAK')}</span>}
         </div>
       )}
-      {isFirst && appt.deposit_status === 'paid' && (
+      {badge === 'deposit' && (
         <div title={t('Caparra incassata', 'Deposit collected')} style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 7, background: 'var(--surface)', border: '1.5px solid var(--ok)', display: 'grid', placeItems: 'center', boxShadow: '0 1px 2px rgba(17,24,39,0.12)', zIndex: 3 }}>
           <Icon name="wallet" size={13} color="var(--ok)" stroke={2} />
+        </div>
+      )}
+      {badge === 'done' && (
+        <div data-done="" title={t('Conclusa: conto chiuso', 'Done: bill closed')} style={{ position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 99, background: 'var(--ok)', display: 'grid', placeItems: 'center', boxShadow: '0 0 0 2px var(--surface)', zIndex: 3 }}>
+          <Icon name="check" size={12} color="#FFFFFF" stroke={3} />
         </div>
       )}
       {/* Chi, poi cosa, poi quando: in reception la prima domanda davanti a un
           blocco è «chi arriva?». Prima il nome della cliente era la riga più
           piccola e più chiara, sotto servizio e orario. Nei blocchi bassi
           tutto su una riga: cliente, servizio, ora. */}
-      <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && isFirst && appt.deposit_status === 'paid' ? 24 : 0 }}>
+      <div style={{ ...textZ, fontWeight: 700, fontSize: 12.5, color: ink.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.25, flex: compact ? '0 1 auto' : 'none', minWidth: 0, paddingRight: !compact && badge ? 24 : 0 }}>
         {/* arrivata / in corso: il pallino accanto al nome, visibile in ogni altezza */}
         {showStatusDot && <span title={sm.label} style={{ display: 'inline-block', verticalAlign: 'middle', width: 7, height: 7, borderRadius: 99, background: sm.color, marginRight: 5, marginTop: -2, boxShadow: '0 0 0 1.5px rgba(255,255,255,0.8)' }} />}
         {/* la permanenza: altri appuntamenti della cliente attaccati a questo */}

@@ -152,14 +152,18 @@
 .dk-wblock__v { position: absolute; top: 3px; bottom: 3px; left: calc(50% + var(--wb-l) / 2); transform: translateX(-50%); writing-mode: vertical-rl; text-overflow: ellipsis; font-size: 10px; line-height: 1.1; letter-spacing: 0.01em; }
 .dk-wblock__ini { position: absolute; top: 2px; left: var(--wb-l); right: 0; text-align: center; font-size: 9.5px; line-height: 1.15; letter-spacing: -0.02em; }
 .dk-wblock__ini--svc { text-align: left; padding-left: 2px; font-weight: 700; }
+.dk-wblock__ini-t { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: -0.03em; opacity: 0.85; text-align: center; }
 @container (max-width: 40px) {
   /* !important: le righe hanno display in linea */
-  .dk-wblock .dk-wblock__h, .dk-wblock .dk-wblock__badges, .dk-wblock .dk-wblock__gift { display: none !important; }
+  /* la spunta della conclusa coprirebbe le iniziali: resta il colore spento */
+  .dk-wblock .dk-wblock__h, .dk-wblock .dk-wblock__badges, .dk-wblock .dk-wblock__gift, .dk-wblock .dk-wblock__done { display: none !important; }
   .dk-wblock .dk-wblock__ini { display: block; }
   .dk-wblock.dk-wblock--tall .dk-wblock__ini { display: none; }
   .dk-wblock.dk-wblock--tall .dk-wblock__v { display: block; }
 }
 @container (max-width: 22px) {
+  /* l'ora non ci sta: «10:» tagliata non diceva niente */
+  .dk-wblock .dk-wblock__ini-t { display: none; }
   .dk-wblock .dk-wblock__ini { font-size: 8px; letter-spacing: -0.04em; }
   .dk-wblock .dk-wblock__v { font-size: 9px; }
 }

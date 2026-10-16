@@ -28,7 +28,7 @@ import { retryForced } from './lib/retry.js';
 import { splitText, weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
-  weekDays, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
+  weekDays, fixedColumns, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
 } from './lib/week.js';
 
 import { useWeekData } from './hooks/useWeekData.js';
@@ -45,7 +45,10 @@ import { useGridDrag } from './hooks/useGridDrag.js';
 const SUBCOL_W = 44;   // larghezza minima di una sotto-colonna operatrice
 const DAY_MIN_W = 112;
 
-export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, hiddenOps = [] }) {
+/** `dynamicCols`, `verticalText`: le preferenze di visualizzazione
+ *  (ViewPrefs): sotto-colonne larghe col lavoro del giorno o tutte uguali,
+ *  scritte nei blocchi anche per lungo o solo orizzontali. */
+export default function WeekView({ weekStart, operators, colorOf, itemColor, nowMin = null, onOpenDay, onNewAppt, onOpenAppt, pickMode = false, undoMark, undoAfter, ghost, ghostDate, zoom = 1, onZoom, widthZoom = 1, onWidthZoom, widthApi, hiddenOps = [], dynamicCols = true, verticalText = true }) {
   const { t, lang, showRevenue, fireToast, hasScope, settings, live, locationId, modal } = useDash();
   // come in vista giorno: il blocco aperto nel pannello resta cerchiato
   const openApptId = openApptIdOf(modal);
@@ -147,7 +150,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   // i giorni da disegnare: sotto-colonne di TUTTE le operatrici della sede, e
   // l'appuntamento in POST già dove è stato lasciato (vedi weekDays)
   // (le operatrici spente nel filtro «Team» non hanno sotto-colonna: `hiddenOps`)
-  const dayData = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'), hiddenOps);
+  const shown = weekDays(days, pending, operators, locationId, t('Non più in team', 'No longer on the team'), hiddenOps);
+  const dayData = dynamicCols ? shown : fixedColumns(shown);
   // larghezza minima di un giorno a larghezza 1, e con lo zoom di lato
   const dayBase = (d) => Math.max(DAY_MIN_W, d.dayOps.length * SUBCOL_W);
   const dayWidth = (d) => dayBase(d) * (widthZoom || 1);
@@ -441,7 +445,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
               dragging={dragging} dg={dg} movingObjs={movingObjs} marks={marks} g0={G0} g1={G1} pxm={pxm} nowMin={isToday ? nowMinLive : null}
               opening={hoursSet ? openingFor(settings, d.date) : null}
               ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
-              colorOf={colorOf} itemColor={itemColor} stays={stays} linked={linked}
+              colorOf={colorOf} itemColor={itemColor} stays={stays} linked={linked} verticalText={verticalText}
               onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onHover={openHover} onLeave={closeHover}
             />
           );

@@ -38,7 +38,7 @@ export { weekDayOps } from './lib/week.js';
 
 export { workingOperatorIds, visibleDayRows, restingIds, hiddenIdsOf, parseHiddenIds, locationOperators } from './lib/team.js';
 
-export { wantsLightText, inkOn, opColumnTint } from './lib/colors.js';
+export { wantsLightText, inkOn, opColumnTint, isDone, blockLook } from './lib/colors.js';
 
 // Aggiuntivi (nail art durante la manicure): voci senza tempo, etichetta del
 // servizio a cui si appoggiano (vedi lib/addons.js).

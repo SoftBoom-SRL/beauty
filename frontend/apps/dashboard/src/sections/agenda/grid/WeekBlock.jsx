@@ -7,7 +7,7 @@
 // disegnano attaccati (`joinTop`/`joinBottom`), come un blocco solo.
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
-import { DK_START, PXM, addonGroups, initialsOf, inkOn } from '../lib.js';
+import { DK_START, PXM, addonGroups, blockLook, initialsOf } from '../lib.js';
 import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
 
 /** Da quanti px di altezza un blocco stretto scrive il nome per lungo. */
@@ -28,7 +28,7 @@ export const WEEK_TALL_PX = 44;
  * lungo. Stretto e basso: le iniziali. Prima, sotto i 26 px non c'era scritto
  * niente, e sopra si leggevano «Gre…» o i puntini (il titolare, 16/10).
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-export default function WeekBlock({ a, left, width, colorOf, itemColor, moving = false, highlight = false, stay = null, linked = false, joinTop = false, joinBottom = false, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onHover, onLeave }) {
+export default function WeekBlock({ a, left, width, colorOf, itemColor, moving = false, highlight = false, stay = null, linked = false, joinTop = false, joinBottom = false, vertical = true, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * pxm;
   const client = String(a.client_name || '');
   const words = client.split(' ');
@@ -53,7 +53,9 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
    * finiva su tutti i blocchi e non distingueva più niente, spaventando per
    * giornate perfettamente normali. Resta scritto nel pannello di dettaglio,
    * dove serve davvero (e dove la vista giorno lo lascia da tempo). */
-  const flags = !!(depositDue || gifts.length);
+  // conclusa: la spunta, una volta per gruppo di servizi attaccati
+  const doneMark = a.status === 'closed' && !cont;
+  const flags = !!(depositDue || gifts.length || doneMark);
   const sm = statusMeta(a.status, t);
   // arrivata / in corso: il pallino accanto al nome, come in vista giorno
   const showStatusDot = !cont && (a.status === 'checked_in' || a.status === 'in_progress');
@@ -64,12 +66,11 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
   const color = (main && itemColor
     ? itemColor({ service_id: main.service_id, operator_id: main.operator_id ?? a.operator_id })
     : null) || colorOf(a.operator_id);
-  // stessa resa della vista giorno (82%): un colore mezzo slavato qui e pieno
-  // là non si riconosce come lo stesso trattamento
-  const bg = `color-mix(in srgb, ${color} 82%, #FFFFFF)`;
-  /* Il testo: bianco sui colori scuri, come in vista giorno (lib/colors.js).
-   * Sempre scuro, sulle tinte scure dei trattamenti non si leggeva. */
-  const ink = inkOn(color, 0.82);
+  /* Stessa resa della vista giorno (blockLook, lib/colors.js): da fare il
+   * colore pieno, col testo bianco sui colori scuri (sempre scuro, sulle
+   * tinte scure non si leggeva); conclusa il colore appena accennato e il
+   * testo spento. */
+  const { bg, ink, ring } = blockLook(color, a.status);
   const soak = Math.min(h, (a.soakMin || 0) * pxm);
   const barW = isPart ? 6 : 3;
   const badge = isPart && (
@@ -89,7 +90,7 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
     : { last: !!last && h > 30, time: h > 44, extra: h > 58 ? svcName : null };
   return (
     <div
-      data-appt={a.id} className={'dk-wblock' + (h >= WEEK_TALL_PX ? ' dk-wblock--tall' : '')}
+      data-appt={a.id} className={'dk-wblock' + (vertical && h >= WEEK_TALL_PX ? ' dk-wblock--tall' : '')}
       onPointerDown={onDown}
       onMouseEnter={(e) => onHover && onHover(a, e.currentTarget)}
       onMouseLeave={() => onLeave && onLeave()}
@@ -101,7 +102,7 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
         // la copia trascinata ha il bordo, ma non fra due servizi attaccati
         borderStyle: 'solid', borderColor: 'var(--ink)', borderWidth: moving ? `${cont ? 0 : 2}px 2px ${joinBottom ? 0 : 2}px` : 0,
         // `linked`: della stessa permanenza o della stessa visita di quello aperto o indicato
-        boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : linked ? '0 0 0 2px var(--clay)' : '0 1px 2px rgba(17,24,39,0.1)',
+        boxShadow: moving ? 'var(--sh-pop)' : highlight ? '0 0 0 2.5px var(--ink)' : linked ? '0 0 0 2px var(--clay)' : ring || '0 1px 2px rgba(17,24,39,0.1)',
         // niente ingrandimento sulla copia trascinata: spostava i bordi rispetto
         // all'orario d'arrivo (come in vista giorno)
         transition: moving ? 'none' : 'box-shadow 150ms',
@@ -131,6 +132,11 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
       )}
       {flags && (
         <div style={{ position: 'absolute', top: 3, right: 3, display: 'flex', alignItems: 'center', gap: 3, zIndex: 3 }}>
+          {doneMark && (
+            <span data-done="" className="dk-wblock__done" title={t('Conclusa: conto chiuso', 'Done: bill closed')} style={{ width: 12, height: 12, borderRadius: 99, background: 'var(--ok)', display: 'grid', placeItems: 'center', boxShadow: '0 0 0 1.5px var(--surface)' }}>
+              <Icon name="check" size={8} color="#FFFFFF" stroke={3.4} />
+            </span>
+          )}
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
           {/* il trattamento già pagato col suo tipo: regalo, pagato in
               anticipo, pacchetto (e le sedute nel tooltip) */}
@@ -155,11 +161,16 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
       {!rows.time && (link || badge) && (
         <span className="dk-wblock__badges" style={{ position: 'absolute', bottom: 2, right: 3, zIndex: 3, display: 'flex', alignItems: 'center', gap: 3, pointerEvents: 'none' }}>{link}{badge}</span>
       )}
-      {/* stretto e alto: nome (o servizio) e ora per lungo */}
-      {h >= WEEK_TALL_PX && <div className="dk-wblock__v" style={{ color: ink.ink }}>{cont ? svcName : client} · {time}</div>}
-      {/* stretto e basso: le iniziali della cliente; di un servizio attaccato
-          l'inizio del suo nome («Ricos»: l'ora non ci stava e restava «11:1») */}
-      <div className={'dk-wblock__ini' + (cont ? ' dk-wblock__ini--svc' : '')} style={{ color: ink.ink }}>{cont ? main?.service_name || '' : initialsOf(client)}</div>
+      {/* stretto e alto: nome (o servizio) e ora per lungo, se le
+          preferenze lo vogliono (`vertical`, «Scritte nei blocchi») */}
+      {vertical && h >= WEEK_TALL_PX && <div className="dk-wblock__v" style={{ color: ink.ink }}>{cont ? svcName : client} · {time}</div>}
+      {/* stretto: le iniziali della cliente; di un servizio attaccato
+          l'inizio del suo nome («Ricos»: l'ora non ci stava e restava «11:1»).
+          Sotto, dove c'è posto, l'ora */}
+      <div className={'dk-wblock__ini' + (cont ? ' dk-wblock__ini--svc' : '')} style={{ color: ink.ink }}>
+        {cont ? main?.service_name || '' : initialsOf(client)}
+        {h >= 30 && <span className="dk-wblock__ini-t tabnum">{timeLabel(a.startMin)}</span>}
+      </div>
     </div>
   );
 }

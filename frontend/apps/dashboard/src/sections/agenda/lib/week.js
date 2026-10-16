@@ -192,6 +192,10 @@ export function subcolWeight(blocks, resting = false) {
   return 1 + 2 * lanes;
 }
 
+/** Colonne fisse (preferenza «Fissa», ViewPrefs): tutte le sotto-colonne
+ *  larghe uguali ogni giorno, qualunque sia il lavoro. */
+export const fixedColumns = (days) => days.map((d) => ({ ...d, dayOps: d.dayOps.map((o) => ({ ...o, weight: 1 })) }));
+
 /* Aggancio al vicino, come in vista giorno: con trattamenti che non cadono
  * sulle fasce (venti minuti, venticinque) lo scatto alla griglia lasciava
  * sempre un ritaglio invendibile fra un appuntamento e l'altro. Qui i vicini
