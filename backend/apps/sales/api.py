@@ -216,6 +216,10 @@ def charge_no_show(request, appointment_id: int):
 
 @router.post("/client/setup-intent", auth=client_auth, response=SetupIntentOut)
 def client_setup_intent(request):
+    # La carta si salva sull'account del salone: senza, finirebbe su quello
+    # della piattaforma e un eventuale addebito no-show incasserebbe lei.
+    if not stripe_service.payments_enabled(request.auth.salon):
+        raise HttpError(503, "Il salone non accetta ancora pagamenti online")
     intent = stripe_service.create_setup_intent(request.auth.client)
     return {"setup_intent_id": intent.get("id") or "", "client_secret": intent.get("client_secret")}
 
@@ -234,7 +238,7 @@ def deposit_link(request, appointment_id: int, resend: bool = True):
     if appointment.status not in stripe_service.OPEN_APPOINTMENT_STATUSES:
         raise HttpError(400, "L'appuntamento non è più in agenda: nessun link da mandare")
     if not stripe_service.payments_enabled(ctx.salon):
-        raise HttpError(503, "Pagamenti online non configurati: collega Stripe nelle Impostazioni")
+        raise HttpError(503, stripe_service.NOT_CONNECTED_MSG)
     stripe_service.ensure_deposit_link(appointment, resend=resend, actor=ctx.user)
     return serializers.deposit_link_out(appointment)
 
@@ -300,8 +304,15 @@ def stripe_connect_callback(request, data: StripeConnectCallbackIn):
 def stripe_connect_disconnect(request):
     ctx = request.auth
     require_owner(ctx)
-    stripe_service.connect_disconnect(ctx.salon)
-    log_activity(ctx.salon, "settings.stripe_disconnected", "Account Stripe scollegato", actor=ctx.user)
+    suspended = stripe_service.connect_disconnect(ctx.salon)
+    log_activity(
+        ctx.salon,
+        "settings.stripe_disconnected",
+        "Account Stripe scollegato"
+        + (f": {suspended} caparre in attesa senza più scadenza, da incassare al banco" if suspended else ""),
+        actor=ctx.user,
+        payload={"source": "dashboard", "deposits_suspended": suspended},
+    )
     ctx.salon.refresh_from_db()
     return _connect_status(ctx.salon)
 

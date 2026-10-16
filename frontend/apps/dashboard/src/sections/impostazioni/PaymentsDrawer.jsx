@@ -101,12 +101,9 @@ export default function PaymentsDrawer({ onClose }) {
               : <button className="dk-btn dk-btn--clay" onClick={connect}><Icon name="plus" size={16} color="#fff" />{t('Collega Stripe', 'Connect Stripe')}</button>)}
           </div>
           <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
-            {t('Con l’account collegato le caparre pagate dal link finiscono direttamente sul conto Stripe del salone, e gli addebiti no-show sulla carta salvata passano da lì. Senza collegamento le clienti pagano la caparra in salone.', 'With a connected account, deposits paid through the link go straight to the salon’s Stripe balance, and no-show charges on saved cards go through it too. Without it, clients pay the deposit in the salon.')}
+            {t('Con l’account collegato le caparre pagate dal link finiscono direttamente sul conto Stripe del salone, e gli addebiti no-show sulla carta salvata passano da lì. Gli incassi arrivano solo a te: la piattaforma non tocca i soldi. Senza collegamento le clienti pagano la caparra in salone.', 'With a connected account, deposits paid through the link go straight to the salon’s Stripe balance, and no-show charges on saved cards go through it too. The money only ever reaches you: the platform never touches it. Without it, clients pay the deposit in the salon.')}
             {stripe && !stripe.available && (
               <span> {t('Chiedi al fornitore della piattaforma di abilitare Stripe Connect (chiave e client id).', 'Ask the platform provider to enable Stripe Connect (key and client id).')}</span>
-            )}
-            {stripe && stripe.payments_enabled && !stripeOk && (
-              <span> {t('Nota: la piattaforma ha una chiave Stripe generale, quindi i link caparra funzionano già, ma gli incassi arrivano sull’account della piattaforma finché non colleghi il tuo.', 'Note: the platform has a general Stripe key, so deposit links already work, but payouts land on the platform account until you connect yours.')}</span>
             )}
           </div>
         </div>
@@ -167,11 +164,8 @@ export default function PaymentsDrawer({ onClose }) {
         onConfirm={disconnect}
         title={t('Scollegare Stripe?', 'Disconnect Stripe?')}
         message={t('L’account Stripe del salone verrà scollegato.', 'The salon’s Stripe account will be disconnected.')}
-        detail={stripe?.payments_enabled
-          ? t('Da quel momento le caparre pagate dal link finiscono sull’account della piattaforma, non sul conto del salone, e lo stesso gli addebiti no-show sulla carta salvata. Per tornare indietro dovrai rifare il collegamento con Stripe.',
-            'From then on, deposits paid through the link land on the platform account, not the salon’s, and so do no-show charges on saved cards. To undo it you will have to connect Stripe again.')
-          : t('Da quel momento i link di pagamento della caparra non funzionano più: le clienti pagano la caparra in salone. Per tornare indietro dovrai rifare il collegamento con Stripe.',
-            'From then on, deposit payment links stop working: clients pay the deposit in the salon. To undo it you will have to connect Stripe again.')}
+        detail={t('Da quel momento non si creano più link di pagamento della caparra né addebiti no-show: le clienti pagano la caparra in salone. I link già mandati si chiudono, e le caparre in attesa non liberano più lo slot da sole. Per tornare indietro dovrai rifare il collegamento con Stripe.',
+          'From then on, no new deposit payment links or no-show charges are created: clients pay the deposit in the salon. Links already sent are closed, and pending deposits no longer free the slot on their own. To undo it you will have to connect Stripe again.')}
         confirmLabel={t('Scollega', 'Disconnect')}
         cancelLabel={t('Annulla', 'Cancel')}
       />

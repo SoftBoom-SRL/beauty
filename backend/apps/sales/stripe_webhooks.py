@@ -11,6 +11,7 @@ arrivato in più stanno in deposits.py. Stava tutto dentro api.py.
 import datetime as dt
 import logging
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -68,6 +69,34 @@ def handle_event(event: dict) -> None:
         on_refund_event(obj, event_type)
     elif event_type == "setup_intent.succeeded":
         on_setup_intent_succeeded(obj, metadata, account)
+    elif event_type == "account.application.deauthorized":
+        on_account_deauthorized(obj, account)
+
+
+# ---- Revoca dal lato del titolare -----------------------------------------------
+
+
+def on_account_deauthorized(obj: dict, account: str) -> None:
+    """Il titolare ha scollegato la piattaforma dalla sua dashboard Stripe.
+
+    Senza questo evento l'account restava salvato: il pannello diceva
+    «Collegato» e ogni link caparra falliva. L'oggetto dell'evento è
+    l'applicazione revocata (il suo id è il client_id): se non è la nostra,
+    l'evento non ci riguarda.
+    """
+    client_id = getattr(settings, "STRIPE_CONNECT_CLIENT_ID", "") or ""
+    application = obj.get("id") or ""
+    if application and client_id and application != client_id:
+        logger.info("Revoca Stripe di un'altra applicazione (%s) ignorata", application)
+        return
+    for salon, suspended in stripe_service.account_revoked(account):
+        log_activity(
+            salon,
+            "settings.stripe_disconnected",
+            "Stripe scollegato dal titolare nella dashboard Stripe: pagamenti online fermi"
+            + (f", {suspended} caparre in attesa senza più scadenza" if suspended else ""),
+            payload={"source": "stripe", "account_id": account, "deposits_suspended": suspended},
+        )
 
 
 # ---- Account dell'evento -------------------------------------------------------

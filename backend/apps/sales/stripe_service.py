@@ -2,6 +2,12 @@
 
 Stripe è opzionale: senza STRIPE_SECRET_KEY ogni funzione risponde
 HttpError(503, "Stripe non configurato"). Gli importi sono in centesimi.
+
+I soldi vanno SOLO al salone: ogni incasso (caparra, carta salvata, addebito
+no-show) nasce sull'account Stripe collegato dal titolare, mai su quello della
+piattaforma. Senza account collegato i pagamenti online sono spenti e la
+caparra si paga in salone. La chiave della piattaforma serve solo a parlare
+con Stripe per conto degli account collegati (header Stripe-Account).
 """
 
 import datetime as dt
@@ -60,14 +66,33 @@ def as_dict(obj) -> dict:
 
 
 def salon_account_id(salon) -> str:
-    """Account Stripe collegato dal titolare ("" = si usa l'account della piattaforma)."""
+    """Account Stripe collegato dal titolare ("" = nessuno: niente pagamenti online)."""
     salon_settings = getattr(salon, "settings", None)
     return getattr(salon_settings, "stripe_account_id", "") or ""
 
 
+NOT_CONNECTED_MSG = (
+    "Pagamenti online non attivi: il titolare deve collegare il proprio account "
+    "Stripe in Impostazioni → Pagamenti"
+)
+
+
+def require_salon_account(salon) -> str:
+    """Account Stripe del salone, o 503 se il titolare non l'ha collegato.
+
+    Ogni pagamento nuovo passa da qui. Prima, senza account collegato, le
+    chiamate partivano senza header Stripe-Account: caparre e addebiti no-show
+    finivano sul conto della piattaforma invece che su quello del salone.
+    """
+    account = salon_account_id(salon)
+    if not account:
+        raise HttpError(503, NOT_CONNECTED_MSG)
+    return account
+
+
 def _account_opts(salon) -> dict:
-    """kwargs per le chiamate Stripe: instradano sull'account del salone se collegato."""
-    return _account_kwargs(salon_account_id(salon))
+    """kwargs per le chiamate Stripe: sempre sull'account del salone (503 se manca)."""
+    return _account_kwargs(require_salon_account(salon))
 
 
 def _account_kwargs(account: str) -> dict:
@@ -121,8 +146,12 @@ def account_token_matches(salon, token: str, account: str) -> bool:
 
 
 def payments_enabled(salon) -> bool:
-    """Vero se si possono creare pagamenti online per il salone."""
-    return bool(settings.STRIPE_SECRET_KEY)
+    """Vero se si possono creare pagamenti online per il salone.
+
+    Serve anche l'account del titolare: la sola chiave della piattaforma
+    farebbe incassare la piattaforma (vedi `require_salon_account`).
+    """
+    return bool(settings.STRIPE_SECRET_KEY) and bool(salon_account_id(salon))
 
 
 def connect_available() -> bool:
@@ -169,21 +198,90 @@ def connect_exchange(salon, code: str, state: str) -> str:
     return account_id
 
 
-def connect_disconnect(salon) -> None:
-    """Scollega l'account Stripe del salone (revoca lato Stripe se possibile)."""
+def connect_disconnect(salon) -> int:
+    """Scollega l'account Stripe del salone (revoca lato Stripe se possibile).
+
+    Ritorna quante caparre in attesa hanno perso la scadenza (vedi
+    `suspend_pending_deposits`).
+    """
     from apps.core.models import SalonSettings  # lazy
 
     salon_settings, _ = SalonSettings.objects.get_or_create(salon=salon)
     account_id = salon_settings.stripe_account_id
     if account_id and connect_available():
+        # Finché l'accesso c'è, i link ancora aperti si chiudono: dopo la
+        # revoca un pagamento su quell'account non ci arriverebbe più, e la
+        # caparra resterebbe «richiesta» con i soldi già sul conto del salone.
+        close_pending_deposit_links(salon)
         stripe = _client()
         try:
             stripe.OAuth.deauthorize(client_id=settings.STRIPE_CONNECT_CLIENT_ID, stripe_user_id=account_id)
         except stripe.StripeError as exc:  # già revocato lato Stripe: non blocca
             logger.warning("Deauthorize Stripe non riuscita per %s: %s", account_id, exc)
+    _forget_salon_account(salon_settings)
+    return suspend_pending_deposits(salon)
+
+
+def account_revoked(account: str) -> list[tuple]:
+    """Il titolare ha tolto l'accesso dalla SUA dashboard Stripe: i saloni con quell'account tornano scollegati.
+
+    Arriva col webhook `account.application.deauthorized`. Prima l'account
+    restava salvato: il pannello diceva «Collegato» e ogni link caparra
+    falliva con un errore Stripe. Qui i link non si possono più chiudere (non
+    abbiamo più accesso), quindi si toglie solo la scadenza alle caparre in
+    attesa. Ritorna [(salone, caparre sospese)], vuota se nessun salone usa
+    l'account.
+    """
+    from apps.core.models import SalonSettings  # lazy
+
+    if not account:
+        return []
+    revoked = []
+    for salon_settings in SalonSettings.objects.select_related("salon").filter(stripe_account_id=account):
+        _forget_salon_account(salon_settings)
+        revoked.append((salon_settings.salon, suspend_pending_deposits(salon_settings.salon)))
+    return revoked
+
+
+def _forget_salon_account(salon_settings) -> None:
     salon_settings.stripe_account_id = ""
     salon_settings.stripe_connected_at = None
     salon_settings.save(update_fields=["stripe_account_id", "stripe_connected_at", "updated_at"])
+
+
+def _pending_deposits(salon):
+    """Visite ancora in piedi con la caparra da pagare."""
+    from apps.agenda.models import Appointment  # lazy
+
+    return Appointment.objects.select_related("salon", "salon__settings", "client").filter(
+        salon=salon, deposit_status="required", status__in=OPEN_APPOINTMENT_STATUSES
+    )
+
+
+def close_pending_deposit_links(salon) -> None:
+    """Chiude su Stripe i link caparra ancora aperti del salone (errori ignorati)."""
+    for appointment in _pending_deposits(salon).exclude(deposit_checkout_session_id=""):
+        expire_deposit_checkout(appointment)
+
+
+def suspend_pending_deposits(salon) -> int:
+    """Il salone non ha più Stripe: le caparre in attesa perdono la scadenza. Ritorna quante.
+
+    Senza account il link non si rifà, e un pagamento sull'account di prima
+    non ci arriva più: con la scadenza in piedi lo slot si liberava da solo e
+    alla cliente arrivava «caparra non versata», magari dopo averla pagata.
+    Come quando il link non si crea (`_link_not_created`): la caparra resta
+    «richiesta», lo staff la incassa al banco o la toglie.
+    """
+    from apps.agenda.services.deposit_holds import clear_deposit_hold  # lazy
+
+    suspended = 0
+    for appointment in _pending_deposits(salon):
+        if appointment.deposit_due_at is None and appointment.deposit_hold_until is None:
+            continue
+        clear_deposit_hold(appointment)
+        suspended += 1
+    return suspended
 
 
 def _currency(salon) -> str:
@@ -201,7 +299,7 @@ def ensure_customer(client) -> str:
     già in rubrica smettono di funzionare.
     """
     stripe = _client()
-    account = salon_account_id(client.salon)
+    account = require_salon_account(client.salon)
     if client.stripe_customer_id and client.stripe_account_id == account:
         return client.stripe_customer_id
 
@@ -306,7 +404,7 @@ def create_deposit_checkout(appointment) -> dict:
     if amount <= 0:
         raise HttpError(400, "Nessuna caparra richiesta per questo appuntamento")
     client = appointment.client
-    account = salon_account_id(appointment.salon)
+    account = require_salon_account(appointment.salon)
     metadata = {
         "appointment_id": str(appointment.id),
         "kind": "deposit",
@@ -707,7 +805,7 @@ def refund_payment_intent(
     params = {"payment_intent": intent_id, "idempotency_key": idempotency_key}
     if amount_cents and int(amount_cents) > 0:
         params["amount"] = int(amount_cents)
-    opts = _account_opts(salon) if account is None else _account_kwargs(account)
+    opts = _account_kwargs(salon_account_id(salon) if account is None else account)
     try:
         return as_dict(stripe.Refund.create(**params, **opts))
     except stripe.StripeError as exc:

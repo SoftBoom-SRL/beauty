@@ -109,6 +109,7 @@ class OneStripeCustomerTests(StripeTestBase):
     def test_a_second_request_finds_the_customer_already_created(self):
         from .. import stripe_service
 
+        self.connect_stripe()
         customers = iter([{"id": "cus_A", "object": "customer"}, {"id": "cus_B", "object": "customer"}])
         http = self.fake([("POST", "/v1/customers", lambda url, data: next(customers))])
         first = Client.objects.get(pk=self.client_obj.pk)

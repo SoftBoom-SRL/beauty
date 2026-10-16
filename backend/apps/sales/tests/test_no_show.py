@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from ninja.errors import HttpError
 
 from apps.clients.models import Client
-from apps.core.models import Salon
+from apps.core.models import Salon, SalonSettings
 from common.auth import create_staff_tokens
 
 from ..models import Sale
@@ -26,9 +26,11 @@ class ChargeNoShowTests(TestCase):
         from apps.staff.models import Operator
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222",
             consents={"card_charge": True}, stripe_customer_id="cus_1", stripe_payment_method_id="pm_1",
+            stripe_account_id="acct_salon",
         )
         operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
         category = ServiceCategory.objects.create(salon=self.salon, name_it="Unghie")
@@ -60,8 +62,25 @@ class ChargeNoShowTests(TestCase):
             create.call_args.kwargs["idempotency_key"],
             f"no-show-{self.salon.id}-{self.appointment.id}-pm_1",
         )
+        # sul conto del salone
+        self.assertEqual(create.call_args.kwargs["stripe_account"], "acct_salon")
         self.appointment.refresh_from_db()
         self.assertEqual(self.appointment.no_show_payment_intent_id, "pi_ns_1")
+
+    def test_without_the_owner_account_nothing_is_charged(self):
+        """Senza account collegato l'addebito andrebbe alla piattaforma: non parte."""
+        from apps.agenda.models import Appointment
+
+        from .. import stripe_service
+
+        SalonSettings.objects.filter(salon=self.salon).update(stripe_account_id="")
+        appointment = Appointment.objects.select_related("salon", "client").get(pk=self.appointment.pk)
+        with patch("stripe.PaymentIntent.create") as create, patch("stripe.Customer.create") as customer:
+            with self.assertRaises(HttpError) as caught:
+                stripe_service.charge_full_amount(appointment)
+        self.assertEqual(caught.exception.status_code, 503)
+        create.assert_not_called()
+        customer.assert_not_called()
 
     def test_only_no_show_appointments_can_be_charged(self):
         from .. import stripe_service
@@ -86,10 +105,11 @@ class NoShowAmountTests(TestCase):
         from apps.staff.models import Operator
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222",
             consents={"card_charge": True}, stripe_customer_id="cus_1",
-            stripe_payment_method_id="pm_1",
+            stripe_payment_method_id="pm_1", stripe_account_id="acct_salon",
         )
         operator = Operator.objects.create(salon=self.salon, first_name="Giulia", last_name="Bianchi")
         category = ServiceCategory.objects.create(salon=self.salon, name_it="Colore")

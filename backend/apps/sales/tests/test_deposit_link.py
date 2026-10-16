@@ -79,8 +79,36 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertEqual(res.status_code, 503)
         self.assertEqual(stripe_service.ensure_deposit_link(self.appointment), "")
 
+    @override_settings(STRIPE_SECRET_KEY="sk_test_x")
+    def test_without_the_owner_account_nothing_is_collected_on_the_platform(self):
+        """La sola chiave della piattaforma non basta: i soldi vanno solo al salone.
+
+        Prima, senza account collegato, il link partiva senza Stripe-Account e
+        la caparra finiva sul conto della piattaforma.
+        """
+        from .. import stripe_service
+
+        client_auth = {"HTTP_AUTHORIZATION": f"Bearer {create_client_tokens(self.client_obj)['access']}"}
+        with patch("stripe.checkout.Session.create") as create, patch("stripe.SetupIntent.create") as setup:
+            res = self.client.post(f"/api/sales/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **self.staff_auth)
+            self.assertEqual(res.status_code, 503)
+            self.assertIn("collegare il proprio account Stripe", res.json()["detail"])
+            res = self.client.post(f"/api/sales/client/appointments/{self.appointment.id}/deposit-link", data="{}", content_type="application/json", **client_auth)
+            self.assertEqual(res.status_code, 503)
+            res = self.client.post("/api/sales/client/setup-intent", data="{}", content_type="application/json", **client_auth)
+            self.assertEqual(res.status_code, 503)
+            self.assertEqual(stripe_service.ensure_deposit_link(self.appointment), "")
+            with self.assertRaises(HttpError):
+                stripe_service.create_deposit_checkout(self.appointment)
+        create.assert_not_called()
+        setup.assert_not_called()
+        res = self.client.get("/api/sales/stripe/connect/status", **self.auth)
+        self.assertFalse(res.json()["payments_enabled"])
+
     @override_settings(STRIPE_SECRET_KEY="sk_test_x", CLIENT_APP_ORIGIN="https://app.example.com")
     def test_link_is_created_stored_and_queued_for_the_client(self):
+        SalonSettings.objects.filter(salon=self.salon).update(stripe_account_id="acct_salon")
+        self.appointment.salon = Salon.objects.get(pk=self.salon.pk)
         sessions = [
             {"url": "https://checkout.stripe.com/c/pay/cs_1"},
             {"url": "https://checkout.stripe.com/c/pay/cs_2"},
@@ -98,6 +126,7 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertEqual(create.call_count, 2)
         kwargs = create.call_args.kwargs
         self.assertEqual(kwargs["mode"], "payment")
+        self.assertEqual(kwargs["stripe_account"], "acct_salon")
         self.assertEqual(kwargs["line_items"][0]["price_data"]["unit_amount"], 1500)
         self.assertEqual(kwargs["payment_intent_data"]["metadata"]["kind"], "deposit")
         self.assertTrue(kwargs["success_url"].startswith("https://app.example.com/the-parlour?deposit=paid"))
@@ -145,7 +174,8 @@ class DepositLinkAndConnectTests(TestCase):
         from urllib.parse import parse_qs, urlparse
 
         res = self.client.get("/api/sales/stripe/connect/status", **self.auth)
-        self.assertEqual(res.json(), {**res.json(), "available": True, "connected": False, "payments_enabled": True})
+        # senza account collegato niente pagamenti online, anche con la chiave
+        self.assertEqual(res.json(), {**res.json(), "available": True, "connected": False, "payments_enabled": False})
         res = self.client.post("/api/sales/stripe/connect/start", data="{}", content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 200, res.content)
         url = urlparse(res.json()["url"])
@@ -165,6 +195,7 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertTrue(res.json()["connected"])
         self.assertEqual(res.json()["account_id"], "acct_123")
+        self.assertTrue(res.json()["payments_enabled"])
         # le chiamate Stripe successive vanno sull'account collegato
         from .. import stripe_service
 
@@ -179,6 +210,7 @@ class DepositLinkAndConnectTests(TestCase):
             res = self.client.delete("/api/sales/stripe/connect", **self.auth)
         self.assertEqual(res.status_code, 200)
         self.assertFalse(res.json()["connected"])
+        self.assertFalse(res.json()["payments_enabled"])
 
     def test_today_summary_separates_gift_card_money(self):
         from ..models import Payment, Sale, SaleLine
@@ -248,22 +280,24 @@ class DepositAccountTests(StripeTestBase):
     def test_the_old_link_is_closed_on_the_account_it_was_created_on(self):
         from .. import stripe_service
 
-        sessions = iter([_session("cs_platform"), _session("cs_connected")])
+        sessions = iter([_session("cs_old"), _session("cs_connected")])
         http = self.fake([
-            ("POST", "/v1/checkout/sessions/cs_platform/expire", {"id": "cs_platform", "object": "checkout.session"}),
+            ("POST", "/v1/checkout/sessions/cs_old/expire", {"id": "cs_old", "object": "checkout.session"}),
             ("POST", "/v1/checkout/sessions", lambda url, data: next(sessions)),
         ])
+        self._connect("acct_old")
+        self.appointment.salon = self.salon
         stripe_service.ensure_deposit_link(self.appointment)
         self.appointment.refresh_from_db()
-        self.assertEqual(self.appointment.deposit_stripe_account, "")
+        self.assertEqual(self.appointment.deposit_stripe_account, "acct_old")
         self._connect("acct_new")
         appointment = Appointment.objects.select_related("salon", "salon__settings", "client").get(
             pk=self.appointment.pk
         )
         stripe_service.ensure_deposit_link(appointment, resend=True)
-        expire = http.calls_to("/v1/checkout/sessions/cs_platform/expire")
+        expire = http.calls_to("/v1/checkout/sessions/cs_old/expire")
         self.assertEqual(len(expire), 1)
-        self.assertNotIn("Stripe-Account", expire[0]["headers"])
+        self.assertEqual(expire[0]["headers"].get("Stripe-Account"), "acct_old")
         created = [c for c in http.calls_to("/v1/checkout/sessions") if c["url"].endswith("/v1/checkout/sessions")]
         self.assertEqual(created[-1]["headers"].get("Stripe-Account"), "acct_new")
         appointment.refresh_from_db()
@@ -274,6 +308,10 @@ class DepositAccountTests(StripeTestBase):
 @override_settings(STRIPE_SECRET_KEY="sk_test_x")
 class LinkLifetimeTests(StripeTestBase):
     """05-10: la sessione del link muore (24 ore al massimo): si rifà, non si rimanda."""
+
+    def setUp(self):
+        super().setUp()
+        self.connect_stripe()
 
     def _client_link(self):
         token = create_client_tokens(self.client_obj)["access"]
@@ -287,7 +325,7 @@ class LinkLifetimeTests(StripeTestBase):
             deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
             deposit_checkout_session_id="cs_old",
             deposit_link_expires_at=expires_at,
-            deposit_stripe_account="",
+            deposit_stripe_account="acct_salon",
         )
         self.appointment.refresh_from_db()
 
@@ -377,6 +415,10 @@ class LinkLifetimeTests(StripeTestBase):
 class HoldWithoutLinkTests(StripeTestBase):
     """05-11: senza un link pagabile la caparra non ha scadenza e lo slot non si libera."""
 
+    def setUp(self):
+        super().setUp()
+        self.connect_stripe()
+
     def _book_via_api(self):
         from apps.accounts.models import Membership, Role, User
         from common.auth import create_staff_tokens
@@ -429,7 +471,7 @@ class HoldWithoutLinkTests(StripeTestBase):
             deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
             deposit_checkout_session_id="cs_old",
             deposit_link_expires_at=timezone.now() + dt.timedelta(hours=1),
-            deposit_stripe_account="",
+            deposit_stripe_account="acct_salon",
         )
         self.appointment.refresh_from_db()
         http = self.fake([("POST", "/v1/checkout/sessions", ({"error": {"message": "boom"}}, 500))])
@@ -466,12 +508,13 @@ class AmountChangeTests(StripeTestBase):
     def test_reducing_a_required_deposit_replaces_the_link(self):
         from apps.agenda.services.appointments import edit_appointment
 
+        self.connect_stripe()
         appointment, extra = self._two_services(
             deposit_amount=Decimal("70.00"),
             deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
             deposit_checkout_session_id="cs_old",
             deposit_link_expires_at=timezone.now() + dt.timedelta(hours=3),
-            deposit_stripe_account="",
+            deposit_stripe_account="acct_salon",
         )
         piega = appointment.items.get(service=extra)
         http = self.fake([
@@ -501,6 +544,7 @@ class AmountChangeTests(StripeTestBase):
         from apps.agenda.models import UndoEntry
         from apps.agenda.services.appointments import edit_appointment
 
+        self.connect_stripe()
         # Alle 10 fra due giorni: «Indietro» rivaluta l'orario, e con «adesso + 2
         # giorni» dalle 22:30 la visita di un'ora e mezza scavalcava la mezzanotte.
         appointment, extra = self._two_services(
@@ -509,7 +553,7 @@ class AmountChangeTests(StripeTestBase):
             deposit_payment_link="https://checkout.stripe.com/c/pay/cs_old",
             deposit_checkout_session_id="cs_old",
             deposit_link_expires_at=timezone.now() + dt.timedelta(hours=3),
-            deposit_stripe_account="",
+            deposit_stripe_account="acct_salon",
         )
         piega = appointment.items.get(service=extra)
         self.fake([

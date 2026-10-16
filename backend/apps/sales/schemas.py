@@ -203,7 +203,7 @@ class SetupIntentOut(Schema):
 
 class StripeConnectStatusOut(Schema):
     available: bool           # la piattaforma ha STRIPE_CONNECT_CLIENT_ID
-    payments_enabled: bool    # si possono creare link di pagamento (chiave Stripe presente)
+    payments_enabled: bool    # si possono creare link di pagamento (chiave Stripe e account del salone)
     connected: bool
     account_id: str = ""
     connected_at: Optional[datetime] = None

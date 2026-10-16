@@ -27,6 +27,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
     def test_the_deposit_link_is_created_and_stored(self):
         from .. import stripe_service
 
+        self.connect_stripe()
         http = self.fake([("POST", "/v1/checkout/sessions", {
             "id": "cs_test_1", "object": "checkout.session",
             "url": "https://checkout.stripe.com/c/pay/cs_test_1",
@@ -38,8 +39,11 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(self.appointment.deposit_payment_link, url)
         self.assertEqual(self.appointment.deposit_checkout_session_id, "cs_test_1")
         self.assertEqual(len(http.calls_to("/v1/checkout/sessions")), 1)
+        # sul conto del salone, mai su quello della piattaforma
+        self.assertEqual(http.calls_to("/v1/checkout/sessions")[0]["headers"].get("Stripe-Account"), "acct_salon")
 
     def test_the_staff_link_endpoint_answers(self):
+        self.connect_stripe()
         self.fake([("POST", "/v1/checkout/sessions", {
             "id": "cs_test_2", "object": "checkout.session", "url": "https://checkout.stripe.com/c/pay/cs_test_2",
         })])
@@ -141,6 +145,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
     def test_a_reminder_expires_the_previous_session(self):
         from .. import stripe_service
 
+        self.connect_stripe()
         sessions = iter([
             {"id": "cs_1", "object": "checkout.session", "url": "https://checkout.stripe.com/c/pay/cs_1"},
             {"id": "cs_2", "object": "checkout.session", "url": "https://checkout.stripe.com/c/pay/cs_2"},
@@ -157,6 +162,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(self.appointment.deposit_checkout_session_id, "cs_2")
 
     def test_the_client_can_ask_for_a_setup_intent(self):
+        self.connect_stripe()
         http = self.fake([
             ("POST", "/v1/customers", {"id": "cus_1", "object": "customer"}),
             ("POST", "/v1/setup_intents", {
@@ -173,14 +179,17 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.client_obj.refresh_from_db()
         self.assertEqual(self.client_obj.stripe_customer_id, "cus_1")
         self.assertEqual(http.calls_to("/v1/setup_intents")[0]["data"]["customer"], "cus_1")
+        self.assertEqual(http.calls_to("/v1/setup_intents")[0]["headers"].get("Stripe-Account"), "acct_salon")
 
     def test_a_no_show_is_charged(self):
+        self.connect_stripe()
         self.client_obj.consents = {"card_charge": True}
         self.client_obj.stripe_customer_id = "cus_1"
+        self.client_obj.stripe_account_id = "acct_salon"
         self.client_obj.stripe_payment_method_id = "pm_1"
         self.client_obj.save()
         appointment = self.make_appointment(deposit_status="none", deposit_amount=Decimal("0"), status="no_show")
-        self.fake([("POST", "/v1/payment_intents", {
+        http = self.fake([("POST", "/v1/payment_intents", {
             "id": "pi_ns", "object": "payment_intent", "amount": 10000, "status": "succeeded",
         })])
         res = self.client.post(
@@ -191,6 +200,7 @@ class StripeObjectsAreNotDictsTests(StripeTestBase):
         self.assertEqual(res.json()["payment_intent_id"], "pi_ns")
         appointment.refresh_from_db()
         self.assertEqual(appointment.no_show_payment_intent_id, "pi_ns")
+        self.assertEqual(http.calls_to("/v1/payment_intents")[0]["headers"].get("Stripe-Account"), "acct_salon")
 
     def test_a_second_payment_on_the_same_deposit_is_refunded(self):
         from ..stripe_webhooks import on_payment_intent_succeeded
