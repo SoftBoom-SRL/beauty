@@ -446,14 +446,14 @@ class WeekShiftsTests(RealShiftsTestBase):
         self.assertEqual(len(week), 7)
         self.assertEqual(
             week[tuesday.isoformat()][self.giulia.id],
-            {"operator_id": self.giulia.id, "windows": [["09:00", "19:00"]], "absence": None},
+            {"operator_id": self.giulia.id, "windows": [["09:00", "19:00"]], "absence": None, "out_of_team": None},
         )
         self.assertEqual(week[tuesday.isoformat()][self.marta.id]["windows"], [["14:00", "19:00"]])
         # riposo: niente turno, nessuna assenza
-        self.assertEqual(week[monday.isoformat()][self.marta.id], {"operator_id": self.marta.id, "windows": [], "absence": None})
+        self.assertEqual(week[monday.isoformat()][self.marta.id], {"operator_id": self.marta.id, "windows": [], "absence": None, "out_of_team": None})
         # assenti: niente turno, col tipo d'assenza (anche chi quel giorno avrebbe lavorato)
         self.assertEqual(week[wednesday.isoformat()][self.marta.id]["absence"], "vacation")
-        self.assertEqual(week[wednesday.isoformat()][self.giulia.id], {"operator_id": self.giulia.id, "windows": [], "absence": "holiday"})
+        self.assertEqual(week[wednesday.isoformat()][self.giulia.id], {"operator_id": self.giulia.id, "windows": [], "absence": "holiday", "out_of_team": None})
 
     def test_shifts_follow_the_location_and_include_whoever_has_a_service(self):
         centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
@@ -494,6 +494,22 @@ class WeekShiftsTests(RealShiftsTestBase):
         # solo nel giorno in cui ha qualcosa
         other = (monday if self.day != monday else monday + dt.timedelta(days=1)).isoformat()
         self.assertEqual(days[other]["extra_operators"], [])
+
+    def test_days_outside_the_employment_period_say_so(self):
+        """16/10: prima dell'arrivo la colonna diceva «Riposo»; ora si sa che
+        non era ancora nel team (e il giorno non ha il suo turno)."""
+        before = self.day - dt.timedelta(days=self.day.weekday())   # il lunedì della settimana
+        self.marta.employed_from = before + dt.timedelta(days=1)
+        self.marta.save(update_fields=["employed_from"])
+        week = self._week()
+        self.assertEqual(week[before.isoformat()][self.marta.id]["out_of_team"], "before")
+        self.assertEqual(week[before.isoformat()][self.marta.id]["windows"], [])
+        tuesday = (before + dt.timedelta(days=1)).isoformat()
+        self.assertIsNone(week[tuesday][self.marta.id]["out_of_team"])
+        self.assertTrue(week[tuesday][self.marta.id]["windows"])
+        rows = self.client.get("/api/agenda/day", {"date": before.isoformat()}, **self.staff_auth()).json()
+        row = next(r for r in rows if r["operator"]["id"] == self.marta.id)
+        self.assertEqual((row["out_of_team"], row["windows"]), ("before", []))
 
     def test_the_shifts_do_not_cost_a_query_per_operator(self):
         from django.db import connection

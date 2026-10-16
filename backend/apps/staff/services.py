@@ -98,6 +98,17 @@ def _subtract(windows: list[tuple[int, int]], cuts: list[tuple[int, int]]) -> li
     return result
 
 
+def out_of_team(operator, date: date_cls) -> str | None:
+    """«before» se in quel giorno l'operatrice non è ancora nel team, «after» se
+    non lo è più (`employed_from` / `employed_until`, estremi compresi), None
+    se lo è. Prima e dopo non ha turni: vedi `shift_windows`."""
+    if operator.employed_from and date < operator.employed_from:
+        return "before"
+    if operator.employed_until and date > operator.employed_until:
+        return "after"
+    return None
+
+
 def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     """Finestre lavorabili (minuti da mezzanotte) per l'operatrice in quella data.
 
@@ -110,8 +121,13 @@ def shift_windows(operator, date: date_cls) -> list[tuple[int, int]]:
     vengono intersecate con le fasce del giorno: fuori orario — o nei giorni di
     chiusura — non si prenota, qualunque sia il turno. Senza orari configurati
     contano solo i turni.
+
+    Fuori dal rapporto di lavoro (`out_of_team`) non ci sono turni: prima
+    dell'arrivo e dopo l'uscita il pattern non vale. Contandolo, le statistiche
+    di riempimento del passato mettevano al denominatore i turni di chi non
+    c'era ancora, e l'agenda la proponeva in date in cui non lavora.
     """
-    if _current_absence(operator, date) is not None:
+    if out_of_team(operator, date) or _current_absence(operator, date) is not None:
         return []
 
     cycle_weeks = operator.cycle_weeks or 1
@@ -147,7 +163,8 @@ def roster(salon, operators, start: date_cls, days: int) -> list[dict]:
     Per ogni giorno gli orari del centro (`opening`: None se non impostati, []
     se chiuso) e per ogni operatrice le finestre di turno (`shift_windows`:
     ciclo, pause, assenze e orari del centro), la settimana del suo ciclo e
-    l'assenza che copre il giorno. Serve a «Turni del team», dove si guarda se
+    l'assenza che copre il giorno, e `out_of_team` («before»/«after») per i
+    giorni fuori dal rapporto di lavoro. Serve a «Turni del team», dove si guarda se
     i turni coprono l'apertura, e al calendario della scheda: prima ognuna si
     controllava a parte, e un buco del sabato pomeriggio si scopriva in agenda.
     `operators` deve avere turni e assenze già letti (prefetch).
@@ -165,6 +182,7 @@ def roster(salon, operators, start: date_cls, days: int) -> list[dict]:
                     "windows": [(min_to_hm(a), min_to_hm(b)) for a, b in shift_windows(operator, day)],
                     "week_index": _week_index(day, operator.cycle_weeks or 1),
                     "absence": absence,
+                    "out_of_team": out_of_team(operator, day),
                 }
             )
         out.append(
@@ -178,7 +196,8 @@ def roster(salon, operators, start: date_cls, days: int) -> list[dict]:
 
 
 def today_status(operator, on_date: date_cls | None = None) -> dict:
-    """Stato dell'operatrice per la giornata: finestre di turno, on_shift, assenza."""
+    """Stato dell'operatrice per la giornata: finestre di turno, on_shift,
+    assenza e `out_of_team` («before»/«after» fuori dal rapporto di lavoro)."""
     on_date = on_date or timezone.localdate()
     absence = _current_absence(operator, on_date)
     windows = shift_windows(operator, on_date)
@@ -186,4 +205,5 @@ def today_status(operator, on_date: date_cls | None = None) -> dict:
         "windows": windows,
         "on_shift": bool(windows),
         "absence_type": absence.type if absence else None,
+        "out_of_team": out_of_team(operator, on_date),
     }

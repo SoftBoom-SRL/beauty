@@ -1,7 +1,7 @@
 // NewOperatorModal — create operator form (POST /api/staff/). Rendered locally
 // by the staff section (not in the shell modal registry).
 import React, { useState } from 'react';
-import { Icon, NumInput, toastApiError } from '@youty/shared';
+import { Icon, NumInput, toastApiError, todayStr } from '@youty/shared';
 import { DkModal, HexInput } from '../../ui/index.js';
 import ColorWheel from '../../ui/ColorWheel.jsx';
 import { useDash } from '../../ctx.jsx';
@@ -15,6 +15,8 @@ export default function NewOperatorModal({ onClose, onCreated }) {
     first_name: '', last_name: '', role_title: '',
     color: opPalette[operators.length % opPalette.length],
     hourly_cost: '18', service_ids: [],
+    // il primo giorno qui: vuoto per chi c'era già prima del gestionale (vedi ProfileTab)
+    employed_from: '',
   });
   const [saving, setSaving] = useState(false);
   const set = (p) => setForm((f) => ({ ...f, ...p }));
@@ -34,6 +36,7 @@ export default function NewOperatorModal({ onClose, onCreated }) {
         user_id: null,
         service_ids: form.service_ids,
         hourly_cost: (Number(form.hourly_cost) || 0).toFixed(2),
+        employed_from: form.employed_from || null,
         cycle_weeks: 1,
         active: true,
         order: operators.length,
@@ -69,6 +72,18 @@ export default function NewOperatorModal({ onClose, onCreated }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {field(t('Nome', 'First name'), <input value={form.first_name} onChange={(e) => set({ first_name: e.target.value })} style={inputCss} autoFocus />)}
           {field(t('Cognome', 'Last name'), <input value={form.last_name} onChange={(e) => set({ last_name: e.target.value })} style={inputCss} />)}
+        </div>
+        <div data-employment>
+          {field(t('Nel team dal', 'On the team since'), (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input type="date" value={form.employed_from} onChange={(e) => set({ employed_from: e.target.value })} style={{ ...inputCss, flex: 1 }} />
+              <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 42, flexShrink: 0 }} onClick={() => set({ employed_from: todayStr() })}>{t('Da oggi', 'From today')}</button>
+            </div>
+          ))}
+          <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12, marginTop: 5, lineHeight: 1.45 }}>
+            {t('Il primo giorno di lavoro qui: prima non ha turni, e le statistiche di riempimento non la contano. Lasciala vuota se lavorava qui già prima di usare il gestionale.',
+              'Her first working day here: before it she has no shifts, and occupancy stats do not count her. Leave it empty if she worked here before you started using the software.')}
+          </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12 }}>
           {field(t('Ruolo', 'Role'), <input value={form.role_title} onChange={(e) => set({ role_title: e.target.value })} placeholder={t('es. Hair stylist', 'e.g. Hair stylist')} style={inputCss} />)}

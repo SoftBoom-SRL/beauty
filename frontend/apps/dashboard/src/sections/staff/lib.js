@@ -11,7 +11,32 @@ export const AVAIL_META = {
   vacation: { it: 'Ferie',         en: 'Vacation', c: '#5FAEC9', bg: 'rgba(95,174,201,0.16)' },
   holiday:  { it: 'Festività',     en: 'Holiday',  c: '#B26A4F', bg: 'rgba(178,106,79,0.16)' },
   other:    { it: 'Altro',         en: 'Other',    c: '#8A5A6E', bg: 'rgba(138,90,110,0.14)' },
+  // fuori dal rapporto di lavoro (prima di «nel team dal», dopo «fino al»)
+  out:      { it: 'Non in team',   en: 'Not on the team', c: '#9A98A0', bg: 'repeating-linear-gradient(135deg, var(--paper-2) 0 4px, transparent 4px 8px)' },
 };
+
+/* ---- il rapporto di lavoro: nel team dal / fino al ----
+ * Fuori da quei giorni l'operatrice non ha turni (il server, shift_windows):
+ * il riempimento dei mesi passati contava i turni di chi è arrivata dopo come
+ * capacità vuota (il titolare, 16/10). */
+
+/** «before» se `dateStr` viene prima di `from`, «after» se dopo `until`
+ *  (estremi compresi, date «YYYY-MM-DD» o vuote), null se è nel team. */
+export function outOfTeam(dateStr, from, until) {
+  const d = String(dateStr).slice(0, 10);
+  if (from && d < from) return 'before';
+  if (until && d > until) return 'after';
+  return null;
+}
+
+/** La parola per un giorno fuori dal rapporto di lavoro. */
+export const outLabel = (out, t) => (out === 'after' ? t('Non più in team', 'No longer on the team') : t('Non ancora in team', 'Not on the team yet'));
+
+/** «3 feb 2026»: una data pura, già nel giorno del salone. */
+export function dayShort(dateStr, lang) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', { day: 'numeric', month: 'short', year: 'numeric' }).replace('.', '');
+}
 export const ABSENCE_TYPES = ['vacation', 'holiday', 'other'];
 
 /* ---- weekday / month labels (weekday 0 = Monday, as the API) ----
@@ -169,14 +194,18 @@ export function currentWeekIndex(cycleWeeks) {
  * da nessuna parte, prima di salvarlo e andare in agenda (il titolare, 16/10). */
 
 /** Che cosa dice il pattern `weeks` (anche non salvato) per il giorno
- *  `dateStr`: { kind, week, label, brk } con kind ∈ work | off | closed | bad.
+ *  `dateStr`: { kind, week, label, brk } con kind ∈ work | off | closed | bad | out.
  *  `week` = la settimana del ciclo (0 = la prima, come cycleWeekIndex);
  *  `closed`: il centro quel giorno è chiuso (`openingWeek` = gli orari del
  *  centro, {} se non impostati), e allora il turno non conta; `bad`: l'orario
- *  scritto non si legge (`label` = il testo). */
-export function patternDay(weeks, dateStr, openingWeek = null) {
+ *  scritto non si legge (`label` = il testo); `out`: fuori dal rapporto di
+ *  lavoro (`period` = { from, until } della scheda, anche non salvate; `out`
+ *  = «before» | «after»). */
+export function patternDay(weeks, dateStr, openingWeek = null, period = null) {
   const n = Math.max(1, (weeks || []).length);
   const week = cycleWeekIndex(dateStr, n);
+  const out = period ? outOfTeam(dateStr, period.from, period.until) : null;
+  if (out) return { kind: 'out', week, out };
   const [y, m, d] = String(dateStr).split('-').map(Number);
   const dow = (new Date(y, m - 1, d).getDay() + 6) % 7;   // 0 = lunedì
   if (openingWeek && Object.keys(openingWeek).length && !(openingWeek[String(dow)] || []).length) return { kind: 'closed', week };
@@ -203,7 +232,8 @@ const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 
  *  senza nessuna è un buco o la chiusura per pranzo, e `gaps` resta vuoto
  *  (ogni giorno in rosso per la pausa di tutte non diceva niente). */
 export function dayCoverage(day) {
-  const cells = day?.cells || [];
+  // chi quel giorno non è (ancora, più) nel team non conta nel «su quante»
+  const cells = (day?.cells || []).filter((c) => !c.out_of_team);
   const wins = cells.map((c) => (c.windows || []).map(([a, b]) => [hm(a), hm(b)]));
   const working = wins.filter((w) => w.length).length;
   let open = (day?.opening || []).map(([a, b]) => [hm(a), hm(b)]);
@@ -258,6 +288,9 @@ export function formFromDetail(d) {
     location_id: d.location_id ?? null,
     user_id: d.user_id ?? null,
     order: d.order,
+    // il rapporto di lavoro: null = nessun limite («YYYY-MM-DD» altrimenti)
+    employed_from: d.employed_from || null,
+    employed_until: d.employed_until || null,
   };
 }
 
@@ -330,6 +363,10 @@ export { fmtEurOrZero as eur } from '@youty/shared';
 
 /** derive the today-status pill from OperatorStatusOut (port of staffTodayStatus) */
 export function todayStatus(op, t, lang) {
+  if (op.out_of_team) {
+    const m = AVAIL_META.out;
+    return { key: 'out', label: outLabel(op.out_of_team, t), color: m.c, bg: 'var(--paper-2)', hours: '' };
+  }
   if (op.absence_type) {
     const meta = AVAIL_META[op.absence_type] || AVAIL_META.off;
     return { key: op.absence_type, label: meta[lang === 'en' ? 'en' : 'it'], color: meta.c, bg: meta.bg, hours: '' };

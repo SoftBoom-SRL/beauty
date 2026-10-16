@@ -40,6 +40,7 @@ from .schemas import (
 )
 from .services import min_to_hm, roster, today_status
 from .stats import (
+    first_work_day,
     month_revenue_by_operator,
     performance_series,
     served_clients,
@@ -97,6 +98,8 @@ def _operator_out(op: Operator, ctx) -> dict:
         # null e non 0: «0 €/h» sarebbe un dato falso, non un dato nascosto (C6).
         "hourly_cost": op.hourly_cost if hourly_cost_visible else None,
         "cycle_weeks": op.cycle_weeks,
+        "employed_from": op.employed_from,
+        "employed_until": op.employed_until,
         "active": op.active,
         "order": op.order,
         "cash_hidden": not hourly_cost_visible,
@@ -135,6 +138,7 @@ def list_operators(request, include_inactive: bool = False):
                 "on_shift": status["on_shift"],
                 "windows": [(min_to_hm(a), min_to_hm(b)) for a, b in status["windows"]],
                 "absence_type": status["absence_type"],
+                "out_of_team": status["out_of_team"],
                 "month_revenue": revenues.get(op.id, Decimal("0")) if sees_cash else None,
                 "today_clients": clients.get(op.id, 0),
                 "cash_hidden": out["cash_hidden"] or not sees_cash,
@@ -192,6 +196,7 @@ def get_operator(request, operator_id: int):
     op = salon_get(Operator, request.auth, operator_id)
     out = _operator_out(op, request.auth)
     out["shifts"] = list(op.shifts.all())
+    out["first_work_day"] = first_work_day(op)
     return out
 
 
@@ -386,7 +391,11 @@ def public_operators(request, salon: str):
     ratelimit.enforce_public(
         request, s, "operators", PUBLIC_OPERATORS_MAX_PER_WINDOW, PUBLIC_OPERATORS_WINDOW_SECONDS
     )
-    operators = Operator.objects.filter(salon=s, active=True)
+    # Chi ha finito il rapporto di lavoro non si sceglie più: non avrebbe
+    # nessun orario libero, e la cliente non capirebbe perché.
+    operators = Operator.objects.filter(salon=s, active=True).exclude(
+        employed_until__lt=timezone.localdate()
+    )
     location = default_location(s)
     if location is not None:
         operators = operators.filter(Q(location__isnull=True) | Q(location=location))

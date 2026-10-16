@@ -35,6 +35,14 @@ class Operator(models.Model):
     )
     hourly_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     cycle_weeks = models.PositiveSmallIntegerField(default=1)
+    # Il rapporto di lavoro: da quando a quando è nel team (estremi compresi;
+    # vuoto = nessun limite). Fuori da questi giorni non ha turni (vedi
+    # `services.shift_windows`): il riempimento dei mesi passati contava i
+    # turni di chi è arrivato dopo, come capacità vuota, e li sbagliava al
+    # ribasso (il titolare, 16/10). Diverso da `active`: disattivarla la toglie
+    # dagli elenchi, le date dicono quando ha lavorato.
+    employed_from = models.DateField(null=True, blank=True)
+    employed_until = models.DateField(null=True, blank=True)
     active = models.BooleanField(default=True)
     order = models.PositiveIntegerField(default=0)
 

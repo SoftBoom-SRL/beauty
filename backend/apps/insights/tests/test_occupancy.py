@@ -153,6 +153,30 @@ class OccupancyAfterStaffChangesTests(TestCase):
         self.assertAlmostEqual(self._pct(), 33.3, places=1)
 
 
+    def test_a_stylist_who_had_not_started_yet_is_not_capacity(self):
+        """16/10: arrivata il giorno dopo, il suo turno di quel giorno non
+        esisteva. Contato, il riempimento passava dal 33 % al 22 %."""
+        from apps.staff.models import WeeklyShift
+
+        new = Operator.objects.create(
+            salon=self.salon, first_name="Nina", last_name="Neri", employed_from=date(2026, 7, 2)
+        )
+        WeeklyShift.objects.create(operator=new, week_index=0, weekday=2, start_min=540, end_min=1080)
+        self.assertAlmostEqual(self._pct(), 33.3, places=1)
+        new.employed_from = None
+        new.save(update_fields=["employed_from"])
+        self.assertAlmostEqual(self._pct(), 22.2, places=1)
+
+    def test_a_stylist_who_had_already_left_is_not_capacity(self):
+        from apps.staff.models import WeeklyShift
+
+        gone = Operator.objects.create(
+            salon=self.salon, first_name="Lia", last_name="Neri", employed_until=date(2026, 6, 30)
+        )
+        WeeklyShift.objects.create(operator=gone, week_index=0, weekday=2, start_min=540, end_min=1080)
+        self.assertAlmostEqual(self._pct(), 33.3, places=1)
+
+
 class ClosedWeekdaysTests(_Base):
     """15-14 / contratto C10: un giorno senza capacità è null, non 0 %."""
 

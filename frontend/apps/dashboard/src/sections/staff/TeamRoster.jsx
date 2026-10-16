@@ -10,7 +10,7 @@ import { Avatar, Icon, parseISO, toDateStr, todayStr, toastApiError } from '@you
 import { useDash, useLive } from '../../ctx.jsx';
 import { useClickAway } from '../../hooks/useClickAway.js';
 import { absencesApi, staffApi } from '../../api/staff.js';
-import { ABSENCE_TYPES, AVAIL_META, MONTHS_EN, MONTHS_IT, WEEKDAYS, dayCoverage, fmtWindows, hmCompact, inputCss, minCompact, opName } from './lib.js';
+import { ABSENCE_TYPES, AVAIL_META, MONTHS_EN, MONTHS_IT, WEEKDAYS, dayCoverage, fmtWindows, hmCompact, inputCss, minCompact, opName, outLabel } from './lib.js';
 
 const SPANS = [7, 14, 28];
 const AWAY = { event: 'pointerdown', capture: true, escape: true };
@@ -27,6 +27,8 @@ const shiftDays = (dateStr, n) => { const d = parseISO(dateStr); d.setDate(d.get
 /** La casella di un'operatrice in un giorno: che cosa dice e di che colore. */
 export function cellLook(cell, day, t, lang) {
   if (day.opening && !day.opening.length) return { kind: 'closed', bg: 'var(--paper-2)', c: 'var(--muted-2)', lines: ['—'] };
+  // prima di «nel team dal» o dopo «fino al»: niente turno, e non è riposo
+  if (cell.out_of_team) return { kind: 'out', bg: AVAIL_META.out.bg, c: AVAIL_META.out.c, lines: [cell.out_of_team === 'after' ? t('Uscita', 'Left') : t('Non ancora', 'Not yet')], tip: outLabel(cell.out_of_team, t) };
   if (cell.absence) {
     const meta = AVAIL_META[cell.absence.type] || AVAIL_META.other;
     return { kind: 'absence', bg: meta.bg, c: meta.c, lines: [meta[lang === 'en' ? 'en' : 'it']] };
@@ -175,12 +177,14 @@ export default function TeamRoster({ top = null, onOpen }) {
                   {days.map((d) => {
                     const cell = d.cells[row];
                     const look = cellLook(cell, d, t, lang);
-                    const tip = cell.absence ? `${look.lines[0]}${cell.absence.note ? ' · ' + cell.absence.note : ''}` : look.kind === 'work' ? fmtWindows(cell.windows) : look.lines[0];
+                    const tip = look.tip || (cell.absence ? `${look.lines[0]}${cell.absence.note ? ' · ' + cell.absence.note : ''}` : look.kind === 'work' ? fmtWindows(cell.windows) : look.lines[0]);
+                    // fuori dal rapporto di lavoro un'assenza non ha senso: la cella non apre niente
+                    const out = look.kind === 'out';
                     return (
                       <td key={d.date} style={{ padding: 3, borderBottom: '1px solid var(--hair-2)', borderLeft: (parseISO(d.date).getDay() === 1) ? '2px solid var(--line-strong)' : '1px solid var(--hair-2)', background: d.date === today ? 'color-mix(in srgb, var(--clay) 6%, transparent)' : 'transparent' }}>
                         <button type="button" data-cell={`${o.id}:${d.date}`} data-kind={look.kind} title={tip}
-                          onClick={(e) => openCell(e, o, d)}
-                          style={{ width: '100%', minHeight: 40, borderRadius: 8, border: pop && pop.opId === o.id && pop.date === d.date ? '1.5px solid var(--ink)' : '1px solid transparent', background: look.bg, color: look.c, cursor: 'pointer', padding: '3px 2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                          onClick={out ? undefined : (e) => openCell(e, o, d)}
+                          style={{ width: '100%', minHeight: 40, borderRadius: 8, border: pop && pop.opId === o.id && pop.date === d.date ? '1.5px solid var(--ink)' : '1px solid transparent', background: look.bg, color: look.c, cursor: out ? 'default' : 'pointer', padding: '3px 2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
                           {look.lines.map((l, k) => <span key={k} className="tabnum" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.15, whiteSpace: 'nowrap' }}>{l}</span>)}
                         </button>
                       </td>

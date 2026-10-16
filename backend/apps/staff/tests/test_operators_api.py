@@ -7,12 +7,16 @@ Caccia del 22/09:
   l'app prenota;
 - 09-05 / 15-05 (C8): `include_inactive` per ritrovare le disattivate;
 - 09-09 (C19): la PUT applica solo i campi presenti.
+
+16/10: le date del rapporto di lavoro (nel team dal / fino al).
 """
 
+import datetime as dt
 import json
 from decimal import Decimal
 
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.core.models import Location, Salon
 from common.testing import bearer
@@ -353,3 +357,71 @@ class PartialOperatorUpdateTests(_StaffSetup):
         WeeklyShift.objects.create(operator=self.bea, week_index=1, weekday=0, start_min=540, end_min=600)
         self.assertEqual(self._put({"cycle_weeks": 1}).status_code, 200)
         self.assertFalse(WeeklyShift.objects.filter(operator=self.bea, week_index=1).exists())
+
+
+class EmploymentPeriodApiTests(_StaffSetup):
+    """16/10: da quando a quando l'operatrice è nel team. Senza la data di
+    inizio, il riempimento dei mesi passati contava i turni di chi è arrivata
+    dopo come capacità vuota."""
+
+    def setUp(self):
+        super().setUp()
+        self.auth = self._member("titolare@parlour.it", owner=True)
+
+    def _put(self, body):
+        return self.client.put(
+            f"/api/staff/{self.bea.id}", data=json.dumps(body), content_type="application/json", **self.auth
+        )
+
+    def test_the_dates_are_written_read_back_and_cleared(self):
+        res = self._put({"employed_from": "2026-03-02", "employed_until": "2026-12-31"})
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual((res.json()["employed_from"], res.json()["employed_until"]), ("2026-03-02", "2026-12-31"))
+        detail = self.client.get(f"/api/staff/{self.bea.id}", **self.auth).json()
+        self.assertEqual(detail["employed_from"], "2026-03-02")
+        # una PUT senza le date non le tocca; null le toglie
+        self.assertEqual(self._put({"role_title": "Senior"}).status_code, 200)
+        self.bea.refresh_from_db()
+        self.assertEqual(self.bea.employed_from, dt.date(2026, 3, 2))
+        self.assertEqual(self._put({"employed_until": None}).status_code, 200)
+        self.bea.refresh_from_db()
+        self.assertIsNone(self.bea.employed_until)
+        self.assertEqual(self.bea.employed_from, dt.date(2026, 3, 2))
+
+    def test_the_end_cannot_come_before_the_start(self):
+        res = self._put({"employed_from": "2026-05-01", "employed_until": "2026-04-30"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("prima dell'inizio", res.json()["detail"])
+        # anche quando la PUT porta solo una delle due: l'altra è quella salvata
+        self.assertEqual(self._put({"employed_from": "2026-05-01"}).status_code, 200)
+        self.assertEqual(self._put({"employed_until": "2026-04-01"}).status_code, 400)
+        self.assertEqual(self._put({"employed_until": "2026-05-01"}).status_code, 200, "lo stesso giorno va bene")
+        res = self.client.post(
+            "/api/staff/", data=json.dumps({"first_name": "Cleo", "last_name": "C", "employed_from": "2026-06-10", "employed_until": "2026-06-01"}),
+            content_type="application/json", **self.auth,
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_the_card_suggests_the_day_of_her_first_service(self):
+        detail = self.client.get(f"/api/staff/{self.bea.id}", **self.auth).json()
+        self.assertIsNone(detail["first_work_day"])
+        tz = timezone.get_current_timezone()
+        # anche un servizio dentro la visita di una collega; un annullato più vecchio non conta
+        self._visit(dt.datetime(2026, 2, 3, 23, 30, tzinfo=tz), [(self.cut, self.anna), (self.color, self.bea)])
+        old = self._visit(dt.datetime(2025, 12, 1, 10, 0, tzinfo=tz), [(self.cut, self.bea)])
+        old.status = "cancelled"
+        old.save(update_fields=["status"])
+        detail = self.client.get(f"/api/staff/{self.bea.id}", **self.auth).json()
+        self.assertEqual(detail["first_work_day"], "2026-02-03", "il giorno nel fuso del salone")
+
+    def test_today_status_and_the_public_list_know_the_period(self):
+        today = timezone.localdate()
+        self.bea.employed_until = today - dt.timedelta(days=1)
+        self.bea.save(update_fields=["employed_until"])
+        self.anna.employed_from = today + dt.timedelta(days=7)
+        self.anna.save(update_fields=["employed_from"])
+        rows = {o["id"]: o for o in self.client.get("/api/staff/", **self.auth).json()}
+        self.assertEqual((rows[self.bea.id]["out_of_team"], rows[self.anna.id]["out_of_team"]), ("after", "before"))
+        public = [o["id"] for o in self.client.get(f"/api/staff/public/operators?salon={self.salon.slug}").json()]
+        # chi ha finito non si sceglie più; chi arriva fra una settimana sì (per le date da allora)
+        self.assertEqual(public, [self.anna.id])

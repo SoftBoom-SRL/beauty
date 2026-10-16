@@ -333,8 +333,8 @@ test('i turni: ogni sotto-colonna il suo, chi non ne ha a riposo o assente; senz
   const days = weekDays(payload().map((d, i) => ({ ...d, shifts: shifts(i) })), null, OPS, 1, '');
   assert.equal(days[3].usesShifts, true);
   assert.deepEqual(days[3].dayOps.map((o) => [o.id, o.shift, o.weight]), [
-    [1, { windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null }, 3],
-    [2, { windows: [], absence: 'holiday' }, 0.6],
+    [1, { windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null, out: null }, 3],
+    [2, { windows: [], absence: 'holiday', out: null }, 0.6],
   ]);
   // un'operatrice che il server non elenca: turno sconosciuto, niente tratteggio
   const noBea = weekDays(payload().map((d) => ({ ...d, shifts: [shifts(0)[0]] })), null, OPS, 1, '');
@@ -355,6 +355,14 @@ test('i turni a parole: riposo, assenze, fasce', () => {
   assert.equal(shiftText({ windows: [['09:00', '13:00'], ['14:00', '19:00']], absence: null }, t), '09:00–13:00 · 14:00–19:00');
   assert.equal(shiftText({ windows: [], absence: 'vacation' }, t), 'Ferie');
   assert.equal(shiftText(null, t), null);
+  // prima di «nel team dal» e dopo «fino al» non è riposo (16/10)
+  assert.equal(offLabel({ windows: [], absence: null, out: 'before' }, t), 'Non ancora in team');
+  assert.equal(shiftText({ windows: [], absence: null, out: 'after' }, t), 'Non più in team');
+  const days = weekDays(payload().map((d, i) => ({ ...d, shifts: [
+    { operator_id: 1, windows: [['09:00', '19:00']], absence: null },
+    { operator_id: 2, windows: i < 2 ? [] : [['09:00', '19:00']], absence: null, out_of_team: i < 2 ? 'before' : null },
+  ] })), null, OPS, 1, '');
+  assert.deepEqual([days[0].dayOps[1].shift.out, days[3].dayOps[1].shift.out], ['before', null]);
 });
 
 test('trascinando fuori turno il badge avvisa; dentro, o senza turni, no', () => {

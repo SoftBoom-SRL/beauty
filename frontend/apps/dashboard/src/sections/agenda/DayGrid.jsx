@@ -36,6 +36,7 @@ import ClosedHours from './grid/ClosedHours.jsx';
 import GhostBlocks from './grid/GhostBlocks.jsx';
 import VisitBlocks from './grid/VisitBlocks.jsx';
 import { dayStays, linkedIds, stayMatesLabels } from './lib/stay.js';
+import { offLabel } from './lib/week.js';
 import PauseBlock from './grid/PauseBlock.jsx';
 import DayDragBadge from './grid/DayDragBadge.jsx';
 
@@ -478,7 +479,9 @@ export default function DayGrid({
                 onClick={(e) => onColumnClick(e, row)}
                 style={{ flex: '1 0 ' + colW + 'px', position: 'relative', minWidth: 0, borderRadius: '0 0 10px 10px', background: opColumnTint(colorOf(o.id)), cursor: canWrite ? (pickMode ? 'pointer' : 'copy') : 'default', transition: 'box-shadow 120ms' }}
               >
-                <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t} />
+                {/* prima di «nel team dal» o dopo «fino al» non è un giorno fuori turno: lo dice */}
+                <ClosedHours windows={row.windows} g0={G0} g1={G1} pxm={pxm} t={t}
+                  labels={row.out_of_team ? { some: null, none: offLabel({ out: row.out_of_team }, t) } : null} />
                 {/* la traccia dei servizi che si muovono la disegna VisitBlocks,
                     nella loro corsia; qui quella della pausa */}
                 {dragging && d.kind === 'pause' && d.origOp === o.id && (

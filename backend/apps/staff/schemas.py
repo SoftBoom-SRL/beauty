@@ -26,6 +26,12 @@ class OperatorIn(Schema):
     service_ids: list[int] = []
     hourly_cost: Decimal = Field(Decimal("0"), le=MAX_MONEY)
     cycle_weeks: int = 1
+    employed_from: Optional[date] = Field(
+        None, description="Nel team dal (compreso); vuoto = da sempre. Prima non ha turni."
+    )
+    employed_until: Optional[date] = Field(
+        None, description="Nel team fino al (compreso); vuoto = senza fine. Dopo non ha turni."
+    )
     active: bool = True
     order: int = 0
 
@@ -33,7 +39,8 @@ class OperatorIn(Schema):
 class OperatorPatchIn(Schema):
     """PUT /api/staff/{id}: si applicano SOLO i campi presenti nel corpo (C19).
 
-    `location_id` e `user_id` accettano null (nessuna sede, nessun utente);
+    `location_id`, `user_id`, `employed_from` e `employed_until` accettano
+    null (nessuna sede, nessun utente, nessun limite al rapporto di lavoro);
     gli altri campi, se presenti, non possono essere null.
     """
 
@@ -46,6 +53,8 @@ class OperatorPatchIn(Schema):
     service_ids: Optional[list[int]] = None
     hourly_cost: Optional[Decimal] = Field(None, le=MAX_MONEY)
     cycle_weeks: Optional[int] = None
+    employed_from: Optional[date] = None
+    employed_until: Optional[date] = None
     active: Optional[bool] = None
     order: Optional[int] = None
 
@@ -68,6 +77,8 @@ class OperatorOut(Schema):
     # salariale. Vedi `cash_hidden`.
     hourly_cost: Optional[Decimal] = None
     cycle_weeks: int
+    employed_from: Optional[date] = Field(None, description="Nel team dal (compreso); null = da sempre")
+    employed_until: Optional[date] = Field(None, description="Nel team fino al (compreso); null = senza fine")
     active: bool
     order: int
     # Vero quando qualche dato di cassa/HR della riga è stato nascosto (null)
@@ -81,6 +92,9 @@ class OperatorStatusOut(OperatorOut):
     on_shift: bool
     windows: list[tuple[str, str]]
     absence_type: Optional[str] = None
+    out_of_team: Optional[str] = Field(
+        None, description="«before» se oggi non è ancora nel team, «after» se non lo è più"
+    )
     # null senza il permesso vendite (C6).
     month_revenue: Optional[Decimal] = None
     today_clients: int
@@ -100,6 +114,13 @@ class OperatorDetailOut(OperatorOut):
     """Dettaglio operatrice: anagrafica + pattern di turno corrente."""
 
     shifts: list[WeeklyShiftOut]
+    first_work_day: Optional[date] = Field(
+        None,
+        description=(
+            "Il giorno del suo primo servizio in agenda (null se non ne ha): la "
+            "scheda lo propone come «nel team dal» quando manca"
+        ),
+    )
 
 
 class PublicOperatorOut(Schema):
@@ -177,6 +198,8 @@ class RosterOperatorOut(Schema):
     color: str
     location_id: Optional[int] = None
     cycle_weeks: int
+    employed_from: Optional[date] = None
+    employed_until: Optional[date] = None
 
 
 class RosterCellOut(Schema):
@@ -188,6 +211,9 @@ class RosterCellOut(Schema):
     windows: list[tuple[str, str]]
     week_index: int
     absence: Optional[AbsenceOut] = None
+    out_of_team: Optional[str] = Field(
+        None, description="«before»/«after»: quel giorno non è (ancora, più) nel team, niente turni"
+    )
 
 
 class RosterDayOut(Schema):

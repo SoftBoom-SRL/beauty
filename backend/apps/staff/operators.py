@@ -41,8 +41,18 @@ def resolve_user(ctx, user_id: Optional[int]):
     return membership.user
 
 
-# Colonne che accettano null nel corpo: nessuna sede, nessun utente collegato.
-_NULLABLE_OPERATOR_FIELDS = {"location_id", "user_id"}
+# Colonne che accettano null nel corpo: nessuna sede, nessun utente collegato,
+# nessun limite al rapporto di lavoro.
+_NULLABLE_OPERATOR_FIELDS = {"location_id", "user_id", "employed_from", "employed_until"}
+
+
+def validate_employment(operator: Operator, payload: dict) -> None:
+    """La fine del rapporto non può venire prima dell'inizio. In modifica il
+    corpo può portarne uno solo: l'altro è quello già salvato."""
+    start = payload["employed_from"] if "employed_from" in payload else operator.employed_from
+    end = payload["employed_until"] if "employed_until" in payload else operator.employed_until
+    if start and end and end < start:
+        raise HttpError(400, "La fine del rapporto non può venire prima dell'inizio")
 
 
 def validate_operator_payload(payload: dict) -> None:
@@ -77,6 +87,7 @@ def save_operator(operator: Operator, ctx, payload: dict) -> Operator:
     scrivono solo quelle colonne, e i servizi solo se `service_ids` c'è.
     """
     validate_operator_payload(payload)
+    validate_employment(operator, payload)
     payload = dict(payload)
     creating = operator.pk is None
     service_ids = payload.pop("service_ids", None)
