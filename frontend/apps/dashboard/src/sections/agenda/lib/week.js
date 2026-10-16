@@ -11,11 +11,14 @@ import { weekLayout } from './grid.js';
  *
  *  Le operatrici della sede attiva — chi non ha sede vale per tutte, la stessa
  *  regola della vista giorno — e in coda chi ha comunque appuntamenti quel
- *  giorno: di un'altra sede (col suo nome) o non più in team (`orphanName`).
+ *  giorno: di un'altra sede o disattivata, col suo nome. La dashboard elenca
+ *  solo le attive: il nome di una disattivata arriva dal giorno
+ *  (`extra_operators` del payload, qui `extraOps`), e la colonna si chiamava
+ *  «Non più in team»; `orphanName` resta per chi non è in nessuno dei due.
  *  Prima c'erano le sotto-colonne delle operatrici di TUTTE le sedi: in
  *  settimana si prenotava a nome di chi lavora altrove.
  *  `appointments` = gli appuntamenti del giorno (payload /agenda/week). */
-export function weekDayOps(operators, locationId, appointments, orphanName) {
+export function weekDayOps(operators, locationId, appointments, orphanName, extraOps = []) {
   const all = operators || [];
   const base = all.filter((o) => !locationId || o.location_id == null || o.location_id === locationId);
   const known = new Set(base.map((o) => o.id));
@@ -24,7 +27,8 @@ export function weekDayOps(operators, locationId, appointments, orphanName) {
     const id = a.operator_id;
     if (!id || known.has(id)) continue;
     known.add(id);
-    extra.push(all.find((o) => o.id === id) || { id, first_name: orphanName, last_name: '', inactive: true });
+    const named = extraOps.find((o) => o.id === id);
+    extra.push(all.find((o) => o.id === id) || (named && { ...named, inactive: !!named.inactive }) || { id, first_name: orphanName, last_name: '', inactive: true, unknown: true });
   }
   return base.concat(extra);
 }
@@ -163,7 +167,7 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
     // sede o non più in team finiva in una colonna che non c'era, contata
     // nella testata e invisibile.
     const shiftOf = new Map((d.shifts || []).map((sh) => [sh.operator_id, { windows: sh.windows || [], absence: sh.absence || null }]));
-    const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName)
+    const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName, d.extra_operators || [])
       .filter((o) => !off.has(o.id))
       .map((o) => {
         const shift = usesShifts ? shiftOf.get(o.id) ?? null : null;

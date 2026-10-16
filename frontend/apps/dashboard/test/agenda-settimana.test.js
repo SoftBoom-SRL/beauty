@@ -636,3 +636,25 @@ test('in settimana con gli importi nascosti la testata non apre i conti', async 
   assert.equal(button.props.title, 'Apri il giorno');
   assert.equal(button.props.onMouseEnter, undefined);
 });
+
+/* 16/10: la colonna di un'operatrice disattivata, con appuntamenti, in
+ * settimana si chiamava «Non più in team»: ora ha il suo nome (arriva dal
+ * giorno, `extra_operators`), e al passaggio dice che non è più in team. */
+test('in settimana la colonna di una disattivata ha il suo nome', async () => {
+  const g = setup();
+  const marta = { ...sara(W1[3]), id: 50, operator_id: 77, items: [{ service_id: 1, operator_id: 77, duration_min: 30, soak_min: 0, service_name: 'Piega' }] };
+  g.api.weekGets().at(-1).resolve(weekPayload(W1).map((d, i) => (i === 3
+    ? { ...d, appointments: [...d.appointments, marta], extra_operators: [{ id: 77, first_name: 'Marta', last_name: 'Gialli', inactive: true }] }
+    : d)));
+  await tick();
+  g.m.render();
+  const head = find(g.root(), (el) => el.type?.name === 'WeekDayHeader' && el.props.index === 3);
+  const cells = findAll(head.type(head.props), (el) => el.props?.className === 'dk-wsub');
+  const cell = cells.find((c) => c.key === '77' || c.props.title?.startsWith('Marta'));
+  assert.equal(cell.props.title, 'Marta Gialli (non più in team)');
+  assert.equal(textOf(find(cell, (el) => el.props?.className === 'dk-wsub__name')), 'Marta');
+  assert.equal(textOf(find(cell, (el) => el.props?.className === 'dk-wsub__ini')), 'MG');
+  // gli altri giorni non hanno la sua colonna
+  const other = find(g.root(), (el) => el.type?.name === 'WeekDayHeader' && el.props.index === 2);
+  assert.equal(findAll(other.type(other.props), (el) => el.props?.title?.startsWith('Marta')).length, 0);
+});

@@ -75,7 +75,9 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
       {day.dayOps.length > 0 && (
         <div style={{ display: 'flex' }}>
           {day.dayOps.map((o, k) => {
-            const full = `${o.first_name} ${o.last_name || ''}`.trim();
+            // una disattivata ha il suo nome, e al passaggio si legge che non è più in team
+            const name = `${o.first_name} ${o.last_name || ''}`.trim();
+            const full = o.inactive && !o.unknown ? `${name} (${t('non più in team', 'no longer on the team')})` : name;
             const shift = shiftText(o.shift, t);
             const tip = shift ? `${full} · ${shift}` : full;
             const resting = !!o.shift && !o.shift.windows.length;
@@ -83,7 +85,7 @@ export default function WeekDayHeader({ day, index, width, isToday, isTargetDay,
             return (
               <div key={o.id} className="dk-wsub" title={tip} data-resting={resting ? '' : undefined} onMouseEnter={(e) => { const r = e.currentTarget.getBoundingClientRect(); setOpTip({ name: tip, x: r.left + r.width / 2, y: r.bottom + 6 }); }} onMouseLeave={() => setOpTip(null)} style={{ flex: `${o.weight || 1} 1 0`, minWidth: 0, padding: '3px 0 4px', textAlign: 'center', borderLeft: k ? '1px solid var(--hair-2)' : 'none', borderTop: `3px solid ${resting ? `color-mix(in srgb, ${colorOf(o.id)} 40%, var(--paper))` : colorOf(o.id)}`, cursor: 'default', background: opColumnTint(colorOf(o.id), 'var(--paper)'), transition: 'flex-grow 200ms var(--ease)' }}>
                 <div className="dk-wsub__name" style={{ fontSize: 10, fontWeight: 700, color: ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', padding: '0 2px' }}>{opDisplay(o.first_name, o.last_name, opFirsts)}</div>
-                <div className="dk-wsub__ini" style={{ fontSize: 9.5, fontWeight: 800, color: ink, whiteSpace: 'nowrap', overflow: 'hidden' }}>{initialsOf(full)}</div>
+                <div className="dk-wsub__ini" style={{ fontSize: 9.5, fontWeight: 800, color: ink, whiteSpace: 'nowrap', overflow: 'hidden' }}>{initialsOf(name)}</div>
               </div>
             );
           })}

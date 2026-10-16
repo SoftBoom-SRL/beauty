@@ -469,6 +469,32 @@ class WeekShiftsTests(RealShiftsTestBase):
         self.assertNotIn(sara.id, today)
         self.assertEqual(today[lia.id]["windows"], [["09:00", "19:00"]])
 
+    def test_whoever_is_off_the_list_comes_with_the_name(self):
+        """La colonna di una disattivata in settimana diceva «Non più in team»:
+        la dashboard elenca solo le attive. Ora il giorno porta il nome."""
+        nord = Location.objects.create(salon=self.salon, name="Nord")
+        lia = self.operator("Lia", location=nord)
+        self.book(self.anna, self.marta, aware(self.day, 10), [(self.cut30, 30, 0), (self.man60, 60, 0, lia)])
+        self.marta.active = False
+        self.marta.save(update_fields=["active"])
+        centro = Location.objects.create(salon=self.salon, name="Centro", is_default=True)
+        monday = self.day - dt.timedelta(days=self.day.weekday())
+        res = self.client.get(
+            "/api/agenda/week", {"start": monday.isoformat(), "location_id": centro.id}, **self.staff_auth()
+        )
+        days = {d["date"]: d for d in res.json()}
+        extra = {o["id"]: o for o in days[self.day.isoformat()]["extra_operators"]}
+        self.assertEqual(
+            extra[self.marta.id],
+            {"id": self.marta.id, "first_name": self.marta.first_name, "last_name": self.marta.last_name, "inactive": True},
+        )
+        # Lia è attiva ma di un'altra sede: anche lei col nome, non disattivata
+        self.assertFalse(extra[lia.id]["inactive"])
+        self.assertNotIn(self.giulia.id, extra)
+        # solo nel giorno in cui ha qualcosa
+        other = (monday if self.day != monday else monday + dt.timedelta(days=1)).isoformat()
+        self.assertEqual(days[other]["extra_operators"], [])
+
     def test_the_shifts_do_not_cost_a_query_per_operator(self):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext

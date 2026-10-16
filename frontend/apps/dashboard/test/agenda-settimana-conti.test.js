@@ -36,6 +36,21 @@ test('i giorni da disegnare: orari in minuti e sotto-colonne della sede', () => 
   assert.deepEqual(withOrphan[3].dayOps.map((o) => [o.id, o.first_name]), [[1, 'Anna'], [2, 'Giulia'], [99, 'Non più in team']]);
 });
 
+test('una disattivata con appuntamenti ha la colonna col suo nome (extra_operators del giorno)', () => {
+  // la dashboard elenca solo le attive: il nome arriva dal giorno, e la colonna
+  // diceva «Non più in team» (il titolare, 16/10)
+  const marta = { ...sara, id: 44, operator_id: 77 };
+  const days = payload([marta]).map((d, i) => (i === 3 ? { ...d, extra_operators: [{ id: 77, first_name: 'Marta', last_name: 'Gialli', inactive: true }] } : d));
+  const out = weekDays(days, null, OPS, 1, 'Non più in team');
+  const col = out[3].dayOps.find((o) => o.id === 77);
+  assert.deepEqual([col.first_name, col.last_name, col.inactive, !!col.unknown], ['Marta', 'Gialli', true, false]);
+  // senza nome dal server resta il ripiego, segnato come sconosciuto
+  const fallback = weekDays(payload([marta]), null, OPS, 1, 'Non più in team')[3].dayOps.find((o) => o.id === 77);
+  assert.deepEqual([fallback.first_name, fallback.unknown], ['Non più in team', true]);
+  // le altre giornate non hanno la sua colonna
+  assert.equal(out[2].dayOps.some((o) => o.id === 77), false);
+});
+
 test('lo spostamento in POST compare già dove è stato lasciato', () => {
   const days = weekDays(payload(), { id: 42, dayIdx: 4, ns: 960, nop: 2 }, OPS, 1, '');
   assert.deepEqual(days[3].list, []);

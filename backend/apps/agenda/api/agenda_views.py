@@ -151,6 +151,12 @@ def agenda_week(request, start: str, location_id: int = None):
     assenza se quel giorno è assente. Senza, la settimana tratteggiava solo
     gli orari del centro: non si vedeva chi lavorava, e si trascinava una
     cliente sul giorno di riposo di un'operatrice senza accorgersene.
+
+    `extra_operators`: chi quel giorno ha un servizio ma non è fra le
+    operatrici attive della sede (disattivata, o di un'altra sede), con nome
+    e `inactive`. La dashboard elenca solo le attive, e la colonna di una
+    disattivata in settimana si chiamava «Non più in team» invece che col
+    suo nome, come in vista giorno.
     """
     ctx = request.auth
     require_scope(ctx, "agenda")
@@ -178,13 +184,29 @@ def agenda_week(request, start: str, location_id: int = None):
     wanted = {a.operator_id for a in appointments}
     wanted.update(item.operator_id for a in appointments for item in a.items.all())
     orphan_ids = {op_id for op_id in wanted if op_id and op_id not in known}
+    orphans = []
     if orphan_ids:
-        operators += list(
+        orphans = list(
             Operator.objects.filter(salon=ctx.salon, id__in=orphan_ids)
             .select_related("salon__settings")
             .prefetch_related("shifts", "absences")
             .order_by("order", "id")
         )
+        operators += orphans
+
+    def day_extra_operators(day_appointments):
+        ids = {a.operator_id for a in day_appointments}
+        ids.update(item.operator_id for a in day_appointments for item in a.items.all())
+        return [
+            {
+                "id": operator.id,
+                "first_name": operator.first_name,
+                "last_name": operator.last_name,
+                "inactive": not operator.active,
+            }
+            for operator in orphans
+            if operator.id in ids
+        ]
 
     def day_shifts(day):
         shifts = []
@@ -208,6 +230,7 @@ def agenda_week(request, start: str, location_id: int = None):
                 "count": len(day_appointments),
                 "by_status": dict(Counter(a.status for a in day_appointments)),
                 "shifts": day_shifts(day),
+                "extra_operators": day_extra_operators(day_appointments),
                 "appointments": [
                     {
                         "id": a.id,
