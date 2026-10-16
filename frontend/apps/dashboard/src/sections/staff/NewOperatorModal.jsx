@@ -119,7 +119,9 @@ export default function NewOperatorModal({ onClose, onCreated }) {
         <div>
           <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 8 }}>{t('Servizi abilitati', 'Enabled services')}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-            {services.map((s) => {
+            {/* solo quelli che si prenotano, come nella scheda (ServicesAssign):
+                elencava anche i servizi in pausa e gli archiviati */}
+            {services.filter((s) => s.active !== false).map((s) => {
               const on = form.service_ids.includes(s.id);
               return (
                 <button key={s.id} onClick={() => toggleSvc(s.id)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 99, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: '1px solid ' + (on ? 'var(--clay)' : 'var(--hair)'), background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
