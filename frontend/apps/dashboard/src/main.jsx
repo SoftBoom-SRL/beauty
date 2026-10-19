@@ -3,6 +3,7 @@ import { staffAuth, LangProvider } from '@youty/shared';
 import App from './App.jsx';
 import OAuthPopup from './oauth/OAuthPopup.jsx';
 import StripeConnectPopup from './oauth/StripeConnectPopup.jsx';
+import InvitePage from './InvitePage.jsx';
 import { reloadOnce } from './shell/chunkReload.js';
 import '@youty/shared/styles/base.css';
 import './styles/desktop.css';
@@ -27,6 +28,9 @@ if (popupPath === '/oauth-popup/start' || popupPath === '/oauth-popup/done') {
   root.render(<LangProvider><OAuthPopup path={popupPath} /></LangProvider>);
 } else if (popupPath === '/stripe-connect/start' || popupPath === '/stripe-connect/done') {
   root.render(<LangProvider><StripeConnectPopup path={popupPath} /></LangProvider>);
+} else if (popupPath.startsWith('/invito/')) {
+  // il link dell'invito al team: si accetta qui, anche senza sessione
+  root.render(<LangProvider><InvitePage path={popupPath} /></LangProvider>);
 } else {
   root.render(<App />);
 }

@@ -1,26 +1,28 @@
 """Endpoint /api/auth del team: membri, ruoli e inviti (scope `team`), accettazione dell'invito.
 
-Le regole su chi può concedere che cosa stanno in accounts.team.
+Le regole su chi può concedere che cosa stanno in accounts.team; la mail, il
+link e l'accettazione degli inviti in accounts.invitations.
 """
 
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
 from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 
-from apps.core.services import emit_event, log_activity
+from apps.core.services import log_activity
+from common import ratelimit
 from common.auth import create_staff_tokens, staff_auth
 from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
-from ..models import Invitation, Membership, Role, User
+from .. import invitations as inv
+from ..models import Invitation, Membership, Role
 from ..schemas import (
     InvitationAcceptIn,
     InvitationIn,
     InvitationOut,
+    InvitationPreviewOut,
+    InvitationTokenIn,
     MemberOut,
     MemberRoleIn,
     RoleIn,
@@ -41,12 +43,38 @@ from ..team import (
 
 router = Router()
 
+# Pagina dell'invito e accettazione sono senza login: tetto per IP, contro chi
+# prova codici o password a raffica.
+INVITE_PUBLIC_MAX_PER_WINDOW = 30
+INVITE_PUBLIC_WINDOW_SECONDS = 600
+
+
+def _limit_public(request, bucket: str) -> None:
+    ratelimit.enforce(
+        f"invite-{bucket}:{ratelimit.client_ip(request)}",
+        INVITE_PUBLIC_MAX_PER_WINDOW,
+        INVITE_PUBLIC_WINDOW_SECONDS,
+        "Troppi tentativi: riprova tra qualche minuto",
+    )
+
+
+def _operators_by_user(salon) -> dict:
+    """Le schede Staff collegate a un account, per id dell'utente."""
+    from apps.staff.models import Operator  # lazy: lo staff dipende dagli account
+
+    return {o.user_id: o for o in Operator.objects.filter(salon=salon, user__isnull=False)}
+
+
+def _member(membership) -> dict:
+    return member_out(membership, _operators_by_user(membership.salon).get(membership.user_id))
+
 
 # ---- Staff: membri del team ----------------------------------------------------
 
 
 @router.get("/members", auth=staff_auth, response=list[MemberOut])
 def list_members(request):
+    """Membri del team, ognuno con la sua scheda Staff se è collegata."""
     ctx = request.auth
     require_scope(ctx, "team")
     memberships = (
@@ -54,7 +82,8 @@ def list_members(request):
         .select_related("user", "role")
         .order_by("id")
     )
-    return [member_out(m) for m in memberships]
+    operators = _operators_by_user(ctx.salon)
+    return [member_out(m, operators.get(m.user_id)) for m in memberships]
 
 
 @router.post("/members/{int:member_id}/role", auth=staff_auth, response=MemberOut)
@@ -89,7 +118,7 @@ def set_member_role(request, member_id: int, data: MemberRoleIn):
         actor=ctx.user,
         payload={"membership_id": membership.id, "role_id": role.id if role else None},
     )
-    return member_out(membership)
+    return _member(membership)
 
 
 @router.post("/members/{int:member_id}/transfer-ownership", auth=staff_auth, response=MemberOut)
@@ -118,7 +147,7 @@ def transfer_ownership(request, member_id: int):
         actor=ctx.user,
         payload={"from_membership_id": ctx.membership.id, "to_membership_id": target.id},
     )
-    return member_out(target)
+    return _member(target)
 
 
 @router.delete("/members/{int:member_id}", auth=staff_auth, response=OkOut)
@@ -133,6 +162,11 @@ def remove_member(request, member_id: int):
     if membership.role is not None:
         require_can_touch_role(ctx, membership.role)
     email = membership.user.email
+    # Fuori dal team, la sua scheda Staff non resta legata a un accesso che
+    # non c'è più (la scheda rimane: turni e storico sono del salone).
+    from apps.staff.models import Operator  # lazy: lo staff dipende dagli account
+
+    Operator.objects.filter(salon=ctx.salon, user=membership.user).update(user=None)
     membership.delete()
     log_activity(
         ctx.salon,
@@ -219,18 +253,26 @@ def delete_role(request, role_id: int):
 # ---- Staff: inviti ---------------------------------------------------------------
 
 
+def _invitation_of(ctx, invitation_id: int) -> Invitation:
+    """L'invito del salone che chi chiama può gestire (chi può concedere il suo ruolo)."""
+    invitation = salon_get(Invitation, ctx, invitation_id)
+    if not can_grant(ctx, invitation.role):
+        raise HttpError(403, "Questo invito dà permessi che tu non hai: può gestirlo il titolare")
+    return invitation
+
+
 @router.get("/invitations", auth=staff_auth, response=list[InvitationOut])
 def list_invitations(request):
-    """Inviti del salone; il codice solo a chi potrebbe concedere quel ruolo.
+    """Inviti del salone; codice e link solo a chi potrebbe concedere quel ruolo.
 
     Il codice di un invito vale un account: chi lo presenta a
     `accept_invitation` crea l'utente con la password che sceglie e riceve il
     ruolo dell'invito. Consegnato a chiunque avesse `team`, il front-desk
     copiava il codice dell'invito «Manager» destinato alla nuova assunta e
     diventava Manager lui (10-01). A chi può assegnare quel ruolo invece non
-    toglie nulla vederlo: un invito per sé potrebbe crearlo comunque. Oggi
-    l'invio automatico non c'è ancora e il codice si condivide a mano da qui,
-    per questo non sparisce del tutto dalla lista.
+    toglie nulla vederlo: un invito per sé potrebbe crearlo comunque. Il link
+    serve quando la mail non parte (server SMTP non configurato): lo manda il
+    titolare.
     """
     ctx = request.auth
     require_scope(ctx, "team")
@@ -244,103 +286,77 @@ def list_invitations(request):
                 and can_grant(ctx, invitation.role)
             ),
         )
-        for invitation in Invitation.objects.filter(salon=ctx.salon).select_related("role")
+        for invitation in Invitation.objects.filter(salon=ctx.salon).select_related("role", "operator")
     ]
 
 
 @router.post("/invitations", auth=staff_auth, response=InvitationOut)
 def create_invitation(request, data: InvitationIn):
+    """Invita una persona: le arriva una mail col link (se il server SMTP è
+    configurato) e chi invita riceve il link da mandare a mano. Con
+    `operator_id` chi accetta si ritrova collegata a quella scheda Staff. Un
+    invito ancora aperto alla stessa email viene sostituito."""
     ctx = request.auth
     require_scope(ctx, "team")
     role = salon_get(Role, ctx, data.role_id)
     # L'invito è l'altra strada per fabbricarsi permessi: chi invita sceglie
     # l'email, quindi l'account che nasce è suo a tutti gli effetti.
     require_grantable(ctx, role.scopes or [])
-    email = data.email.strip().lower()
-    if Membership.objects.filter(salon=ctx.salon, user__email__iexact=email).exists():
-        raise HttpError(400, "L'utente fa già parte del team")
-    invitation = Invitation.objects.create(salon=ctx.salon, email=email, role=role)
-    emit_event(
-        ctx.salon,
-        "team.invitation",
-        {
-            "invitation_id": invitation.id,
-            "email": invitation.email,
-            "role": role.name,
-            "token": str(invitation.token),
-            "expires_at": invitation.expires_at.isoformat(),
-        },
-    )
-    log_activity(
-        ctx.salon,
-        "team.invitation_created",
-        f"Invito inviato a {invitation.email} ({role.name})",
-        actor=ctx.user,
-        payload={"invitation_id": invitation.id, "role_id": role.id},
-    )
+    operator = None
+    if data.operator_id is not None:
+        from apps.staff.models import Operator  # lazy: lo staff dipende dagli account
+
+        operator = salon_get(Operator, ctx, data.operator_id)
+    invitation, sent = inv.create_invitation(ctx, data.email, role, operator)
     # Chi l'ha appena creato ha superato `require_grantable`: il codice è suo.
-    return invitation_out(invitation, with_token=True)
+    return invitation_out(invitation, with_token=True, email_sent=sent)
+
+
+@router.post("/invitations/{int:invitation_id}/resend", auth=staff_auth, response=InvitationOut)
+def resend_invitation(request, invitation_id: int):
+    """Rimanda la mail dell'invito, con la validità di nuovo piena (anche se
+    era scaduto)."""
+    ctx = request.auth
+    require_scope(ctx, "team")
+    invitation = _invitation_of(ctx, invitation_id)
+    sent = inv.resend_invitation(ctx, invitation)
+    return invitation_out(invitation, with_token=True, email_sent=sent)
+
+
+@router.delete("/invitations/{int:invitation_id}", auth=staff_auth, response=OkOut)
+def revoke_invitation(request, invitation_id: int):
+    """Annulla un invito in attesa: il suo link non apre più niente."""
+    ctx = request.auth
+    require_scope(ctx, "team")
+    inv.revoke_invitation(ctx, _invitation_of(ctx, invitation_id))
+    return OkOut()
+
+
+@router.get("/invitations/preview", response=InvitationPreviewOut)
+def preview_invitation(request, token: str):
+    """La pagina dell'invito (senza login): salone, ruolo, email, se è ancora
+    valido e se c'è già un account con quell'email."""
+    _limit_public(request, "preview")
+    return inv.preview(token)
 
 
 @router.post("/invitations/accept", response=StaffAuthOut)
 def accept_invitation(request, data: InvitationAcceptIn):
-    try:
-        invitation = Invitation.objects.select_related("salon", "role").get(token=data.token)
-    except (Invitation.DoesNotExist, ValidationError, ValueError):
-        raise HttpError(404, "Invito non trovato")
-    if invitation.status != Invitation.Status.PENDING:
-        raise HttpError(400, "Invito non più valido")
-    if invitation.expires_at < timezone.now():
-        invitation.status = Invitation.Status.EXPIRED
-        invitation.save(update_fields=["status"])
-        raise HttpError(400, "Invito scaduto")
-    if User.objects.filter(email__iexact=invitation.email).exists():
-        raise HttpError(400, "Esiste già un utente con questa email")
-    # Le stesse regole del cambio password: senza questo controllo l'invito
-    # creava account con password vuota, che poi funzionava al login. Si valida
-    # prima di toccare qualsiasi cosa, così un rifiuto lascia l'invito
-    # utilizzabile.
-    candidate = User(
-        email=invitation.email, first_name=data.first_name, last_name=data.last_name
+    """Accetta l'invito ed entra (senza login). Account nuovo: nome, cognome e
+    password; account già esistente con l'email dell'invito: la sua password."""
+    _limit_public(request, "accept")
+    membership = inv.accept_invitation(
+        data.token, password=data.password, first_name=data.first_name, last_name=data.last_name
     )
-    try:
-        validate_password(data.password, candidate)
-    except ValidationError as exc:
-        raise HttpError(400, " ".join(exc.messages))
+    tokens = create_staff_tokens(membership.user, membership.salon)
+    return session_payload(membership, tokens)
 
-    with transaction.atomic():
-        # Un invito vale una volta sola: lo stato si ricontrolla sulla riga
-        # bloccata e riletta. Letto a inizio richiesta, due accettazioni
-        # simultanee dello stesso codice passavano entrambe e la seconda
-        # moriva sull'email già presa con un 500.
-        locked = (
-            Invitation.objects.select_for_update()
-            .filter(pk=invitation.pk, status=Invitation.Status.PENDING)
-            .first()
-        )
-        if locked is None:
-            raise HttpError(400, "Invito non più valido")
-        try:
-            with transaction.atomic():
-                user = User.objects.create_user(
-                    email=invitation.email,
-                    password=data.password,
-                    first_name=data.first_name,
-                    last_name=data.last_name,
-                )
-        except IntegrityError:
-            raise HttpError(400, "Esiste già un utente con questa email")
-        membership = Membership.objects.create(
-            user=user, salon=invitation.salon, role=invitation.role
-        )
-        invitation.status = Invitation.Status.ACCEPTED
-        invitation.save(update_fields=["status"])
-        log_activity(
-            invitation.salon,
-            "team.invitation_accepted",
-            f"{user.get_full_name() or user.email} è entrato nel team",
-            actor=user,
-            payload={"invitation_id": invitation.id},
-        )
-    tokens = create_staff_tokens(user, invitation.salon)
+
+@router.post("/invitations/accept-session", auth=staff_auth, response=StaffAuthOut)
+def accept_invitation_with_session(request, data: InvitationTokenIn):
+    """Accetta con la sessione già aperta (chi entra con Yourang non ha una
+    password): l'email dell'account deve essere quella dell'invito. Risponde
+    con la sessione del salone dell'invito."""
+    membership = inv.accept_with_session(data.token, request.auth.user)
+    tokens = create_staff_tokens(membership.user, membership.salon)
     return session_payload(membership, tokens)

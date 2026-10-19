@@ -316,6 +316,28 @@ PUBLIC_API_URL = (
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+# Mail in uscita: per ora gli inviti al team (il link per entrare). Si
+# configura con un server SMTP qualunque (quello del dominio, Brevo, SES…):
+# l'invito «non arrivava» perché nessuno lo mandava, il codice si copiava a
+# mano e non c'era nemmeno una pagina dove usarlo. Senza EMAIL_HOST la mail
+# non parte (in sviluppo si stampa nella console) e il gestionale dice al
+# titolare di mandare lui il link, con WhatsApp o copiandolo.
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_ENABLED = bool(EMAIL_HOST)
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+# 465 vuole SSL dall'inizio, 587 STARTTLS: le due cose non vanno insieme
+EMAIL_USE_SSL = _env_flag("EMAIL_USE_SSL", "1" if EMAIL_PORT == 465 else "0")
+EMAIL_USE_TLS = not EMAIL_USE_SSL and _env_flag("EMAIL_USE_TLS", "1")
+EMAIL_TIMEOUT = 15
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "") or EMAIL_HOST_USER or "no-reply@localhost"
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if EMAIL_ENABLED
+    else "django.core.mail.backends.console.EmailBackend"
+)
+
 # Origine dell'app cliente (per le pagine di ritorno del pagamento caparra).
 # Vuota di serie: se manca si ripiega su FRONTEND_ORIGIN, come dice DEPLOY.md.
 # Col vecchio default «http://localhost:5174» il ripiego non scattava mai e in

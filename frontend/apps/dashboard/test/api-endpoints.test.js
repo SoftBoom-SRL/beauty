@@ -207,6 +207,11 @@ const CASES = [
   [() => rolesApi.remove(171), ['DELETE', '/api/auth/roles/171']],
   [() => invitationsApi.list(), ['GET', '/api/auth/invitations']],
   [() => invitationsApi.create(B), ['POST', '/api/auth/invitations', { body: B }]],
+  [() => invitationsApi.resend(4), ['POST', '/api/auth/invitations/4/resend']],
+  [() => invitationsApi.revoke(4), ['DELETE', '/api/auth/invitations/4']],
+  [() => invitationsApi.preview('abc'), ['GET', '/api/auth/invitations/preview', { params: { token: 'abc' } }]],
+  [() => invitationsApi.accept(B), ['POST', '/api/auth/invitations/accept', { body: B }]],
+  [() => invitationsApi.acceptSession('abc'), ['POST', '/api/auth/invitations/accept-session', { body: { token: 'abc' } }]],
   [() => staffAccountApi.changePassword(B), ['POST', '/api/auth/staff/password', { body: B }]],
   // integrazioni
   [() => yourangApi.status(), ['GET', '/api/integrations/yourang/status']],

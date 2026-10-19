@@ -115,6 +115,15 @@ export const api = { get: call('get'), post: call('post'), put: call('put'), pat
 export const API_URL = 'http://localhost:8000';
 // i percorsi dei file così come sono (le copertine delle comunicazioni)
 export const mediaUrl = (path) => path;
+// La sessione dello staff: quella di globalThis.__session, che il test
+// imposta; applySession la sostituisce (la pagina dell'invito, il cambio
+// di titolarità). useT come quello vero ma con le frasi in italiano.
+export const staffAuth = {
+  getSession: () => globalThis.__session ?? null,
+  applySession: (s) => { globalThis.__session = s; },
+  refresh: () => Promise.resolve(),
+};
+export const useT = () => ({ t: (it) => it, lang: 'it' });
 `;
 /* ctx.jsx: il contesto è globalThis.__dash; useLive tiene l'ultima callback in
  * globalThis.__useLive, e il test la chiama con gli eventi (il debounce di 250

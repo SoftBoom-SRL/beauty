@@ -62,7 +62,8 @@ def _due(now):
 # Campi che non devono restare a database una volta consegnato il messaggio: un
 # codice di accesso vale finché serve, poi è solo una credenziale in chiaro in
 # una tabella che nessuno guarda più.
-SENSITIVE_PAYLOAD_KEYS = ("code", "otp", "token")
+# Il link d'invito contiene il codice: è una credenziale come lui.
+SENSITIVE_PAYLOAD_KEYS = ("code", "otp", "token", "accept_url")
 # Dopo quanti giorni gli eventi già consegnati vengono cancellati.
 PURGE_AFTER_DAYS = 30
 

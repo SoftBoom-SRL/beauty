@@ -232,6 +232,11 @@ può essere necessaria a seconda di dove sta il proxy.
 | `JWT_SECRET` | `SECRET_KEY` | Chiave di firma dei JWT, se la si vuole diversa da quella di Django. Cambiarla invalida all'istante tutte le sessioni, staff e clienti. |
 | `CORS_ALLOWED_ORIGIN_REGEXES` | vuota | Via di fuga se un giorno servisse un origin variabile: pattern separati da **spazio** (la virgola compare nei quantificatori regex). L'ancoraggio finale `$` viene aggiunto se manca. Con i tre domini fissi di oggi non serve. |
 | `SERVE_MEDIA` | `1` | A `0` Django smette di servire `/media/`: si mette solo quando i file passano da S3 o da un nginx dedicato, altrimenti logo e foto diventano 404. |
+| `EMAIL_HOST` | vuota | Server SMTP da cui partono le mail del gestionale (oggi: gli **inviti al team**, col link per entrare). Qualunque SMTP va bene: quello del dominio, Brevo, Amazon SES, Gmail Workspace… Senza, nessuna mail parte: il pannello «Membri del team» lo dice e propone di mandare il link a mano (WhatsApp, la propria mail, copia). |
+| `EMAIL_PORT` | `587` | `587` = STARTTLS (il caso comune), `465` = SSL dall'inizio (si accende da solo con questa porta). |
+| `EMAIL_HOST_USER`<br>`EMAIL_HOST_PASSWORD` | vuote | Le credenziali SMTP (per molti servizi una chiave API al posto della password). |
+| `DEFAULT_FROM_EMAIL` | `EMAIL_HOST_USER` | Il mittente, per esempio `youty <no-reply@yourang.ai>`. Deve essere un indirizzo che il server SMTP può usare (dominio verificato), altrimenti le mail finiscono nello spam o vengono rifiutate. Chi invita è nel *Rispondi a*. |
+| `EMAIL_USE_TLS`<br>`EMAIL_USE_SSL` | `1` / `0` | Da toccare solo se il provider chiede una combinazione diversa. |
 
 > **Se stai aggiornando un deploy vecchio**, togli le `YOURANG_PROXY_*`: il
 > backend non le legge più. Servono invece `ENCRYPTION_KEY`,

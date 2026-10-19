@@ -19,7 +19,16 @@ export const rolesApi = {
 
 export const invitationsApi = {
   list: () => api.get('/api/auth/invitations'),
+  // { email, role_id, operator_id? } → l'invito col link e `email_sent`
   create: (body) => api.post('/api/auth/invitations', body),
+  resend: (id) => api.post(`/api/auth/invitations/${id}/resend`),
+  revoke: (id) => api.del(`/api/auth/invitations/${id}`),
+  // la pagina /invito/<codice>, senza login
+  preview: (token) => api.get('/api/auth/invitations/preview', { params: { token } }),
+  // { token, password, first_name?, last_name? } → la sessione nel salone dell'invito
+  accept: (body) => api.post('/api/auth/invitations/accept', body),
+  // con la sessione già aperta (chi entra con Yourang)
+  acceptSession: (token) => api.post('/api/auth/invitations/accept-session', { token }),
 };
 
 /* Il server risponde con token nuovi (le altre sessioni sono invalidate): chi

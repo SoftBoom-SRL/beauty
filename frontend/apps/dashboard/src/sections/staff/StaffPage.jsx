@@ -121,6 +121,7 @@ export default function StaffPage({ id, onBack, initialTab = null, onSwitch = nu
           services={services} serviceCategories={serviceCategories}
           toggleSvc={toggleSvc} onServiceCreated={onServiceCreated}
           firstWorkDay={detail.first_work_day || null}
+          operator={detail}
           t={t} lang={lang} fireToast={fireToast}
         />
       )}

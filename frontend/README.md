@@ -39,6 +39,7 @@ log del backend.
 | Percorso | Cosa |
 |---|---|
 | `main.jsx`, `App.jsx`, `LoginPage.jsx` | avvio, sessione, accesso |
+| `InvitePage.jsx` | `/invito/<codice>`: chi è invitata entra nel team (fuori dalla shell, come i popup) |
 | `ctx.jsx` | il contesto (`DashboardProvider`, `useDash`, `useLive`): una facciata che mette insieme i pezzi di `app/` |
 | `app/` | feed live (`liveFeed.js`), cataloghi di base (`useCatalogs.js`), sede attiva, colori delle operatrici, schermate di avvio |
 | `api/<dominio>.js` | una funzione per endpoint (core, staff, catalog, clients, inventory, sales, marketing, automations, insights, team, integrations) |

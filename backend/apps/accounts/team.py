@@ -6,6 +6,7 @@ membri e per gli inviti (un invito è un account con un ruolo). Il titolare ne
 è esente: i permessi sono suoi per definizione.
 """
 
+from django.conf import settings
 from django.db import transaction
 from ninja.errors import HttpError
 
@@ -25,24 +26,41 @@ def role_out(role) -> dict | None:
     }
 
 
-def member_out(membership) -> dict:
+def operator_brief(operator) -> dict | None:
+    if operator is None:
+        return None
+    return {"id": operator.id, "name": f"{operator.first_name} {operator.last_name}".strip()}
+
+
+def member_out(membership, operator=None) -> dict:
+    """`operator` = la sua scheda Staff, se collegata (Operator.user)."""
     return {
         "id": membership.id,
         "user": user_out(membership.user),
         "role": role_out(membership.role),
         "is_owner": membership.is_owner,
+        "operator": operator_brief(operator),
     }
 
 
-def invitation_out(invitation, *, with_token: bool) -> dict:
+def invitation_out(invitation, *, with_token: bool, email_sent: bool | None = None) -> dict:
+    from .invitations import invite_link  # gli inviti usano queste regole
+
     return {
         "id": invitation.id,
         "email": invitation.email,
         "role": role_out(invitation.role),
+        "operator": operator_brief(invitation.operator),
         "token": invitation.token if with_token else None,
+        # il link è il codice: stessa regola
+        "link": invite_link(invitation) if with_token else None,
         "status": invitation.status,
         "expires_at": invitation.expires_at,
         "created_at": invitation.created_at,
+        "sent_at": invitation.sent_at,
+        "send_error": invitation.send_error,
+        "can_email": settings.EMAIL_ENABLED,
+        "email_sent": email_sent,
     }
 
 

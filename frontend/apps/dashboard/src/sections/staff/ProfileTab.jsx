@@ -8,6 +8,7 @@ import ColorWheel from '../../ui/ColorWheel.jsx';
 import { GD_PALETTE } from '../../ui/palette.js';
 import { HIDDEN, dayShort, inputCss } from './lib.js';
 import ServicesAssign from './ServicesAssign.jsx';
+import AccessCard from './AccessCard.jsx';
 
 /** Da quando a quando è nel team. La data d'inizio conta: senza, il
  *  riempimento dei mesi passati metteva fra la capacità i turni di chi non
@@ -66,7 +67,7 @@ function EmploymentFields({ form, setForm, canTeam, firstWorkDay, t, lang }) {
 
 export default function ProfileTab({
   form, setForm, canTeam, canPricing, locations, initials, color, opPalette,
-  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast, firstWorkDay = null,
+  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast, firstWorkDay = null, operator = null,
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
@@ -154,6 +155,9 @@ export default function ProfileTab({
           <ColorWheel value={color} onChange={(c) => canTeam && setForm((f) => ({ ...f, color: c }))} t={t} disabled={!canTeam} />
         </div>
       </div>
+
+      {/* con quale account entra nel gestionale: lo vede e lo cambia chi gestisce il team */}
+      {canTeam && operator?.id && <AccessCard operator={operator} />}
 
       <div className="dk-card" style={{ padding: 20, gridColumn: '1 / -1' }}>
         <ServicesAssign
