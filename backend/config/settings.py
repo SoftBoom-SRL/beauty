@@ -316,14 +316,18 @@ PUBLIC_API_URL = (
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard (per redirect_uri del popup OAuth).
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-# Mail in uscita: per ora gli inviti al team (il link per entrare). Si
-# configura con un server SMTP qualunque (quello del dominio, Brevo, SES…):
-# l'invito «non arrivava» perché nessuno lo mandava, il codice si copiava a
-# mano e non c'era nemmeno una pagina dove usarlo. Senza EMAIL_HOST la mail
-# non parte (in sviluppo si stampa nella console) e il gestionale dice al
-# titolare di mandare lui il link, con WhatsApp o copiandolo.
+# Mail in uscita: per ora gli inviti al team (il link per entrare). L'invito
+# «non arrivava» perché nessuno lo mandava: il codice si copiava a mano e non
+# c'era nemmeno una pagina dove usarlo. Due strade, in quest'ordine:
+# - Mailgun con la sua API (quella del salone): MAILGUN_API_KEY e
+#   MAILGUN_DOMAIN, più MAILGUN_REGION («eu» per un dominio della regione EU);
+# - un server SMTP qualunque: EMAIL_HOST e compagnia.
+# Senza nessuna delle due la mail non parte (in sviluppo si stampa nella
+# console) e il gestionale dice al titolare di mandare lui il link.
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY", "")
+MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN", "").strip()
+MAILGUN_REGION = os.getenv("MAILGUN_REGION", "us").strip().lower()
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
-EMAIL_ENABLED = bool(EMAIL_HOST)
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
@@ -331,11 +335,20 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_SSL = _env_flag("EMAIL_USE_SSL", "1" if EMAIL_PORT == 465 else "0")
 EMAIL_USE_TLS = not EMAIL_USE_SSL and _env_flag("EMAIL_USE_TLS", "1")
 EMAIL_TIMEOUT = 15
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "") or EMAIL_HOST_USER or "no-reply@localhost"
-EMAIL_BACKEND = (
-    "django.core.mail.backends.smtp.EmailBackend"
-    if EMAIL_ENABLED
-    else "django.core.mail.backends.console.EmailBackend"
+if MAILGUN_API_KEY and MAILGUN_DOMAIN:
+    EMAIL_BACKEND = "common.mailgun.MailgunBackend"
+elif EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_ENABLED = EMAIL_BACKEND != "django.core.mail.backends.console.EmailBackend"
+# Il mittente deve stare su un dominio che chi spedisce può usare (con
+# Mailgun quello di MAILGUN_DOMAIN), altrimenti la mail finisce nello spam.
+DEFAULT_FROM_EMAIL = (
+    os.getenv("DEFAULT_FROM_EMAIL", "")
+    or (f"youty <no-reply@{MAILGUN_DOMAIN}>" if MAILGUN_DOMAIN else "")
+    or EMAIL_HOST_USER
+    or "no-reply@localhost"
 )
 
 # Origine dell'app cliente (per le pagine di ritorno del pagamento caparra).

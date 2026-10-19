@@ -125,7 +125,7 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
 - CRUD `/roles` (scope team; i ruoli is_system non sono eliminabili → 400).
 - POST `/invitations` {email, role_id, operator_id?} (scope team) → crea invito (annulla
   quello ancora aperto alla stessa email), manda la mail col link `<FRONTEND_ORIGIN>/invito/<token>`
-  se `EMAIL_HOST` è configurato, `emit_event(salon,"team.invitation",{…, accept_url, email_sent})`
+  se la posta è configurata (API Mailgun con `MAILGUN_API_KEY`/`MAILGUN_DOMAIN`, o SMTP con `EMAIL_HOST`), `emit_event(salon,"team.invitation",{…, accept_url, email_sent})`
   + log. Risponde col link e `email_sent`. GET `/invitations` (scope team): codice e link solo a chi
   può concedere quel ruolo. POST `/invitations/{id}/resend` (rimanda e rinnova 7 giorni),
   DELETE `/invitations/{id}` (annulla).

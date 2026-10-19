@@ -80,6 +80,26 @@ class InvitationEmailTests(_InviteSetup):
         self.assertIn("connessione rifiutata", out["send_error"])
         self.assertEqual(Invitation.objects.get(id=out["id"]).status, Invitation.Status.PENDING)
 
+    @override_settings(
+        EMAIL_ENABLED=True, EMAIL_BACKEND="common.mailgun.MailgunBackend",
+        MAILGUN_API_KEY="key-sbagliata", MAILGUN_DOMAIN="mg.example.it", MAILGUN_REGION="eu",
+    )
+    def test_with_mailgun_a_refusal_ends_up_on_the_invitation(self):
+        import httpx
+
+        from common.mailgun import MailgunBackend
+
+        def refuse(request):
+            return httpx.Response(401, text="Forbidden")
+
+        client = httpx.Client(transport=httpx.MockTransport(refuse))
+        with mock.patch.object(MailgunBackend, "_client", return_value=client) as made:
+            out = self._invite()
+        made.assert_called_once()
+        self.assertFalse(out["email_sent"])
+        self.assertIn("Mailgun 401", out["send_error"])
+        self.assertIn("MAILGUN_API_KEY", out["send_error"])
+
     def test_inviting_again_replaces_the_open_invitation(self):
         first = self._invite()
         second = self._invite("MARA@parlour.it")
