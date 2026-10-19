@@ -57,7 +57,7 @@ def agenda_day(request, date: str, location_id: int = None):
     deposit_holds.process_deposit_holds(ctx.salon)
 
     from apps.staff.models import Operator  # lazy
-    from apps.staff.services import shift_windows  # lazy
+    from apps.staff.services import out_of_team, shift_windows  # lazy
 
     # Le operatrici su cui cercano disponibilità e conferma (attive, della sede o
     # senza sede), con turni, assenze e settings del salone già letti:
@@ -128,6 +128,8 @@ def agenda_day(request, date: str, location_id: int = None):
                 [_fmt_min(start), _fmt_min(end)]
                 for start, end in shift_windows(operator, day)
             ],
+            # «before»/«after»: quel giorno non è (ancora, più) nel team
+            "out_of_team": out_of_team(operator, day),
             "appointments": [
                 _appointment_out(a, gifts, ctx)
                 for a in appointments_by_operator.get(operator.id, [])
@@ -217,6 +219,9 @@ def agenda_week(request, start: str, location_id: int = None):
                     "operator_id": operator.id,
                     "windows": [[_fmt_min(s), _fmt_min(e)] for s, e in status["windows"]],
                     "absence": status["absence_type"],
+                    # fuori dal rapporto di lavoro («before»/«after»): la colonna
+                    # dice «Non ancora in team» invece di «Riposo»
+                    "out_of_team": status["out_of_team"],
                 }
             )
         return shifts

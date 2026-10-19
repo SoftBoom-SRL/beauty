@@ -123,9 +123,19 @@ saloni già creati così la migrazione `accounts 0006` crea quelli che mancano
 - GET `/members` (scope team) → membri con ruolo. POST `/members/{id}/role` {role_id} (scope team).
   DELETE `/members/{id}` (scope team; vietato rimuovere l'owner → 400).
 - CRUD `/roles` (scope team; i ruoli is_system non sono eliminabili → 400).
-- POST `/invitations` {email, role_id} (scope team) → crea invito + `emit_event(salon,"team.invitation",...)` + log. GET `/invitations` (scope team).
-- POST `/invitations/accept` {token, password, first_name, last_name} (no auth) →
-  crea User + Membership con ruolo dell'invito, status accepted → token di login.
+- POST `/invitations` {email, role_id, operator_id?} (scope team) → crea invito (annulla
+  quello ancora aperto alla stessa email), manda la mail col link `<FRONTEND_ORIGIN>/invito/<token>`
+  se la posta è configurata (API Mailgun con `MAILGUN_API_KEY`/`MAILGUN_DOMAIN`, o SMTP con `EMAIL_HOST`), `emit_event(salon,"team.invitation",{…, accept_url, email_sent})`
+  + log. Risponde col link e `email_sent`. GET `/invitations` (scope team): codice e link solo a chi
+  può concedere quel ruolo. POST `/invitations/{id}/resend` (rimanda e rinnova 7 giorni),
+  DELETE `/invitations/{id}` (annulla).
+- GET `/invitations/preview?token=` (no auth, tetto per IP): salone, ruolo, email, stato,
+  `has_account`/`has_password`.
+- POST `/invitations/accept` {token, password, first_name?, last_name?} (no auth) → account
+  nuovo (nome e password) o esistente con quell'email (la sua password) + Membership con
+  il ruolo dell'invito, scheda Staff collegata se l'invito la porta → token di login.
+- POST `/invitations/accept-session` {token} (staff auth, email dell'account = email
+  dell'invito): per chi entra con Yourang → sessione nel salone dell'invito.
 
 **Endpoint cliente**
 - POST `/client/register` {salon_slug, first_name, last_name, phone, email?, lang} (no auth) →

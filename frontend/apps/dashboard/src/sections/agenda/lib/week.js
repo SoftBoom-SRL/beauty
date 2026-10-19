@@ -166,7 +166,7 @@ export function weekDays(days, pending, operators, locationId, orphanName, hidde
     // principale: una visita spostata dal filtro su una collega di un'altra
     // sede o non più in team finiva in una colonna che non c'era, contata
     // nella testata e invisibile.
-    const shiftOf = new Map((d.shifts || []).map((sh) => [sh.operator_id, { windows: sh.windows || [], absence: sh.absence || null }]));
+    const shiftOf = new Map((d.shifts || []).map((sh) => [sh.operator_id, { windows: sh.windows || [], absence: sh.absence || null, out: sh.out_of_team || null }]));
     const dayOps = weekDayOps(operators, locationId, list.map((a) => ({ operator_id: weekColOf(a) })), orphanName, d.extra_operators || [])
       .filter((o) => !off.has(o.id))
       .map((o) => {
@@ -290,8 +290,11 @@ export function weekSplitBody(day, d, force) {
 
 /** Il motivo per cui un'operatrice quel giorno non lavora, detto in
  *  colonna: le assenze con le parole del pannello Staff (AVAIL_META di
- *  staff/lib.js), «Assente» per «Altro», che in agenda non direbbe niente. */
+ *  staff/lib.js), «Assente» per «Altro», che in agenda non direbbe niente.
+ *  Prima di «nel team dal» e dopo «fino al» (`out`) non è riposo: lo dice. */
 export function offLabel(shift, t) {
+  if (shift?.out === 'before') return t('Non ancora in team', 'Not on the team yet');
+  if (shift?.out === 'after') return t('Non più in team', 'No longer on the team');
   if (shift?.absence === 'vacation') return t('Ferie', 'Vacation');
   if (shift?.absence === 'holiday') return t('Festività', 'Holiday');
   if (shift?.absence) return t('Assente', 'Away');

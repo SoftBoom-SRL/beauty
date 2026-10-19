@@ -120,6 +120,8 @@ export default function StaffPage({ id, onBack, initialTab = null, onSwitch = nu
           locations={locations} initials={initials} color={color} opPalette={opPalette}
           services={services} serviceCategories={serviceCategories}
           toggleSvc={toggleSvc} onServiceCreated={onServiceCreated}
+          firstWorkDay={detail.first_work_day || null}
+          operator={detail}
           t={t} lang={lang} fireToast={fireToast}
         />
       )}
@@ -139,7 +141,8 @@ export default function StaffPage({ id, onBack, initialTab = null, onSwitch = nu
             <div className="t-meta" style={{ marginBottom: 12 }}>{t('Calendario · turni e assenze', 'Calendar · shifts and time off')}</div>
             {absences == null
               ? <div className="skel" style={{ height: 320, borderRadius: 16 }} />
-              : <AbsenceCalendar operatorId={id} absences={absences} onChanged={reloadAbsences} canEdit={canTeam} weeks={weeks} draft={shiftsDirty} />}
+              : <AbsenceCalendar operatorId={id} absences={absences} onChanged={reloadAbsences} canEdit={canTeam} weeks={weeks} draft={shiftsDirty}
+                period={{ from: form.employed_from, until: form.employed_until }} />}
           </div>
         </div>
       )}

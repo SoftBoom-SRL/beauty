@@ -15,7 +15,7 @@ from django.test import TestCase
 from apps.core.models import Salon
 
 from ..models import Absence, Operator, WeeklyShift
-from ..services import shift_windows
+from ..services import shift_windows, today_status
 from .base import StaffApiTestCase, _StaffSetup
 
 
@@ -79,6 +79,39 @@ class ShiftWindowsTests(TestCase):
         day_b = dt.date(2026, 7, 8)  # mercoledì successivo, indice 0
         self.assertEqual(shift_windows(self.operator, day_a), [(600, 900)])
         self.assertEqual(shift_windows(self.operator, day_b), [(540, 1020)])
+
+
+class EmploymentPeriodShiftTests(TestCase):
+    """16/10: fuori dal rapporto di lavoro (prima di `employed_from`, dopo
+    `employed_until`) il pattern non vale. Contato, il riempimento del passato
+    metteva fra la capacità i turni di chi non c'era ancora."""
+
+    def setUp(self):
+        self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
+        self.operator = Operator.objects.create(salon=self.salon, first_name="Nina", last_name="N")
+        for weekday in range(7):
+            WeeklyShift.objects.create(operator=self.operator, week_index=0, weekday=weekday, start_min=540, end_min=1080)
+        self.start, self.end = dt.date(2026, 7, 6), dt.date(2026, 7, 10)
+        self.operator.employed_from, self.operator.employed_until = self.start, self.end
+        self.operator.save()
+
+    def test_no_shift_before_the_start_or_after_the_end_both_days_included(self):
+        day = lambda n: self.start + dt.timedelta(days=n)  # noqa: E731
+        self.assertEqual(shift_windows(self.operator, day(-1)), [])
+        self.assertEqual(shift_windows(self.operator, self.start), [(540, 1080)])
+        self.assertEqual(shift_windows(self.operator, self.end), [(540, 1080)])
+        self.assertEqual(shift_windows(self.operator, self.end + dt.timedelta(days=1)), [])
+        self.assertEqual(
+            [today_status(self.operator, d)["out_of_team"] for d in (day(-1), self.start, self.end, day(5))],
+            ["before", None, None, "after"],
+        )
+        self.assertFalse(today_status(self.operator, day(-1))["on_shift"])
+
+    def test_without_dates_there_is_no_limit(self):
+        self.operator.employed_from = self.operator.employed_until = None
+        self.operator.save()
+        self.assertEqual(shift_windows(self.operator, dt.date(2020, 1, 1)), [(540, 1080)])
+        self.assertIsNone(today_status(self.operator, dt.date(2020, 1, 1))["out_of_team"])
 
 
 class OpeningHoursIntersectionTests(TestCase):
@@ -396,6 +429,15 @@ class RosterTests(StaffApiTestCase):
         self.assertEqual(bea(1)["windows"], [])
         self.assertEqual((bea(1)["absence"]["type"], bea(2)["absence"]["note"]), ("vacation", "mare"))
         self.assertIsNone(bea(3)["absence"])
+
+    def test_days_outside_the_employment_period_have_no_shift(self):
+        self.bea.employed_from = self.monday + dt.timedelta(days=2)
+        self.bea.save(update_fields=["employed_from"])
+        out = self.get(days=7)
+        bea = [day["cells"][1] for day in out["days"]]
+        self.assertEqual([c["out_of_team"] for c in bea[:3]], ["before", "before", None])
+        self.assertEqual([bool(c["windows"]) for c in bea[:3]], [False, False, True])
+        self.assertEqual(out["operators"][1]["employed_from"], (self.monday + dt.timedelta(days=2)).isoformat())
 
     def test_location_limits_and_bad_requests(self):
         from apps.core.models import Location

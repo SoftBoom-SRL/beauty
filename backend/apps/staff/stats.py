@@ -11,7 +11,7 @@ incassi lo decide api.py (`_sees_cash`), non queste funzioni.
 from datetime import date as date_cls
 from decimal import Decimal
 
-from django.db.models import Count, Max, Q, Sum
+from django.db.models import Count, Max, Min, Q, Sum
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 
@@ -22,6 +22,18 @@ from apps.sales.models import SaleLine
 # string di un GET senza scope richiesto, e senza limite superiore
 # `?months=50000000` diventava una scansione di cinquant'anni di vendite.
 MAX_PERFORMANCE_MONTHS = 36
+
+
+def first_work_day(operator) -> date_cls | None:
+    """Il giorno (nel fuso del salone) del primo servizio dell'operatrice in
+    agenda, anche dentro la visita di una collega; gli annullati non contano.
+    La scheda lo propone come «nel team dal» quando la data manca."""
+    first = (
+        AppointmentService.objects.filter(operator=operator)
+        .exclude(appointment__status=Appointment.Status.CANCELLED)
+        .aggregate(first=Min("appointment__start"))["first"]
+    )
+    return timezone.localtime(first).date() if first else None
 
 
 def month_revenue(operator, on_date: date_cls | None = None) -> Decimal:

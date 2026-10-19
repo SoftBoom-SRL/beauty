@@ -1,8 +1,13 @@
-// TeamDrawer.jsx — port of TeamManager on the real accounts API.
+// TeamDrawer.jsx — chi entra nel gestionale: membri (ruolo, scheda Staff
+// collegata, titolarità) e inviti.
 // Members: GET /api/auth/members, POST /members/{id}/role, DELETE /members/{id},
-// POST /members/{id}/transfer-ownership (owner only).
-// Invitations: GET/POST /api/auth/invitations — delivery is Yourang (phase 2),
-// so the invite token is displayed with a copy button only.
+// POST /members/{id}/transfer-ownership (owner only); la scheda Staff si
+// collega con PUT /api/staff/{id} { user_id }.
+// Inviti (19/10, «è confusionario e non arrivano le mail»): prima un codice da
+// copiare, nessuna mail e nessun posto dove usarlo. Ora l'invito è un LINK
+// (/invito/<codice>): parte per mail se il server ha la posta configurata,
+// altrimenti lo si manda da qui con WhatsApp, la propria mail o copiandolo.
+// Si rimanda, si annulla, e può portare la scheda Staff da collegare.
 // Requires scope 'team' (owner bypasses).
 import React, { useCallback, useEffect, useState } from 'react';
 import { Icon, Avatar, salonTzOpts, staffAuth, toastApiError } from '@youty/shared';
@@ -10,8 +15,14 @@ import DkDrawer from '../../ui/DkDrawer.jsx';
 import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
-import { inputCss, LockNote, CopyField } from './lib.jsx';
+import { inputCss, LockNote } from './lib.jsx';
+import { ShareLink, deliveryLine, roleSummary } from './InviteParts.jsx';
+import { linkableOperators, openInvites } from './invites.js';
 import { invitationsApi, membersApi, rolesApi } from '../../api/team.js';
+import { staffApi } from '../../api/staff.js';
+
+const opName = (o) => `${o.first_name} ${o.last_name || ''}`.trim();
+const SMALL = { height: 32, padding: '0 11px', fontSize: 12.5, gap: 6 };
 
 const initialsOf = (name, email) => {
   const src = (name || '').trim() || (email || '');
@@ -21,7 +32,8 @@ const initialsOf = (name, email) => {
 };
 
 export default function TeamDrawer({ onClose, onRoles }) {
-  const { t, lang, hasScope, session, fireToast } = useDash();
+  const { t, lang, hasScope, session, fireToast, operators = [], reload } = useDash();
+  const salonName = session?.salon?.name || '';
   const canTeam = hasScope('team');
   /* Un ruolo si assegna (o si invita) solo se non dà più di quanto si ha: il
    * server lo rifiuta con 403, e chi ha il solo «team» poteva altrimenti
@@ -40,8 +52,10 @@ export default function TeamDrawer({ onClose, onRoles }) {
   const [roles, setRoles] = useState([]);
   const [invitations, setInvitations] = useState(null);
   const [inviting, setInviting] = useState(false);
-  const [inv, setInv] = useState({ email: '', role_id: null });
+  const [inv, setInv] = useState({ email: '', role_id: null, operator_id: null });
   const [sending, setSending] = useState(false);
+  const [created, setCreated] = useState(null);   // l'invito appena creato: com'è andata e il link
+  const [busyInv, setBusyInv] = useState(null);   // id dell'invito in rimando / annullo
 
   const load = useCallback(async () => {
     try {
@@ -101,21 +115,65 @@ export default function TeamDrawer({ onClose, onRoles }) {
     finally { setTransferring(false); }
   };
 
+  /* La scheda Staff di un membro: si libera quella di prima e si lega la
+   * nuova (Operator.user è uno a uno). */
+  const [linking, setLinking] = useState(null);
+  const linkOperator = async (m, opId) => {
+    const current = m.operator?.id ?? null;
+    if (current === opId || linking) return;
+    setLinking(m.id);
+    try {
+      if (current) await staffApi.update(current, { user_id: null });
+      if (opId) await staffApi.update(opId, { user_id: m.user.id });
+      const op = operators.find((o) => o.id === opId);
+      setMembers((l) => l.map((x) => (x.id === m.id ? { ...x, operator: op ? { id: op.id, name: opName(op) } : null } : x)));
+      reload?.operators?.().catch(() => {});
+      fireToast({ msg: op ? t(`Collegato alla scheda di ${opName(op)}`, `Linked to ${opName(op)}'s profile`) : t('Scheda Staff scollegata', 'Staff profile unlinked'), icon: 'check' });
+    } catch (err) { toastApiError(err, fireToast, t); } finally { setLinking(null); }
+  };
+
   const sendInvite = async () => {
     const email = inv.email.trim();
     if (!email || !inv.role_id || sending) return;
     setSending(true);
     try {
-      const created = await invitationsApi.create({ email, role_id: inv.role_id });
-      setInvitations((l) => [created, ...(l || [])]);
+      const made = await invitationsApi.create({ email, role_id: inv.role_id, operator_id: inv.operator_id || null });
+      // l'invito di prima alla stessa email il server l'ha annullato
+      setInvitations((l) => [made, ...(l || []).filter((x) => x.email !== made.email)]);
       setInviting(false);
-      setInv({ email: '', role_id: roles[0]?.id ?? null });
-      fireToast({ msg: t('Invito creato per ', 'Invite created for ') + email, icon: 'check' });
+      setCreated(made);
+      setInv({ email: '', role_id: roles[0]?.id ?? null, operator_id: null });
     } catch (err) { toastApiError(err, fireToast, t); }
     finally { setSending(false); }
   };
 
-  const pending = (invitations || []).filter((i) => i.status === 'pending');
+  const resend = async (i) => {
+    if (busyInv) return;
+    setBusyInv(i.id);
+    try {
+      const upd = await invitationsApi.resend(i.id);
+      setInvitations((l) => l.map((x) => (x.id === i.id ? upd : x)));
+      fireToast(upd.email_sent
+        ? { msg: t(`Mail rimandata a ${i.email}`, `Email sent again to ${i.email}`), icon: 'check' }
+        : { msg: t('Invito rinnovato per 7 giorni: manda tu il link', 'Invitation renewed for 7 days: send the link yourself'), icon: 'info' });
+    } catch (err) { toastApiError(err, fireToast, t); } finally { setBusyInv(null); }
+  };
+  const [confirmRevoke, setConfirmRevoke] = useState(null);
+  const revoke = async () => {
+    const i = confirmRevoke;
+    if (!i || busyInv) return;
+    setBusyInv(i.id);
+    try {
+      await invitationsApi.revoke(i.id);
+      setInvitations((l) => l.filter((x) => x.id !== i.id));
+      if (created?.id === i.id) setCreated(null);
+      setConfirmRevoke(null);
+      fireToast({ msg: t('Invito annullato', 'Invitation cancelled'), icon: 'x' });
+    } catch (err) { toastApiError(err, fireToast, t); } finally { setBusyInv(null); }
+  };
+
+  const pending = openInvites(invitations).filter((i) => i.id !== created?.id);
+  const roleOf = (id) => roles.find((r) => r.id === id);
 
   return (
     <DkDrawer open onClose={onClose}>
@@ -131,6 +189,10 @@ export default function TeamDrawer({ onClose, onRoles }) {
           </div>
         ) : (
           <React.Fragment>
+            <div data-team-intro className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.5, marginBottom: 12 }}>
+              {t('Chi entra nel gestionale, con la sua email. Il ruolo dice che cosa può fare; la scheda Staff collega l’accesso alla sua colonna in agenda.',
+                'Who signs in to the app, with their own email. The role says what they can do; the Staff profile links the access to their calendar column.')}
+            </div>
             {!isOwner && roles.some((r) => !canAssign(r)) && (
               <div className="t-sm" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', color: 'var(--ink-2)', marginBottom: 12 }}>
                 <Icon name="lock" size={14} color="var(--muted)" style={{ flexShrink: 0, marginTop: 1 }} />
@@ -141,7 +203,8 @@ export default function TeamDrawer({ onClose, onRoles }) {
             {/* members */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
               {members.map((m) => (
-                <div key={m.id} className="dk-card" style={{ padding: 13, boxShadow: 'none', border: '1px solid var(--hair)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div key={m.id} data-member={m.id} className="dk-card" style={{ padding: 13, boxShadow: 'none', border: '1px solid var(--hair)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <Avatar initials={initialsOf(m.user.name, m.user.email)} size={40} color={m.is_owner ? 'var(--clay)' : 'var(--paper-2)'} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -173,65 +236,130 @@ export default function TeamDrawer({ onClose, onRoles }) {
                     </React.Fragment>
                   )}
                 </div>
+                {/* la sua scheda Staff: lega l'accesso alla colonna in agenda */}
+                <label data-member-operator style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, paddingTop: 9, borderTop: '1px solid var(--hair-2)' }}>
+                  <Icon name="user" size={14} color="var(--muted)" />
+                  <span className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, flexShrink: 0 }}>{t('Scheda Staff', 'Staff profile')}</span>
+                  <select value={m.operator?.id ?? ''} disabled={linking === m.id} onChange={(e) => linkOperator(m, e.target.value ? Number(e.target.value) : null)}
+                    style={{ flex: 1, minWidth: 0, border: '1px solid var(--hair)', borderRadius: 8, outline: 'none', fontSize: 12.5, fontWeight: 600, padding: '5px 8px', fontFamily: 'var(--sans)', background: 'var(--surface)', cursor: 'pointer', color: m.operator ? 'var(--ink)' : 'var(--muted)' }}>
+                    <option value="">{t('Nessuna: non lavora in agenda', 'None: not in the calendar')}</option>
+                    {linkableOperators(operators, m.user.id).map((o) => <option key={o.id} value={o.id}>{opName(o)}</option>)}
+                    {m.operator && !operators.some((o) => o.id === m.operator.id) && <option value={m.operator.id}>{m.operator.name}</option>}
+                  </select>
+                </label>
+                </div>
               ))}
             </div>
 
-            {/* pending invitations */}
+            {/* l'invito appena creato: se la mail è partita, e il link da mandare */}
+            {created && (
+              <div data-created className="dk-card" style={{ padding: 15, boxShadow: 'none', border: '1px solid ' + (created.email_sent ? 'var(--ok)' : 'var(--warn)'), marginTop: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 }}>
+                  <Icon name={created.email_sent ? 'check' : 'info'} size={17} color={created.email_sent ? 'var(--ok)' : 'var(--warn)'} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                      {created.email_sent ? t(`Mail inviata a ${created.email}`, `Email sent to ${created.email}`) : t(`Invito pronto per ${created.email}`, `Invitation ready for ${created.email}`)}
+                    </div>
+                    <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.45 }}>
+                      {created.email_sent
+                        ? t('Le arriva un link per scegliere la password ed entrare. Vale 7 giorni; puoi mandarlo anche da qui.', 'They get a link to choose a password and join. Valid for 7 days; you can also send it from here.')
+                        : created.can_email
+                          ? t('La mail non è partita: manda tu il link, con WhatsApp o dalla tua mail. Vale 7 giorni.', 'The email did not go out: send the link yourself, by WhatsApp or from your email. Valid for 7 days.')
+                          : t('Il gestionale non ha ancora la posta configurata: manda tu il link, con WhatsApp o dalla tua mail. Vale 7 giorni.', 'Outgoing email is not set up yet: send the link yourself, by WhatsApp or from your email. Valid for 7 days.')}
+                    </div>
+                  </div>
+                  <button className="dk-iconbtn" onClick={() => setCreated(null)} aria-label={t('Chiudi', 'Close')} style={{ width: 28, height: 28 }}><Icon name="x" size={13} /></button>
+                </div>
+                {created.link && <ShareLink inv={created} salonName={salonName} t={t} fireToast={fireToast} />}
+              </div>
+            )}
+
+            {/* inviti in attesa (e scaduti, che si rimandano) */}
             {pending.length > 0 && (
               <React.Fragment>
                 <div className="t-meta" style={{ margin: '18px 0 9px' }}>{t('Inviti in attesa', 'Pending invitations')}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {pending.map((i) => (
-                    <div key={i.id} className="dk-card" style={{ padding: 13, boxShadow: 'none', border: '1px dashed var(--hair)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 9 }}>
-                        <div style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--warn-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="mail" size={15} color="var(--warn)" /></div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.email}</div>
-                          <div className="t-sm" style={{ color: 'var(--muted)' }}>
-                            {/* giorno del salone, non del dispositivo (17-15, 15-22) */}
-                            {(i.role?.name || '—')} · {t('scade', 'expires')} {new Date(i.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts())}
+                  {pending.map((i) => {
+                    const line = deliveryLine(i, t, lang);
+                    const mine = !!i.token;   // il link lo vede chi può concedere quel ruolo (10-01)
+                    return (
+                      <div key={i.id} data-invitation={i.id} className="dk-card" style={{ padding: 13, boxShadow: 'none', border: '1px dashed var(--hair)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: 9, background: i.expired ? 'var(--paper-2)' : 'var(--warn-tint)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon name="mail" size={15} color={i.expired ? 'var(--muted)' : 'var(--warn)'} /></div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.email}</div>
+                            <div className="t-sm" style={{ color: 'var(--muted)' }}>
+                              {/* giorno del salone, non del dispositivo (17-15, 15-22) */}
+                              {(i.role?.name || '—')}{i.operator ? ` · ${t('scheda', 'profile')} ${i.operator.name}` : ''} · {i.expired ? t('scaduto', 'expired') : t('scade', 'expires')} {new Date(i.expires_at).toLocaleDateString(lang === 'en' ? 'en-GB' : 'it-IT', salonTzOpts())}
+                            </div>
                           </div>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: i.expired ? 'var(--muted)' : 'var(--warn)', background: i.expired ? 'var(--paper-2)' : 'var(--warn-tint)', padding: '1px 7px', borderRadius: 99, flexShrink: 0 }}>{i.expired ? t('scaduto', 'expired') : t('in attesa', 'pending')}</span>
                         </div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '1px 7px', borderRadius: 99, flexShrink: 0 }}>{t('in attesa', 'pending')}</span>
+                        <div data-delivery={line.ok ? 'sent' : 'manual'} className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 6, color: line.ok ? 'var(--ok)' : 'var(--muted)', marginBottom: 8 }}>
+                          <Icon name={line.ok ? 'check' : 'info'} size={13} color={line.ok ? 'var(--ok)' : 'var(--muted)'} />{line.text}
+                        </div>
+                        {mine ? (
+                          <React.Fragment>
+                            {!i.expired && i.link && <ShareLink inv={i} salonName={salonName} t={t} fireToast={fireToast} />}
+                            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                              <button data-resend className="dk-btn dk-btn--ghost" style={SMALL} disabled={busyInv === i.id} onClick={() => resend(i)}>
+                                <Icon name="refresh" size={13} />{i.can_email ? t('Rimanda la mail', 'Send email again') : t('Rinnova 7 giorni', 'Renew 7 days')}
+                              </button>
+                              {!i.expired && (
+                                <button data-revoke className="dk-btn dk-btn--ghost" style={{ ...SMALL, color: 'var(--danger)' }} disabled={busyInv === i.id} onClick={() => setConfirmRevoke(i)}>
+                                  <Icon name="x" size={13} color="var(--danger)" />{t('Annulla invito', 'Cancel invitation')}
+                                </button>
+                              )}
+                            </div>
+                          </React.Fragment>
+                        ) : (
+                          <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--muted)' }}>
+                            <Icon name="lock" size={13} color="var(--muted)" />
+                            {t('Il link di questo invito lo vede solo chi può assegnare il suo ruolo, per esempio il titolare.', 'Only someone who can grant its role (e.g. the owner) can see this invitation link.')}
+                          </div>
+                        )}
                       </div>
-                      {/* Il codice È l'account: arriva solo a chi potrebbe concedere
-                          quel ruolo (10-01). Per gli altri il server manda null. */}
-                      {i.token ? (
-                        <React.Fragment>
-                          <CopyField value={i.token} t={t} fireToast={fireToast} />
-                          <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>{t('L’invio automatico arriva con Yourang (fase 2): per ora condividi il codice manualmente.', 'Automatic delivery ships with Yourang (phase 2): for now share the code manually.')}</div>
-                        </React.Fragment>
-                      ) : (
-                        <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--muted)' }}>
-                          <Icon name="lock" size={13} color="var(--muted)" />
-                          {t('Il codice di questo invito lo vede solo chi può assegnare il suo ruolo, per esempio il titolare.', 'Only someone who can grant its role (e.g. the owner) can see this invitation code.')}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </React.Fragment>
             )}
 
-            {/* invite form */}
+            {/* invita una persona */}
             {inviting ? (
-              <div className="dk-card" style={{ padding: 15, border: '1px solid var(--clay)', boxShadow: 'none', marginTop: 12 }}>
-                <div className="t-meta" style={{ marginBottom: 10 }}>{t('Invita un membro', 'Invite a member')}</div>
-                <input value={inv.email} onChange={(e) => setInv((f) => ({ ...f, email: e.target.value }))} type="email" placeholder="email@salone.it" style={{ ...inputCss, width: '100%', boxSizing: 'border-box', marginBottom: 9 }} />
-                <select value={inv.role_id ?? ''} onChange={(e) => setInv((f) => ({ ...f, role_id: Number(e.target.value) }))} style={{ ...inputCss, width: '100%', fontWeight: 600, cursor: 'pointer', marginBottom: 12 }}>
+              <div data-invite-form className="dk-card" style={{ padding: 15, border: '1px solid var(--clay)', boxShadow: 'none', marginTop: 12 }}>
+                <div className="t-meta" style={{ marginBottom: 4 }}>{t('Invita una persona', 'Invite someone')}</div>
+                <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 12, lineHeight: 1.45 }}>
+                  {t('Le arriva un link per scegliere la password ed entrare con la sua email.', 'They get a link to choose a password and sign in with their email.')}
+                </div>
+                <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Email', 'Email')}</div>
+                <input value={inv.email} onChange={(e) => setInv((f) => ({ ...f, email: e.target.value }))} type="email" placeholder="email@salone.it" style={{ ...inputCss, width: '100%', boxSizing: 'border-box', marginBottom: 10 }} />
+                <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Ruolo: che cosa potrà fare', 'Role: what they can do')}</div>
+                <select value={inv.role_id ?? ''} onChange={(e) => setInv((f) => ({ ...f, role_id: Number(e.target.value) }))} style={{ ...inputCss, width: '100%', fontWeight: 600, cursor: 'pointer', marginBottom: 5 }}>
                   {roles.map((r) => (
                     <option key={r.id} value={r.id} disabled={!canAssign(r)}>
                       {r.name}{canAssign(r) ? '' : ' · ' + t('non assegnabile', 'not assignable')}
                     </option>
                   ))}
                 </select>
+                <div data-role-summary className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5, lineHeight: 1.4, marginBottom: 10 }}>
+                  {roleSummary(roleOf(inv.role_id), lang) || t('Nessun permesso: vede solo la sua agenda.', 'No permissions.')}
+                </div>
+                <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('È un’operatrice dello Staff?', 'Is this a stylist on the Staff?')}</div>
+                <select value={inv.operator_id ?? ''} onChange={(e) => setInv((f) => ({ ...f, operator_id: e.target.value ? Number(e.target.value) : null }))} style={{ ...inputCss, width: '100%', cursor: 'pointer', marginBottom: 5 }}>
+                  <option value="">{t('No, non lavora in agenda', 'No, not in the calendar')}</option>
+                  {linkableOperators(operators).map((o) => <option key={o.id} value={o.id}>{opName(o)}</option>)}
+                </select>
+                <div className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5, lineHeight: 1.4, marginBottom: 12 }}>
+                  {t('Entrando si ritrova collegata alla sua scheda e alla sua colonna in agenda.', 'On joining they are linked to their profile and calendar column.')}
+                </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="dk-btn dk-btn--ghost" style={{ flex: 1 }} onClick={() => setInviting(false)}>{t('Annulla', 'Cancel')}</button>
-                  <button className="dk-btn dk-btn--clay" style={{ flex: 1 }} disabled={!inv.email.trim() || !inv.role_id || sending} onClick={sendInvite}><Icon name="check" size={16} color="#fff" />{t('Crea invito', 'Create invite')}</button>
+                  <button className="dk-btn dk-btn--clay" style={{ flex: 1 }} disabled={!inv.email.trim() || !inv.role_id || sending} onClick={sendInvite}><Icon name="send" size={15} color="#fff" />{sending ? t('Invio…', 'Sending…') : t('Invia invito', 'Send invitation')}</button>
                 </div>
               </div>
             ) : (
-              <button className="dk-btn dk-btn--ghost" style={{ width: '100%', borderStyle: 'dashed', marginTop: 12 }} onClick={() => setInviting(true)}><Icon name="plus" size={16} />{t('Invita un membro', 'Invite a member')}</button>
+              <button data-invite className="dk-btn dk-btn--ghost" style={{ width: '100%', borderStyle: 'dashed', marginTop: 12 }} onClick={() => { setCreated(null); setInviting(true); }}><Icon name="plus" size={16} />{t('Invita una persona', 'Invite someone')}</button>
             )}
 
             {/* link to roles */}
@@ -257,6 +385,17 @@ export default function TeamDrawer({ onClose, onRoles }) {
           'Past appointments and sales stay. Re-admitting them needs a new invitation.')}
         confirmLabel={t('Rimuovi', 'Remove')}
         cancelLabel={t('Annulla', 'Cancel')}
+      />
+      <DkConfirm
+        open={!!confirmRevoke}
+        busy={!!busyInv}
+        onClose={() => setConfirmRevoke(null)}
+        onConfirm={revoke}
+        title={t('Annullare l’invito?', 'Cancel the invitation?')}
+        message={t(`Il link mandato a ${confirmRevoke?.email || ''} non aprirà più niente.`, `The link sent to ${confirmRevoke?.email || ''} will stop working.`)}
+        detail={t('Per invitarla di nuovo basta un invito nuovo.', 'To invite them again, just send a new invitation.')}
+        confirmLabel={t('Annulla invito', 'Cancel invitation')}
+        cancelLabel={t('Indietro', 'Back')}
       />
       <DkConfirm
         open={!!confirmTransfer}

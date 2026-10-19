@@ -162,19 +162,33 @@ def default_invitation_expiry():
 
 
 class Invitation(models.Model):
-    """Invito email a entrare nel team con un ruolo predefinito."""
+    """Invito email a entrare nel team con un ruolo predefinito (vedi accounts.invitations)."""
 
     class Status(models.TextChoices):
         PENDING = "pending"
         ACCEPTED = "accepted"
         EXPIRED = "expired"
+        # annullato dal titolare, o sostituito da un invito nuovo alla stessa email
+        REVOKED = "revoked"
 
     salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="invitations")
     email = models.EmailField()
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="invitations")
+    # La scheda Staff a cui collegare chi accetta: l'operatrice che entra nel
+    # gestionale si ritrova già legata alla sua colonna in agenda.
+    operator = models.ForeignKey(
+        "staff.Operator", on_delete=models.SET_NULL, null=True, blank=True, related_name="invitations"
+    )
+    invited_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     expires_at = models.DateTimeField(default=default_invitation_expiry)
+    # Quando è partita l'ultima mail, e perché l'ultima non è partita: senza,
+    # «inviato» nel registro valeva anche per gli inviti mai spediti.
+    sent_at = models.DateTimeField(null=True, blank=True)
+    send_error = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -12,14 +12,16 @@
 import React, { useMemo, useState } from 'react';
 import { Icon, WEEKDAYS_SHORT_EN, WEEKDAYS_SHORT_IT, todayStr, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
-import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss, patternDay } from './lib.js';
+import { AVAIL_META, ABSENCE_TYPES, MONTHS_IT, MONTHS_EN, inputCss, outLabel, patternDay } from './lib.js';
 import { absencesApi } from '../../api/staff.js';
 
 const fmtDM = (iso) => iso.split('-').slice(1).reverse().join('/'); // "2026-07-04" → "04/07"
 
 /** `weeks` = il pattern dell'editor (useOperatorEditor), `draft` = ha
  *  modifiche non salvate: il calendario lo dice. */
-export default function AbsenceCalendar({ operatorId, absences, onChanged, canEdit, weeks = null, draft = false }) {
+/** `period` = { from, until }: il rapporto di lavoro della scheda (anche non
+ *  salvato); fuori da quei giorni il calendario dice «Non ancora/più in team». */
+export default function AbsenceCalendar({ operatorId, absences, onChanged, canEdit, weeks = null, draft = false, period = null }) {
   const { t, lang, fireToast, settings } = useDash();
   const openingWeek = settings?.opening_hours_week || null;
   const cycle = (weeks || []).length;
@@ -172,16 +174,18 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
             const ab = coverage[d];
             const st = ab && (AVAIL_META[ab.type] || AVAIL_META.other);
             // senza assenza, quello che prevede il pattern
-            const pd = !ab && weeks ? patternDay(weeks, k, openingWeek) : null;
+            const pd = !ab && weeks ? patternDay(weeks, k, openingWeek, period) : null;
             const look = st ? { bg: st.bg, c: st.c, label: st[lang === 'en' ? 'en' : 'it'] }
-              : pd?.kind === 'work' ? { bg: AVAIL_META.work.bg, c: AVAIL_META.work.c, label: pd.label }
-                : pd?.kind === 'off' ? { bg: AVAIL_META.off.bg, c: AVAIL_META.off.c, label: t('Riposo', 'Day off') }
-                  : pd?.kind === 'closed' ? { bg: 'var(--paper-2)', c: 'var(--muted-2)', label: t('Chiuso', 'Closed') }
-                    : pd?.kind === 'bad' ? { bg: 'var(--warn-tint)', c: 'var(--warn)', label: '?' }
-                      : null;
+              : pd?.kind === 'out' ? { bg: AVAIL_META.out.bg, c: AVAIL_META.out.c, label: pd.out === 'after' ? t('Uscita', 'Left') : t('Non ancora', 'Not yet') }
+                : pd?.kind === 'work' ? { bg: AVAIL_META.work.bg, c: AVAIL_META.work.c, label: pd.label }
+                  : pd?.kind === 'off' ? { bg: AVAIL_META.off.bg, c: AVAIL_META.off.c, label: t('Riposo', 'Day off') }
+                    : pd?.kind === 'closed' ? { bg: 'var(--paper-2)', c: 'var(--muted-2)', label: t('Chiuso', 'Closed') }
+                      : pd?.kind === 'bad' ? { bg: 'var(--warn-tint)', c: 'var(--warn)', label: '?' }
+                        : null;
             const tip = st ? (ab.note || look.label)
               : pd?.kind === 'work' ? `${pd.label}${pd.brk ? ' · ' + t('pausa', 'break') + ' ' + pd.brk : ''}`
-                : pd?.kind === 'bad' ? t(`Orario non valido: «${pd.label}»`, `Invalid hours: “${pd.label}”`) : look?.label;
+                : pd?.kind === 'bad' ? t(`Orario non valido: «${pd.label}»`, `Invalid hours: “${pd.label}”`)
+                  : pd?.kind === 'out' ? outLabel(pd.out, t) : look?.label;
             const isToday = k === today;
             const selected = edit && edit.id && ab && ab.id === edit.id;
             return (
@@ -236,7 +240,7 @@ export default function AbsenceCalendar({ operatorId, absences, onChanged, canEd
         <div className="dk-card" style={{ padding: 18 }}>
           <div className="t-meta" style={{ marginBottom: 12 }}>{t('Legenda', 'Legend')}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {(weeks ? ['work', 'off', ...ABSENCE_TYPES] : ABSENCE_TYPES).map((k) => {
+            {(weeks ? ['work', 'off', ...ABSENCE_TYPES, ...(period?.from || period?.until ? ['out'] : [])] : ABSENCE_TYPES).map((k) => {
               const meta = AVAIL_META[k];
               return (
                 <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

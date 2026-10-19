@@ -1,16 +1,73 @@
 // ProfileTab.jsx — linguetta «Anagrafica» della scheda operatrice (StaffPage):
-// dati anagrafici, colore in agenda, servizi abilitati. Il modulo è lo stato
-// `form` della pagina (useOperatorEditor): qui si modifica, «Salva» è in alto.
-import { NumInput } from '@youty/shared';
+// dati anagrafici, periodo nel team, colore in agenda, servizi abilitati. Il
+// modulo è lo stato `form` della pagina (useOperatorEditor): qui si modifica,
+// «Salva» è in alto.
+import { Icon, NumInput, todayStr } from '@youty/shared';
 import { HexInput } from '../../ui/index.js';
 import ColorWheel from '../../ui/ColorWheel.jsx';
 import { GD_PALETTE } from '../../ui/palette.js';
-import { HIDDEN, inputCss } from './lib.js';
+import { HIDDEN, dayShort, inputCss } from './lib.js';
 import ServicesAssign from './ServicesAssign.jsx';
+import AccessCard from './AccessCard.jsx';
+
+/** Da quando a quando è nel team. La data d'inizio conta: senza, il
+ *  riempimento dei mesi passati metteva fra la capacità i turni di chi non
+ *  c'era ancora, e lo sbagliava al ribasso (il titolare, 16/10). Quando manca
+ *  si propone il giorno del primo appuntamento (`firstWorkDay`). */
+function EmploymentFields({ form, setForm, canTeam, firstWorkDay, t, lang }) {
+  const from = form.employed_from || '';
+  const until = form.employed_until || '';
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value || null }));
+  const reversed = from && until && until < from;
+  const earlier = from && firstWorkDay && firstWorkDay < from;
+  const ended = until && until < todayStr();
+  const note = { fontSize: 12, lineHeight: 1.45, marginTop: 6 };
+  return (
+    <div data-employment>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <label style={{ display: 'block' }}>
+          <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Nel team dal', 'On the team since')}</div>
+          <input type="date" value={from} max={until || undefined} disabled={!canTeam} onChange={set('employed_from')} style={inputCss} />
+        </label>
+        <label style={{ display: 'block' }}>
+          <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Fino al', 'Until')} <span style={{ fontWeight: 500, color: 'var(--muted-2)' }}>{t('· se è andata via', '· if she left')}</span></div>
+          <input type="date" value={until} min={from || undefined} disabled={!canTeam} onChange={set('employed_until')} style={inputCss} />
+        </label>
+      </div>
+      <div className="t-sm" style={{ ...note, color: 'var(--muted)' }}>
+        {t('Prima di questa data non ha turni: le statistiche di riempimento non contano i suoi turni nei giorni in cui non c’era. Vuota = da sempre.',
+          'Before this date she has no shifts: occupancy stats do not count her shifts on days she was not here. Empty = always.')}
+      </div>
+      {!from && firstWorkDay && canTeam && (
+        <button type="button" data-use-first-day onClick={() => setForm((f) => ({ ...f, employed_from: firstWorkDay }))}
+          className="dk-btn dk-btn--soft" style={{ height: 30, padding: '0 10px', fontSize: 12.5, marginTop: 8, gap: 6 }}>
+          <Icon name="calendar" size={13} />{t(`Usa il primo appuntamento: ${dayShort(firstWorkDay, lang)}`, `Use her first appointment: ${dayShort(firstWorkDay, lang)}`)}
+        </button>
+      )}
+      {reversed && (
+        <div data-employment-error className="t-sm" style={{ ...note, color: 'var(--danger)', fontWeight: 600 }}>
+          {t('La fine non può venire prima dell’inizio.', 'The end cannot come before the start.')}
+        </div>
+      )}
+      {earlier && !reversed && (
+        <div data-employment-warn className="t-sm" style={{ ...note, color: 'var(--warn)' }}>
+          {t(`Ha già appuntamenti dal ${dayShort(firstWorkDay, lang)}, prima di questa data: quei giorni restano in agenda, ma senza il suo turno.`,
+            `She already has appointments from ${dayShort(firstWorkDay, lang)}, before this date: those days stay in the calendar, without her shift.`)}
+        </div>
+      )}
+      {ended && !reversed && (
+        <div className="t-sm" style={{ ...note, color: 'var(--muted)' }}>
+          {t('Dopo questa data non ha turni e non si prenota. Per toglierla anche dagli elenchi, disattivala qui sotto.',
+            'After this date she has no shifts and cannot be booked. To remove her from the lists too, deactivate her below.')}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ProfileTab({
   form, setForm, canTeam, canPricing, locations, initials, color, opPalette,
-  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast,
+  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast, firstWorkDay = null, operator = null,
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
@@ -48,6 +105,7 @@ export default function ProfileTab({
               </select>
             </label>
           )}
+          <EmploymentFields form={form} setForm={setForm} canTeam={canTeam} firstWorkDay={firstWorkDay} t={t} lang={lang} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <label style={{ display: 'block' }}>
               <div className="t-sm" style={{ color: 'var(--muted)', fontWeight: 600, marginBottom: 5 }}>{t('Costo orario €', 'Hourly cost €')}</div>
@@ -97,6 +155,9 @@ export default function ProfileTab({
           <ColorWheel value={color} onChange={(c) => canTeam && setForm((f) => ({ ...f, color: c }))} t={t} disabled={!canTeam} />
         </div>
       </div>
+
+      {/* con quale account entra nel gestionale: lo vede e lo cambia chi gestisce il team */}
+      {canTeam && operator?.id && <AccessCard operator={operator} />}
 
       <div className="dk-card" style={{ padding: 20, gridColumn: '1 / -1' }}>
         <ServicesAssign

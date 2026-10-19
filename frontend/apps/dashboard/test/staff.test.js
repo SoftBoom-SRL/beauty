@@ -1,8 +1,11 @@
 // Scheda operatrice: PUT parziale, modifiche altrui, dati di cassa nascosti,
 // media degli incassi. Caccia ai bug del 22/09/2026: 09-09 (contratto C19),
-// 09-01 (C6), 15-03, 15-18.
+// 09-01 (C6), 15-03, 15-18. 16/10: «Nuova operatrice» offre solo i servizi
+// che si prenotano.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+
+import { findAll, installDom, loadComponent, mount, spy, textOf } from './grid-harness.mjs';
 
 import {
   changedOperatorFields, formFromDetail, perfStats, sameOperatorField, sameWeeks, weeksFromShifts,
@@ -77,4 +80,24 @@ test('15-18: la media degli incassi non è arrotondata all’euro', () => {
 test('C6: la serie senza importi è «nascosta», non una serie a zero', () => {
   const perf = [{ month: '2026-08', revenue: null, sales_count: 4, cash_hidden: true }, { month: '2026-09', revenue: null, sales_count: 2, cash_hidden: true }];
   assert.equal(perfStats(perf).hidden, true);
+});
+
+/* 16/10: «Nuova operatrice» elencava tutti i servizi, anche in pausa e
+ * archiviati (quelli che non si fanno più): la scheda dell'operatrice
+ * (ServicesAssign) mostra solo quelli attivi. */
+test('nuova operatrice: fra i servizi da abilitare niente in pausa né archiviati', async () => {
+  const { default: NewOperatorModal } = await loadComponent('apps/dashboard/src/sections/staff/NewOperatorModal.jsx', { stubs: ['ColorWheel.jsx'] });
+  installDom();
+  globalThis.__dash = {
+    t: (it) => it, lang: 'it', locations: [], operators: [], opPalette: ['#E53935'], reload: { operators: spy() }, fireToast: spy(),
+    services: [
+      { id: 1, name_it: 'Taglio', active: true },
+      { id: 2, name_it: 'Permanente', active: false, archived_at: '2026-10-16T10:00:00Z' },
+      { id: 3, name_it: 'Piega estiva', active: false },
+    ],
+  };
+  const m = mount(NewOperatorModal, { onClose: spy(), onCreated: spy() });
+  const chips = findAll(m.tree, (el) => el.type === 'button' && ['Taglio', 'Permanente', 'Piega estiva'].includes(textOf(el)));
+  assert.deepEqual(chips.map(textOf), ['Taglio']);
+  m.unmount();
 });
