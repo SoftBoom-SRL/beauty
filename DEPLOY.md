@@ -230,6 +230,15 @@ conto degli account collegati. Il ritorno da Stripe è
 rifiuta); un link di onboarding scaduto riporta a `/stripe-connect/start`, che
 ne chiede un altro.
 
+**La chiave live funziona solo dal server.** Su Stripe ha una *politica di
+accesso* («Server produzione beauty», dashboard.stripe.com → *Politiche di
+accesso*) che accetta richieste solo da `91.99.117.151`, l'IP con cui il server
+Coolify esce verso Stripe (che ha solo indirizzi IPv4). Una chiave rubata non
+serve fuori da lì, e Stripe avvisa dei tentativi. **Se il portale cambia server o
+IP, la politica va aggiornata prima del passaggio**: altrimenti ogni chiamata a
+Stripe viene rifiutata e caparre, collegamenti e rimborsi si fermano. I webhook
+non ne dipendono, perché sono chiamate di Stripe verso di noi.
+
 ### Le altre variabili che il backend legge
 
 Hanno tutte un default sensato e nessuna è obbligatoria, ma sono quelle che
