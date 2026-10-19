@@ -12,6 +12,7 @@ con Stripe per conto degli account collegati (header Stripe-Account).
 
 import datetime as dt
 import logging
+import time
 from decimal import Decimal
 from urllib.parse import urlencode
 
@@ -75,18 +76,32 @@ NOT_CONNECTED_MSG = (
     "Pagamenti online non attivi: il titolare deve collegare il proprio account "
     "Stripe in Impostazioni → Pagamenti"
 )
+NOT_ACTIVE_MSG = (
+    "Pagamenti online non ancora attivi: l'account Stripe del salone aspetta che "
+    "il titolare finisca i dati o che Stripe lo verifichi (Impostazioni → Pagamenti)"
+)
+
+
+def salon_charges_enabled(salon) -> bool:
+    """Stripe ha attivato i pagamenti sull'account del salone?"""
+    salon_settings = getattr(salon, "settings", None)
+    return bool(getattr(salon_settings, "stripe_charges_enabled", False))
 
 
 def require_salon_account(salon) -> str:
-    """Account Stripe del salone, o 503 se il titolare non l'ha collegato.
+    """Account Stripe del salone, o 503 se il titolare non l'ha collegato o non è attivo.
 
     Ogni pagamento nuovo passa da qui. Prima, senza account collegato, le
     chiamate partivano senza header Stripe-Account: caparre e addebiti no-show
-    finivano sul conto della piattaforma invece che su quello del salone.
+    finivano sul conto della piattaforma invece che su quello del salone. Un
+    account creato dal portale ma non ancora attivato da Stripe rifiuterebbe il
+    pagamento: meglio dirlo subito che mandare alla cliente un link che non va.
     """
     account = salon_account_id(salon)
     if not account:
         raise HttpError(503, NOT_CONNECTED_MSG)
+    if not salon_charges_enabled(salon):
+        raise HttpError(503, NOT_ACTIVE_MSG)
     return account
 
 
@@ -148,20 +163,199 @@ def account_token_matches(salon, token: str, account: str) -> bool:
 def payments_enabled(salon) -> bool:
     """Vero se si possono creare pagamenti online per il salone.
 
-    Serve anche l'account del titolare: la sola chiave della piattaforma
-    farebbe incassare la piattaforma (vedi `require_salon_account`).
+    Serve anche l'account del titolare, attivo: la sola chiave della
+    piattaforma farebbe incassare la piattaforma (vedi `require_salon_account`).
     """
-    return bool(settings.STRIPE_SECRET_KEY) and bool(salon_account_id(salon))
+    return (
+        bool(settings.STRIPE_SECRET_KEY)
+        and bool(salon_account_id(salon))
+        and salon_charges_enabled(salon)
+    )
 
 
 def connect_available() -> bool:
+    """Il titolare può collegare Stripe: basta la chiave della piattaforma (Account Links)."""
+    return bool(settings.STRIPE_SECRET_KEY)
+
+
+def oauth_available() -> bool:
+    """Si può collegare un account Stripe che il titolare ha GIÀ (OAuth): serve anche il client id.
+
+    Stripe non dà più l'OAuth ai nuovi account di piattaforma, o lo dà solo
+    dopo una revisione: è la strada secondaria, non quella principale.
+    """
     return bool(settings.STRIPE_SECRET_KEY and settings.STRIPE_CONNECT_CLIENT_ID)
 
 
-def connect_authorize_url(salon, redirect_uri: str) -> str:
-    """URL OAuth (Stripe Connect Standard) a cui mandare il titolare per collegare il suo account."""
+# Categoria Stripe (MCC) dei saloni: «Barber and Beauty Shops».
+SALON_MCC = "7230"
+# Stesso salone, stessa finestra di dieci minuti: una richiesta ripetuta
+# (doppio tocco, rete che ritenta) riprende l'account già creato da Stripe.
+_ACCOUNT_CREATE_WINDOW = 600
+
+
+def _copy_account_state(salon_settings, account: dict) -> None:
+    salon_settings.stripe_details_submitted = bool(account.get("details_submitted"))
+    salon_settings.stripe_charges_enabled = bool(account.get("charges_enabled"))
+
+
+def _new_account_params(salon, email: str) -> dict:
+    """Un account come gli Standard: dashboard Stripe completa, commissioni e rischio a carico suo e di Stripe.
+
+    Sono i valori della configurazione Connect della piattaforma («i venditori
+    incassano direttamente»): il salone paga le commissioni, Stripe risponde
+    delle perdite, la piattaforma non tocca i soldi.
+    """
+    business_profile = {"name": salon.name, "mcc": SALON_MCC}
+    origin = (settings.CLIENT_APP_ORIGIN or "").rstrip("/")
+    if origin.startswith("https://"):
+        business_profile["url"] = f"{origin}/{salon.slug}"
+    params = {
+        "controller": {
+            "stripe_dashboard": {"type": "full"},
+            "fees": {"payer": "account"},
+            "losses": {"payments": "stripe"},
+            "requirement_collection": "stripe",
+        },
+        "business_profile": business_profile,
+        "metadata": {"salon_id": str(salon.id)},
+    }
+    if email:
+        params["email"] = email
+    return params
+
+
+def _ensure_connect_account(salon, email: str) -> str:
+    """Account Stripe del salone: quello già salvato, o uno nuovo creato adesso.
+
+    Sotto lock della riga: due «Collega Stripe» insieme creavano due account e
+    il titolare ne completava uno mentre il portale ne teneva l'altro.
+    """
+    from apps.core.models import SalonSettings  # lazy
+
+    stripe = _client()
+    SalonSettings.objects.get_or_create(salon=salon)
+    with transaction.atomic():
+        salon_settings = SalonSettings.objects.select_for_update().get(salon=salon)
+        if salon_settings.stripe_account_id:
+            return salon_settings.stripe_account_id
+        window = int(time.time() // _ACCOUNT_CREATE_WINDOW)
+        try:
+            account = as_dict(
+                stripe.Account.create(
+                    **_new_account_params(salon, email),
+                    idempotency_key=f"connect-account-{salon.id}-{window}",
+                )
+            )
+        except stripe.StripeError as exc:
+            raise HttpError(400, f"Account Stripe non creato: {getattr(exc, 'user_message', None) or exc}")
+        account_id = account.get("id") or ""
+        if not account_id:
+            raise HttpError(400, "Stripe non ha restituito l'account creato")
+        salon_settings.stripe_account_id = account_id
+        salon_settings.stripe_connected_at = timezone.now()
+        _copy_account_state(salon_settings, account)
+        salon_settings.save(
+            update_fields=[
+                "stripe_account_id",
+                "stripe_connected_at",
+                "stripe_details_submitted",
+                "stripe_charges_enabled",
+                "updated_at",
+            ]
+        )
+    logger.info("Account Stripe %s creato per il salone %s", account_id, salon.id)
+    return account_id
+
+
+def connect_onboarding_url(salon, *, email: str, refresh_url: str, return_url: str) -> str:
+    """Pagina di Stripe dove il titolare crea (o completa) l'account del salone: Account Links.
+
+    È il collegamento consigliato da Stripe: il portale crea l'account, Stripe
+    raccoglie dati, documento e IBAN sulle sue pagine e rimanda il titolare a
+    `return_url`. Un link vale una volta e per pochi minuti: scaduto, Stripe
+    porta a `refresh_url`, che ne chiede uno nuovo per lo stesso account.
+    """
     if not connect_available():
-        raise HttpError(503, "Stripe Connect non configurato sulla piattaforma (STRIPE_CONNECT_CLIENT_ID)")
+        raise HttpError(503, "Stripe non configurato sulla piattaforma (STRIPE_SECRET_KEY)")
+    account_id = _ensure_connect_account(salon, email)
+    stripe = _client()
+    try:
+        link = as_dict(
+            stripe.AccountLink.create(
+                account=account_id,
+                refresh_url=refresh_url,
+                return_url=return_url,
+                type="account_onboarding",
+                collection_options={"fields": "eventually_due"},
+            )
+        )
+    except stripe.StripeError as exc:
+        raise HttpError(400, f"Collegamento Stripe non avviato: {getattr(exc, 'user_message', None) or exc}")
+    url = link.get("url") or ""
+    if not url:
+        raise HttpError(400, "Stripe non ha restituito la pagina di collegamento")
+    return url
+
+
+def refresh_account_state(salon) -> bool:
+    """Rilegge da Stripe l'account del salone e ne salva lo stato. Ritorna True se è cambiato.
+
+    Al ritorno da Stripe e quando il pannello mostra un account non ancora
+    attivo: l'evento `account.updated` può non arrivare (webhook non
+    configurato, consegna in ritardo) e il salone resterebbe «in verifica».
+    Se Stripe non risponde lo stato resta quello di prima.
+    """
+    from apps.core.models import SalonSettings  # lazy
+
+    salon_settings = SalonSettings.objects.filter(salon=salon).first()
+    account_id = getattr(salon_settings, "stripe_account_id", "")
+    if not account_id or not settings.STRIPE_SECRET_KEY:
+        return False
+    stripe = _client()
+    try:
+        account = as_dict(stripe.Account.retrieve(account_id))
+    except stripe.StripeError as exc:
+        logger.info("Account Stripe %s non letto: %s", account_id, exc)
+        return False
+    return bool(save_account_state(account_id, account))
+
+
+def save_account_state(account_id: str, account: dict) -> list:
+    """Scrive lo stato dell'account sui saloni che lo usano. Ritorna [(salone, stato nuovo)] di quelli cambiati."""
+    from apps.core.models import SalonSettings  # lazy
+
+    changed = []
+    if not account_id:
+        return changed
+    for salon_settings in SalonSettings.objects.select_related("salon").filter(stripe_account_id=account_id):
+        before = (salon_settings.stripe_details_submitted, salon_settings.stripe_charges_enabled)
+        _copy_account_state(salon_settings, account)
+        if (salon_settings.stripe_details_submitted, salon_settings.stripe_charges_enabled) != before:
+            salon_settings.save(
+                update_fields=["stripe_details_submitted", "stripe_charges_enabled", "updated_at"]
+            )
+            salon_settings.salon.settings = salon_settings
+            changed.append((salon_settings.salon, account_state(salon_settings.salon)))
+    return changed
+
+
+def account_state(salon) -> str:
+    """Com'è il collegamento: none, incomplete (dati da finire), pending (Stripe verifica), active."""
+    salon_settings = getattr(salon, "settings", None)
+    if not getattr(salon_settings, "stripe_account_id", ""):
+        return "none"
+    if salon_settings.stripe_charges_enabled:
+        return "active"
+    if salon_settings.stripe_details_submitted:
+        return "pending"
+    return "incomplete"
+
+
+def connect_authorize_url(salon, redirect_uri: str) -> str:
+    """URL OAuth (Stripe Connect Standard) per collegare un account che il titolare ha già."""
+    if not oauth_available():
+        raise HttpError(503, "Collegamento di un account Stripe esistente non disponibile (STRIPE_CONNECT_CLIENT_ID)")
     state = signing.dumps({"salon": salon.id}, salt=_CONNECT_SALT)
     params = {
         "response_type": "code",
@@ -194,7 +388,20 @@ def connect_exchange(salon, code: str, state: str) -> str:
     salon_settings, _ = SalonSettings.objects.get_or_create(salon=salon)
     salon_settings.stripe_account_id = account_id
     salon_settings.stripe_connected_at = timezone.now()
-    salon_settings.save(update_fields=["stripe_account_id", "stripe_connected_at", "updated_at"])
+    salon_settings.stripe_details_submitted = False
+    salon_settings.stripe_charges_enabled = False
+    salon_settings.save(
+        update_fields=[
+            "stripe_account_id",
+            "stripe_connected_at",
+            "stripe_details_submitted",
+            "stripe_charges_enabled",
+            "updated_at",
+        ]
+    )
+    # Un account già in uso è di solito attivo: lo si legge subito, così il
+    # salone incassa senza aspettare `account.updated`.
+    refresh_account_state(salon)
     return account_id
 
 
@@ -208,16 +415,19 @@ def connect_disconnect(salon) -> int:
 
     salon_settings, _ = SalonSettings.objects.get_or_create(salon=salon)
     account_id = salon_settings.stripe_account_id
-    if account_id and connect_available():
+    if account_id and settings.STRIPE_SECRET_KEY:
         # Finché l'accesso c'è, i link ancora aperti si chiudono: dopo la
         # revoca un pagamento su quell'account non ci arriverebbe più, e la
         # caparra resterebbe «richiesta» con i soldi già sul conto del salone.
         close_pending_deposit_links(salon)
+    if account_id and oauth_available():
+        # Solo gli account collegati con OAuth si revocano: quelli creati dal
+        # portale restano del titolare su Stripe, il portale smette di usarli.
         stripe = _client()
         try:
             stripe.OAuth.deauthorize(client_id=settings.STRIPE_CONNECT_CLIENT_ID, stripe_user_id=account_id)
-        except stripe.StripeError as exc:  # già revocato lato Stripe: non blocca
-            logger.warning("Deauthorize Stripe non riuscita per %s: %s", account_id, exc)
+        except stripe.StripeError as exc:  # già revocato, o account creato dal portale: non blocca
+            logger.info("Deauthorize Stripe non riuscita per %s: %s", account_id, exc)
     _forget_salon_account(salon_settings)
     return suspend_pending_deposits(salon)
 
@@ -246,7 +456,17 @@ def account_revoked(account: str) -> list[tuple]:
 def _forget_salon_account(salon_settings) -> None:
     salon_settings.stripe_account_id = ""
     salon_settings.stripe_connected_at = None
-    salon_settings.save(update_fields=["stripe_account_id", "stripe_connected_at", "updated_at"])
+    salon_settings.stripe_details_submitted = False
+    salon_settings.stripe_charges_enabled = False
+    salon_settings.save(
+        update_fields=[
+            "stripe_account_id",
+            "stripe_connected_at",
+            "stripe_details_submitted",
+            "stripe_charges_enabled",
+            "updated_at",
+        ]
+    )
 
 
 def _pending_deposits(salon):

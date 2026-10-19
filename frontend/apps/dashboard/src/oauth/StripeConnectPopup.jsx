@@ -1,6 +1,10 @@
 // StripeConnectPopup.jsx — popup del collegamento Stripe Connect (titolare).
-//   /stripe-connect/start → chiede l'URL OAuth al backend e ci va
-//   /stripe-connect/done  → Stripe torna con ?code&state: li scambia, avvisa l'opener, si chiude
+//   /stripe-connect/start → chiede al backend la pagina di Stripe e ci va: di
+//     base l'onboarding dell'account creato dal portale (Account Links), con
+//     ?mode=existing l'OAuth per un account che il titolare ha già. Ci torna
+//     anche Stripe quando il link dell'onboarding è scaduto: se ne chiede un altro.
+//   /stripe-connect/done  → ritorno da Stripe: con ?code&state (OAuth) li
+//     scambia, senza (onboarding) fa rileggere l'account; avvisa l'opener e si chiude
 // Stessa origine dell'opener: `api` porta il Bearer dello staff e il
 // postMessage punta a window.location.origin (come OAuthPopup per Yourang).
 import { useEffect, useState } from 'react';
@@ -16,19 +20,18 @@ export default function StripeConnectPopup({ path }) {
     let cancelled = false;
     (async () => {
       try {
+        const params = new URLSearchParams(window.location.search);
         if (path === '/stripe-connect/start') {
-          const res = await stripeConnectApi.start();
+          const res = await stripeConnectApi.start(params.get('mode') === 'existing' ? 'existing' : undefined);
           window.location.replace(res.url);
           return;
         }
-        const params = new URLSearchParams(window.location.search);
         const err = params.get('error');
         if (err) throw new Error(params.get('error_description') || err);
         const code = params.get('code');
         const state = params.get('state');
-        if (!code || !state) throw new Error('missing code/state');
-        await stripeConnectApi.callback({ code, state });
-        notifyOpener({ type: STRIPE_MSG, ok: true });
+        const res = await stripeConnectApi.callback(code ? { code, state: state || '' } : {});
+        notifyOpener({ type: STRIPE_MSG, ok: true, state: res?.state });
         window.close();
       } catch (e) {
         if (cancelled) return;

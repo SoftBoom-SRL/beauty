@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from ninja import Schema
 from pydantic import Field
@@ -202,11 +202,20 @@ class SetupIntentOut(Schema):
 
 
 class StripeConnectStatusOut(Schema):
-    available: bool           # la piattaforma ha STRIPE_CONNECT_CLIENT_ID
-    payments_enabled: bool    # si possono creare link di pagamento (chiave Stripe e account del salone)
-    connected: bool
+    available: bool           # la piattaforma ha la chiave Stripe: si può collegare
+    oauth_available: bool = False  # si può collegare un account già esistente (client id OAuth)
+    payments_enabled: bool    # si possono creare link di pagamento (account del salone attivo)
+    # none | incomplete (dati da finire su Stripe) | pending (Stripe verifica) | active
+    state: str = "none"
+    connected: bool           # account attivo
     account_id: str = ""
     connected_at: Optional[datetime] = None
+
+
+class StripeConnectStartIn(Schema):
+    # create: il portale crea l'account e il titolare lo completa su Stripe;
+    # existing: collega un account che il titolare ha già (OAuth).
+    mode: Literal["create", "existing"] = "create"
 
 
 class StripeConnectStartOut(Schema):
@@ -214,8 +223,9 @@ class StripeConnectStartOut(Schema):
 
 
 class StripeConnectCallbackIn(Schema):
-    code: str
-    state: str
+    # Solo l'OAuth torna con code e state; l'onboarding di Stripe torna senza niente.
+    code: str = ""
+    state: str = ""
 
 
 class DepositLinkOut(Schema):

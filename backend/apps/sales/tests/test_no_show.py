@@ -26,7 +26,7 @@ class ChargeNoShowTests(TestCase):
         from apps.staff.models import Operator
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon", stripe_charges_enabled=True)
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222",
             consents={"card_charge": True}, stripe_customer_id="cus_1", stripe_payment_method_id="pm_1",
@@ -105,7 +105,7 @@ class NoShowAmountTests(TestCase):
         from apps.staff.models import Operator
 
         self.salon = Salon.objects.create(name="The Parlour", slug="the-parlour")
-        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon", stripe_charges_enabled=True)
         self.client_obj = Client.objects.create(
             salon=self.salon, first_name="Sofia", last_name="Ricci", phone="+393331112222",
             consents={"card_charge": True}, stripe_customer_id="cus_1",

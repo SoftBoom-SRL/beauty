@@ -187,7 +187,7 @@ Opzionali, da aggiungere quando servono:
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_CONNECT_WEBHOOK_SECRET=whsec_...
-STRIPE_CONNECT_CLIENT_ID=ca_...
+STRIPE_CONNECT_CLIENT_ID=ca_...   # facoltativa: solo per collegare un account Stripe già esistente
 ```
 
 Con Connect i webhook arrivano da **due** endpoint Stripe (vedi §8), ognuno col
@@ -199,10 +199,24 @@ collegati. Con uno solo dei due, gli eventi dell'altra famiglia vengono rifiutat
 al rilascio dello slot. In alternativa, o durante la rotazione di un segreto,
 `STRIPE_WEBHOOK_SECRETS=whsec_a,whsec_b` elenca tutti quelli validi.
 
-`STRIPE_CONNECT_CLIENT_ID` è il client_id della piattaforma
-(dashboard.stripe.com → *Impostazioni → Connect → Opzioni di onboarding → OAuth*):
-serve a far collegare al titolare il **proprio** account Stripe. Senza, il
-pulsante «Collega Stripe» in *Impostazioni → Pagamenti* non compare.
+**Come si collega il salone (Account Links).** Basta `STRIPE_SECRET_KEY`: con
+«Collega Stripe» in *Impostazioni → Pagamenti* il portale crea l'account Stripe
+del salone (come gli Standard: dashboard Stripe completa, commissioni al salone,
+perdite a Stripe) e manda il titolare sull'onboarding ospitato da Stripe, dove
+mette dati dell'attività, documento e IBAN. L'account nasce «da completare»,
+passa «in verifica» quando i dati sono inviati e diventa «collegato» quando
+Stripe attiva i pagamenti (`charges_enabled`, letto al ritorno, dall'evento
+`account.updated` e a ogni apertura del pannello). Prima di allora nessun
+pagamento parte. Su Stripe, *Impostazioni → Connect → Branding* va compilato:
+l'onboarding ospitato lo richiede. In live Stripe crea account solo dopo aver
+approvato la configurazione Connect della piattaforma.
+
+`STRIPE_CONNECT_CLIENT_ID` è facoltativo: è il client_id OAuth della piattaforma
+(dashboard.stripe.com → *Impostazioni → Connect → Opzioni di onboarding → OAuth*)
+e aggiunge nel pannello il link «Hai già un account Stripe? Collega quello», per
+chi vuole usare un account che ha già. Stripe sconsiglia l'OAuth ai nuovi
+account di piattaforma e lo abilita solo dopo la revisione: senza, tutto il resto
+funziona.
 
 **I soldi vanno solo al salone.** Ogni incasso (link caparra, carta salvata,
 addebito no-show) nasce sull'account collegato dal titolare, come *direct
@@ -210,9 +224,11 @@ charge*: la piattaforma non riceve niente e non prende commissioni. Un salone
 che non ha collegato Stripe non ha pagamenti online (la caparra si paga in
 salone): la sola `STRIPE_SECRET_KEY` non basta, e non fa mai incassare
 l'account della piattaforma. La chiave serve solo a parlare con Stripe per
-conto degli account collegati. Il `redirect_uri` da whitelistare su Stripe è
-`https://beauty.yourang.ai/stripe-connect/done`, cioè
-`<FRONTEND_ORIGIN>/stripe-connect/done`: se non combacia, Stripe rifiuta.
+conto degli account collegati. Il ritorno da Stripe è
+`<FRONTEND_ORIGIN>/stripe-connect/done` (per l'OAuth va messo fra i redirect URI:
+`https://beauty.yourang.ai/stripe-connect/done`, se non combacia Stripe
+rifiuta); un link di onboarding scaduto riporta a `/stripe-connect/start`, che
+ne chiede un altro.
 
 ### Le altre variabili che il backend legge
 
@@ -376,8 +392,10 @@ Eventi da selezionare su entrambi: `checkout.session.completed`,
 Gli eventi `refund.*` non sono facoltativi: portano ogni rimborso con il suo
 stato, e senza di loro una caparra con un rimborso ancora in corso (o fallito)
 può risultare detraibile per l'importo sbagliato al checkout.
-Solo sull'endpoint degli account collegati va aggiunto anche
-`account.application.deauthorized`: arriva quando il titolare scollega la
+Solo sull'endpoint degli account collegati vanno aggiunti anche
+`account.updated` e `account.application.deauthorized`. Il primo dice quando
+Stripe attiva (o sospende) l'account di un salone: senza, il salone resta «in
+verifica» finché il titolare non riapre il pannello Pagamenti. Il secondo arriva quando il titolare scollega la
 piattaforma dalla **sua** dashboard Stripe invece che da *Impostazioni →
 Pagamenti*. Il salone torna «non collegato» e le caparre in attesa perdono la
 scadenza: un pagamento su quell'account non ci arriverebbe più, e lo slot non

@@ -22,7 +22,9 @@ export const salesApi = {
  * pagamenti. */
 export const stripeConnectApi = {
   status: () => api.get('/api/sales/stripe/connect/status'),
-  start: () => api.post('/api/sales/stripe/connect/start', {}),
+  // mode 'existing': collega un account che il titolare ha già (OAuth);
+  // senza, il portale crea l'account e Stripe lo fa completare (Account Links).
+  start: (mode) => api.post('/api/sales/stripe/connect/start', mode ? { mode } : {}),
   callback: (body) => api.post('/api/sales/stripe/connect/callback', body),
   disconnect: () => api.del('/api/sales/stripe/connect'),
 };

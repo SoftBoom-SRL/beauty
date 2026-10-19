@@ -131,7 +131,11 @@ class StripeTestBase(TestCase):
 
     def connect_stripe(self, account="acct_salon"):
         """Il titolare collega il suo account: senza, nessun pagamento online parte."""
-        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": account})
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={
+            "stripe_account_id": account,
+            "stripe_details_submitted": bool(account),
+            "stripe_charges_enabled": bool(account),
+        })
         self.salon.refresh_from_db()
 
     def make_appointment(self, price="100.00", start=None, **fields):

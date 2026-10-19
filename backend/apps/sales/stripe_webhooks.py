@@ -71,6 +71,8 @@ def handle_event(event: dict) -> None:
         on_setup_intent_succeeded(obj, metadata, account)
     elif event_type == "account.application.deauthorized":
         on_account_deauthorized(obj, account)
+    elif event_type == "account.updated":
+        on_account_updated(obj, account)
 
 
 # ---- Revoca dal lato del titolare -----------------------------------------------
@@ -96,6 +98,34 @@ def on_account_deauthorized(obj: dict, account: str) -> None:
             "Stripe scollegato dal titolare nella dashboard Stripe: pagamenti online fermi"
             + (f", {suspended} caparre in attesa senza più scadenza" if suspended else ""),
             payload={"source": "stripe", "account_id": account, "deposits_suspended": suspended},
+        )
+
+
+_ACCOUNT_STATE_LOG = {
+    "active": "Stripe ha attivato l'account del salone: le caparre online sono pronte",
+    "pending": "Account Stripe in verifica: i pagamenti online ripartono quando Stripe ha finito",
+    "incomplete": "Stripe chiede altri dati sull'account del salone: il titolare li completa in Impostazioni → Pagamenti",
+}
+
+
+def on_account_updated(obj: dict, account: str) -> None:
+    """Stripe ha cambiato l'account di un salone: attivato, in verifica, dati mancanti.
+
+    L'account creato dal portale nasce «da completare»: è questo evento a dire
+    quando il titolare ha finito e Stripe lo ha attivato. Vale anche al
+    contrario: se Stripe sospende i pagamenti, il portale smette di mandare
+    link che la cliente non potrebbe pagare. L'evento arriva sull'account
+    stesso: l'oggetto deve essere quello dell'evento.
+    """
+    account_id = obj.get("id") or ""
+    if not account_id or (account and account != account_id):
+        return
+    for salon, state in stripe_service.save_account_state(account_id, obj):
+        log_activity(
+            salon,
+            "settings.stripe_account_updated",
+            _ACCOUNT_STATE_LOG.get(state, "Account Stripe del salone aggiornato"),
+            payload={"account_id": account_id, "state": state},
         )
 
 
