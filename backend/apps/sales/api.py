@@ -40,6 +40,7 @@ from .schemas import (
     SettleIn,
     SetupIntentOut,
     StripeConnectCallbackIn,
+    StripeConnectStartIn,
     StripeConnectStartOut,
     StripeConnectStatusOut,
     TodaySummaryOut,
@@ -238,6 +239,8 @@ def deposit_link(request, appointment_id: int, resend: bool = True):
     if appointment.status not in stripe_service.OPEN_APPOINTMENT_STATUSES:
         raise HttpError(400, "L'appuntamento non è più in agenda: nessun link da mandare")
     if not stripe_service.payments_enabled(ctx.salon):
+        # Il motivo giusto: account da collegare, oppure creato ma non ancora attivo.
+        stripe_service.require_salon_account(ctx.salon)
         raise HttpError(503, stripe_service.NOT_CONNECTED_MSG)
     stripe_service.ensure_deposit_link(appointment, resend=resend, actor=ctx.user)
     return serializers.deposit_link_out(appointment)
@@ -267,36 +270,83 @@ def client_deposit_link(request, appointment_id: int):
 
 def _connect_status(salon) -> dict:
     salon_settings = getattr(salon, "settings", None)
+    state = stripe_service.account_state(salon)
     return {
         "available": stripe_service.connect_available(),
+        "oauth_available": stripe_service.oauth_available(),
         "payments_enabled": stripe_service.payments_enabled(salon),
-        "connected": bool(getattr(salon_settings, "stripe_account_id", "")),
+        "state": state,
+        "connected": state == "active",
         "account_id": getattr(salon_settings, "stripe_account_id", "") or "",
         "connected_at": getattr(salon_settings, "stripe_connected_at", None),
     }
 
 
+_STATE_LOG = {
+    "active": "Account Stripe attivo: le caparre online arrivano sul conto del salone",
+    "pending": "Dati inviati a Stripe: l'account del salone è in verifica",
+}
+
+
+def _refresh_and_log(ctx, *, before: str) -> None:
+    """Rilegge l'account da Stripe e scrive nel registro se è diventato attivo o in verifica."""
+    stripe_service.refresh_account_state(ctx.salon)
+    ctx.salon.refresh_from_db()
+    after = stripe_service.account_state(ctx.salon)
+    if after != before and after in _STATE_LOG:
+        log_activity(
+            ctx.salon,
+            "settings.stripe_connected",
+            _STATE_LOG[after],
+            actor=ctx.user,
+            payload={"account_id": stripe_service.salon_account_id(ctx.salon), "state": after},
+        )
+
+
 @router.get("/stripe/connect/status", auth=staff_auth, response=StripeConnectStatusOut)
 def stripe_connect_status(request):
-    return _connect_status(request.auth.salon)
+    ctx = request.auth
+    # Un account non ancora attivo si rilegge da Stripe: se `account.updated`
+    # non è arrivato, il pannello resterebbe «in verifica» per sempre.
+    before = stripe_service.account_state(ctx.salon)
+    if before in ("incomplete", "pending"):
+        _refresh_and_log(ctx, before=before)
+    return _connect_status(ctx.salon)
 
 
 @router.post("/stripe/connect/start", auth=staff_auth, response=StripeConnectStartOut)
-def stripe_connect_start(request):
-    """URL a cui mandare il titolare per collegare il suo account Stripe (popup)."""
+def stripe_connect_start(request, data: StripeConnectStartIn):
+    """Pagina di Stripe dove mandare il titolare (popup).
+
+    Di base l'account lo crea il portale e il titolare lo completa su Stripe
+    (Account Links). Con `mode="existing"` collega invece un account che ha
+    già, via OAuth, se la piattaforma lo ha abilitato.
+    """
     ctx = request.auth
     require_owner(ctx)
-    redirect_uri = f"{django_settings.FRONTEND_ORIGIN.rstrip('/')}/stripe-connect/done"
-    return {"url": stripe_service.connect_authorize_url(ctx.salon, redirect_uri)}
+    origin = django_settings.FRONTEND_ORIGIN.rstrip("/")
+    if data.mode == "existing":
+        return {"url": stripe_service.connect_authorize_url(ctx.salon, f"{origin}/stripe-connect/done")}
+    url = stripe_service.connect_onboarding_url(
+        ctx.salon,
+        email=getattr(ctx.user, "email", "") or "",
+        refresh_url=f"{origin}/stripe-connect/start",
+        return_url=f"{origin}/stripe-connect/done",
+    )
+    return {"url": url}
 
 
 @router.post("/stripe/connect/callback", auth=staff_auth, response=StripeConnectStatusOut)
 def stripe_connect_callback(request, data: StripeConnectCallbackIn):
+    """Ritorno da Stripe: con `code` è l'OAuth, senza è la fine dell'onboarding (Account Links)."""
     ctx = request.auth
     require_owner(ctx)
-    account_id = stripe_service.connect_exchange(ctx.salon, data.code, data.state)
-    log_activity(ctx.salon, "settings.stripe_connected", "Account Stripe collegato", actor=ctx.user, payload={"account_id": account_id})
-    ctx.salon.refresh_from_db()
+    if data.code:
+        account_id = stripe_service.connect_exchange(ctx.salon, data.code, data.state)
+        log_activity(ctx.salon, "settings.stripe_connected", "Account Stripe collegato", actor=ctx.user, payload={"account_id": account_id})
+        ctx.salon.refresh_from_db()
+        return _connect_status(ctx.salon)
+    _refresh_and_log(ctx, before=stripe_service.account_state(ctx.salon))
     return _connect_status(ctx.salon)
 
 

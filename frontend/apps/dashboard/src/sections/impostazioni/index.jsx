@@ -209,8 +209,14 @@ export default function ImpostazioniSection() {
       {/* PAGAMENTI & CAPARRE */}
       <Group title={t('Pagamenti & caparre', 'Payments & deposits')}>
         <Row first icon="wallet" label={t('Stripe del salone', 'Salon Stripe account')}
-          sub={settings?.stripe_connected ? t('Collegato: caparre e addebiti finiscono sul tuo conto Stripe', 'Connected: deposits and charges land on your Stripe account') : t('Collega il tuo account per incassare le caparre online', 'Connect your account to collect deposits online')}
-          value={settings?.stripe_connected ? t('Connesso', 'Connected') : t('Non connesso', 'Not connected')}
+          sub={settings?.stripe_connected ? t('Collegato: caparre e addebiti finiscono sul tuo conto Stripe', 'Connected: deposits and charges land on your Stripe account')
+            : settings?.stripe_state === 'pending' ? t('Stripe sta verificando l’account del salone', 'Stripe is reviewing the salon account')
+            : settings?.stripe_state === 'incomplete' ? t('Mancano dei dati su Stripe: completa il collegamento', 'Some details are missing on Stripe: finish connecting')
+            : t('Collega il tuo account per incassare le caparre online', 'Connect your account to collect deposits online')}
+          value={settings?.stripe_connected ? t('Connesso', 'Connected')
+            : settings?.stripe_state === 'pending' ? t('In verifica', 'In review')
+            : settings?.stripe_state === 'incomplete' ? t('Da completare', 'To finish')
+            : t('Non connesso', 'Not connected')}
           onClick={() => setPayOpen(true)} />
         <Row icon="clock" label={t('Caparra con scadenza', 'Deposit deadline')}
           sub={t('Libera lo slot se la caparra non viene pagata in tempo; la cliente resta fra i «da richiamare»', 'Frees the slot if the deposit is not paid in time; the client stays in “to call back”')}

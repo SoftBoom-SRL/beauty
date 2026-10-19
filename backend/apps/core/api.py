@@ -74,10 +74,16 @@ def _settings_out(s: SalonSettings) -> dict:
         "automation_delay_seconds": s.automation_delay_seconds,
         "cancel_reasons": [str(x) for x in (s.cancel_reasons or [])],
         "no_show_reasons": [str(x) for x in (s.no_show_reasons or [])],
-        "stripe_connected": bool(s.stripe_account_id),
-        "stripe_connect_available": bool(
-            django_settings.STRIPE_SECRET_KEY and django_settings.STRIPE_CONNECT_CLIENT_ID
+        # Collegato = account attivo: uno appena creato dal portale non incassa
+        # finché Stripe non lo attiva (vedi sales.stripe_service.account_state).
+        "stripe_connected": bool(s.stripe_account_id) and s.stripe_charges_enabled,
+        "stripe_state": (
+            "none" if not s.stripe_account_id
+            else "active" if s.stripe_charges_enabled
+            else "pending" if s.stripe_details_submitted
+            else "incomplete"
         ),
+        "stripe_connect_available": bool(django_settings.STRIPE_SECRET_KEY),
         "stripe_account_id": s.stripe_account_id,
     }
 

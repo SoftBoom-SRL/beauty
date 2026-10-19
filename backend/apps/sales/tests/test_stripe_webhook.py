@@ -152,7 +152,7 @@ class DuplicateDepositPaymentTests(TestCase):
 
         from .. import stripe_service
 
-        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon")
+        SalonSettings.objects.create(salon=self.salon, stripe_account_id="acct_salon", stripe_charges_enabled=True)
         self.appointment = Appointment.objects.select_related("salon", "client").get(pk=self.appointment.pk)
         stripe = Mock()
         stripe.checkout.Session.create.side_effect = [

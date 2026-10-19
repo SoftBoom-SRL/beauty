@@ -11,8 +11,8 @@ export const STRIPE_MSG = 'stripe-connect';
 
 /** Il popup Yourang (`mode` 'login' | 'connect'); null se il browser lo blocca. */
 export const openYourangPopup = (mode) => window.open(`/oauth-popup/start?mode=${mode}`, 'yourang-oauth', 'width=520,height=680');
-/** Il popup Stripe Connect; null se il browser lo blocca. */
-export const openStripePopup = () => window.open('/stripe-connect/start', 'stripe-connect', 'width=620,height=760');
+/** Il popup Stripe Connect (`mode` 'existing' = account già esistente); null se il browser lo blocca. */
+export const openStripePopup = (mode) => window.open(`/stripe-connect/start${mode === 'existing' ? '?mode=existing' : ''}`, 'stripe-connect', 'width=620,height=760');
 
 /** Dalla pagina del popup: avvisa la finestra che l'ha aperta (stessa origine). */
 export function notifyOpener(msg) {

@@ -107,7 +107,9 @@ class DepositLinkAndConnectTests(TestCase):
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_x", CLIENT_APP_ORIGIN="https://app.example.com")
     def test_link_is_created_stored_and_queued_for_the_client(self):
-        SalonSettings.objects.filter(salon=self.salon).update(stripe_account_id="acct_salon")
+        SalonSettings.objects.filter(salon=self.salon).update(
+            stripe_account_id="acct_salon", stripe_details_submitted=True, stripe_charges_enabled=True,
+        )
         self.appointment.salon = Salon.objects.get(pk=self.salon.pk)
         sessions = [
             {"url": "https://checkout.stripe.com/c/pay/cs_1"},
@@ -170,13 +172,17 @@ class DepositLinkAndConnectTests(TestCase):
         )
 
     @override_settings(STRIPE_SECRET_KEY="sk_test_x", STRIPE_CONNECT_CLIENT_ID="ca_test", FRONTEND_ORIGIN="https://beauty.example.com")
-    def test_connect_start_callback_and_disconnect(self):
+    def test_an_existing_account_connects_with_oauth_and_disconnects(self):
         from urllib.parse import parse_qs, urlparse
 
         res = self.client.get("/api/sales/stripe/connect/status", **self.auth)
         # senza account collegato niente pagamenti online, anche con la chiave
-        self.assertEqual(res.json(), {**res.json(), "available": True, "connected": False, "payments_enabled": False})
-        res = self.client.post("/api/sales/stripe/connect/start", data="{}", content_type="application/json", **self.auth)
+        self.assertEqual(res.json(), {
+            **res.json(), "available": True, "oauth_available": True, "connected": False,
+            "payments_enabled": False, "state": "none",
+        })
+        existing = json.dumps({"mode": "existing"})
+        res = self.client.post("/api/sales/stripe/connect/start", data=existing, content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 200, res.content)
         url = urlparse(res.json()["url"])
         self.assertEqual(url.netloc, "connect.stripe.com")
@@ -185,16 +191,19 @@ class DepositLinkAndConnectTests(TestCase):
         self.assertEqual(query["redirect_uri"], ["https://beauty.example.com/stripe-connect/done"])
         state = query["state"][0]
         # solo il titolare
-        res = self.client.post("/api/sales/stripe/connect/start", data="{}", content_type="application/json", **self.staff_auth)
+        res = self.client.post("/api/sales/stripe/connect/start", data=existing, content_type="application/json", **self.staff_auth)
         self.assertEqual(res.status_code, 403)
         # callback con lo state firmato
         import json as _json
 
-        with patch("stripe.OAuth.token", return_value={"stripe_user_id": "acct_123"}):
+        active = {"id": "acct_123", "details_submitted": True, "charges_enabled": True}
+        with patch("stripe.OAuth.token", return_value={"stripe_user_id": "acct_123"}), \
+                patch("stripe.Account.retrieve", return_value=active):
             res = self.client.post("/api/sales/stripe/connect/callback", data=_json.dumps({"code": "ac_x", "state": state}), content_type="application/json", **self.auth)
         self.assertEqual(res.status_code, 200, res.content)
         self.assertTrue(res.json()["connected"])
         self.assertEqual(res.json()["account_id"], "acct_123")
+        self.assertEqual(res.json()["state"], "active")
         self.assertTrue(res.json()["payments_enabled"])
         # le chiamate Stripe successive vanno sull'account collegato
         from .. import stripe_service
@@ -233,7 +242,11 @@ class DepositAccountTests(StripeTestBase):
     """05-12: rimborsi e chiusure vanno sull'account dove la caparra vive."""
 
     def _connect(self, account):
-        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"stripe_account_id": account})
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={
+            "stripe_account_id": account,
+            "stripe_details_submitted": bool(account),
+            "stripe_charges_enabled": bool(account),
+        })
         self.salon.refresh_from_db()
 
     def _pay(self, account=""):

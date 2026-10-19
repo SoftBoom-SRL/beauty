@@ -57,6 +57,8 @@ class SettingsOut(Schema):
     no_show_reasons: list[str] = []
     # Pagamenti online: Stripe Connect del salone (sola lettura, si gestisce da /api/sales/stripe/connect).
     stripe_connected: bool = False
+    # none | incomplete | pending | active (vedi sales.stripe_service.account_state)
+    stripe_state: str = "none"
     stripe_connect_available: bool = False
     stripe_account_id: str = ""
 

@@ -141,6 +141,14 @@ class SalonSettings(TimeStampedModel):
     # online e gli addebiti no-show passano su questo account.
     stripe_account_id = models.CharField(max_length=64, blank=True, default="")
     stripe_connected_at = models.DateTimeField(null=True, blank=True)
+    # Com'è l'account su Stripe (copiati da Account.details_submitted e
+    # Account.charges_enabled): un account appena creato dal portale c'è, ma
+    # finché il titolare non finisce i dati e Stripe non lo attiva non può
+    # incassare. Si paga online solo con `stripe_charges_enabled`.
+    # `db_default` come per automation_delay_seconds: il codice di prima, durante
+    # un deploy, crea le impostazioni senza queste colonne.
+    stripe_details_submitted = models.BooleanField(default=False, db_default=False)
+    stripe_charges_enabled = models.BooleanField(default=False, db_default=False)
 
     def __str__(self):
         return f"Impostazioni · {self.salon.name}"

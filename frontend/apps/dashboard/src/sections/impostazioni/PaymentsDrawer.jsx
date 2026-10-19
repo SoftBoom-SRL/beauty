@@ -36,12 +36,19 @@ export default function PaymentsDrawer({ onClose }) {
   // l'ascolto registrato una volta sola teneva il `t` dell'apertura, e il
   // toast sarebbe uscito nella lingua di allora.
   usePopupMessage(STRIPE_MSG, (m) => {
-    if (m.ok) { fireToast({ msg: t('Account Stripe collegato', 'Stripe account connected'), icon: 'check' }); loadStripe(); reload.salon().catch(() => {}); }
-    else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (m.error ? ': ' + m.error : ''), icon: 'alert' });
+    if (m.ok) {
+      // Al ritorno dall'onboarding l'account può essere già attivo, in verifica
+      // da Stripe o con dati ancora da finire: il messaggio lo dice.
+      const msg = m.state === 'pending' ? t('Dati inviati: Stripe sta verificando l’account', 'Details sent: Stripe is reviewing the account')
+        : m.state === 'incomplete' ? t('Collegamento da completare: mancano dei dati su Stripe', 'Connection to finish: some details are missing on Stripe')
+        : t('Account Stripe collegato', 'Stripe account connected');
+      fireToast({ msg, icon: m.state === 'incomplete' ? 'info' : 'check' });
+      loadStripe(); reload.salon().catch(() => {});
+    } else fireToast({ msg: t('Collegamento Stripe non riuscito', 'Stripe connection failed') + (m.error ? ': ' + m.error : ''), icon: 'alert' });
   }, [t]);
 
-  const connect = () => {
-    const popup = openStripePopup();
+  const connect = (mode) => {
+    const popup = openStripePopup(mode);
     if (!popup) fireToast({ msg: t('Popup bloccato: consenti i popup e riprova', 'Popup blocked: allow popups and retry'), icon: 'info' });
   };
   const disconnect = async () => {
@@ -73,6 +80,9 @@ export default function PaymentsDrawer({ onClose }) {
 
   const fmtMin = (m) => (m === 0 ? t('Mai', 'Never') : m < 60 ? `${m} min` : m % 60 === 0 ? `${m / 60} h` : `${Math.floor(m / 60)} h ${m % 60} min`);
   const stripeOk = !!stripe?.connected;
+  // none | incomplete (dati da finire su Stripe) | pending (Stripe verifica) | active
+  const stripeState = stripe?.state || (stripeOk ? 'active' : 'none');
+  const stripeWaiting = stripeState === 'incomplete' || stripeState === 'pending';
 
   return (
     <DkDrawer open onClose={onClose}>
@@ -85,27 +95,42 @@ export default function PaymentsDrawer({ onClose }) {
         <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamenti online', 'Online payments')}</div>
         <div className="dk-card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--hair)', marginBottom: 22 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 42, height: 42, borderRadius: 12, background: stripeOk ? 'var(--ok-tint)' : 'var(--surface-2)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-              <Icon name="wallet" size={20} color={stripeOk ? 'var(--ok)' : 'var(--muted)'} />
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: stripeOk ? 'var(--ok-tint)' : stripeWaiting ? 'var(--warn-tint)' : 'var(--surface-2)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+              <Icon name="wallet" size={20} color={stripeOk ? 'var(--ok)' : stripeWaiting ? 'var(--warn)' : 'var(--muted)'} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>Stripe</div>
-              <div className="t-sm" style={{ color: stripeOk ? 'var(--ok)' : 'var(--muted)', fontWeight: 600 }}>
-                {stripe === null ? '…' : stripeOk
-                  ? t('Collegato', 'Connected') + (stripe.account_id ? ` · ${stripe.account_id}` : '')
+              <div className="t-sm" style={{ color: stripeOk ? 'var(--ok)' : stripeWaiting ? 'var(--warn)' : 'var(--muted)', fontWeight: 600 }}>
+                {stripe === null ? '…'
+                  : stripeOk ? t('Collegato', 'Connected') + (stripe.account_id ? ` · ${stripe.account_id}` : '')
+                  : stripeState === 'pending' ? t('In verifica da Stripe', 'Under review by Stripe')
+                  : stripeState === 'incomplete' ? t('Da completare su Stripe', 'To finish on Stripe')
                   : stripe?.available ? t('Non collegato', 'Not connected') : t('Non disponibile su questa installazione', 'Not available on this installation')}
               </div>
             </div>
-            {isOwner && stripe?.available && (stripeOk
-              ? <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={() => setConfirmOff(true)}>{t('Scollega', 'Disconnect')}</button>
-              : <button className="dk-btn dk-btn--clay" onClick={connect}><Icon name="plus" size={16} color="#fff" />{t('Collega Stripe', 'Connect Stripe')}</button>)}
-          </div>
-          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
-            {t('Con l’account collegato le caparre pagate dal link finiscono direttamente sul conto Stripe del salone, e gli addebiti no-show sulla carta salvata passano da lì. Gli incassi arrivano solo a te: la piattaforma non tocca i soldi. Senza collegamento le clienti pagano la caparra in salone.', 'With a connected account, deposits paid through the link go straight to the salon’s Stripe balance, and no-show charges on saved cards go through it too. The money only ever reaches you: the platform never touches it. Without it, clients pay the deposit in the salon.')}
-            {stripe && !stripe.available && (
-              <span> {t('Chiedi al fornitore della piattaforma di abilitare Stripe Connect (chiave e client id).', 'Ask the platform provider to enable Stripe Connect (key and client id).')}</span>
+            {isOwner && stripe?.available && (
+              stripeOk ? <button className="dk-btn dk-btn--ghost" disabled={busy} onClick={() => setConfirmOff(true)}>{t('Scollega', 'Disconnect')}</button>
+              : stripeState === 'pending' ? <button className="dk-btn dk-btn--ghost" onClick={loadStripe}>{t('Aggiorna', 'Refresh')}</button>
+              : stripeState === 'incomplete' ? <button className="dk-btn dk-btn--clay" onClick={() => connect()}>{t('Completa su Stripe', 'Finish on Stripe')}</button>
+              : <button className="dk-btn dk-btn--clay" onClick={() => connect()}><Icon name="plus" size={16} color="#fff" />{t('Collega Stripe', 'Connect Stripe')}</button>
             )}
           </div>
+          <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 12, lineHeight: 1.5 }}>
+            {stripeState === 'pending'
+              ? t('Hai inviato i dati: Stripe li sta verificando, di solito in pochi minuti, a volte qualche giorno. Le caparre online partono appena l’account è attivo; fino ad allora le clienti pagano in salone.', 'You sent your details: Stripe is reviewing them, usually within minutes, sometimes a few days. Online deposits start as soon as the account is active; until then clients pay in the salon.')
+              : stripeState === 'incomplete'
+                ? t('L’account del salone è stato creato ma su Stripe mancano ancora dei dati (attività, documento, IBAN). Riprendi da dove eri rimasto con «Completa su Stripe».', 'The salon account was created but some details are still missing on Stripe (business, ID, bank account). Pick up where you left off with “Finish on Stripe”.')
+                : t('Con «Collega Stripe» si apre Stripe: crei l’account del salone con i dati dell’attività, un documento e l’IBAN. Le caparre pagate dal link e gli addebiti no-show finiscono direttamente sul conto Stripe del salone, con le commissioni Stripe a tuo carico. Gli incassi arrivano solo a te: la piattaforma non tocca i soldi. Senza collegamento le clienti pagano la caparra in salone.', '“Connect Stripe” opens Stripe: you create the salon account with your business details, an ID and your bank account. Deposits paid through the link and no-show charges go straight to the salon’s Stripe balance, with Stripe fees on you. The money only ever reaches you: the platform never touches it. Without it, clients pay the deposit in the salon.')}
+            {stripe && !stripe.available && (
+              <span> {t('Chiedi al fornitore della piattaforma di abilitare Stripe.', 'Ask the platform provider to enable Stripe.')}</span>
+            )}
+          </div>
+          {isOwner && stripe?.available && stripe?.oauth_available && stripeState === 'none' && (
+            <button type="button" onClick={() => connect('existing')} className="t-sm"
+              style={{ marginTop: 10, padding: 0, border: 0, background: 'none', color: 'var(--clay-ink)', fontWeight: 600, cursor: 'pointer', textAlign: 'left' }}>
+              {t('Hai già un account Stripe? Collega quello', 'Already have a Stripe account? Connect it')}
+            </button>
+          )}
         </div>
 
         {/* ── caparra con scadenza ── */}
