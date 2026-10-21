@@ -20,7 +20,7 @@ from ninja.errors import HttpError
 from apps.core.services import log_activity
 from common import ratelimit
 from common.auth import staff_auth
-from common.permissions import require_owner
+from common.permissions import require_owner, require_scope
 from common.schemas import OkOut
 
 from . import client as yc
@@ -73,7 +73,7 @@ def _require_config() -> None:
 def oauth_start(request):
     """Avvia il flusso "connect" (dalle impostazioni, utente loggato → collega QUESTO salone)."""
     ctx = request.auth
-    require_owner(ctx)
+    require_scope(ctx, "integrations")
     _require_config()
     return start_flow(ctx.salon, ctx.user)
 
@@ -263,7 +263,7 @@ def voice_book(request, data: VoiceAppointmentIn):
 def voice_status(request):
     """Se l'assistente vocale è attivo, e se il collegamento Yourang permette di attivarlo."""
     ctx = request.auth
-    require_owner(ctx)
+    require_scope(ctx, "integrations")
     return voice.status(ctx.salon)
 
 
@@ -274,7 +274,7 @@ def voice_install(request):
     Ripeterlo reinstalla con una chiave nuova (la precedente smette di valere).
     """
     ctx = request.auth
-    require_owner(ctx)
+    require_scope(ctx, "integrations")
     try:
         voice.install(ctx.salon, ctx.user)
     except voice.VoiceSetupError as exc:
@@ -286,6 +286,6 @@ def voice_install(request):
 def voice_uninstall(request):
     """Spegne l'assistente vocale: l'agente non può più leggere la disponibilità né prenotare."""
     ctx = request.auth
-    require_owner(ctx)
+    require_scope(ctx, "integrations")
     voice.uninstall(ctx.salon, ctx.user)
     return voice.status(ctx.salon)

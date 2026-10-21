@@ -15,6 +15,7 @@ SCOPES = [
     "team",          # Team & permessi / staff
     "activity_log",  # Registro attività
     "insights",      # Analisi dati
+    "integrations",  # Integrazione Yourang e assistente vocale (non lo scollegamento)
 ]
 
 
