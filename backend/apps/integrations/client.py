@@ -25,13 +25,12 @@ REFRESH_MARGIN = dt.timedelta(seconds=60)
 # `contacts:write` autorizza anche le scritture sul catalogo (qualsiasi scope
 # :write rende il token READ_WRITE lato Yourang; non esiste `catalogues:write`).
 # OAUTH_ e non SCOPES: SCOPES nel progetto sono i permessi dello staff
-# (common.permissions), un'altra cosa.
-# ponytail: `agents:read agents:write` (assistente vocale, voice.install) tolti
-# finché Yourang in produzione non li consente al client beauty-crm: chiederli
-# prima faceva fallire OGNI accesso e collegamento con "Scope not permitted for
-# this client". Si rimettono qui quando gli allowed_scopes del client li hanno.
+# (common.permissions), un'altra cosa. `agents:*` serve all'assistente vocale
+# (voice.install): strumenti esterni sull'org e prenotazione interna spenta. Le
+# connessioni nate prima non li hanno: il cassetto chiede di ricollegare.
 OAUTH_SCOPES = (
     "openid profile email offline_access contacts:read contacts:write events:read"
+    " agents:read agents:write"
 )
 
 
