@@ -55,6 +55,8 @@ export default function ImpostazioniSection() {
   const isOwner = !!session?.is_owner;
   const canTeam = hasScope('team');
   const canLog = hasScope('activity_log');
+  // Il titolare li ha tutti (hasScope): il permesso serve al tecnico che lo aiuta.
+  const canYourang = hasScope('integrations');
 
   const [page, setPage] = useState(null);           // 'bookings' | 'log' | 'sedi'
   const [pwOpen, setPwOpen] = useState(false);
@@ -83,7 +85,7 @@ export default function ImpostazioniSection() {
   }, [deepLink, setDeepLink]);
 
   // Stato del collegamento Yourang e risposta del popup OAuth. L'ascolto si
-  // registra subito dopo le letture, con la loro dipendenza (isOwner), come
+  // registra subito dopo le letture, con la loro dipendenza (canYourang), come
   // quando stavano nello stesso effetto, e in più `t`: registrato con il `t`
   // del momento, dopo il cambio di lingua (che si fa proprio in questa
   // pagina) il toast diceva «Yourang collegato» con la pagina in inglese
@@ -91,28 +93,31 @@ export default function ImpostazioniSection() {
   const loadYourang = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
   const loadVoice = () => voiceApi.status().then(setVoice).catch(() => setVoice(null));
   useEffect(() => {
-    if (!isOwner) return;
+    if (!canYourang) return;
     loadYourang();
     loadVoice();
+  }, [canYourang]);
+  useEffect(() => {
+    if (!isOwner) return;
     outboxApi.status().then(setOutbox).catch(() => setOutbox(null));
   }, [isOwner]);
   usePopupMessage(YOURANG_MSG, (m) => {
     if (m.ok) { fireToast({ msg: t('Yourang collegato', 'Yourang connected'), icon: 'check' }); loadYourang(); }
     else fireToast({ msg: t('Connessione a Yourang non riuscita', 'Yourang connection failed') + (m.error ? ': ' + m.error : ''), icon: 'info' });
-  }, [isOwner, t], isOwner);
+  }, [canYourang, t], canYourang);
 
   /* Collegato da poco: la prima sincronizzazione gira in background sul server.
    * Si ricontrolla ogni tanto finché non risulta fatta (o non compare un
    * errore), così la riga non resta su «in corso» fino a ricaricare la pagina. */
   const firstSyncRunning = !!yourang?.connected && !yourang?.last_sync_at && !yourang?.last_error;
   useEffect(() => {
-    if (!isOwner || !firstSyncRunning) return undefined;
+    if (!canYourang || !firstSyncRunning) return undefined;
     const timer = setInterval(() => {
       yourangApi.status().then(setYourang).catch(() => {});
       loadVoice(); // l'assistente vocale si installa all'inizio dello stesso giro
     }, 15000);
     return () => clearInterval(timer);
-  }, [isOwner, firstSyncRunning]);
+  }, [canYourang, firstSyncRunning]);
 
   const connectYourang = () => {
     const popup = openYourangPopup('connect');
@@ -235,12 +240,12 @@ export default function ImpostazioniSection() {
           onClick={() => setReasonsOpen(true)} />
       </Group>
 
-      {/* YOURANG — connessione OAuth + sync (titolare).
+      {/* YOURANG — connessione OAuth + sync (permesso «integrations»; il titolare ce l'ha).
           La riga diceva «sincronizzati» anche con la sincronizzazione ferma o
           parziale: l'errore restava solo a database (11-18, 17-13). Ora mostra
           l'ultimo errore (C9), la prima sincronizzazione ancora in corso e
           quando è avvenuta l'ultima. */}
-      {isOwner && (
+      {canYourang && (
         <Group title={t('Integrazione Yourang', 'Yourang integration')}>
           <Row first icon="globe"
             label={t('Collega Yourang', 'Connect Yourang')}

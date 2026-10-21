@@ -21,6 +21,7 @@ export const SCOPES = [
   { id: 'team', it: 'Team e permessi', en: 'Team & permissions' },
   { id: 'activity_log', it: 'Registro attività', en: 'Activity log' },
   { id: 'insights', it: 'Analisi dati', en: 'Insights' },
+  { id: 'integrations', it: 'Integrazione Yourang e assistente vocale', en: 'Yourang integration & voice assistant' },
 ];
 
 export default function RolesDrawer({ onClose }) {

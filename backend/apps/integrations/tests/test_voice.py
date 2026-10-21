@@ -61,10 +61,18 @@ class VoiceAuthTests(VoiceTestBase):
         voice.revoke_key(self.salon, None)
         self.assertEqual(self.services().status_code, 401)
 
-    def test_only_the_owner_manages_the_assistant(self):
+    def test_without_the_integrations_permission_the_assistant_is_off_limits(self):
         desk = self.staff_auth(("agenda", "settings"))
         self.assertEqual(self.client.post("/api/integrations/voice/assistant", **desk).status_code, 403)
         self.assertEqual(self.client.get("/api/integrations/voice/assistant", **desk).status_code, 403)
+        self.assertEqual(self.client.delete("/api/integrations/voice/assistant", **desk).status_code, 403)
+        self.assertEqual(self.client.get("/api/integrations/yourang/oauth/start", **desk).status_code, 403)
+
+    def test_the_technician_with_the_permission_reaches_the_assistant_not_the_disconnect(self):
+        # Il tecnico che aiuta la titolare: vede e ricollega, ma non scollega il salone.
+        tech = self.staff_auth(("integrations",))
+        self.assertEqual(self.client.get("/api/integrations/voice/assistant", **tech).status_code, 200)
+        self.assertEqual(self.client.delete("/api/integrations/yourang/connection", **tech).status_code, 403)
 
 
 @override_settings(**API_SETTINGS, PUBLIC_API_URL="https://beautyapi.test")
