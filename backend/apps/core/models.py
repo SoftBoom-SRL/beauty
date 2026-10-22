@@ -40,6 +40,14 @@ class Salon(TimeStampedModel):
         max_length=64, null=True, blank=True, unique=True, editable=False
     )
     voice_api_key_created_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # Chiave con cui uno strumento esterno (n8n, Make, Zapier) legge gli
+    # appuntamenti in arrivo per mandare messaggi per trattamento
+    # (integrations.automation_key). Separata da quella vocale: revocarne una
+    # non deve spegnere l'altra. Solo l'impronta sha256; vuota = spenta.
+    automation_api_key_hash = models.CharField(
+        max_length=64, null=True, blank=True, unique=True, editable=False
+    )
+    automation_api_key_created_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     def __str__(self):
         return self.name
