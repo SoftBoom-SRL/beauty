@@ -17,9 +17,10 @@ import PasswordDrawer from './PasswordDrawer.jsx';
 import PaymentsDrawer from './PaymentsDrawer.jsx';
 import ReasonsDrawer from './ReasonsDrawer.jsx';
 import VoiceDrawer from './VoiceDrawer.jsx';
+import AutomationKeyDrawer from './AutomationKeyDrawer.jsx';
 import { CopyField } from './lib.jsx';
 import { outboxApi } from '../../api/core.js';
-import { voiceApi, yourangApi } from '../../api/integrations.js';
+import { automationKeyApi, voiceApi, yourangApi } from '../../api/integrations.js';
 import { YOURANG_MSG, openYourangPopup, usePopupMessage } from '../../oauth/popup.js';
 
 /* Host dell'app cliente: la dashboard non può dedurlo (è un altro dominio),
@@ -70,6 +71,8 @@ export default function ImpostazioniSection() {
   const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
   const [voice, setVoice] = useState(null);       // assistente vocale: { active, created_at }
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [autoKey, setAutoKey] = useState(null);   // chiave n8n/Make/Zapier: { active, created_at }
+  const [autoKeyOpen, setAutoKeyOpen] = useState(false);
   const [outbox, setOutbox] = useState(null);     // stato consegna messaggi (OTP, conferme, promemoria)
 
   // deep link from agenda cash-up → activity log filtered to today
@@ -92,10 +95,12 @@ export default function ImpostazioniSection() {
   // (voce 44). `t` cambia solo con la lingua.
   const loadYourang = () => yourangApi.status().then(setYourang).catch(() => setYourang(null));
   const loadVoice = () => voiceApi.status().then(setVoice).catch(() => setVoice(null));
+  const loadAutoKey = () => automationKeyApi.status().then(setAutoKey).catch(() => setAutoKey(null));
   useEffect(() => {
     if (!canYourang) return;
     loadYourang();
     loadVoice();
+    loadAutoKey();
   }, [canYourang]);
   useEffect(() => {
     if (!isOwner) return;
@@ -273,6 +278,10 @@ export default function ImpostazioniSection() {
             sub={t('L’agente Yourang prenota gli appuntamenti al telefono', 'The Yourang agent books appointments over the phone')}
             value={voice?.active ? t('Attivo', 'Active') : t('Non attivo', 'Off')}
             onClick={() => setVoiceOpen(true)} />
+          <Row icon="link" label={t('Automazioni esterne', 'External automations')} tag="n8n"
+            sub={t('Chiave per n8n, Make o Zapier: leggono gli appuntamenti e mandano messaggi per trattamento', 'Key for n8n, Make or Zapier: they read appointments and send messages by treatment')}
+            value={autoKey?.active ? t('Attiva', 'Active') : t('Non attiva', 'Off')}
+            onClick={() => setAutoKeyOpen(true)} />
         </Group>
       )}
 
@@ -342,6 +351,7 @@ export default function ImpostazioniSection() {
       {payOpen && <PaymentsDrawer onClose={() => setPayOpen(false)} />}
       {reasonsOpen && <ReasonsDrawer onClose={() => setReasonsOpen(false)} />}
       {voiceOpen && <VoiceDrawer onClose={() => setVoiceOpen(false)} onChange={loadVoice} onReconnect={connectYourang} />}
+      {autoKeyOpen && <AutomationKeyDrawer onClose={() => setAutoKeyOpen(false)} onChange={loadAutoKey} />}
     </div>
   );
 }

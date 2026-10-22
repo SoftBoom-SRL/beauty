@@ -21,3 +21,11 @@ export const voiceApi = {
   install: () => api.post('/api/integrations/voice/assistant'),
   uninstall: () => api.del('/api/integrations/voice/assistant'),
 };
+
+/* Chiave per n8n / Make / Zapier: rispondono { active, created_at }, e
+ * `rotate` anche { key }, l'unica volta che la chiave si vede. */
+export const automationKeyApi = {
+  status: () => api.get('/api/integrations/automation/key'),
+  rotate: () => api.post('/api/integrations/automation/key'),
+  revoke: () => api.del('/api/integrations/automation/key'),
+};
