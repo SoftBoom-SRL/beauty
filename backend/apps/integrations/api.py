@@ -24,13 +24,14 @@ from common.permissions import require_owner, require_scope
 from common.schemas import OkOut
 
 from . import client as yc
-from . import crypto, sync, voice, webhooks
+from . import automation_key, crypto, sync, voice, webhooks
 from .connection import OrgConflict, attach_tokens, link_org, reset_remote_refs
 from .login import login_with_yourang
 from .models import YourangConnection
 from .oauth import consume_state, start_flow
 from .schemas import (
     AuthorizeOut,
+    AutomationKeyOut,
     ExchangeIn,
     StatusOut,
     VoiceAppointmentIn,
@@ -289,3 +290,47 @@ def voice_uninstall(request):
     require_scope(ctx, "integrations")
     voice.uninstall(ctx.salon, ctx.user)
     return voice.status(ctx.salon)
+
+
+# ---- Automazioni esterne: n8n, Make, Zapier leggono l'agenda (automation_key.py)
+
+
+@router.get("/automation/appointments", auth=automation_key.automation_auth)
+def automation_appointments(request, start: str, end: str):
+    """Appuntamenti confermati che iniziano fra `start` (incluso) ed `end` (escluso), massimo 7 giorni.
+
+    Autenticazione: `Authorization: Bearer <chiave>` generata in Impostazioni.
+    `start`/`end` in ISO (es. `2026-10-23T10:00:00Z`); senza fuso valgono nel fuso
+    del salone, una data sola vale la sua mezzanotte. Per ogni appuntamento:
+    cliente, `phone`, `lang`, preferenze (`whatsapp_reminders` falso = niente
+    promemoria; `wa` falso = non usa WhatsApp), orari e `services` con id e nome.
+    Uso tipico: ogni ora, la finestra da +24h a +25h, così ogni appuntamento
+    passa una volta sola.
+    """
+    return automation_key.upcoming(request.auth, start, end)
+
+
+@router.get("/automation/key", auth=staff_auth, response=AutomationKeyOut)
+def automation_key_status(request):
+    """Se la chiave per gli strumenti esterni è attiva, e da quando."""
+    ctx = request.auth
+    require_scope(ctx, "integrations")
+    return automation_key.status(ctx.salon)
+
+
+@router.post("/automation/key", auth=staff_auth, response=AutomationKeyOut)
+def automation_key_rotate(request):
+    """Genera la chiave e la restituisce una volta sola; la precedente smette subito di valere."""
+    ctx = request.auth
+    require_scope(ctx, "integrations")
+    key = automation_key.rotate_key(ctx.salon, ctx.user)
+    return {**automation_key.status(ctx.salon), "key": key}
+
+
+@router.delete("/automation/key", auth=staff_auth, response=AutomationKeyOut)
+def automation_key_revoke(request):
+    """Revoca la chiave: lo strumento esterno non legge più l'agenda."""
+    ctx = request.auth
+    require_scope(ctx, "integrations")
+    automation_key.revoke_key(ctx.salon, ctx.user)
+    return automation_key.status(ctx.salon)

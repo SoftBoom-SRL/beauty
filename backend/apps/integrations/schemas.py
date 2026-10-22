@@ -52,6 +52,17 @@ class VoiceStatusOut(Schema):
     needs_reconnect: bool
 
 
+class AutomationKeyOut(Schema):
+    """Stato della chiave per gli strumenti esterni (n8n, Make, Zapier).
+
+    `key` c'è solo nella risposta che la genera: dopo non la si rilegge più.
+    """
+
+    active: bool
+    created_at: Optional[datetime] = None
+    key: Optional[str] = None
+
+
 class VoiceAppointmentIn(Schema):
     """Prenotazione dell'agente vocale.
 
