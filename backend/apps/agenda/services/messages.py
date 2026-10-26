@@ -54,6 +54,8 @@ def _event_payload(appointment: Appointment) -> dict:
         "lang": client.lang,
         "whatsapp_reminders": client.whatsapp_reminders,
         "wa": client.wa,
+        # 'YYYY-MM-DD', '--MM-DD' se l'anno non è noto, null se manca.
+        "birthday": client.birthday_iso,
         "start": appointment.start.isoformat(),
         "end": appointment.end.isoformat(),
         "operator_id": appointment.operator_id,
