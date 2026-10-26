@@ -12,6 +12,7 @@ import { automationKeyApi } from '../../api/integrations.js';
 import { CopyField } from './lib.jsx';
 
 const ENDPOINT = API_URL + '/api/integrations/automation/appointments';
+const BIRTHDAYS = API_URL + '/api/integrations/automation/birthdays';
 
 export default function AutomationKeyDrawer({ onClose, onChange }) {
   const { t, fireToast } = useDash();
@@ -56,6 +57,9 @@ export default function AutomationKeyDrawer({ onClose, onChange }) {
 
         <div className="t-sm" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Indirizzo (GET, parametri start ed end in ISO)', 'URL (GET, start and end parameters in ISO)')}</div>
         <div style={{ marginBottom: 16 }}><CopyField value={ENDPOINT} t={t} fireToast={fireToast} /></div>
+
+        <div className="t-sm" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Compleanni (GET, parametro date AAAA-MM-GG; senza, oggi)', 'Birthdays (GET, date parameter YYYY-MM-DD; none = today)')}</div>
+        <div style={{ marginBottom: 16 }}><CopyField value={BIRTHDAYS} t={t} fireToast={fireToast} /></div>
 
         {status?.key && (
           <>

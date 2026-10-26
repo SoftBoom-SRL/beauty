@@ -310,6 +310,19 @@ def automation_appointments(request, start: str, end: str):
     return automation_key.upcoming(request.auth, start, end)
 
 
+@router.get("/automation/birthdays", auth=automation_key.automation_auth)
+def automation_birthdays(request, date: str = None):
+    """Clienti attive che compiono gli anni il giorno `date` (AAAA-MM-GG; senza, oggi nel fuso del salone).
+
+    Stessa chiave degli appuntamenti. Per ogni cliente: `client_id`,
+    `client_name`, `phone`, `lang`, `wa`, `marketing` (consenso ai messaggi
+    promozionali) e `birthday` ('AAAA-MM-GG', o '--MM-GG' se l'anno non è noto).
+    Il 28 febbraio degli anni non bisestili ci sono anche le nate il 29.
+    Uso tipico: ogni mattina alle 9, senza parametri.
+    """
+    return automation_key.birthdays(request.auth, date)
+
+
 @router.get("/automation/key", auth=staff_auth, response=AutomationKeyOut)
 def automation_key_status(request):
     """Se la chiave per gli strumenti esterni è attiva, e da quando."""
