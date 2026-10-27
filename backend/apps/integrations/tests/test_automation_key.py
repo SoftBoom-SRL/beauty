@@ -146,3 +146,46 @@ class AutomationBirthdaysTest(RealShiftsTestBase):
         self.assertEqual([r["client_id"] for r in self.fetch().json()], [self.anna.id])
         self.assertEqual(self.fetch("ieri").status_code, 400)
         self.assertEqual(self.fetch(key="yta_sbagliata").status_code, 401)
+
+
+class AutomationFirstTimeTest(RealShiftsTestBase):
+    """Prima visita al salone e prima volta di ogni trattamento."""
+
+    def setUp(self):
+        self.key = automation_key.rotate_key(self.salon, None)
+
+    def rows(self):
+        query = urlencode({"start": aware(self.day, 0).isoformat(), "end": aware(self.day, 23).isoformat()})
+        response = self.client.get(f"{URL}?{query}", HTTP_AUTHORIZATION=f"Bearer {self.key}")
+        return {r["appointment_id"]: r for r in response.json()}
+
+    @staticmethod
+    def flags(row):
+        return row["first_visit"], [s["first_time"] for s in row["services"]]
+
+    def test_first_visit_then_only_the_new_treatment_is_a_first(self):
+        first = self.book(self.anna, self.giulia, aware(self.day, 9), [(self.cut30, 30, 0)])
+        second = self.book(self.anna, self.giulia, aware(self.day, 14), [(self.cut30, 30, 0), (self.man60, 60, 0)])
+
+        rows = self.rows()
+
+        self.assertEqual(self.flags(rows[first.id]), (True, [True]))
+        self.assertEqual(self.flags(rows[second.id]), (False, [False, True]))
+
+    def test_cancelled_and_no_show_visits_do_not_count_as_history(self):
+        for hour, status in ((9, Appointment.Status.CANCELLED), (10, Appointment.Status.NO_SHOW)):
+            gone = self.book(self.anna, self.giulia, aware(self.day, hour), [(self.cut30, 30, 0)])
+            Appointment.objects.filter(pk=gone.pk).update(status=status)
+        real = self.book(self.anna, self.giulia, aware(self.day, 14), [(self.cut30, 30, 0)])
+
+        self.assertEqual(self.flags(self.rows()[real.id]), (True, [True]))
+
+    def test_imported_or_long_standing_client_is_never_a_first_and_new_treatment_is_unknown(self):
+        earlier = self.book(self.bea, self.giulia, aware(self.day, 9), [(self.cut30, 30, 0)])
+        later = self.book(self.bea, self.giulia, aware(self.day, 14), [(self.cut30, 30, 0), (self.man60, 60, 0)])
+        for origin, since in (("Import", None), ("Yourang", None), ("", self.day - dt.timedelta(days=400))):
+            Client.objects.filter(pk=self.bea.pk).update(origin=origin, since=since)
+            rows = self.rows()
+            self.assertEqual(self.flags(rows[earlier.id]), (False, [None]), origin)
+            # Il taglio lo ha fatto qui: quello si sa. La manicure no.
+            self.assertEqual(self.flags(rows[later.id]), (False, [False, None]), origin)

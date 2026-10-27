@@ -176,6 +176,9 @@ def _reconcile_contact(salon, rc: dict, by_id: dict, by_key: dict, report: SyncR
             phone=phone,
             email=email,
             yourang_contact_id=rid,
+            # Contatto che il salone aveva già: per le «prime volte» delle
+            # automazioni conta come importata (agenda.services.messages).
+            origin="Yourang",
             # `since` vuoto di proposito: è una voce della rubrica Yourang, non
             # una cliente acquisita oggi. Con since=oggi il primo collegamento
             # trasformava l'intera rubrica in «nuovi clienti» del giorno (e del

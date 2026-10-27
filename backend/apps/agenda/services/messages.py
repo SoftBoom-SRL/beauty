@@ -27,7 +27,46 @@ from django.utils.dateparse import parse_datetime
 from apps.core.models import OutboxEvent
 from apps.core.services import automation_delay_seconds, emit_event, held_events, supersede_events
 
-from ..models import Appointment
+from ..models import Appointment, AppointmentService
+
+
+# Schede arrivate da un altro sistema (import CSV o agenda, contatti Yourang):
+# clienti che il salone conosceva già, ma il cui passato qui non c'è.
+IMPORTED_ORIGINS = ("Import", "Yourang")
+
+
+def _first_times(appointment: Appointment) -> tuple[bool, dict]:
+    """(prima visita?, {service_id: prima volta di quel trattamento?}).
+
+    Conta lo storico registrato qui: le visite non annullate né no-show che
+    iniziano prima di questa. Una cliente importata, o con un «cliente dal»
+    vecchio (stessa soglia degli insight), al salone c'è già stata: non è alla
+    prima visita, e un trattamento che qui non ha mai fatto vale None (non lo
+    sappiamo), perché il suo passato è nell'altro gestionale.
+    """
+    from apps.insights.services import HISTORIC_SINCE_DAYS  # lazy: insights importa agenda
+
+    client = appointment.client
+    earlier = (
+        Appointment.objects.filter(client=client, start__lt=appointment.start)
+        .exclude(status__in=Appointment.INACTIVE_STATUSES)
+        .exclude(pk=appointment.pk)
+    )
+    known_before = set(
+        AppointmentService.objects.filter(appointment__in=earlier).values_list("service_id", flat=True)
+    )
+    historic = client.origin in IMPORTED_ORIGINS or bool(
+        client.since
+        and client.since
+        < timezone.localdate(appointment.start) - dt.timedelta(days=HISTORIC_SINCE_DAYS)
+    )
+    first_visit = not historic and not earlier.exists()
+    unknown = None if historic else True
+    services = {
+        item.service_id: (False if item.service_id in known_before else unknown)
+        for item in appointment.items.all()
+    }
+    return first_visit, services
 
 
 def _event_payload(appointment: Appointment) -> dict:
@@ -46,6 +85,7 @@ def _event_payload(appointment: Appointment) -> dict:
     promemoria all'ora vecchia. Il canale lo sceglie Yourang, rispettandole.
     """
     client = appointment.client
+    first_visit, first_time = _first_times(appointment)
     return {
         "appointment_id": appointment.id,
         "client_id": client.id,
@@ -56,6 +96,9 @@ def _event_payload(appointment: Appointment) -> dict:
         "wa": client.wa,
         # 'YYYY-MM-DD', '--MM-DD' se l'anno non è noto, null se manca.
         "birthday": client.birthday_iso,
+        # Prima visita al salone; in `services`, `first_time` per trattamento
+        # (None = non lo sappiamo: cliente importata, vedi _first_times).
+        "first_visit": first_visit,
         "start": appointment.start.isoformat(),
         "end": appointment.end.isoformat(),
         "operator_id": appointment.operator_id,
@@ -66,6 +109,7 @@ def _event_payload(appointment: Appointment) -> dict:
                 "duration_min": item.duration_min,
                 "soak_min": item.soak_min,
                 "operator_id": item.operator_id,
+                "first_time": first_time.get(item.service_id),
             }
             for item in appointment.items.select_related("service")
         ],

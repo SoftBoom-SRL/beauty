@@ -622,7 +622,10 @@ class SyncedContactSinceTests(_EventCase):
                            return_value={}):
             report = sync.sync_clients(self.conn)
         self.assertEqual(report.created, 1)
-        self.assertIsNone(Client.objects.get(yourang_contact_id="c-1").since)
+        pulled = Client.objects.get(yourang_contact_id="c-1")
+        self.assertIsNone(pulled.since)
+        # Contatto che il salone aveva già: per le automazioni mai «prima volta».
+        self.assertEqual(pulled.origin, "Yourang")
 
     def test_a_client_born_from_a_booking_keeps_since(self):
         appt = self._import("evt-new")
