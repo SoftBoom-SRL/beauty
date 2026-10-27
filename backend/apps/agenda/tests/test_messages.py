@@ -505,6 +505,6 @@ class PayloadCarriesThePreferencesTests(MessagesTestBase):
             event.payload["services"][0],
             {
                 "id": self.svc60.id, "name": self.svc60.name_it, "duration_min": 60,
-                "soak_min": 0, "operator_id": self.op1.id,
+                "soak_min": 0, "operator_id": self.op1.id, "first_time": True,
             },
         )
