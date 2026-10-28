@@ -12,7 +12,6 @@ import logging
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from apps.core.models import SalonSettings
 from apps.core.services import emit_event, log_activity
 from common import ratelimit
 from common.phone import find_client_by_phone
@@ -39,22 +38,8 @@ def record_lead(salon, data, *, first_name: str, phone: str, ip: str) -> None:
     `first_name` e `phone` arrivano già ripuliti e controllati; `ip` è quello
     del chiamante (`ratelimit.client_ip`), per il tetto per IP e per salone.
     """
-    # Il modulo raccoglie anche se il salone non ha configurato l'informativa:
-    # bloccarlo spegnerebbe la raccolta contatti alla maggior parte dei saloni
-    # attivi, ed è una decisione commerciale, non tecnica. Resta il WARNING qui
-    # e l'avviso in dashboard — il consenso senza informativa da leggere è
-    # debole, e chi lo raccoglie deve poterlo sapere.
-    # values_list().first() e non _settings(): un endpoint pubblico non deve
-    # creare righe (get_or_create) su richiesta di uno sconosciuto.
-    privacy_url = (
-        SalonSettings.objects.filter(salon=salon)
-        .values_list("privacy_policy_url", flat=True)
-        .first()
-    )
-    if not privacy_url:
-        logger.warning(
-            "hook: consenso raccolto senza informativa privacy configurata (salone=%s)", salon.slug
-        )
+    # Nessun controllo sull'informativa: senza link del salone l'app cliente
+    # mostra quella generata su /<slug>/privacy, quindi un testo c'è sempre.
 
     # Rate limit per IP, sul contatore condiviso di common.ratelimit: è una
     # UPDATE atomica sul database, mentre il vecchio leggi-poi-scrivi sulla

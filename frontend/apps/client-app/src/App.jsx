@@ -7,9 +7,11 @@ import AuthFlow from './screens/auth/AuthFlow.jsx';
 import NavBar from './components/NavBar.jsx';
 import Utility from './components/Utility.jsx';
 import Hook from './screens/Hook.jsx';
+import Privacy from './screens/Privacy.jsx';
 
 /* Il primo segmento del path è lo slug del salone (vedi shared/salon.js), il
- * secondo sceglie la pagina: /<slug> è l'app, /<slug>/hook il form contatti.
+ * secondo sceglie la pagina: /<slug> è l'app, /<slug>/hook il form contatti,
+ * /<slug>/privacy l'informativa generata.
  * Letto una volta sola: l'app non naviga via URL. */
 const PAGE = window.location.pathname.split('/').filter(Boolean)[1] || '';
 
@@ -80,12 +82,12 @@ function Root() {
   const vars = brandVars(brand);
 
   /* Form pubblico: niente shell, niente navbar, niente gate di sessione. */
-  if (PAGE === 'hook') {
+  if (PAGE === 'hook' || PAGE === 'privacy') {
     return (
       <div className="app-viewport">
         <div className="app-frame" style={{ ...vars, fontFamily: 'var(--sans)' }}>
           <div className="scroll" style={{ flex: 1, minHeight: 0, background: 'var(--paper-0)' }}>
-            <Hook />
+            {PAGE === 'hook' ? <Hook /> : <Privacy />}
           </div>
           <Toast {...toastProps} />
         </div>

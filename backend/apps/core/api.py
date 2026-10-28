@@ -67,6 +67,7 @@ def _settings_out(s: SalonSettings) -> dict:
         "flexible_window_min": s.flexible_window_min,
         "flexible_reward_pct": s.flexible_reward_pct,
         "privacy_policy_url": s.privacy_policy_url,
+        "privacy_holder": s.privacy_holder,
         "cancel_min_hours": django_settings.CLIENT_MOVE_CANCEL_MIN_HOURS,
         "timezone": django_settings.TIME_ZONE,
         "deposit_hold_minutes": s.deposit_hold_minutes,
@@ -389,6 +390,7 @@ def public_branding(request, salon: str):
         "opening_hours": st.opening_hours,
         "opening_hours_week": st.opening_hours_week or {},
         "privacy_policy_url": st.privacy_policy_url,
+        "privacy_holder": st.privacy_holder,
         "timezone": django_settings.TIME_ZONE,
         "cancel_min_hours": django_settings.CLIENT_MOVE_CANCEL_MIN_HOURS,
     }

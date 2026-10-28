@@ -94,14 +94,10 @@ export default function Hook() {
                 style={{ marginTop: 2, width: 18, height: 18, accentColor: 'var(--brand)', flex: '0 0 auto' }} />
               <span>
                 {t('Ho letto e accetto l’', 'I have read and accept the ')}
-                {/* Senza URL configurato resta testo, non un link a vuoto: il
-                  * modulo raccoglie lo stesso (scelta commerciale, vedi
-                  * public_hook) e l'avviso alla titolare sta in dashboard. */}
-                {brand.privacyUrl
-                  ? <a href={brand.privacyUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--brand)', fontWeight: 700 }}>
-                      {t('informativa privacy', 'privacy policy')}
-                    </a>
-                  : <strong>{t('informativa privacy', 'privacy policy')}</strong>}
+                {/* privacyUrl c'è sempre: il link del salone o l'informativa generata (ctx). */}
+                <a href={brand.privacyUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--brand)', fontWeight: 700 }}>
+                  {t('informativa privacy', 'privacy policy')}
+                </a>
                 {t(' del salone.', ' of the salon.')}
               </span>
             </label>

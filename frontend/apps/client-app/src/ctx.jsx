@@ -48,7 +48,9 @@ export function AppProvider({ children }) {
         address: b.address || '',
         phone: b.phone || '',
         openingHours: b.opening_hours || '',
-        privacyUrl: b.privacy_policy_url || '',
+        // Senza un link del salone si usa l'informativa generata su /<slug>/privacy.
+        privacyUrl: b.privacy_policy_url || `/${b.slug}/privacy`,
+        privacyHolder: b.privacy_holder || '',
         // La soglia di preavviso è configurabile: se il branding non la espone
         // ancora si resta sul 24 di `makeBrand`, mai su un testo fisso.
         cancelMinHours: b.cancel_min_hours,

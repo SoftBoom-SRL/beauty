@@ -18,6 +18,7 @@ export default function BrandDrawer({ onClose }) {
   const isOwner = !!session?.is_owner;
   const [color, setColor] = useState(settings?.brand_color || '#6366F1');
   const [privacyUrl, setPrivacyUrl] = useState(settings?.privacy_policy_url || '');
+  const [privacyHolder, setPrivacyHolder] = useState(settings?.privacy_holder || '');
   const [file, setFile] = useState(null);        // pending File
   const [filePreview, setFilePreview] = useState(null); // data URL of pending file
   const [saving, setSaving] = useState(false);
@@ -40,7 +41,7 @@ export default function BrandDrawer({ onClose }) {
     setSaving(true);
     try {
       if (file) await settingsApi.uploadLogo(file);
-      await settingsApi.update({ brand_color: color, privacy_policy_url: privacyUrl.trim() });
+      await settingsApi.update({ brand_color: color, privacy_policy_url: privacyUrl.trim(), privacy_holder: privacyHolder.trim() });
       await reload.salon();
       fireToast({ msg: t('Brand salvato', 'Brand saved'), icon: 'check' });
       onClose();
@@ -120,8 +121,23 @@ export default function BrandDrawer({ onClose }) {
           <span className="t-sm" style={{ color: 'var(--muted-2)', fontSize: 11.5, whiteSpace: 'nowrap' }}>{t('da Impostazioni › Orari', 'from Settings › Hours')}</span>
         </div>
 
-        {/* informativa privacy — obbligatoria nel form pubblico di raccolta contatti */}
-        <div className="t-meta" style={{ marginBottom: 10 }}>{t('Informativa privacy', 'Privacy policy')}</div>
+        {/* informativa privacy — senza link del salone l'app cliente usa quella generata su /<slug>/privacy */}
+        <div className="t-meta" style={{ marginBottom: 10 }}>{t('Titolare del trattamento', 'Data controller')}</div>
+        <textarea
+          rows={3}
+          value={privacyHolder}
+          disabled={!isOwner}
+          maxLength={400}
+          onChange={(e) => setPrivacyHolder(e.target.value)}
+          placeholder={t('Ragione sociale, P.IVA, sede, email o PEC', 'Company name, VAT no., address, email')}
+          style={{ ...inputCss, width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', opacity: isOwner ? 1 : 0.55 }}
+        />
+        <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6, marginBottom: 18 }}>
+          {t('Compare come titolare nell’informativa privacy che generiamo per le tue clienti. Il titolare dei loro dati è il salone.',
+             'Shown as data controller in the privacy policy we generate for your clients. The salon is the controller of their data.')}
+        </div>
+
+        <div className="t-meta" style={{ marginBottom: 10 }}>{t('Informativa privacy tua (facoltativa)', 'Your own privacy policy (optional)')}</div>
         <input
           type="url"
           value={privacyUrl}
@@ -131,8 +147,8 @@ export default function BrandDrawer({ onClose }) {
           style={{ ...inputCss, width: '100%', boxSizing: 'border-box', opacity: isOwner ? 1 : 0.55 }}
         />
         <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6, marginBottom: 22 }}>
-          {t('Link alla vostra informativa, mostrato nel form pubblico di raccolta contatti. Il titolare del trattamento dei dati delle clienti è il salone.',
-             'Link to your privacy policy, shown on the public contact form. The salon is the data controller for its clients.')}
+          {t('Solo se ne hai già una sul tuo sito. Se lasci vuoto usiamo quella generata.',
+             'Only if you already have one on your website. Leave empty to use the generated one.')}
         </div>
 
         {isOwner && (

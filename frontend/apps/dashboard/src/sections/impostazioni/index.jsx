@@ -195,12 +195,20 @@ export default function ImpostazioniSection() {
                  'Name, phone and email. Whoever fills it in lands in your contacts tagged “Da form”.')}
             </div>
             <CopyField value={`${CLIENT_APP_URL}/${salon.slug}/hook`} t={t} fireToast={fireToast} />
-            {!settings?.privacy_policy_url && (
+            {/* L'informativa c'è sempre (link del salone o generata): manca solo chi è il titolare. */}
+            {!settings?.privacy_policy_url && !settings?.privacy_holder && (
               <div className="t-sm" style={{ color: 'var(--danger)', marginTop: 9, lineHeight: 1.45 }}>
-                {t('Manca l’informativa privacy: il modulo raccoglie comunque, ma il consenso che stai registrando è senza un testo da leggere. Impostala in Brand & app cliente.',
-                   'Privacy policy missing: the form still collects, but the consent you are recording has no notice behind it. Set it under Brand & client app.')}
+                {t('Completa i dati del titolare (ragione sociale, P.IVA, email) in Brand & app cliente: l’informativa privacy generata per ora mostra solo nome e indirizzo del salone.',
+                   'Add the data controller details (company name, VAT no., email) under Brand & client app: the generated privacy policy currently shows only the salon name and address.')}
               </div>
             )}
+          </div>
+          <div style={{ padding: '14px 16px', borderTop: '1px solid var(--hair)' }}>
+            <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 3 }}>{t('Informativa privacy', 'Privacy policy')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 9, lineHeight: 1.45 }}>
+              {t('Già collegata all’app e al modulo. Copiala dove serve (sito, Instagram, WhatsApp).', 'Already linked from the app and the form. Copy it wherever you need it.')}
+            </div>
+            <CopyField value={settings?.privacy_policy_url || `${CLIENT_APP_URL}/${salon.slug}/privacy`} t={t} fireToast={fireToast} />
           </div>
         </Group>
       )}

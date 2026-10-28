@@ -57,9 +57,8 @@ class PublicHookTests(TestCase):
         self.assertTrue(client.categories.filter(name="Da form").exists())
 
     def test_collects_even_without_privacy_policy(self):
-        """Decisione presa, non svista: senza informativa il modulo raccoglie
-        lo stesso. Chiuderlo spegnerebbe la raccolta contatti alla maggior parte
-        dei saloni attivi. Restano il WARNING nei log e l'avviso in dashboard."""
+        """Senza link del salone vale l'informativa generata dall'app cliente
+        su /<slug>/privacy: il modulo raccoglie lo stesso."""
         self.assertEqual(self._post().status_code, 200)
         self.assertTrue(Client.objects.filter(salon=self.salon).exists())
 

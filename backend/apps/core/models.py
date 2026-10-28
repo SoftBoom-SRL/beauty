@@ -122,6 +122,10 @@ class SalonSettings(TimeStampedModel):
     # Informativa privacy del SALONE: il titolare del trattamento dei dati delle
     # clienti è il salone, non la piattaforma. Mostrata nel form pubblico /<slug>/hook.
     privacy_policy_url = models.URLField(blank=True, default="")
+    # Chi è il titolare (ragione sociale, P.IVA, sede, email/PEC), testo libero.
+    # Senza `privacy_policy_url` l'app cliente genera l'informativa su
+    # /<slug>/privacy con questi dati: molti saloni non hanno un sito.
+    privacy_holder = models.TextField(blank=True, default="")
     lastminute_discount_cap = models.PositiveSmallIntegerField(default=0)  # 0/10/20/30 %
     lastminute_monthly_budget = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     flexible_enabled = models.BooleanField(default=True)
