@@ -38,6 +38,7 @@ _SETTINGS_INT_RANGES = {
 # «#AABBCC\n» arrivava a una colonna di sette caratteri (500 su PostgreSQL).
 _BRAND_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 MAX_OPENING_HOURS_CHARS = 500
+MAX_PRIVACY_HOLDER_CHARS = 400
 
 
 def validate_url(raw: str, label: str) -> str:
@@ -110,6 +111,11 @@ def clean_settings_payload(payload: dict, current: SalonSettings) -> tuple[dict,
         payload["privacy_policy_url"] = validate_url(
             payload["privacy_policy_url"], "Indirizzo dell'informativa privacy"
         )
+    if "privacy_holder" in payload:
+        holder = str(payload["privacy_holder"] or "").strip()
+        if len(holder) > MAX_PRIVACY_HOLDER_CHARS:
+            raise HttpError(400, f"Dati del titolare troppo lunghi (max {MAX_PRIVACY_HOLDER_CHARS} caratteri)")
+        payload["privacy_holder"] = holder
     # L'invariante va verificata sui valori EFFETTIVI dopo il salvataggio, non
     # solo quando arriva il sollecito: abbassando la sola scadenza il sollecito
     # restava oltre, non partiva più e in Impostazioni continuava a comparire.

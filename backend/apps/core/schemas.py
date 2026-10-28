@@ -38,6 +38,7 @@ class SettingsOut(Schema):
     flexible_reward_pct: int
     # Informativa privacy del salone, mostrata nel form pubblico /<slug>/hook.
     privacy_policy_url: str = ""
+    privacy_holder: str = ""
     # Soglia (ore) sotto la quale una cancellazione è "tardiva" → caparra trattenuta.
     # Derivata da settings.CLIENT_MOVE_CANCEL_MIN_HOURS, sola lettura.
     cancel_min_hours: int
@@ -78,6 +79,7 @@ class SettingsIn(Schema):
     flexible_window_min: Optional[int] = None
     flexible_reward_pct: Optional[int] = None
     privacy_policy_url: Optional[str] = None
+    privacy_holder: Optional[str] = None
     deposit_hold_minutes: Optional[int] = None
     deposit_reminder_minutes: Optional[int] = None
     automation_delay_seconds: Optional[int] = None
@@ -166,6 +168,7 @@ class PublicBrandingOut(Schema):
     opening_hours: str = ""
     opening_hours_week: dict = {}
     privacy_policy_url: str = ""
+    privacy_holder: str = ""
     timezone: str = "Europe/Rome"
     # Ore minime di preavviso per spostare o annullare: l'app cliente scriveva
     # «24h» a codice fisso, e un salone con una soglia diversa prometteva alle

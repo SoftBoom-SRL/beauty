@@ -25,7 +25,7 @@ export { onColor };
  *  `cancelMinHours` è la soglia entro cui l'app non lascia più spostare o
  *  annullare: è configurabile per salone, quindi non va scritta nei testi. Il
  *  24 è solo il valore predefinito, per il branding che non la espone ancora. */
-export function makeBrand({ color, name, slug, logoUrl, address = '', phone = '', openingHours = '', privacyUrl = '', cancelMinHours = 24, type = 'serif' }) {
+export function makeBrand({ color, name, slug, logoUrl, address = '', phone = '', openingHours = '', privacyUrl = '', privacyHolder = '', cancelMinHours = 24, type = 'serif' }) {
   return {
     color,
     ink: darken(color),
@@ -37,6 +37,7 @@ export function makeBrand({ color, name, slug, logoUrl, address = '', phone = ''
     address,
     phone,
     openingHours,
+    privacyHolder, // ragione sociale, P.IVA, sede, email: titolare nell'informativa generata
     privacyUrl, // informativa privacy DEL SALONE (è lui il titolare del trattamento)
     cancelMinHours: Number(cancelMinHours) > 0 ? Number(cancelMinHours) : 24,
     type, // 'serif' | 'grotesk' — heading typography flavour

@@ -24,7 +24,7 @@ test('makeBrand: i campi del branding, con i valori predefiniti', () => {
   assert.deepEqual(b, {
     color: '#7C4A57', ink: '#59353f', tint: '#ede6e7', on: '#FFFFFF',
     name: 'The Parlour', slug: 'the-parlour', logo: null,
-    address: '', phone: '', openingHours: '', privacyUrl: '',
+    address: '', phone: '', openingHours: '', privacyUrl: '', privacyHolder: '',
     cancelMinHours: 24, type: 'serif',
   });
   assert.equal(makeBrand({ color: '#7C4A57', logoUrl: 'https://x/logo.png' }).logo, 'https://x/logo.png');

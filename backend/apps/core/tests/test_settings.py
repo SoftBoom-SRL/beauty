@@ -146,6 +146,11 @@ class SettingsApiTests(TestCase):
         self.assertEqual(SalonSettings.objects.get(salon=self.salon).brand_color, "#6366F1")
         self.assertEqual(self._put({"brand_color": "#AABBCC"}).status_code, 200)
 
+    def test_privacy_holder_is_saved_trimmed_and_capped(self):
+        ok = self._put({"privacy_holder": "  Elisir di Maria Rossi\nP.IVA 01234567890  "})
+        self.assertEqual(ok.json()["privacy_holder"], "Elisir di Maria Rossi\nP.IVA 01234567890")
+        self.assertEqual(self._put({"privacy_holder": "x" * 401}).status_code, 400)
+
     def test_privacy_policy_url_must_be_a_real_address(self):
         # Il valore è reso come href nell'app pubblica delle clienti.
         self.assertEqual(self._put({"privacy_policy_url": "javascript:alert(1)"}).status_code, 400)
