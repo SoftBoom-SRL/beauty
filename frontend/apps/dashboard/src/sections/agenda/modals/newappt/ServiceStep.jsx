@@ -6,7 +6,7 @@
 // durante la manicure: col prezzo, senza tempo), che si aggiungono col «+»
 // sotto il servizio. Gli aggiuntivi non sono fra le pillole: da soli non si
 // prenotano.
-// Con `categories` e più di dieci servizi, i servizi stanno in cartelle, una
+// Con `categories` (e almeno due categorie usate), i servizi stanno in cartelle, una
 // per categoria, come nel vecchio gestionale del salone: si apre la cartella e
 // si sceglie; cercando col filtro si vede di nuovo l'elenco intero. La
 // cartella aperta (`folder`) e «Altre…» aperto (`othersFor`) sono stato del
@@ -28,11 +28,12 @@ export default function ServiceStep({
 }) {
   const catIds = new Set((categories || []).map((c) => c.id));
   const catOf = (s) => (catIds.has(s.category_id) ? s.category_id : 'none');
-  const folders = categories && activeServices.length > 10 ? [
+  const folders = categories ? [
     ...categories.map((c) => ({ id: c.id, name: lang === 'en' && c.name_en ? c.name_en : c.name_it, color: c.color })),
     { id: 'none', name: t('Altri servizi', 'Other services'), color: null },
   ].map((f) => ({ ...f, items: activeServices.filter((s) => catOf(s) === f.id) })).filter((f) => f.items.length) : null;
-  const useFolders = !!folders && !svcQ;
+  // Una cartella sola sarebbe solo un clic in più: allora l'elenco piatto.
+  const useFolders = !!folders && folders.length > 1 && !svcQ;
   const open = useFolders ? folders.find((f) => f.id === folder) : null;
   const shown = useFolders ? (open ? open.items : []) : filteredServices;
   return (
