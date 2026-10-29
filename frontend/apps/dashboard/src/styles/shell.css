@@ -13,8 +13,7 @@
 .dk-side { width: var(--side-w); flex-shrink: 0; height: 100%; background: var(--ink); color: #fff; display: flex; flex-direction: column; padding: 22px 16px 16px; }
 .dk-logo { display: flex; align-items: center; gap: 9px; padding: 4px 10px 22px; }
 .dk-logo b { font-size: 21px; font-weight: 800; letter-spacing: -0.025em; color: #fff; }
-.dk-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; overflow-y: auto; }
-.dk-nav::-webkit-scrollbar { width: 0; }
+.dk-nav { display: flex; flex-direction: column; gap: 3px; flex: 1; overflow-y: auto; scrollbar-width: thin; }
 .dk-navitem { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 12px; color: rgba(255,255,255,0.62); font-weight: 600; font-size: 14.5px; cursor: pointer; transition: all 150ms var(--ease); text-align: left; width: 100%; position: relative; }
 .dk-navitem:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.92); }
 .dk-navitem--active { background: rgba(255,255,255,0.10); color: #fff; }
@@ -23,6 +22,15 @@
 .dk-navsection { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.32); padding: 18px 12px 8px; }
 .dk-salon { margin-top: 8px; padding: 12px; border-radius: 14px; background: rgba(255,255,255,0.07); display: flex; align-items: center; gap: 11px; cursor: pointer; transition: background 150ms; }
 .dk-salon:hover { background: rgba(255,255,255,0.11); }
+/* Schermi bassi (portatili 1366×768, zoom del browser): le voci compatte ci
+   stanno tutte; se ancora non bastano, la barra di scorrimento si vede. */
+@media (max-height: 800px) {
+  .dk-side { padding-top: 14px; }
+  .dk-logo { padding-bottom: 10px; }
+  .dk-nav { gap: 1px; }
+  .dk-navitem { padding-top: 7px; padding-bottom: 7px; }
+  .dk-navsection { padding-top: 10px; padding-bottom: 4px; }
+}
 
 /* Main */
 .dk-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; transition: padding-right 220ms var(--ease-emph); }
