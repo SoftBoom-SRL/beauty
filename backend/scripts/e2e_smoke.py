@@ -382,14 +382,14 @@ def step_05_client_books(api, ctx, args):
                        body={"items": [{"service_id": ctx["svc_book"]["id"],
                                         "operator_id": operator_id}],
                              "start": slot["start"]})
-    if appt.get("created_via") != "app":
-        raise StepFail(f"created_via atteso 'app', ottenuto {appt.get('created_via')!r}")
+    # `created_via` non è nella risposta dell'app (ClientAppointmentOut lo
+    # tiene per il salone): lo controlla lo step 06, dalla dashboard.
     ctx["appt_a"] = {"id": appt["id"], "date": day, "start": slot["start"],
-                     "operator_id": appt["operator_id"],
+                     "operator_id": operator_id,
                      "service_id": ctx["svc_book"]["id"]}
     note = "" if day == today + timedelta(days=1) else f" (adattato: {day} per rispettare policy 24h)"
     return (f"appuntamento #{appt['id']} {ctx['svc_book']['name_it']} il {day} "
-            f"{slot['start'][11:16]} op={appt['operator_id']}, created_via=app{note}")
+            f"{slot['start'][11:16]} op={operator_id}{note}")
 
 
 def step_06_dashboard_sees_it(api, ctx, args):
@@ -402,6 +402,8 @@ def step_06_dashboard_sees_it(api, ctx, args):
                 if appt["id"] == a["id"] and op["id"] == a["operator_id"]), None)
     if hit is None:
         raise StepFail(f"appuntamento #{a['id']} non presente sotto l'operatrice {a['operator_id']} in /agenda/day")
+    if hit.get("created_via") != "app":
+        raise StepFail(f"created_via atteso 'app', ottenuto {hit.get('created_via')!r}")
     _, week = api.get("/api/agenda/week", token=ctx["staff_token"],
                       params={"start": a["date"].isoformat()},
                       label="GET /api/agenda/week")
@@ -409,7 +411,7 @@ def step_06_dashboard_sees_it(api, ctx, args):
                   for day in week for appt in day["appointments"])
     if not in_week:
         raise StepFail(f"appuntamento #{a['id']} assente da /agenda/week")
-    return (f"#{a['id']} (prenotato dall'APP) visibile in dashboard: /agenda/day sotto op "
+    return (f"#{a['id']} (prenotato dall'APP, created_via=app) visibile in dashboard: /agenda/day sotto op "
             f"{a['operator_id']} (status {hit['status']}) e in /agenda/week")
 
 
@@ -617,6 +619,234 @@ def step_14_placeholders(api, ctx, args):
             f"setup-intent → 503 «{intent.get('detail', '')[:30]}» (Stripe non configurato)")
 
 
+# ---------------------------------------------------------------------------
+# Beauty Boutique (lancio 3/11): operatrice fuori competenze, pausa al volo,
+# conto con prodotto metà contanti e metà da saldare senza scontrino, cassa
+# del giorno, saldo, storico cliente, eliminazione operatrice.
+# ---------------------------------------------------------------------------
+
+
+def _unskilled_pair(operators, services):
+    """(operatrice, servizio) con un servizio che l'operatrice NON ha fra le competenze."""
+    for svc in services:
+        if not svc.get("active", True) or svc.get("is_addon"):
+            continue
+        for op in operators:
+            if op.get("service_ids") and svc["id"] not in op["service_ids"]:
+                return op, svc
+    return None, None
+
+
+def step_15_book_unskilled_operator(api, ctx, args):
+    need(ctx, "staff_token", "client_token", "app_client_id")
+    _, operators = api.get("/api/staff/", token=ctx["staff_token"], label="GET /api/staff/")
+    _, services = api.get("/api/catalog/services", token=ctx["staff_token"], label="GET /api/catalog/services")
+    op, svc = _unskilled_pair(operators, services)
+    if op is None:
+        raise StepFail("nel seed ogni operatrice fa ogni servizio: niente da provare")
+    items = [{"service_id": svc["id"], "operator_id": op["id"]}]
+    today = now_rome().date()
+    slot = None
+    for day in (today, today + timedelta(days=1)):
+        _, slots = api.get("/api/agenda/availability", token=ctx["staff_token"],
+                           params={"date": day.isoformat(), "items": json.dumps(items, separators=(",", ":"))},
+                           label="GET /api/agenda/availability (operatrice fuori competenze)")
+        if slots:
+            slot = slots[0]
+            break
+    if slot is None:
+        raise StepFail(f"nessun orario proposto per {op['first_name']} su {svc['name_it']}")
+    if slot["assignment"][0]["operator_id"] != op["id"]:
+        raise StepFail(f"lo slot va a un'altra operatrice: {short(slot)}")
+    # l'app cliente resta fra le abilitate
+    api.post("/api/agenda/client/appointments", token=ctx["client_token"], expect=400,
+             body={"items": items, "start": slot["start"]},
+             label="POST /api/agenda/client/appointments (fuori competenze → 400)")
+    _, appt = api.post("/api/agenda/appointments", token=ctx["staff_token"],
+                       body={"client_id": ctx["app_client_id"], "items": items, "start": slot["start"]},
+                       label="POST /api/agenda/appointments (fuori competenze)")
+    if appt["items"][0]["operator_id"] != op["id"]:
+        raise StepFail(f"appuntamento assegnato a un'altra: {short(appt)}")
+    ctx["bb_appt"] = appt
+    ctx["bb_op"] = op
+    return (f"{op['first_name']} non ha «{svc['name_it']}» fra le competenze: lo staff la prenota "
+            f"alle {slot['start'][11:16]} (#{appt['id']}), l'app cliente riceve 400")
+
+
+def step_16_one_off_pause(api, ctx, args):
+    need(ctx, "staff_token", "bb_op")
+    day = now_rome().date() + timedelta(days=2)
+    start = datetime.combine(day, datetime.min.time(), ROME).replace(hour=16)
+    _, pause = api.post("/api/agenda/pauses", token=ctx["staff_token"],
+                        body={"operator_id": ctx["bb_op"]["id"], "start": start.isoformat(),
+                              "duration_min": 20, "note": "pausa e2e"},
+                        label="POST /api/agenda/pauses")
+    _, day_view = api.get("/api/agenda/day", token=ctx["staff_token"], params={"date": day.isoformat()},
+                          label="GET /api/agenda/day")
+    row = next((g for g in day_view if g["operator"]["id"] == ctx["bb_op"]["id"]), None)
+    if row is None or not any(p["id"] == pause["id"] for p in row.get("pauses", [])):
+        raise StepFail("la pausa non compare nella colonna dell'operatrice")
+    return f"pausa #{pause['id']} di 20' alle 16:00 del {day} senza toccare i turni, visibile in agenda"
+
+
+def step_17_checkout_product_due_no_receipt(api, ctx, args):
+    need(ctx, "staff_token", "bb_appt")
+    appt = ctx["bb_appt"]
+    _, page = api.get("/api/inventory/products", token=ctx["staff_token"], params={"limit": 100},
+                      label="GET /api/inventory/products")
+    products = page["items"] if isinstance(page, dict) else page
+    product = next((p for p in products if p["active"] and p["usage"] in ("retail", "mixed")
+                    and D(p["stock_qty"]) >= 1 and D(p["sale_price"]) > 0), None)
+    if product is None:
+        raise StepFail("nessun prodotto in vendita con giacenza nel seed")
+    aid = appt["id"]
+    api.post(f"/api/agenda/appointments/{aid}/check-in", token=ctx["staff_token"], body={}, expect=None,
+             label="POST /api/agenda/appointments/{id}/check-in")
+    api.post(f"/api/agenda/appointments/{aid}/start", token=ctx["staff_token"], body={}, expect=None,
+             label="POST /api/agenda/appointments/{id}/start")
+    item = appt["items"][0]
+    service_price, product_price = D(item["price"]), D(product["sale_price"])
+    total = service_price + product_price
+    cash = (total / 2).quantize(CENT)
+    body = {
+        "blocks": [{"operator_id": item["operator_id"], "lines": [
+            {"line_type": "service", "service_id": item["service_id"], "qty": 1, "unit_price": str(service_price)},
+            {"line_type": "product", "product_id": product["id"], "qty": 1, "unit_price": str(product_price)},
+        ]}],
+        "payments": [{"method": "cash", "amount": str(cash)}],
+        "leave_due": True,
+        "receipt_issued": False,
+    }
+    _, out = api.post(f"/api/sales/checkout/{aid}", token=ctx["staff_token"], body=body,
+                      label="POST /api/sales/checkout/{id} (prodotto, da saldare, senza scontrino)")
+    sale = out["sale"]
+    if sale["receipt_issued"] is not False:
+        raise StepFail(f"la vendita risulta con scontrino: {short(sale)}")
+    if D(sale["total"]) != total or D(sale["amount_due"]) != total - cash:
+        raise StepFail(f"totale/da saldare errati: {short(sale)}")
+    if not any(line["line_type"] == "product" for line in sale["lines"]):
+        raise StepFail("la riga prodotto manca nel conto")
+    _, after = api.get(f"/api/inventory/products/{product['id']}", token=ctx["staff_token"],
+                       label="GET /api/inventory/products/{id}")
+    if D(after["stock_qty"]) != D(product["stock_qty"]) - 1:
+        raise StepFail("giacenza non scalata dal conto")
+    ctx["bb_sale"] = sale
+    return (f"conto #{sale['id']}: servizio €{service_price} + «{product['name']}» €{product_price}; "
+            f"€{cash} contanti, €{total - cash} da saldare, senza scontrino; giacenza scalata")
+
+
+def step_18_register_and_settle(api, ctx, args):
+    need(ctx, "staff_token", "bb_sale")
+    sale = ctx["bb_sale"]
+    today = now_rome().date().isoformat()
+    _, before = api.get("/api/sales/register", token=ctx["staff_token"], params={"date": today},
+                        label="GET /api/sales/register")
+    rows = [p for p in before["payments"] if p["sale_id"] == sale["id"]]
+    if len(rows) != 1 or rows[0]["method"] != "cash" or rows[0]["receipt_issued"] is not False:
+        raise StepFail(f"il pagamento del conto non è in cassa come atteso: {short(rows)}")
+    if D(before["no_receipt"]) < D(rows[0]["amount"]):
+        raise StepFail(f"«senza scontrino» non conta il pagamento: {short(before)}")
+    due = D(sale["amount_due"])
+    _, settled = api.post(f"/api/sales/{sale['id']}/settle", token=ctx["staff_token"],
+                          body={"payments": [{"method": "card", "amount": str(due)}]},
+                          label="POST /api/sales/{id}/settle")
+    if D(settled["amount_due"]) != 0:
+        raise StepFail(f"il conto non risulta saldato: {short(settled)}")
+    _, after = api.get("/api/sales/register", token=ctx["staff_token"], params={"date": today},
+                       label="GET /api/sales/register")
+    card_delta = D(after["by_method"].get("card", 0)) - D(before["by_method"].get("card", 0))
+    cash_delta = D(after["cash_in"]) - D(before["cash_in"])
+    if card_delta != due or cash_delta != due:
+        raise StepFail(f"la cassa non cresce del saldo (€{due}): carta +{card_delta}, incassato +{cash_delta}")
+    return (f"cassa di oggi: {len(before['payments'])} pagamenti, senza scontrino €{before['no_receipt']}; "
+            f"saldo €{due} con carta → carta +€{card_delta}, incassato +€{cash_delta}")
+
+
+def step_19_history_and_delete_operator(api, ctx, args):
+    need(ctx, "staff_token", "bb_sale", "app_client_id", "bb_op")
+    sale = ctx["bb_sale"]
+    _, hist = api.get(f"/api/clients/{ctx['app_client_id']}/history", token=ctx["staff_token"],
+                      label="GET /api/clients/{id}/history")
+    visit = next((e for e in hist["entries"] if e["kind"] == "visit" and e.get("sale")
+                  and e["sale"]["id"] == sale["id"]), None)
+    if visit is None:
+        raise StepFail("la visita pagata non è nello storico cliente")
+    methods = sorted(p["method"] for p in visit["sale"]["payments"])
+    if methods != ["card", "cash"] or visit["sale"]["receipt_issued"] is not False:
+        raise StepFail(f"storico senza pagamenti o scontrino: {short(visit['sale'])}")
+    if not any(line["line_type"] == "product" for line in visit["sale"]["lines"]):
+        raise StepFail("il prodotto non è nello storico della visita")
+    # una scheda creata per sbaglio si elimina davvero; chi ha lavorato resta in archivio
+    _, temp = api.post("/api/staff/", token=ctx["staff_token"],
+                       body={"first_name": "Prova", "last_name": "E2E", "color": "#A5B4FC", "cycle_weeks": 1, "order": 99},
+                       label="POST /api/staff/")
+    _, gone = api.request("DELETE", f"/api/staff/{temp['id']}", token=ctx["staff_token"], label="DELETE /api/staff/{id}")
+    _, kept = api.request("DELETE", f"/api/staff/{ctx['bb_op']['id']}", token=ctx["staff_token"], label="DELETE /api/staff/{id}")
+    if gone.get("deleted") is not True or kept.get("deleted") is not False:
+        raise StepFail(f"eliminazione inattesa: nuova={short(gone)} con storico={short(kept)}")
+    _, listed = api.get("/api/staff/", token=ctx["staff_token"], label="GET /api/staff/")
+    ids = {o["id"] for o in listed}
+    if temp["id"] in ids or ctx["bb_op"]["id"] in ids:
+        raise StepFail("un'operatrice eliminata compare ancora nel team")
+    return (f"storico: visita #{visit['appointment']['id']} con contanti+carta, prodotto, senza scontrino; "
+            f"operatrice nuova eliminata, {ctx['bb_op']['first_name']} (con storico) archiviata, nessuna delle due nel team")
+
+
+def step_20_vip_card(api, ctx, args):
+    """Carta VIP: credito portato dal gestionale di prima, ricarica in cassa, spesa al banco."""
+    need(ctx, "staff_token", "app_client_id")
+    tok, today = ctx["staff_token"], now_rome().date().isoformat()
+
+    def cash_in():
+        _, reg = api.get("/api/sales/register", token=tok, params={"date": today}, label="GET /api/sales/register")
+        return D(reg["cash_in"])
+
+    start = cash_in()
+    _, card = api.post("/api/marketing/gift-cards", token=tok,
+                       body={"kind": "prepaid", "value": "80.00", "recipient_client_id": ctx["app_client_id"],
+                             "imported": True},
+                       label="POST /api/marketing/gift-cards (credito già esistente)")
+    if card["payment_status"] != "paid" or D(card["balance"]) != D("80.00"):
+        raise StepFail(f"credito importato non spendibile: {short(card)}")
+    if cash_in() != start:
+        raise StepFail("il credito importato è entrato nella cassa di oggi")
+    _, card = api.post(f"/api/marketing/gift-cards/{card['id']}/top-up", token=tok,
+                       body={"amount": "50.00", "method": "card"},
+                       label="POST /api/marketing/gift-cards/{id}/top-up")
+    if D(card["balance"]) != D("130.00"):
+        raise StepFail(f"saldo dopo la ricarica errato: {short(card)}")
+    if cash_in() != start + D("50.00"):
+        raise StepFail("la ricarica non è entrata nella cassa di oggi")
+    _, wallet = api.get("/api/marketing/gift-cards", token=tok,
+                        params={"client_id": ctx["app_client_id"], "status": "active", "payment_status": "paid"},
+                        label="GET /api/marketing/gift-cards?client_id=…")
+    if not any(g["id"] == card["id"] for g in wallet["items"]):
+        raise StepFail("la carta non compare fra quelle della cliente")
+    _, products = api.get("/api/inventory/products", token=tok, params={"limit": 100},
+                          label="GET /api/inventory/products")
+    items = products["items"] if isinstance(products, dict) else products
+    product = next((p for p in items if p["active"] and p["usage"] in ("retail", "mixed")
+                    and D(p["stock_qty"]) >= 1 and D(p["sale_price"]) > 0), None)
+    if product is None:
+        raise StepFail("nessun prodotto in vendita con giacenza nel seed")
+    price = D(product["sale_price"])
+    api.post("/api/sales/pos", token=tok, body={
+        "client_id": ctx["app_client_id"],
+        "blocks": [{"operator_id": None, "lines": [
+            {"line_type": "product", "product_id": product["id"], "qty": 1, "unit_price": str(price)}]}],
+        "payments": [{"method": "gift_card", "amount": str(price), "gift_card_code": card["code"]}],
+    }, label="POST /api/sales/pos (pagata col credito)")
+    _, wallet = api.get("/api/marketing/gift-cards", token=tok, params={"client_id": ctx["app_client_id"]},
+                        label="GET /api/marketing/gift-cards?client_id=…")
+    after = next(g for g in wallet["items"] if g["id"] == card["id"])
+    if D(after["balance"]) != D("130.00") - price:
+        raise StepFail(f"saldo non scalato dalla spesa: {short(after)}")
+    if cash_in() != start + D("50.00"):
+        raise StepFail("la spesa col credito è contata come incasso")
+    return (f"credito importato €80 (cassa invariata), ricarica €50 con carta (+€50 in cassa), "
+            f"«{product['name']}» €{price} pagato col credito: saldo €{after['balance']}")
+
+
 STEPS = [
     ("Staff login (dashboard) + /auth/me", step_01_staff_login),
     ("Staff refresh token", step_02_staff_refresh),
@@ -632,6 +862,12 @@ STEPS = [
     ("KPI owner + incassi di oggi", step_12_kpis_summary),
     ("Policy 24h: cancel/move cliente <24h → 400", step_13_policy_negative),
     ("Placeholder: insights/ask 501, setup-intent 503", step_14_placeholders),
+    ("Operatrice fuori competenze: lo staff sì, l'app no", step_15_book_unskilled_operator),
+    ("Pausa al volo in agenda, senza toccare i turni", step_16_one_off_pause),
+    ("Conto con prodotto, metà da saldare, senza scontrino", step_17_checkout_product_due_no_receipt),
+    ("Cassa del giorno e saldo del conto", step_18_register_and_settle),
+    ("Storico cliente con pagamenti + eliminazione operatrice", step_19_history_and_delete_operator),
+    ("Carta VIP: credito importato, ricarica, spesa", step_20_vip_card),
 ]
 
 

@@ -156,11 +156,12 @@ def _filter_day(raw: str):
 
 
 def sales_history(
-    salon, *, kind, date_from, date_to, q, client_id, operator_id, limit, offset, due=False
+    salon, *, kind, date_from, date_to, q, client_id, operator_id, limit, offset, due=False, receipt=None
 ) -> dict:
     """Storico vendite del salone, una pagina, con i KPI {revenue, count, items_count, due_total} sul filtro.
 
-    `due` tiene solo i conti con qualcosa ancora da saldare; `due_total` è quanto
+    `due` tiene solo i conti con qualcosa ancora da saldare; `receipt` (True/False)
+    solo quelli con o senza scontrino; `due_total` è quanto
     resta da saldare sulle vendite del filtro. `limit` e `offset` arrivano già
     nei limiti che mette lo schema dell'endpoint.
     """
@@ -190,6 +191,8 @@ def sales_history(
         qs = qs.filter(lines__operator_id=operator_id)
     if due:
         qs = qs.filter(amount_due__gt=0)
+    if receipt is not None:
+        qs = qs.filter(receipt_issued=receipt)
 
     base = Sale.objects.filter(pk__in=qs.values("pk"))  # evita duplicati da join
     agg = base.aggregate(revenue=Sum("total"), count=Count("id"), due_total=Sum("amount_due"))
@@ -269,4 +272,66 @@ def day_money(salon, day: dt.date, location_id=None) -> dict:
         "to_collect": to_collect.quantize(CENT),
         "visits": len(visits),
         "closed": closed,
+    }
+
+
+def day_register(salon, day: dt.date) -> dict:
+    """La cassa di un giorno: ogni pagamento arrivato quel giorno, con i totali.
+
+    Conta il denaro quando ARRIVA (`Payment.created_at`), come `cash_movements`:
+    un saldo di un conto di ieri sta oggi, la caparra il giorno in cui è stata
+    versata. Le gift card usate sono pagamenti ma non denaro nuovo: stanno nel
+    loro metodo e `cash_in` (quello di `day_summary`) le esclude.
+
+    - `by_method`: {metodo: totale} dei pagamenti del giorno;
+    - `receipt` / `no_receipt`: gli stessi pagamenti divisi per scontrino della
+      vendita (`Sale.receipt_issued`);
+    - `refunded`: le caparre restituite quel giorno (denaro uscito);
+    - `payments`: l'elenco, dal più recente.
+    """
+    zero = Decimal("0.00")
+    start, end = day_bounds(day)
+    payments = list(
+        Payment.objects.filter(sale__salon=salon, created_at__gte=start, created_at__lt=end)
+        .select_related("sale__client", "gift_card")
+        .order_by("-created_at", "-id")
+    )
+    by_method: dict[str, Decimal] = {}
+    receipt = no_receipt = zero
+    rows = []
+    for p in payments:
+        sale = p.sale
+        by_method[p.method] = by_method.get(p.method, zero) + p.amount
+        if sale.receipt_issued:
+            receipt += p.amount
+        else:
+            no_receipt += p.amount
+        rows.append({
+            **serializers.payment_out(p),
+            "sale_id": sale.id,
+            "kind": sale.kind,
+            "client_id": sale.client_id,
+            "client_name": sale.client.full_name if sale.client_id else "",
+            "receipt_issued": sale.receipt_issued,
+            # Saldo di un conto di un altro giorno, o caparra: la cassa li
+            # mostra con un'etichetta, perché non sono il venduto di oggi.
+            "is_settlement": sale.created_at < start,
+            "is_deposit": sale.deposit_appointment_id is not None,
+        })
+    refunded = (
+        DepositRefund.objects.filter(salon=salon, created_at__gte=start, created_at__lt=end)
+        .aggregate(t=Sum("amount"))["t"]
+        or zero
+    )
+    summary = day_summary(salon, day)
+    return {
+        "date": day,
+        "sold": summary["total"],
+        "cash_in": summary["cash_in"],
+        "due_left": summary["due_left"],
+        "by_method": {k: v.quantize(CENT) for k, v in by_method.items()},
+        "receipt": receipt.quantize(CENT),
+        "no_receipt": no_receipt.quantize(CENT),
+        "refunded": refunded.quantize(CENT),
+        "payments": rows,
     }

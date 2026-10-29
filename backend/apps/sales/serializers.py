@@ -62,6 +62,7 @@ def sale_out(sale: Sale) -> dict:
         "coupon_discount": sale.coupon_discount,
         "deposit_deducted": sale.deposit_deducted,
         "amount_due": sale.amount_due,
+        "receipt_issued": sale.receipt_issued,
         "created_at": sale.created_at,
     }
 

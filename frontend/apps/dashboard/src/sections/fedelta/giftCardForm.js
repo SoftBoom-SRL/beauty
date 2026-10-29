@@ -40,7 +40,10 @@ export function giftCardMissing(f, t) {
   } else if (f.byName ? !String(f.recipientName || '').trim() : !f.recipient) {
     out.push(t('Indica chi riceve il regalo', 'Say who receives the gift'));
   }
-  if (f.paid ? !f.canCash : !f.canPayLater) {
+  if (f.imported) {
+    // il credito di prima diventa saldo spendibile: è della cassa come un incasso
+    if (!f.canCash) out.push(t('Serve il permesso «vendite» per importare un credito', 'The «sales» permission is required to import a credit'));
+  } else if (f.paid ? !f.canCash : !f.canPayLater) {
     out.push(f.paid
       ? t('Serve il permesso «vendite» per incassare', 'The «sales» permission is required to take payment')
       : t('Serve il permesso «marketing» per una carta da pagare dopo', 'The «marketing» permission is required for a card paid later'));
@@ -61,8 +64,10 @@ export function giftCardPayload(f, today) {
     buyer_client_id: prepaid ? (client ? client.id : null) : (f.buyer ? f.buyer.id : null),
     recipient_client_id: client ? client.id : null,
     recipient_name: client ? client.full_name : (prepaid ? '' : String(f.recipientName || '').trim()),
-    paid: !!f.paid,
-    paid_method: f.paid ? f.paidMethod : '',
+    paid: !f.imported && !!f.paid,
+    paid_method: !f.imported && f.paid ? f.paidMethod : '',
+    // Credito già versato nel gestionale di prima: spendibile, ma non è un incasso di oggi.
+    ...(f.imported ? { imported: true } : {}),
     delivery_date: !prepaid && f.scheduled && f.deliveryDate ? f.deliveryDate : null,
     // oggi in salone + n mesi (senza sforare a fine mese), alle 23:59 del salone
     expires_at: f.expiryMonths ? expiryInMonthsIso(f.expiryMonths, today) : null,

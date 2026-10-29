@@ -6,6 +6,13 @@
 // durante la manicure: col prezzo, senza tempo), che si aggiungono col «+»
 // sotto il servizio. Gli aggiuntivi non sono fra le pillole: da soli non si
 // prenotano.
+// Con `categories` (e almeno due categorie usate), i servizi stanno in cartelle, una
+// per categoria, come nel vecchio gestionale del salone: si apre la cartella e
+// si sceglie; cercando col filtro si vede di nuovo l'elenco intero. La
+// cartella aperta (`folder`) e «Altre…» aperto (`othersFor`) sono stato del
+// pannello che la contiene. Con `allOps`, «Altre…» sotto
+// un servizio mostra anche chi di solito non lo fa: il banco può affidarglielo
+// a mano (il server lo accetta solo dallo staff).
 // `stepRef` è la ref del passo (la checklist del piede ci porta).
 import { Avatar, Icon, fmtDur, fmtEur } from '@youty/shared';
 import { addonGroups, firstName, isAddonRow } from '../../lib.js';
@@ -17,7 +24,18 @@ export default function ServiceStep({
   stepRef, items, activeServices, filteredServices, svcQ, setSvcQ, inputCss, isSelected, toggleService, eligibleOps, svcColor, svcOf,
   svcName, giftFor, selSlot, assignedName, removeItem, setItemOp, onClose, setTab, t, lang,
   addonServices = [], addAddon = null, addonFor = null, setAddonFor = () => {},
+  categories = null, allOps = [], folder = null, setFolder = () => {}, othersFor = null, setOthersFor = () => {},
 }) {
+  const catIds = new Set((categories || []).map((c) => c.id));
+  const catOf = (s) => (catIds.has(s.category_id) ? s.category_id : 'none');
+  const folders = categories ? [
+    ...categories.map((c) => ({ id: c.id, name: lang === 'en' && c.name_en ? c.name_en : c.name_it, color: c.color })),
+    { id: 'none', name: t('Altri servizi', 'Other services'), color: null },
+  ].map((f) => ({ ...f, items: activeServices.filter((s) => catOf(s) === f.id) })).filter((f) => f.items.length) : null;
+  // Una cartella sola sarebbe solo un clic in più: allora l'elenco piatto.
+  const useFolders = !!folders && folders.length > 1 && !svcQ;
+  const open = useFolders ? folders.find((f) => f.id === folder) : null;
+  const shown = useFolders ? (open ? open.items : []) : filteredServices;
   return (
     <div ref={stepRef} style={{ marginBottom: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -26,12 +44,37 @@ export default function ServiceStep({
           <input value={svcQ} onChange={(e) => setSvcQ(e.target.value)} placeholder={t('Filtra…', 'Filter…')} style={{ ...inputCss, marginLeft: 'auto', width: 130, padding: '5px 9px', fontSize: 12.5, marginBottom: 8 }} />
         )}
       </div>
+      {useFolders && !open && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+          {folders.map((f) => {
+            const picked = f.items.filter((s) => isSelected(s.id)).length;
+            const c = f.color || 'var(--clay)';
+            return (
+              <button key={f.id} type="button" data-folder={f.id} onClick={() => setFolder(f.id)}
+                style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 12px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', border: `1.5px solid color-mix(in srgb, ${c} 45%, transparent)`, background: `color-mix(in srgb, ${c} 16%, var(--surface))` }}>
+                <Icon name="archive" size={17} color="var(--ink-2)" />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                  <span className="t-sm" style={{ color: 'var(--muted)', fontSize: 11.5 }}>
+                    {f.items.length} {t('servizi', 'services')}{picked ? ' · ' + picked + ' ' + t('scelti', 'picked') : ''}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {open && (
+        <button type="button" onClick={() => setFolder(null)} className="dk-pill" style={{ padding: '4px 10px', fontSize: 12, marginBottom: 8 }}>
+          <Icon name="chevL" size={12} />{t('Categorie', 'Categories')} · <b>{open.name}</b>
+        </button>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {/* La pillola prende il colore del servizio (il suo, o della
             categoria), pieno: è lo stesso codice colore dei blocchi in
             agenda, e con il solo pallino il servizio si leggeva solo
             parola per parola. */}
-        {filteredServices.map((s) => {
+        {shown.map((s) => {
           const on = isSelected(s.id);
           const noOps = !eligibleOps(s.id).length;
           const cat = svcColor(s);
@@ -55,7 +98,7 @@ export default function ServiceStep({
             </button>
           );
         })}
-        {!filteredServices.length && <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('Nessun servizio corrisponde', 'No service matches')}</span>}
+        {!useFolders && !filteredServices.length && <span className="t-sm" style={{ color: 'var(--muted-2)' }}>{t('Nessun servizio corrisponde', 'No service matches')}</span>}
       </div>
 
       {items.length > 0 && (
@@ -64,6 +107,9 @@ export default function ServiceStep({
             const s = svcOf(it.service_id);
             if (!s) return null;
             const eligible = eligibleOps(it.service_id);
+            const others = allOps.filter((o) => !eligible.some((e) => e.id === o.id));
+            const chosenOther = others.find((o) => o.id === it.operator_id);
+            const showOthers = othersFor === it.key || !!chosenOther;
             const assigned = it.operator_id === null && selSlot ? assignedName(it.service_id) : null;
             const picking = addonFor === it.key;
             const gift = giftFor(s.id);
@@ -100,7 +146,30 @@ export default function ServiceStep({
                       </button>
                     );
                   })}
-                  {!eligible.length && (
+                  {showOthers && others.map((o) => {
+                    const on = o.id === it.operator_id;
+                    return (
+                      <button key={o.id} type="button" onClick={() => setItemOp(it.key, o.id)} className={'dk-pill dk-pill--tint' + (on ? ' dk-pill--on' : '')}
+                        title={t(`${o.first_name} di solito non fa questo servizio`, `${o.first_name} doesn't usually do this service`)}
+                        style={{ ...pillVars(o.color || 'var(--clay)'), padding: '3px 10px 3px 4px', fontSize: 12, borderStyle: 'dashed', opacity: on ? 1 : 0.8 }}>
+                        <Avatar initials={o.initials} size={20} color={o.color || 'var(--clay)'} ring={on} />
+                        <span>{o.first_name}</span>
+                        <Icon name={on ? 'check' : 'alert'} size={12} stroke={2.4} />
+                      </button>
+                    );
+                  })}
+                  {others.length > 0 && !showOthers && (
+                    <button type="button" onClick={() => setOthersFor(it.key)} className="dk-pill" style={{ padding: '4px 10px', fontSize: 12, borderStyle: 'dashed' }}
+                      title={t('Affida il servizio a chi di solito non lo fa', 'Give the service to someone who doesn’t usually do it')}>
+                      {t('Altre…', 'Others…')}
+                    </button>
+                  )}
+                  {chosenOther && (
+                    <span className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, width: '100%' }}>
+                      {t(`${chosenOther.first_name} di solito non fa questo servizio: scelta a mano`, `${chosenOther.first_name} doesn't usually do this service: picked by hand`)}
+                    </span>
+                  )}
+                  {!eligible.length && !chosenOther && (
                     <span className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                       <Icon name="alert" size={13} color="var(--danger)" />{t('Nessuna operatrice abilitata a questo servizio', 'No stylist can perform this service')}
                       <button type="button" onClick={() => { onClose?.(); setTab('staff'); }} style={{ color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>{t('Abilita in Staff', 'Enable in Staff')}</button>

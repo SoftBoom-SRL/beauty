@@ -47,7 +47,7 @@ class PlanStep(NamedTuple):
     addon: bool = False
 
 
-def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_service_ids=()):
+def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_service_ids=(), any_operator: bool = False):
     """Piano della ricerca: per ogni voce un `PlanStep` (servizio, candidate, attivo, posa, gruppo).
 
     None se una voce non ha nessuna operatrice possibile: allora non c'è orario.
@@ -71,6 +71,10 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
     Aggiuntivi: per una prenotazione nuova sono i servizi `is_addon`, a durata
     e posa 0, e come alla conferma non possono stare da soli né in testa (422);
     spostando una visita sono le sue voci senza tempo.
+
+    `any_operator` (ricerca del banco): l'operatrice indicata a mano si cerca
+    anche se il servizio non è fra le sue competenze, come la conferma
+    (`resolution._chain_step`) gliel'assegna.
     """
     operator_by_id = {op.id: op for op in operators}
     keep = set(keep_service_ids or ())
@@ -84,7 +88,7 @@ def _slot_plan(salon, items: list[dict], operators, *, moving: bool, keep_servic
         group = None
         if requested and requested in operator_by_id:
             operator = operator_by_id[requested]
-            candidates = [operator] if operator.id in eligible_ids or moving else []
+            candidates = [operator] if operator.id in eligible_ids or moving or any_operator else []
         elif requested and moving:
             # L'operatrice della visita non è più in organico (o lavora in
             # un'altra sede): si cerca fra le altre idonee invece di non
@@ -184,7 +188,8 @@ def _chain_at(plan, windows, busy, tick: int, bands):
 
 
 def _search_context(
-    salon, day: dt.date, items: list[dict], location, *, exclude_appointment_id, keep_service_ids
+    salon, day: dt.date, items: list[dict], location, *, exclude_appointment_id, keep_service_ids,
+    any_operator: bool = False,
 ):
     """(piano, finestre di turno, impegni) per cercare in quel giorno; None se una voce non ha operatrici.
 
@@ -198,6 +203,7 @@ def _search_context(
     plan = _slot_plan(
         salon, items, operators,
         moving=exclude_appointment_id is not None, keep_service_ids=keep_service_ids,
+        any_operator=any_operator,
     )
     if plan is None:
         return None
@@ -214,6 +220,7 @@ def get_free_slots(
     *,
     exclude_appointment_id: int | None = None,
     keep_service_ids=(),
+    any_operator: bool = False,
 ) -> list[dict]:
     """Slot liberi per una sequenza di servizi.
 
@@ -229,6 +236,7 @@ def get_free_slots(
     stesso orario non verrebbe mai riproposto) e le operatrici delle righe si
     trattano come in `_slot_plan`.
     keep_service_ids: servizi già sulla visita, ammessi anche se disattivati.
+    any_operator: ricerca del banco, vedi `_slot_plan`.
 
     Griglia dall'intervallo fasce orarie del salone (SalonSettings.slot_interval_min,
     default settings.AGENDA_SLOT_STEP_MIN). Un orario t è valido se i servizi
@@ -248,6 +256,7 @@ def get_free_slots(
     context = _search_context(
         salon, date, items, location,
         exclude_appointment_id=exclude_appointment_id, keep_service_ids=keep_service_ids,
+        any_operator=any_operator,
     )
     if context is None:
         return []

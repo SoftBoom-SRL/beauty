@@ -8,6 +8,7 @@ import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
 import PaymentsPanel from './PaymentsPanel.jsx';
+import ReceiptToggle from './ReceiptToggle.jsx';
 import CouponField from './CouponField.jsx';
 import ConfirmPaymentModal from './ConfirmPaymentModal.jsx';
 import DuesBanner from './DuesBanner.jsx';
@@ -19,6 +20,7 @@ import CartLine from './cart/CartLine.jsx';
 import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
 import usePackages from './usePackages.js';
+import useClientCredit from './useClientCredit.js';
 import {
   counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
 } from './lines.js';
@@ -45,8 +47,10 @@ export default function CartTab({ onGoHistory }) {
   const [cart, setCart] = useState([]);
   const [globalDisc, setGlobalDisc] = useState(0);
   const [clientSel, setClientSel] = useState(null);
+  const credit = useClientCredit(clientSel?.id ?? null, canSell);
   const [sellerId, setSellerId] = useState(() => operators[0]?.id ?? null);
   const [pay, setPay] = useState(emptyPayments());
+  const [receipt, setReceipt] = useState(true);   // scontrino emesso
   const [giftAmt, setGiftAmt] = useState('50');
   const [giftName, setGiftName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -157,6 +161,7 @@ export default function CartTab({ onGoHistory }) {
         payments: resolvePayments(pay, totalCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
         ...(leftCents > 0 ? { leave_due: true } : {}),
+        receipt_issued: receipt,
       });
       setDone(sale);
       refreshProducts();  // le giacenze sono cambiate: il banco deve vederlo subito
@@ -171,7 +176,7 @@ export default function CartTab({ onGoHistory }) {
 
   const reset = () => {
     setCart([]); setClientSel(null); setGlobalDisc(0); setQ('');
-    setPay(emptyPayments()); setGiftAmt('50'); setGiftName(''); setDone(null); setConfirmOpen(false);
+    setPay(emptyPayments()); setReceipt(true); setGiftAmt('50'); setGiftName(''); setDone(null); setConfirmOpen(false);
     setCoupon(null); setCouponCode(''); setCouponErr(null);
   };
 
@@ -272,7 +277,8 @@ export default function CartTab({ onGoHistory }) {
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} cards={credit} />
+            <ReceiptToggle value={receipt} onChange={setReceipt} t={t} style={{ marginTop: 12 }} />
           </div>
         </div>
 

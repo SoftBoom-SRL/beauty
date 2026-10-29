@@ -253,6 +253,8 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove, rowRef, onCl
   /* ---- servizi: si scelgono e si tolgono come in «Nuova prenotazione»
    * (prima ogni clic aggiungeva un'altra copia dello stesso servizio) ---- */
   const [svcQ, setSvcQ] = useState('');
+  const [svcFolder, setSvcFolder] = useState(null);
+  const [othersFor, setOthersFor] = useState(null);
   const filteredServices = activeServices.filter((s) => !svcQ || svcName(s, lang).toLowerCase().includes(svcQ.toLowerCase()));
   const isSelected = (sid) => row.items.some((x) => x.service_id === sid);
   const setItems = (fn) => onPatch((r) => ({ items: typeof fn === 'function' ? fn(r.items) : fn, selStart: null }));
@@ -368,6 +370,8 @@ function GroupRow({ row, index, canRemove, busy, onPatch, onRemove, rowRef, onCl
           inputCss={inputCss} isSelected={isSelected} toggleService={toggleService} eligibleOps={eligibleOps} svcColor={svcColor}
           svcOf={svcOf} svcName={svcName} giftFor={giftFor} selSlot={selSlot} assignedName={assignedName} removeItem={removeItem}
           setItemOp={setItemOp} onClose={onCloseDrawer} setTab={setTab} t={t} lang={lang}
+          categories={serviceCategories} allOps={operators}
+          folder={svcFolder} setFolder={setSvcFolder} othersFor={othersFor} setOthersFor={setOthersFor}
         />
 
         {/* 3. orario */}

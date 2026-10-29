@@ -66,6 +66,20 @@ class GetFreeSlotsTests(AgendaTestBase):
             )
         self.assertEqual(slots, [])
 
+    def test_the_desk_search_finds_the_operator_picked_by_hand(self):
+        # Il banco può affidare il servizio a chi di solito non lo fa: la
+        # ricerca propone i suoi orari, come la conferma glieli assegna.
+        mapping = {self.op2.id: [(9 * 60, 18 * 60)]}
+        with self._windows(mapping):
+            slots = get_free_slots(
+                self.salon,
+                self.day,
+                [{"service_id": self.svc60.id, "operator_id": self.op2.id}],
+                any_operator=True,
+            )
+        self.assertTrue(slots)
+        self.assertEqual({s["assignment"][0]["operator_id"] for s in slots}, {self.op2.id})
+
     def test_multi_service_sequential_chain(self):
         # Finestra stretta 9:00-10:00: due servizi da 30' entrano solo alle 9:00.
         mapping = {self.op1.id: [(9 * 60, 10 * 60)]}

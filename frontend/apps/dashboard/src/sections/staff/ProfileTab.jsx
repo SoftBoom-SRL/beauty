@@ -67,7 +67,7 @@ function EmploymentFields({ form, setForm, canTeam, firstWorkDay, t, lang }) {
 
 export default function ProfileTab({
   form, setForm, canTeam, canPricing, locations, initials, color, opPalette,
-  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast, firstWorkDay = null, operator = null,
+  services, serviceCategories, toggleSvc, onServiceCreated, t, lang, fireToast, firstWorkDay = null, operator = null, onDelete = null,
 }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
@@ -123,6 +123,12 @@ export default function ProfileTab({
             </div>
             <button className={'swt press' + (form.active ? ' swt--on' : '')} disabled={!canTeam} onClick={() => canTeam && setForm((f) => ({ ...f, active: !f.active }))} aria-pressed={form.active} />
           </div>
+          {onDelete && (
+            <button type="button" onClick={onDelete} data-delete-operator
+              style={{ marginTop: 10, padding: '9px 14px', borderRadius: 9, background: 'transparent', border: '1px solid var(--danger-tint)', color: 'var(--danger)', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="x" size={14} color="var(--danger)" />{t('Elimina operatrice', 'Delete stylist')}
+            </button>
+          )}
         </div>
       </div>
 

@@ -74,6 +74,7 @@ def create_appointment(
     client_overlap_ok: bool = False,
     allow_soak: bool = True,
     deposit_paid=None,
+    any_operator: bool = False,
 ) -> Appointment:
     """Crea l'appuntamento rivalidando che lo slot sia libero (altrimenti 409).
 
@@ -93,6 +94,8 @@ def create_appointment(
     non un conflitto — e l'appuntamento NON viene marcato come forzato.
     `allow_soak=False` (app cliente): nemmeno con la stilista scelta si entra
     nella posa di un'altra cliente, che resta una decisione dello staff.
+    `any_operator=True` (solo staff): l'operatrice scelta a mano può fare anche
+    un servizio che non ha fra le competenze (vedi `resolution._chain_step`).
 
     La caparra si calcola su quanto la cliente pagherà in salone, cioè al netto
     dei servizi coperti dalle sue gift card «a trattamento». Nessuna caparra per
@@ -108,6 +111,7 @@ def create_appointment(
         "location": location,
         "ignore_client_id": client.id if client_overlap_ok else None,
         "allow_soak": allow_soak,
+        "any_operator": any_operator,
     }
     forced = False
     try:
@@ -213,6 +217,7 @@ def edit_appointment(
     actor=None,
     expected_updated_at: dt.datetime | None = None,
     client_overlap_ok: bool = True,
+    any_operator: bool = False,
 ) -> Appointment:
     """Modifica i servizi e/o la nota di una visita aperta.
 
@@ -269,6 +274,7 @@ def edit_appointment(
             "keep_service_ids": {item.service_id for item in existing.values()},
             "existing_items": existing,
             "ignore_client_id": appointment.client_id if client_overlap_ok else None,
+            "any_operator": any_operator,
         }
         try:
             resolved = resolve_items_edit(appointment.salon, items, appointment.start, **kwargs)
@@ -328,6 +334,7 @@ def move_appointment(
     force: bool = False,
     allow_past: bool = True,
     client_overlap_ok: bool = False,
+    any_operator: bool = False,
 ) -> Appointment:
     """Sposta l'appuntamento (items con lo stesso delta, essendo sequenziali da start).
 
@@ -365,7 +372,7 @@ def move_appointment(
     target_operators = []
     for item in items:
         if operator is not None and item.operator_id == source_id:
-            if not item.service.operators.filter(id=operator.id).exists():
+            if not any_operator and not item.service.operators.filter(id=operator.id).exists():
                 raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
             target_operators.append(operator)
         else:
@@ -475,6 +482,7 @@ def split_appointment(
     force: bool = False,
     client_overlap_ok: bool = False,
     item_ids=None,
+    any_operator: bool = False,
 ) -> tuple[Appointment, Appointment]:
     """Stacca UN servizio da un appuntamento multi-servizio e lo sposta altrove
     (anche in un altro giorno), come appuntamento a sé della stessa cliente.
@@ -545,7 +553,7 @@ def split_appointment(
     movers = [
         (row, target if row.operator_id == item.operator_id else row.operator) for row in group
     ]
-    if operator is not None and any(
+    if operator is not None and not any_operator and any(
         (row is item or who.id != row.operator_id)
         and not row.service.operators.filter(id=who.id).exists()
         for row, who in movers

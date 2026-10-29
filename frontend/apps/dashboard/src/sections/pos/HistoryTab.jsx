@@ -12,6 +12,7 @@ import {
 } from './lib.js';
 import { lineGrossCents, paidLater, saleLineLabel } from './history.js';
 import { salesApi } from '../../api/sales.js';
+import NoReceiptBadge from './NoReceiptBadge.jsx';
 import { useDebounced } from '../../hooks/useDebounced.js';
 import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
@@ -27,6 +28,7 @@ export default function HistoryTab() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [dueOnly, setDueOnly] = useState(false);   // solo i conti con qualcosa da saldare
+  const [receipt, setReceipt] = useState('');      // '' tutte · 'true' con scontrino · 'false' senza
   const qDeb = useDebounced(q, 300);
 
   /* ---- data ---- */
@@ -41,7 +43,7 @@ export default function HistoryTab() {
 
   const params = (offset) => ({
     kind: kind || null, date_from: dateFrom || null, date_to: dateTo || null,
-    q: qDeb || null, operator_id: opId || null, due: dueOnly ? 1 : null, limit: LIMIT, offset,
+    q: qDeb || null, operator_id: opId || null, due: dueOnly ? 1 : null, receipt: receipt || null, limit: LIMIT, offset,
   });
 
   /* Biglietto della richiesta in corso (useLatestRequest): ogni fetch ne
@@ -65,7 +67,7 @@ export default function HistoryTab() {
         toastApiError(err, fireToast, t);
       })
       .finally(() => { if (req.isLatest(seq)) setLoading(false); });
-  }, [kind, dateFrom, dateTo, qDeb, opId, dueOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, dateFrom, dateTo, qDeb, opId, dueOnly, receipt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = async () => {
     const seq = req.begin();
@@ -175,6 +177,11 @@ export default function HistoryTab() {
           <option value="">{t('Tutte le operatrici', 'All stylists')}</option>
           {operators.map((o) => <option key={o.id} value={o.id}>{opName(o)}</option>)}
         </select>
+        <select value={receipt} onChange={(e) => setReceipt(e.target.value)} style={{ ...inputCss, cursor: 'pointer', minWidth: 140 }}>
+          <option value="">{t('Con e senza scontrino', 'With or without receipt')}</option>
+          <option value="true">{t('Con scontrino', 'With receipt')}</option>
+          <option value="false">{t('Senza scontrino', 'Without receipt')}</option>
+        </select>
         <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={inputCss} title={t('Dal', 'From')} />
         <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={inputCss} title={t('Al', 'To')} />
         <button onClick={() => setDueOnly((v) => !v)} aria-pressed={dueOnly}
@@ -217,6 +224,7 @@ export default function HistoryTab() {
                           · <Icon name="wallet" size={13} color="var(--ok)" />{t('caparra', 'deposit')} −{money(s.deposit_deducted, lang)}
                         </span>
                       )}
+                      {s.receipt_issued === false && <NoReceiptBadge t={t} />}
                       {dueNow && (
                         <span style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>
                           {t('Da saldare', 'Left to pay')} {money(s.amount_due, lang)}

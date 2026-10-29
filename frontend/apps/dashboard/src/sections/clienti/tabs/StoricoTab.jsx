@@ -11,6 +11,8 @@ import { NoteCard, NoteComposer } from '../NoteBits.jsx';
 import { dateLabel, depositBadge, sheetVal, timelineDate, visitPaidState } from '../helpers.js';
 import { clientsApi } from '../../../api/clients.js';
 import { useOnModalClosed } from '../../../hooks/useOnModalClosed.js';
+import { methodLabel } from '../../pos/lib.js';
+import NoReceiptBadge from '../../pos/NoReceiptBadge.jsx';
 
 export default function StoricoTab({ c }) {
   const { t, lang, fireToast, hasScope, openModal, modal } = useDash();
@@ -128,6 +130,7 @@ export default function StoricoTab({ c }) {
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 700, fontSize: 14 }}>{t('Vendita al banco', 'Counter sale')}</div>
                         <div className="t-sm" style={{ color: 'var(--muted)' }}>{timeLabel(minutesOfDay(e.date))}</div>
+                        <SaleMeta sale={e.sale} t={t} lang={lang} />
                       </div>
                       <span className="t-num" style={{ fontSize: 16, fontWeight: 700 }}>{fmtEur(Number(e.sale.total), lang)}</span>
                     </div>
@@ -190,6 +193,7 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
               </div>
             ))}
           </div>
+          {e.sale && !saleHidden && <SaleMeta sale={e.sale} t={t} lang={lang} extrasOnly />}
           {a.note && <div style={{ marginTop: 8, padding: '7px 10px', background: 'var(--warn-tint)', borderRadius: 8, fontSize: 13, color: 'var(--ink-2)', display: 'flex', gap: 7 }}><Icon name="info" size={13} color="var(--warn)" style={{ marginTop: 2, flexShrink: 0 }} /><span>{a.note}</span></div>}
           {a.cancel_reason && <div className="t-sm" style={{ marginTop: 6, color: 'var(--danger)' }}>{t('Motivo', 'Reason')}: {a.cancel_reason}</div>}
         </div>
@@ -227,6 +231,32 @@ function VisitCard({ e, lang, t, upcoming, canWrite, salesHidden, composerOpen, 
           <button type="button" className="dk-btn dk-btn--ghost" style={{ height: 30, fontSize: 12, padding: '0 10px' }} onClick={onSheet}><Icon name="edit" size={13} />{e.sheets?.length ? t('Scheda tecnica', 'Technical sheet') : t('Compila scheda tecnica', 'Fill technical sheet')}</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---- un conto: le righe (per una visita solo quelle oltre i servizi, che la
+ * visita mostra già), come è stato pagato e se ha lo scontrino ---- */
+function SaleMeta({ sale, t, lang, extrasOnly }) {
+  const lines = (sale.lines || []).filter((l) => !extrasOnly || l.line_type !== 'service');
+  const name = (l) => l.product_name || l.service_name || l.package_name || (l.line_type === 'gift_card' ? t('Gift card', 'Gift card') + (l.gift_card_code ? ' ' + l.gift_card_code : '') : '');
+  return (
+    <div style={{ marginTop: 6 }}>
+      {lines.map((l) => (
+        <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13.5 }}>
+          <Icon name={l.line_type === 'product' ? 'box' : l.line_type === 'gift_card' ? 'gift' : l.line_type === 'package' ? 'tag' : 'scissors'} size={13} color="var(--muted-2)" />
+          <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{name(l)}{l.qty > 1 ? ' × ' + l.qty : ''}</span>
+          <span className="t-num" style={{ marginLeft: 'auto', fontSize: 13.5 }}>{fmtEur(Number(l.amount), lang)}</span>
+        </div>
+      ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 5 }}>
+        {(sale.payments || []).map((p) => (
+          <span key={p.id} style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)', background: 'var(--surface-2)', padding: '2px 8px', borderRadius: 99 }}>
+            {methodLabel(p.method, t)} · {fmtEurNoFree(p.amount, lang)}
+          </span>
+        ))}
+        {sale.receipt_issued === false && <NoReceiptBadge t={t} />}
+      </div>
     </div>
   );
 }

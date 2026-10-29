@@ -93,9 +93,10 @@ class AddonBookingTests(AddonTestBase):
         body = self.visit([item(self.man60, self.marta), item(self.scrub)])
         self.assertEqual([i["operator_id"] for i in body["items"]], [self.marta.id, self.giulia.id])
 
-    def test_an_operator_who_cannot_do_the_addon_is_refused(self):
+    def test_the_desk_can_give_the_addon_to_who_does_not_usually_do_it(self):
+        # Scelta a mano dal banco: si può (Beauty Boutique, 10/2026).
         res = self.create([item(self.man60, self.giulia), item(self.scrub, self.marta)])
-        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(res.status_code, 200, res.content)
 
     def test_an_addon_alone_or_first_is_refused_even_forcing(self):
         for items, message in (
@@ -353,14 +354,14 @@ class AddonMoveTests(AddonTestBase):
         self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual([i["operator_id"] for i in res.json()["items"]], [self.marta.id, self.marta.id])
 
-    def test_a_colleague_who_cannot_do_the_addon_cannot_take_the_column(self):
+    def test_a_colleague_who_does_not_usually_do_the_addon_can_take_the_column(self):
         visit = self.visit([item(self.man60, self.giulia), item(self.scrub)])
         res = self.post(
             f"/api/agenda/appointments/{visit['id']}/move",
             {"start": visit["start"], "operator_id": self.marta.id, "from_operator_id": self.giulia.id},
             self.desk,
         )
-        self.assertEqual(res.status_code, 400, res.content)
+        self.assertEqual(res.status_code, 200, res.content)
 
     def test_the_addon_instant_inside_another_booking_is_no_conflict(self):
         # Bea con Giulia dalle 10:40; Anna: colore (30' + 20' di posa) e nail
@@ -429,11 +430,9 @@ class AddonSplitTests(AddonTestBase):
         self.assertEqual(res.status_code, 400, res.content)
         self.assertIn("usa «Sposta»", res.json()["detail"])
 
-    def test_a_colleague_must_be_able_to_do_the_addons_she_receives(self):
+    def test_the_desk_can_split_to_a_colleague_who_does_not_usually_do_the_addon(self):
         visit = self.visit([item(self.man60, self.giulia), item(self.scrub), item(self.cut30, self.giulia)])
         res = self.split(visit, visit["items"][0]["id"], operator_id=self.marta.id)
-        self.assertEqual(res.status_code, 400, res.content)
-        res = self.split(visit, visit["items"][0]["id"], operator_id=self.giulia.id)
         self.assertEqual(res.status_code, 200, res.content)
 
 

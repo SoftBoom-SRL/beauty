@@ -191,9 +191,9 @@ export function useAgendaMutations({
    * l'agenda nel momento di punta. Resta l'avviso normale dello spostamento,
    * con «Annulla». */
   const onInvalidDrop = (verdict, d, intent) => {
-    // L'idoneità non si forza: il server rifiuta comunque (400) e forzare qui
-    // voleva dire una chiamata sicuramente persa. Si dice perché, e basta.
-    if (verdict.code === 'skill' || !canWrite || !intent) {
+    // Chi di solito non fa il servizio può riceverlo lo stesso (scelta del
+    // banco, Beauty Boutique 10/2026): si sposta, e l'avviso ha «Annulla».
+    if (!canWrite || !intent) {
       fireToast({ msg: verdict.label + (verdict.detail ? ' · ' + verdict.detail : ''), icon: 'alert' });
       return;
     }
@@ -201,7 +201,7 @@ export function useAgendaMutations({
      * staff il server il passato lo concede, e forzando subito l'appuntamento
      * restava marcato «forzato» senza bisogno. Si prova normalmente; se poi lo
      * slot non è libero davvero, il 409 fa forzare come sempre. */
-    const force = verdict.code !== 'past';
+    const force = verdict.code !== 'past' && verdict.code !== 'skill';
     if (intent.kind === 'split') {
       // Senza questo ramo lo stacco su uno slot non valido non faceva NULLA: il
       // blocco tornava al suo posto e non succedeva niente.

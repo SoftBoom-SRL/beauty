@@ -130,10 +130,10 @@ export function dayDragContext({ rows, operators, step, nowMin, t }) {
 /** Nome di battesimo dell'operatrice della colonna `opId`. */
 export const opFirstName = (ctx, opId) => firstName(ctx.rowOf(opId)?.operator?.name || '');
 
-/* Abilitazione al servizio (Staff → servizi dell'operatrice). Il server
- * rifiuta con un 400 la riassegnazione a chi non è abilitata: meglio dirlo
- * durante il trascinamento, quando si può ancora scegliere un'altra colonna.
- * Se l'elenco manca (payload vecchio) non si blocca niente. */
+/* Abilitazione al servizio (Staff → servizi dell'operatrice). Durante il
+ * trascinamento si dice se la collega di solito non lo fa: rilasciando, il
+ * servizio passa a lei lo stesso (il banco lo può decidere). Se l'elenco
+ * manca (payload vecchio) non si segnala niente. */
 export function canDo(operators, opId, serviceId) {
   const op = (operators || []).find((x) => x.id === opId);
   if (!op || !Array.isArray(op.service_ids) || !op.service_ids.length) return true;
@@ -151,7 +151,7 @@ export function skillVerdict(ctx, opId, blocks) {
   return {
     ok: false, code: 'skill',
     label: t(`${opFirstName(ctx, opId)} non fa ${bad.service_name}`, `${opFirstName(ctx, opId)} does not do ${bad.service_name}`),
-    detail: t('Abilita il servizio in Staff', 'Enable the service in Staff'),
+    detail: t('Rilascia per affidarglielo comunque', 'Drop to give it to her anyway'),
   };
 }
 

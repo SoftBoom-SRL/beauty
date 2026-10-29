@@ -76,6 +76,8 @@ class GiftCardIn(Schema):
     # Da 1 a 100, solo con `gift_service_id` (lo controlla `gift_cards`, con
     # un messaggio che dice cosa correggere).
     sessions: int = 1
+    # Credito portato dal gestionale di prima: pagata, ma senza incasso oggi.
+    imported: bool = False
 
 
 class GiftCardOut(Schema):
@@ -146,6 +148,14 @@ class GiftCardListOut(Schema):
 
 class MarkPaidIn(Schema):
     method: str = Field(max_length=20)  # come GiftCardIn.paid_method
+
+
+class TopUpIn(Schema):
+    """Ricarica di una carta a importo: quanto si carica e come lo paga la cliente."""
+
+    amount: Decimal
+    method: str = Field(max_length=20)
+    receipt_issued: bool = True
 
 
 # ---- Fedeltà -----------------------------------------------------------------

@@ -15,6 +15,7 @@ export const giftCardsApi = {
   list: (params) => api.get('/api/marketing/gift-cards', { params }),
   create: (body) => api.post('/api/marketing/gift-cards', body),
   markPaid: (id, body) => api.post(`/api/marketing/gift-cards/${id}/mark-paid`, body),
+  topUp: (id, body) => api.post(`/api/marketing/gift-cards/${id}/top-up`, body),
 };
 
 export const loyaltyApi = {

@@ -167,6 +167,16 @@ test('un regalo resta com’era, con le sedute se è un trattamento', () => {
   });
 });
 
+test('credito già esistente (carta VIP del gestionale di prima): pagato senza incasso, solo con «vendite»', () => {
+  const vip = form({ kind: 'prepaid', type: 'amount', value: 120, imported: true, paid: true });
+  assert.deepEqual(giftCardPayload(vip), {
+    kind: 'prepaid', value: '120.00', buyer_client_id: 4, recipient_client_id: 4, recipient_name: 'Sofia Ricci',
+    paid: false, paid_method: '', imported: true, delivery_date: null, expires_at: null,
+  });
+  assert.deepEqual(giftCardMissing(vip, t), []);
+  assert.deepEqual(giftCardMissing({ ...vip, canCash: false }, t), ['Serve il permesso «vendite» per importare un credito']);
+});
+
 /* ---- i pacchetti a listino ------------------------------------------------ */
 
 test('validità e sedute dei pacchetti', () => {

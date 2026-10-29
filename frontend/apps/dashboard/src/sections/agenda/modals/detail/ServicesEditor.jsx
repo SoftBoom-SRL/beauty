@@ -157,7 +157,7 @@ export default function ServicesEditor({
                         <span>{holder.name}</span>
                       </span>
                       <span className="t-sm" style={{ color: 'var(--warn)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <Icon name="alert" size={11} color="var(--warn)" />{holder.active ? t('non più abilitata a questo servizio', 'no longer enabled for this service') : t('non più attiva', 'no longer active')}
+                        <Icon name="alert" size={11} color="var(--warn)" />{holder.active ? t('di solito non fa questo servizio', 'doesn’t usually do this service') : t('non più attiva', 'no longer active')}
                       </span>
                     </React.Fragment>
                   )}
@@ -174,16 +174,22 @@ export default function ServicesEditor({
                           </button>
                         );
                       })}
+                      <OthersSelect eligible={eligible} operators={operators} current={it.operator_id} onPick={(id) => setItemOperator(it.key, id)} t={t} />
                       {isNew && (
                         <button type="button" onClick={() => setItemOperator(it.key, null)} className={'dk-pill' + (it.operator_id === null ? ' dk-pill--on' : '')} style={{ padding: '3px 9px', fontSize: 11.5 }}>
                           <Icon name="sparkle" size={11} color={it.operator_id === null ? '#fff' : 'var(--muted-2)'} />{t('Prima disponibile', 'First available')}
                         </button>
                       )}
                     </React.Fragment>
-                  ) : !holder && (
-                    <span className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <Icon name="alert" size={12} color="var(--danger)" />{t('Nessuna operatrice abilitata a questo servizio', 'No stylist can perform this service')}
-                    </span>
+                  ) : (
+                    <React.Fragment>
+                      {!holder && (
+                        <span className="t-sm" style={{ color: 'var(--danger)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <Icon name="alert" size={12} color="var(--danger)" />{t('Nessuna operatrice abilitata a questo servizio', 'No stylist can perform this service')}
+                        </span>
+                      )}
+                      <OthersSelect eligible={eligible} operators={operators} current={it.operator_id} onPick={(id) => setItemOperator(it.key, id)} t={t} />
+                    </React.Fragment>
                   )}
                 </div>
               </div>
@@ -285,5 +291,21 @@ export default function ServicesEditor({
         </div>
       )}
     </div>
+  );
+}
+
+/* «Altre…»: affida il servizio a chi di solito non lo fa (il banco lo può
+ * decidere, il server lo accetta dallo staff). Una select nativa: niente
+ * stato, e nell'elenco solo chi non è già fra le pillole. */
+function OthersSelect({ eligible, operators, current, onPick, t }) {
+  const others = (operators || []).filter((o) => o.id !== current && !eligible.some((e) => e.id === o.id));
+  if (!others.length) return null;
+  return (
+    <select value="" onChange={(e) => e.target.value && onPick(Number(e.target.value))} aria-label={t('Altre operatrici', 'Other stylists')}
+      title={t('Affida il servizio a chi di solito non lo fa', 'Give the service to someone who doesn’t usually do it')}
+      style={{ fontSize: 11.5, padding: '2px 6px', borderRadius: 99, border: '1px dashed var(--hair)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer' }}>
+      <option value="">{t('Altre…', 'Others…')}</option>
+      {others.map((o) => <option key={o.id} value={o.id}>{o.first_name}</option>)}
+    </select>
   );
 }

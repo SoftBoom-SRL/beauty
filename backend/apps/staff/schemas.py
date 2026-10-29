@@ -86,6 +86,12 @@ class OperatorOut(Schema):
     cash_hidden: bool = False
 
 
+class OperatorDeleteOut(Schema):
+    ok: bool = True
+    # Falso = aveva appuntamenti o vendite: archiviata (non attiva), non cancellata.
+    deleted: bool
+
+
 class OperatorStatusOut(OperatorOut):
     """Riga della lista operatrici: anagrafica + stato di oggi + KPI rapide."""
 

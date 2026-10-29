@@ -8,11 +8,14 @@
 // sommare meno del dovuto, e il resto resta da saldare. `dueToggleLabel` è la
 // scritta dell'interruttore («Lascia da saldare» in cassa, «Paga solo una
 // parte» nel saldo di un conto).
+// `cards`: le carte a importo della cliente (useClientCredit). Un clic paga con
+// la carta; se il saldo non basta, la carta paga il suo saldo e il resto va in
+// contanti (pagamento diviso).
 import { Icon } from '@youty/shared';
 import { PAYMENT_TOLERANCE_CENTS, canBalance, centsToEur, divHalfUp, dueLeftCents, paymentsMatch, toCents } from './money.js';
 import { money, payMethods, sanitizeAmtInput } from './lib.js';
 
-export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, dueToggleLabel }) {
+export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, dueToggleLabel, cards = [] }) {
   const methods = payMethods(t);
   const set = (patch) => onChange({ ...v, ...patch });
   const setRow = (i, patch) => set({ rows: v.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
@@ -43,6 +46,33 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
     const others = v.rows.reduce((s, r, j) => (j === i ? s : s + toCents(r.amt)), 0);
     setRow(i, { amt: centsToEur(Math.max(0, dueCents - others)) });
   };
+
+  const pickCard = (g) => {
+    const bal = toCents(g.balance);
+    if (bal >= dueCents) { set({ split: false, rows: [], method: 'gift_card', giftCode: g.code }); return; }
+    set({
+      split: true,
+      rows: [
+        { method: 'gift_card', amt: centsToEur(bal), code: g.code },
+        { method: 'cash', amt: centsToEur(dueCents - bal), code: '' },
+      ],
+    });
+  };
+  const inUse = (g) => (v.split ? v.rows.some((r) => r.method === 'gift_card' && r.code === g.code) : v.method === 'gift_card' && v.giftCode === g.code);
+  const creditChips = cards.length > 0 && (
+    <div data-client-credit style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+      {cards.map((g) => {
+        const on = inUse(g);
+        return (
+          <button key={g.id} type="button" onClick={() => pickCard(g)} aria-pressed={on}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 99, cursor: 'pointer', fontSize: 12.5, fontWeight: 700, border: '1px solid ' + (on ? 'var(--clay-ink)' : 'var(--hair)'), background: on ? 'var(--clay-tint)' : 'var(--surface)', color: 'var(--clay-ink)' }}>
+            <Icon name={g.kind === 'prepaid' ? 'wallet' : 'gift'} size={13} color="var(--clay-ink)" />
+            {g.kind === 'prepaid' ? t('Usa il credito', 'Use credit') : t('Usa la gift card', 'Use gift card')} · {money(g.balance, lang)}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const methodBtn = (active, k, label, onPick, small) => (
     <button key={k} onClick={onPick} style={{
@@ -100,6 +130,7 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
           {t('Pagamento diviso', 'Split payment')}
         </button>
       </div>
+      {creditChips}
 
       {!v.split ? (
         <div>

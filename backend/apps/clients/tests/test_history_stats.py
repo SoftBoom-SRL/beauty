@@ -631,3 +631,23 @@ class VisitsAreDaysTests(_Base):
         # Senza «vendite» il passaggio al banco non si vede, e non si conta.
         hidden = client_history(_request(self.salon, scopes=("clients",)), self.client_obj.id)
         self.assertEqual(hidden["counts"]["visits"], 1)
+
+
+class HistoryPaymentsTests(_Base):
+    """Lo storico dice di ogni visita come è stata pagata e se ha lo scontrino."""
+
+    def test_the_visit_shows_its_lines_payments_and_receipt(self):
+        appt = self.appointment()
+        sale = self.checkout(appt, "80")
+        sale.receipt_issued = False
+        sale.save(update_fields=["receipt_issued"])
+        counter = self.counter_sale("25")
+        data = client_history(_request(self.salon), self.client_obj.id)
+        visit = next(e for e in data["entries"] if e["kind"] == "visit")
+        self.assertFalse(visit["sale"]["receipt_issued"])
+        self.assertEqual([(p["method"], p["amount"]) for p in visit["sale"]["payments"]], [("cash", Decimal("80"))])
+        self.assertEqual([line["line_type"] for line in visit["sale"]["lines"]], ["service"])
+        pos = next(e for e in data["entries"] if e["kind"] == "sale")
+        self.assertEqual(pos["sale"]["id"], counter.id)
+        self.assertTrue(pos["sale"]["receipt_issued"])
+        self.assertEqual([line["line_type"] for line in pos["sale"]["lines"]], ["product"])

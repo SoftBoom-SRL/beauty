@@ -31,6 +31,13 @@ from .models import GiftCard
 # spenderle non fa guadagnare altri punti.
 LOYALTY_PAID_METHOD = "loyalty"
 
+# Credito che la cliente aveva già nel gestionale di prima (la «carta VIP»
+# ricaricata, Beauty Boutique 10/2026): i soldi li ha versati allora, non oggi.
+# Come i premi fedeltà la carta nasce pagata ma senza incasso: niente vendita,
+# niente «Venduto», niente cassa del giorno.
+IMPORTED_PAID_METHOD = "import"
+NOT_CASHED_METHODS = (LOYALTY_PAID_METHOD, IMPORTED_PAID_METHOD)
+
 # Una gift card comprata dall'app è un impegno che il salone dovrà onorare: il
 # tetto è quello che una cliente può ragionevolmente regalare. Senza, un POST
 # con value=99999999.99 creava una carta da cento milioni che entrava nei KPI
@@ -283,7 +290,7 @@ def gift_card_kpis(qs) -> dict:
     # «Venduto» è il denaro davvero incassato: le carte ancora da pagare non
     # sono ricavi, e i premi fedeltà (paid_method="loyalty") non li ha pagati
     # nessuno — contarli gonfiava il KPI di soldi mai entrati in cassa.
-    sold = Q(payment_status=GiftCard.PaymentStatus.PAID) & ~Q(paid_method=LOYALTY_PAID_METHOD)
+    sold = Q(payment_status=GiftCard.PaymentStatus.PAID) & ~Q(paid_method__in=NOT_CASHED_METHODS)
     # «Da spendere» è il credito che il salone deve ancora onorare: solo carte
     # attive, pagate e non scadute.
     spendable = (
@@ -350,8 +357,13 @@ def sell_gift_card(
     actor=None,
     kind=GiftCard.Kind.GIFT,
     sessions=1,
+    imported=False,
 ) -> GiftCard:
     """Carta venduta dallo staff: pagata subito (con la sua vendita in cassa) o da pagare.
+
+    `imported`: il credito residuo di una carta del gestionale di prima. Nasce
+    pagata (`IMPORTED_PAID_METHOD`) ma senza vendita: quei soldi sono entrati
+    allora, e contarli oggi gonfiava la cassa del giorno dell'importazione.
 
     `kind` è «gift» (un regalo) o «prepaid» (un trattamento che la cliente paga
     oggi e farà più avanti: acquirente e destinataria sono lei). Le sedute di un
@@ -371,7 +383,11 @@ def sell_gift_card(
         value = Decimal(gift_service.price) * sessions
     if kind == GiftCard.Kind.PREPAID:
         buyer, recipient, recipient_name = _prepaid_owner(buyer, recipient)
-    if paid:
+    if imported:
+        if gift_service is not None:
+            raise HttpError(422, "Si importa solo un credito a importo")
+        paid, paid_method = True, IMPORTED_PAID_METHOD
+    elif paid:
         _require_payment_method(paid_method)
     # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
     # sua vendita è esattamente il buco che stiamo chiudendo.
@@ -388,6 +404,7 @@ def sell_gift_card(
             sold_by=actor,
             kind=kind,
             sessions=sessions,
+            cash_in=not imported,
         )
         extra = []
         if delivery_date:
@@ -398,7 +415,7 @@ def sell_gift_card(
             extra.append("expires_at")
         if extra:
             card.save(update_fields=extra)
-        if paid:
+        if paid and not imported:
             # «Vendo e segno pagata subito» è il caso normale al banco (la
             # maschera manda paid=true di default), ma nasceva una carta
             # payment_status=paid senza nessuna vendita a registro: quei soldi
@@ -447,4 +464,47 @@ def cash_gift_card(salon, card, *, method: str, actor=None) -> GiftCard:
         actor=actor,
         payload={"gift_card_id": card.id, "amount": str(card.initial_value), "method": method},
     )
+    return card
+
+
+def top_up_gift_card(salon, card, amount, *, method: str, actor=None, receipt_issued=True) -> GiftCard:
+    """Ricarica una carta a importo (la «carta VIP»): il saldo sale di `amount`
+    e l'importo entra in cassa come vendita al banco.
+
+    Solo carte a importo, pagate e non scadute; una carta esaurita torna attiva.
+    Anche il valore iniziale sale, così «speso» (iniziale − saldo) resta giusto.
+    """
+    _require_payment_method(method)
+    if not method:
+        raise HttpError(422, "Indica come è stata pagata la ricarica")
+    amount = Decimal(amount)
+    if amount <= 0:
+        raise HttpError(422, "Importo della ricarica non valido")
+    if card.gift_service_id:
+        raise HttpError(422, "Si ricaricano solo le carte a importo")
+    if mark_expired_if_past(card):
+        raise HttpError(422, "Gift card scaduta: non può essere ricaricata")
+    from apps.sales.services import record_gift_card_top_up  # lazy
+
+    with transaction.atomic():
+        card = GiftCard.objects.select_for_update().get(pk=card.pk)
+        if card.payment_status != GiftCard.PaymentStatus.PAID:
+            raise HttpError(422, "Gift card non ancora pagata: incassala prima di ricaricarla")
+        if card.status not in (GiftCard.Status.ACTIVE, GiftCard.Status.REDEEMED):
+            raise HttpError(422, "Gift card non attiva")
+        if card.balance + amount > MAX_MONEY or card.initial_value + amount > MAX_MONEY:
+            raise HttpError(422, "Importo della ricarica non valido")
+        card.balance += amount
+        card.initial_value += amount
+        card.status = GiftCard.Status.ACTIVE
+        card.sessions_left = 1
+        card.save(update_fields=["balance", "initial_value", "status", "sessions_left"])
+        record_gift_card_top_up(salon, card, amount, method=method, actor=actor, receipt_issued=receipt_issued)
+        log_activity(
+            salon,
+            "giftcard.paid",
+            f"Ricarica gift card {card.code}: +€{amount} ({method}), saldo €{card.balance}",
+            actor=actor,
+            payload={"gift_card_id": card.id, "amount": str(amount), "method": method, "top_up": True},
+        )
     return card

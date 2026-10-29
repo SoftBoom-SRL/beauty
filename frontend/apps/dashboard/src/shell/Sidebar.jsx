@@ -10,7 +10,7 @@ export default function Sidebar({ collapsed, onToggleCollapse }) {
   const SECTION_SUBTABS = {
     magazzino: [['prodotti', t('Prodotti', 'Products')], ['ordini', t('Ordini', 'Orders')], ['fornitori', t('Fornitori', 'Suppliers')], ['storico', t('Storico', 'History')]],
     servizi: [['servizi', t('Servizi', 'Services')], ['pacchetti', t('Pacchetti', 'Packages')]],
-    pos: [['products', t('Prodotti', 'Products')], ['history', t('Storico', 'History')]],
+    pos: [['products', t('Prodotti', 'Products')], ['register', t('Cassa', 'Register')], ['history', t('Storico', 'History')]],
     fedelta: [['coupon', t('Coupon', 'Coupons')], ['fedelta', t('Fedeltà', 'Loyalty')], ['gift', t('Gift card', 'Gift cards')]],
   };
   const NAV_MAIN = [

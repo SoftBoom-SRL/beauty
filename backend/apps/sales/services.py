@@ -415,6 +415,7 @@ def finalize_sale(
     coupon_code: str = "",
     actor=None,
     allow_due: bool = False,
+    receipt_issued: bool = True,
 ) -> Sale:
     """Core condiviso checkout/POS: valida, crea Sale/righe/pagamenti e integra le altre app.
 
@@ -426,6 +427,7 @@ def finalize_sale(
     coupon_code = buono sconto presentato al banco, facoltativo (vedi `_coupon_for_sale`)
     allow_due = la cliente può pagare meno del dovuto: il resto va in `Sale.amount_due`
                 (vedi `_left_due`)
+    receipt_issued = falso se l'incasso non ha scontrino fiscale (`Sale.receipt_issued`)
 
     Una riga «package» vende un pacchetto di listino: le sue sedute nascono qui,
     nella transazione della vendita (`marketing.credits.create_package_credits`),
@@ -473,6 +475,7 @@ def finalize_sale(
             coupon_discount=discount,
             deposit_deducted=deposit_deducted,
             amount_due=amount_due,
+            receipt_issued=receipt_issued,
             created_by=actor,
         )
         if coupon is not None:
@@ -552,6 +555,7 @@ def finalize_sale(
                 "coupon_discount": str(discount),
                 "deposit_deducted": str(deposit_deducted),
                 "amount_due": str(amount_due),
+                "receipt_issued": receipt_issued,
                 "client_id": client.id if client else None,
                 "appointment_id": appointment.id if appointment else None,
             },
@@ -626,7 +630,18 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
     """
     if SaleLine.objects.filter(gift_card=card).exists():
         return None  # già venduta al banco: sarebbe un doppio conteggio
-    amount = Decimal(str(card.initial_value)).quantize(CENT)
+    return _gift_card_sale(salon, card, card.initial_value, method, actor, client=card.buyer_client)
+
+
+def record_gift_card_top_up(salon, card, amount, *, method: str, actor=None, receipt_issued=True):
+    """La ricarica di una carta (la «carta VIP» con credito): una vendita al banco
+    per l'importo caricato, così entra nella cassa del giorno e nei ricavi."""
+    client = card.recipient_client or card.buyer_client
+    return _gift_card_sale(salon, card, amount, method, actor, client=client, receipt_issued=receipt_issued)
+
+
+def _gift_card_sale(salon, card, amount, method, actor, *, client, receipt_issued=True):
+    amount = Decimal(str(amount)).quantize(CENT)
     if amount <= 0:
         return None
     if method not in Payment.Method.values:
@@ -635,9 +650,10 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
         sale = Sale.objects.create(
             salon=salon,
             kind=Sale.Kind.POS,
-            client=card.buyer_client,
+            client=client,
             total=amount,
             created_by=actor,
+            receipt_issued=receipt_issued,
         )
         SaleLine.objects.create(
             sale=sale,

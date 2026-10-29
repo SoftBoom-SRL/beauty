@@ -18,6 +18,7 @@ from common.validation import require_hex_color
 from .models import Absence, Operator
 from .operators import (
     absence_or_404,
+    delete_operator as delete_or_archive_operator,
     replace_operator_shifts,
     save_operator,
     validate_absence,
@@ -26,6 +27,7 @@ from .schemas import (
     AbsenceIn,
     AbsenceOut,
     OperatorColorIn,
+    OperatorDeleteOut,
     OperatorDetailOut,
     OperatorIn,
     OperatorOut,
@@ -241,22 +243,23 @@ def set_operator_color(request, operator_id: int, data: OperatorColorIn):
     return _operator_out(operator, ctx)
 
 
-@router.delete("/{int:operator_id}", auth=staff_auth, response=OkOut)
+@router.delete("/{int:operator_id}", auth=staff_auth, response=OperatorDeleteOut)
 def delete_operator(request, operator_id: int):
-    """Soft delete: l'operatrice resta in archivio (storico turni/vendite intatto)."""
+    """Elimina l'operatrice. Con appuntamenti o vendite resta in archivio
+    (non attiva, storico intatto) e `deleted` è falso; senza, si cancella."""
     ctx = request.auth
     require_scope(ctx, "team")
     operator = salon_get(Operator, ctx, operator_id)
-    operator.active = False
-    operator.save(update_fields=["active"])
+    operator_id, name = operator.id, f"{operator.first_name} {operator.last_name}"
+    deleted = delete_or_archive_operator(operator)
     log_activity(
         ctx.salon,
         "operator.deleted",
-        f"Operatrice disattivata: {operator.first_name} {operator.last_name}",
+        f"Operatrice {'eliminata' if deleted else 'archiviata'}: {name}",
         actor=ctx.user,
-        payload={"operator_id": operator.id},
+        payload={"operator_id": operator_id, "deleted": deleted},
     )
-    return OkOut()
+    return {"ok": True, "deleted": deleted}
 
 
 # ---- Turni: sostituzione integrale del pattern ---------------------------------
