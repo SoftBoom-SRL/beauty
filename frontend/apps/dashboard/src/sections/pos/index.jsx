@@ -1,9 +1,10 @@
 // Punto Vendita (POS) — Prodotti (counter-sale cart) + Storico (sales history).
-// Sub-tab ids match the shell's SECTION_SUBTABS for `pos`: 'products' | 'history'.
+// Sub-tab ids match the shell's SECTION_SUBTABS for `pos`: 'products' | 'register' | 'history'.
 import { Icon } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import CartTab from './CartTab.jsx';
 import HistoryTab from './HistoryTab.jsx';
+import RegisterTab from './RegisterTab.jsx';
 
 export default function PosSection() {
   const { t, subTab, setSubTab } = useDash();
@@ -14,6 +15,7 @@ export default function PosSection() {
       <div style={{ borderBottom: '1px solid var(--hair)', display: 'flex', gap: 4, marginBottom: 18 }}>
         {[
           ['products', t('Prodotti', 'Products'), 'box'],
+          ['register', t('Cassa', 'Register'), 'wallet'],
           ['history', t('Storico', 'History'), 'clock'],
         ].map(([k, l, ic]) => {
           const on = tab === k;
@@ -25,8 +27,8 @@ export default function PosSection() {
           );
         })}
       </div>
-      {tab === 'history'
-        ? <HistoryTab />
+      {tab === 'history' ? <HistoryTab />
+        : tab === 'register' ? <RegisterTab />
         : <CartTab onGoHistory={() => setSubTab('history')} />}
     </div>
   );

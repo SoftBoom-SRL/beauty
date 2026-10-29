@@ -82,6 +82,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
   })));
   const [svcQ, setSvcQ] = useState('');
   const [addonFor, setAddonFor] = useState(null);   // servizio con la scelta degli aggiuntivi aperta
+  const [svcFolder, setSvcFolder] = useState(null); // cartella (categoria) aperta fra i servizi
+  const [othersFor, setOthersFor] = useState(null); // servizio con «Altre…» operatrici aperto
   const activeServices = (services || []).filter((s) => s.active !== false && !isAddonService(s));
   const addonServices = (services || []).filter((s) => s.active !== false && isAddonService(s));
   // il colore del servizio: il suo, o quello della categoria (ui/palette.js)
@@ -333,6 +335,8 @@ export default function NewApptModal({ prefill, onClose, onCreated }) {
           svcOf={svcOf} svcName={svcName} giftFor={giftFor} selSlot={selSlot} assignedName={assignedName} removeItem={removeItem}
           setItemOp={setItemOp} onClose={onClose} setTab={setTab} t={t} lang={lang}
           addonServices={addonServices} addAddon={addAddon} addonFor={addonFor} setAddonFor={setAddonFor}
+          categories={serviceCategories} allOps={operators}
+          folder={svcFolder} setFolder={setSvcFolder} othersFor={othersFor} setOthersFor={setOthersFor}
         />
 
         {/* ── 3. orario ── */}

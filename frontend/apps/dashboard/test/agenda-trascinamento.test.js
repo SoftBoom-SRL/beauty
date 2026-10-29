@@ -119,7 +119,7 @@ test('abilitazione: senza elenco dei servizi non si blocca niente', () => {
   assert.equal(canDo([{ id: 2, service_ids: [412] }], 2, 412), true);
   const ctx = ctxOf({ operators: [OPS[0], { id: 2, first_name: 'Giulia', service_ids: [412] }] });
   assert.deepEqual(skillVerdict(ctx, 2, [blockOf(sara, 421)]), {
-    ok: false, code: 'skill', label: 'Giulia non fa Manicure', detail: 'Abilita il servizio in Staff',
+    ok: false, code: 'skill', label: 'Giulia non fa Manicure', detail: 'Rilascia per affidarglielo comunque',
   });
   assert.equal(skillVerdict(ctx, 2, [blockOf(maria, 412)]), null);
 });

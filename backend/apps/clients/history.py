@@ -58,8 +58,20 @@ def build_history(ctx, client) -> dict:
     (`sales_hidden`), e i codici delle gift card mascherati come in agenda.
     """
     from apps.agenda.presenters import _appointment_out, gift_index  # lazy: riuso serializzazione
-    from apps.sales.serializers import sale_out  # lazy
-    from apps.sales.models import Sale  # lazy
+    from django.db.models import Prefetch
+
+    from apps.sales.models import Payment, Sale, SaleLine  # lazy
+    from apps.sales.serializers import line_out, payment_out, sale_out  # lazy
+
+    def sale_with_detail(s):
+        # Righe e pagamenti nello storico: il salone vuole vedere di ogni visita
+        # cosa è stato fatto e come è stato pagato, scontrino compreso
+        # (Beauty Boutique, 10/2026). Precaricati sotto: niente query a visita.
+        return {
+            **sale_out(s),
+            "lines": [line_out(line) for line in s.lines.all()],
+            "payments": [payment_out(p) for p in s.payments.all()],
+        }
 
     # Gli incassi di ogni visita sono dati di cassa: senza il permesso
     # «vendite» la timeline resta completa ma senza importi, come la lista
@@ -71,7 +83,17 @@ def build_history(ctx, client) -> dict:
     # card va calcolato una volta per tutte (vedi `client_appointments`).
     gifts = gift_index(ctx.salon, [client.id])
     all_sales = (
-        list(Sale.objects.filter(salon=ctx.salon, client=client).select_related("client"))
+        list(
+            Sale.objects.filter(salon=ctx.salon, client=client)
+            .select_related("client")
+            .prefetch_related(
+                Prefetch(
+                    "lines",
+                    queryset=SaleLine.objects.select_related("operator", "gift_card", "product", "service", "package"),
+                ),
+                Prefetch("payments", queryset=Payment.objects.select_related("gift_card")),
+            )
+        )
         if can_read_sales
         else []
     )
@@ -116,7 +138,7 @@ def build_history(ctx, client) -> dict:
                 "upcoming": a.start >= now and a.status in ("confirmed", "checked_in", "in_progress"),
                 "appointment": _appointment_out(a, gifts, viewer=ctx),
                 "operator_name": a.operator.full_name if a.operator_id else "",
-                "sale": sale_out(sale) if sale else None,
+                "sale": sale_with_detail(sale) if sale else None,
                 "deposit_sale": sale_out(deposit) if deposit else None,
                 "covered_by_sale": _covered_by(a, sales_by_id),
                 "notes": [note_out(n) for n in notes_by_appt.get(a.id, [])],
@@ -124,7 +146,7 @@ def build_history(ctx, client) -> dict:
             }
         )
     for s in counter_sales:
-        entries.append({"kind": "sale", "date": s.created_at, "sale": sale_out(s)})
+        entries.append({"kind": "sale", "date": s.created_at, "sale": sale_with_detail(s)})
     for n in notes:
         if not n.appointment_id:
             entries.append({"kind": "note", "date": n.created_at, "note": note_out(n)})

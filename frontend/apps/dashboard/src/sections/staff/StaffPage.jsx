@@ -3,10 +3,11 @@
 // Turni e ferie (weekly pattern PUT /{id}/shifts + absences CRUD),
 // Performance (GET /{id}/performance bar chart), Clienti serviti (GET /{id}/clients).
 import { useState } from 'react';
-import { Avatar, Icon } from '@youty/shared';
+import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { HIDDEN, eur, opName } from './lib.js';
 import { useOperatorEditor } from './useOperatorEditor.js';
+import { staffApi } from '../../api/staff.js';
 import ProfileTab from './ProfileTab.jsx';
 import ShiftPattern from './ShiftPattern.jsx';
 import AbsenceCalendar from './AbsenceCalendar.jsx';
@@ -45,6 +46,22 @@ export default function StaffPage({ id, onBack, initialTab = null, onSwitch = nu
   };
 
   const openClient = (cid) => { setSelClient(cid); setTab('clienti'); };
+
+  /* Elimina: senza storico la scheda sparisce; con appuntamenti o vendite
+   * resta archiviata fra le non attive, perché incassi e visite passate
+   * restino a suo nome. */
+  const removeOperator = async () => {
+    const name = [form.first_name, form.last_name].filter(Boolean).join(' ');
+    if (!window.confirm(t(`Eliminare ${name}? Non comparirà più in agenda, nel team e nelle prenotazioni.`, `Delete ${name}? She will no longer appear in the calendar, team or bookings.`))) return;
+    try {
+      const res = await staffApi.remove(id);
+      fireToast({
+        msg: res.deleted ? t(`${name} eliminata`, `${name} deleted`) : t(`${name} archiviata: il suo storico resta`, `${name} archived: her history stays`),
+        icon: 'check',
+      });
+      onBack();
+    } catch (err) { toastApiError(err, fireToast, t); }
+  };
 
   /* ---- loading skeleton ---- */
   if (!detail || !form) {
@@ -121,7 +138,7 @@ export default function StaffPage({ id, onBack, initialTab = null, onSwitch = nu
           services={services} serviceCategories={serviceCategories}
           toggleSvc={toggleSvc} onServiceCreated={onServiceCreated}
           firstWorkDay={detail.first_work_day || null}
-          operator={detail}
+          operator={detail} onDelete={canTeam ? removeOperator : null}
           t={t} lang={lang} fireToast={fireToast}
         />
       )}

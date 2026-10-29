@@ -304,17 +304,41 @@ class ForcedBookingTests(AgendaTestBase):
             self.assertEqual(res.status_code, 200, res.content)
         self.assertEqual(Appointment.objects.filter(forced=True).count(), 2)
 
-    def test_force_never_bypasses_operator_eligibility(self):
+    def test_the_desk_can_book_an_operator_not_enabled_for_the_service(self):
+        # Il banco affida la cliente a mano a chi di solito non fa il servizio
+        # (Beauty Boutique, 10/2026): si può, anche senza forzare.
         auth = self._staff()
         body = {
             "client_id": self.client_obj.id,
             "items": [{"service_id": self.svc60.id, "operator_id": self.op2.id}],  # op2 non abilitata
             "start": _aware(self.day, 10).isoformat(),
-            "force": True,
         }
         with self._windows({self.op2.id: [(9 * 60, 18 * 60)]}):
             res = self.client.post("/api/agenda/appointments", data=json.dumps(body), content_type="application/json", **auth)
-        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["items"][0]["operator_id"], self.op2.id)
+        self.assertFalse(res.json()["forced"])
+
+    def test_the_client_app_still_cannot_pick_an_operator_not_enabled(self):
+        with self._windows({self.op2.id: [(9 * 60, 18 * 60)]}), self.assertRaises(HttpError) as err:
+            create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op2.id}],
+                _aware(self.day, 10), via=Appointment.CreatedVia.APP, allow_past=False,
+            )
+        self.assertEqual(err.exception.status_code, 400)
+
+    def test_auto_assignment_stays_among_enabled_operators(self):
+        auth = self._staff()
+        body = {
+            "client_id": self.client_obj.id,
+            "items": [{"service_id": self.svc60.id, "operator_id": None}],
+            "start": _aware(self.day, 10).isoformat(),
+        }
+        with self._windows({self.op1.id: [(9 * 60, 18 * 60)], self.op2.id: [(9 * 60, 18 * 60)]}):
+            res = self.client.post("/api/agenda/appointments", data=json.dumps(body), content_type="application/json", **auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["items"][0]["operator_id"], self.op1.id)
 
     def test_client_api_cannot_force(self):
         from common.auth import create_client_tokens

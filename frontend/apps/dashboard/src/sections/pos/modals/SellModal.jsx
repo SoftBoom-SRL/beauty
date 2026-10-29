@@ -14,6 +14,7 @@ import { Icon, toastApiError } from '@youty/shared';
 import DkModal from '../../../ui/DkModal.jsx';
 import { useDash } from '../../../ctx.jsx';
 import PaymentsPanel from '../PaymentsPanel.jsx';
+import ReceiptToggle from '../ReceiptToggle.jsx';
 import CouponField from '../CouponField.jsx';
 import ConfirmPaymentModal from '../ConfirmPaymentModal.jsx';
 import DuesBanner from '../DuesBanner.jsx';
@@ -63,6 +64,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const [start] = useState(() => checkoutState([], appt ? [appt] : []));
   const [lines, setLines] = useState(start.lines);
   const [pay, setPay] = useState(start.pay);
+  const [receipt, setReceipt] = useState(true);   // scontrino emesso
 
   /* ---- conto unico: le altre visite della cliente di oggi ---- */
   const { data: otherVisits } = useResource(() => salesApi.otherVisits(appt.id), [appt?.id], { enabled: !!appt && canSell, fallback: [] });
@@ -231,6 +233,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
         ...(coupon ? { coupon_code: coupon.code } : {}),
         ...(leftCents > 0 ? { leave_due: true } : {}),
         ...(included.length ? { extra_appointment_ids: included } : {}),
+        receipt_issued: receipt,
       };
       const res = await salesApi.checkout(appt.id, body);
       setResult(res);
@@ -341,6 +344,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
                 : t('Niente da incassare.', 'Nothing to collect.')}
             </div>
           )}
+          <ReceiptToggle value={receipt} onChange={setReceipt} t={t} style={{ marginTop: 12 }} />
 
           {/* totals — per operator + deposit + grand */}
           <TotalsBox blockIds={blockIds} opColor={opColor} opLabel={opLabel} opSubtotal={opSubtotal}

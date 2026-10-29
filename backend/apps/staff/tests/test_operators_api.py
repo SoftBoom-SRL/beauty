@@ -425,3 +425,40 @@ class EmploymentPeriodApiTests(_StaffSetup):
         public = [o["id"] for o in self.client.get(f"/api/staff/public/operators?salon={self.salon.slug}").json()]
         # chi ha finito non si sceglie più; chi arriva fra una settimana sì (per le date da allora)
         self.assertEqual(public, [self.anna.id])
+
+
+class DeleteOperatorTests(_StaffSetup):
+    """DELETE /api/staff/{id}: senza storico si cancella, con lo storico si archivia."""
+
+    def _delete(self, operator, auth=None):
+        return self.client.delete(f"/api/staff/{operator.id}", **(auth or self._member("team@x.it", ["team"])))
+
+    def test_an_operator_without_history_is_deleted(self):
+        WeeklyShift.objects.create(operator=self.bea, weekday=0, start_min=540, end_min=1080)
+        res = self._delete(self.bea)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(res.json()["deleted"])
+        self.assertFalse(Operator.objects.filter(pk=self.bea.pk).exists())
+
+    def test_an_operator_with_visits_is_archived_with_her_history(self):
+        visit = self._visit(timezone.now() - dt.timedelta(days=3), [(self.cut, self.anna)])
+        res = self._delete(self.anna)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(res.json()["deleted"])
+        self.anna.refresh_from_db()
+        self.assertFalse(self.anna.active)
+        self.assertEqual(visit.items.get().operator_id, self.anna.id)
+        listed = self.client.get("/api/staff/", **self._member("team2@x.it", ["team"])).json()
+        self.assertNotIn(self.anna.id, [o["id"] for o in listed])
+
+    def test_an_operator_with_sales_is_archived(self):
+        from apps.sales.models import Sale, SaleLine
+
+        sale = Sale.objects.create(salon=self.salon, kind="pos", total=Decimal("10"))
+        SaleLine.objects.create(sale=sale, operator=self.bea, line_type="product", qty=1, unit_price=Decimal("10"), amount=Decimal("10"))
+        self.assertFalse(self._delete(self.bea).json()["deleted"])
+        self.assertTrue(Operator.objects.filter(pk=self.bea.pk, active=False).exists())
+
+    def test_deleting_asks_for_the_team_permission(self):
+        self.assertEqual(self._delete(self.bea, self._member("agenda@x.it", ["agenda"])).status_code, 403)
+        self.assertTrue(Operator.objects.filter(pk=self.bea.pk, active=True).exists())

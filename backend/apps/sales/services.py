@@ -415,6 +415,7 @@ def finalize_sale(
     coupon_code: str = "",
     actor=None,
     allow_due: bool = False,
+    receipt_issued: bool = True,
 ) -> Sale:
     """Core condiviso checkout/POS: valida, crea Sale/righe/pagamenti e integra le altre app.
 
@@ -426,6 +427,7 @@ def finalize_sale(
     coupon_code = buono sconto presentato al banco, facoltativo (vedi `_coupon_for_sale`)
     allow_due = la cliente può pagare meno del dovuto: il resto va in `Sale.amount_due`
                 (vedi `_left_due`)
+    receipt_issued = falso se l'incasso non ha scontrino fiscale (`Sale.receipt_issued`)
 
     Una riga «package» vende un pacchetto di listino: le sue sedute nascono qui,
     nella transazione della vendita (`marketing.credits.create_package_credits`),
@@ -473,6 +475,7 @@ def finalize_sale(
             coupon_discount=discount,
             deposit_deducted=deposit_deducted,
             amount_due=amount_due,
+            receipt_issued=receipt_issued,
             created_by=actor,
         )
         if coupon is not None:
@@ -552,6 +555,7 @@ def finalize_sale(
                 "coupon_discount": str(discount),
                 "deposit_deducted": str(deposit_deducted),
                 "amount_due": str(amount_due),
+                "receipt_issued": receipt_issued,
                 "client_id": client.id if client else None,
                 "appointment_id": appointment.id if appointment else None,
             },

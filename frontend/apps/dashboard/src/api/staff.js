@@ -10,6 +10,8 @@ export const staffApi = {
   update: (id, body) => api.put(`/api/staff/${id}`, body),
   setColor: (id, color) => api.patch(`/api/staff/${id}/color`, { color }),
   updateShifts: (id, body) => api.put(`/api/staff/${id}/shifts`, body),
+  // { deleted }: falso se aveva appuntamenti o vendite (resta archiviata, non attiva)
+  remove: (id) => api.del(`/api/staff/${id}`),
   performance: (id, params) => api.get(`/api/staff/${id}/performance`, { params }),
   clients: (id, params) => api.get(`/api/staff/${id}/clients`, { params }),
   /** I turni del team giorno per giorno: { start, days, location_id? }. */

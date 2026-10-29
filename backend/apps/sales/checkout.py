@@ -108,6 +108,7 @@ def checkout_appointment(salon, appointment_id: int, payload: dict, *, actor=Non
                 coupon_code=payload["coupon_code"],
                 actor=actor,
                 allow_due=bool(payload.get("leave_due")),
+                receipt_issued=payload.get("receipt_issued", True),
             )
         except IntegrityError:
             # Due checkout partiti insieme: il controllo qui sopra li lascia passare

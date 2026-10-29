@@ -50,6 +50,10 @@ class Sale(models.Model):
     # nuovi `Payment` (con la loro data), che lo riducono. Il venduto resta
     # `total` dal giorno della vendita; il denaro entra in cassa quando arriva.
     amount_due = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_default=0)
+    # Scontrino fiscale battuto o no. Il salone usa il gestionale come registro
+    # di TUTTI gli incassi, anche quelli senza scontrino: la cassa del giorno e
+    # lo storico cliente li devono mostrare, distinti (Beauty Boutique, 10/2026).
+    receipt_issued = models.BooleanField(default=True, db_default=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )

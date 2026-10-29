@@ -107,7 +107,7 @@ def _pick_operator(
 
 def _chain_step(
     service, requested, operators, operator_by_id, duration_min: int, soak_min: int, *,
-    previous=None, addon: bool = False,
+    previous=None, addon: bool = False, any_operator: bool = False,
 ) -> ChainStep:
     """La voce di `service` con l'operatrice indicata (`requested`) o le idonee; 400 se non si può.
 
@@ -116,6 +116,12 @@ def _chain_step(
     le competenze. Il controllo vale per chi riceve una voce nuova o cambia mano.
     Anche un aggiuntivo (`addon`) lo deve saper fare chi lo riceve: non occupa
     tempo, ma resta un lavoro.
+
+    `any_operator` (gesti dello staff): l'operatrice scelta A MANO può ricevere
+    anche un servizio che di solito non fa — il salone a volte affida una
+    cliente a chi non ha quel servizio fra le competenze (Beauty Boutique,
+    10/2026). L'assegnazione automatica resta sempre fra le abilitate, e l'app
+    cliente non lo passa mai.
     """
     eligible_ids = set(service.operators.values_list("id", flat=True))
     if requested:
@@ -124,9 +130,7 @@ def _chain_step(
             # Chi ha già la riga la tiene, anche fuori organico o senza più
             # quel servizio: non è una nuova assegnazione.
             operator = operator or previous.operator
-        elif operator is None or operator.id not in eligible_ids:
-            # L'idoneità non si forza MAI: nessuno può fare un servizio che
-            # non sa fare, per quanto il banco insista.
+        elif operator is None or (operator.id not in eligible_ids and not any_operator):
             raise HttpError(400, "Operatrice non idonea per il servizio selezionato")
         return ChainStep(operator, [], duration_min, soak_min, addon)
     eligible = [op for op in operators if op.id in eligible_ids]
@@ -203,6 +207,7 @@ def resolve_items(
     force: bool = False,
     ignore_client_id: int | None = None,
     allow_soak: bool = True,
+    any_operator: bool = False,
 ) -> list[tuple]:
     """Risolve e valida la sequenza richiesta a partire da `start`.
 
@@ -240,7 +245,7 @@ def resolve_items(
         steps.append(_chain_step(
             service, raw.get("operator_id"), operators, operator_by_id,
             0 if addon else service.duration_min, 0 if addon else service.soak_min or 0,
-            addon=addon,
+            addon=addon, any_operator=any_operator,
         ))
         services.append(service)
     check_chain(step.addon for step in steps)
@@ -266,6 +271,7 @@ def resolve_items_edit(
     existing_items=None,
     force: bool = False,
     ignore_client_id: int | None = None,
+    any_operator: bool = False,
 ) -> list[tuple]:
     """Come resolve_items ma con durata per-item sovrascrivibile manualmente.
 
@@ -376,7 +382,7 @@ def resolve_items_edit(
         price = previous.price if previous is not None else service.price
         steps.append(_chain_step(
             service, raw.get("operator_id"), operators, operator_by_id, duration_min, soak,
-            previous=previous, addon=addon,
+            previous=previous, addon=addon, any_operator=any_operator,
         ))
         agreed.append((service, duration_min, soak, price))
     check_chain(step.addon for step in steps)

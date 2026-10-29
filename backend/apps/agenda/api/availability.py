@@ -49,4 +49,6 @@ def availability(
         day,
         _parse_items_param(items),
         location=_get_location(ctx, location_id),
+        # come la conferma: il banco può scegliere anche chi di solito non fa il servizio
+        any_operator=True,
     )

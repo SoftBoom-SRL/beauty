@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date as date_type, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
@@ -60,6 +60,8 @@ class SaleIn(Schema):
     # (`Sale.amount_due`, poi POST /{id}/settle). Serve la cliente; pagare più
     # del dovuto resta un errore.
     leave_due: bool = False
+    # Falso = incasso registrato senza scontrino fiscale (`Sale.receipt_issued`).
+    receipt_issued: bool = True
 
 
 class CheckoutIn(SaleIn):
@@ -126,7 +128,32 @@ class SaleOut(Schema):
     deposit_deducted: Decimal
     # Quanto la cliente deve ancora su questo conto (0 = saldato).
     amount_due: Decimal = Decimal("0.00")
+    receipt_issued: bool = True
     created_at: datetime
+
+
+class RegisterPaymentOut(PaymentOut):
+    sale_id: int
+    kind: str
+    client_id: Optional[int] = None
+    client_name: str = ""
+    receipt_issued: bool = True
+    is_settlement: bool = False
+    is_deposit: bool = False
+
+
+class DayRegisterOut(Schema):
+    """La cassa di un giorno: i pagamenti arrivati e i loro totali."""
+
+    date: date_type
+    sold: Decimal
+    cash_in: Decimal
+    due_left: Decimal
+    by_method: dict[str, Decimal]
+    receipt: Decimal
+    no_receipt: Decimal
+    refunded: Decimal
+    payments: list[RegisterPaymentOut]
 
 
 class SaleDetailOut(SaleOut):

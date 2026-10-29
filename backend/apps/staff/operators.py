@@ -219,3 +219,27 @@ def absence_or_404(operator: Operator, absence_id: int) -> Absence:
     if absence is None:
         raise HttpError(404, "Assenza non trovata")
     return absence
+
+
+def delete_operator(operator: Operator) -> bool:
+    """Elimina l'operatrice; True se cancellata davvero, False se archiviata.
+
+    Senza storico (nessun appuntamento, nessuna riga di vendita: una scheda
+    creata per sbaglio, una collega mai partita) si cancella, turni e assenze
+    compresi. Con lo storico no: le visite la proteggono (PROTECT) e sulle
+    vendite resterebbe «senza operatrice», perdendo incassi e provvigioni. Allora
+    si archivia (`active=False`): sparisce da agenda, prenotazioni e team, e
+    resta solo fra le non attive con il suo storico (Beauty Boutique, 10/2026).
+    """
+    with transaction.atomic():
+        has_history = (
+            operator.appointments.exists()
+            or operator.appointment_items.exists()
+            or operator.sale_lines.exists()
+        )
+        if has_history:
+            operator.active = False
+            operator.save(update_fields=["active"])
+            return False
+        operator.delete()
+        return True

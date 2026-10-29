@@ -13,6 +13,7 @@ from ninja import Query, Router
 from ninja.errors import HttpError
 
 from django.conf import settings as django_settings
+from django.utils import timezone
 
 from common.auth import client_auth, staff_auth
 from common.permissions import require_owner, require_scope
@@ -33,6 +34,7 @@ from .schemas import (
     CheckoutIn,
     CheckoutOut,
     ClientDuesOut,
+    DayRegisterOut,
     DepositLinkOut,
     PosIn,
     SaleDetailOut,
@@ -96,6 +98,7 @@ def pos_sale(request, data: PosIn):
         coupon_code=payload["coupon_code"],
         actor=ctx.user,
         allow_due=payload["leave_due"],
+        receipt_issued=payload["receipt_issued"],
     )
     return serializers.sale_detail(sale)
 
@@ -145,9 +148,11 @@ def list_sales(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     due: bool = False,
+    receipt: Optional[bool] = None,
 ):
     """Storico vendite con KPI {revenue, count, items_count, due_total} sul filtro corrente.
-    `due=1`: solo i conti con qualcosa ancora da saldare."""
+    `due=1`: solo i conti con qualcosa ancora da saldare. `receipt=1|0`: solo
+    le vendite con o senza scontrino."""
     ctx = request.auth
     require_scope(ctx, "sales")
     return reports.sales_history(
@@ -161,7 +166,18 @@ def list_sales(
         limit=limit,
         offset=offset,
         due=due,
+        receipt=receipt,
     )
+
+
+@router.get("/register", auth=staff_auth, response=DayRegisterOut)
+def day_register(request, date: str = ""):
+    """La cassa di un giorno (`date` YYYY-MM-DD, vuoto = oggi): ogni pagamento
+    arrivato, i totali per metodo e la divisione con/senza scontrino."""
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    day = reports._filter_day(date) or timezone.localdate()
+    return reports.day_register(ctx.salon, day)
 
 
 @router.get("/today-summary", auth=staff_auth, response=TodaySummaryOut)

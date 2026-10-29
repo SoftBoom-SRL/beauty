@@ -226,7 +226,7 @@ class AppointmentEditApiTests(AgendaTestBase):
         neighbour.refresh_from_db()
         self.assertEqual(neighbour.items.get().duration_min, 30)
 
-    def test_put_force_never_bypasses_eligibility(self):
+    def test_put_can_pass_a_service_to_an_operator_not_enabled(self):
         appointment = self._make(
             [{"service_id": self.svc60.id, "operator_id": self.op1.id}]
         )
@@ -237,7 +237,8 @@ class AppointmentEditApiTests(AgendaTestBase):
         }
         with self._windows({**self.mapping, self.op2.id: [(8 * 60, 20 * 60)]}):
             resp = self._put(f"/api/agenda/appointments/{appointment.id}", payload)
-        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.json()["items"][0]["operator_id"], self.op2.id)
 
     def test_put_without_force_never_marks_the_visit_as_forced(self):
         appointment = self._make(
@@ -502,10 +503,10 @@ class ExistingRowKeepsItsOperatorTests(EditBase):
         # un servizio aggiunto a Giulia: idem
         extra = self.rows(visit) + [{"service_id": self.cut30.id, "operator_id": self.giulia.id}]
         self.assertEqual(self.edit(visit, {"items": extra, "force": True}).status_code, 400)
-        # e chi non ha mai saputo fare il servizio non lo riceve
+        # chi di solito non fa il servizio lo riceve se il banco lo sceglie a mano
         self.marta.services.remove(self.cut30)
         swapped = self.rows(visit, {cut.id: {"operator_id": self.marta.id}})
-        self.assertEqual(self.edit(visit, {"items": swapped, "force": True}).status_code, 400)
+        self.assertEqual(self.edit(visit, {"items": swapped, "force": True}).status_code, 200)
 
 
 class ReassignFromInactiveColumnTests(EditBase):

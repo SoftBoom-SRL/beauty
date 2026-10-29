@@ -305,10 +305,11 @@ export function requestStatus({ req, reqOp, items, slots, dayRows, totalDur, ste
   const exact = (slots || []).find((s) => minutesOfDay(s.start) === req.startMin);
   if (exact) return { ok: true, slot: exact };
   let label, detail = '';
-  const notEligible = reqOp ? items.filter((it) => !isEligible(it.service_id, reqOp.id)) : [];
+  // chi la scelta a mano l'ha fatta da «Altre…» non è un errore da segnalare
+  const notEligible = reqOp ? items.filter((it) => !isEligible(it.service_id, reqOp.id) && it.operator_id !== reqOp.id) : [];
   if (reqOp && notEligible.length) {
     label = t(`${reqOp.first_name} non esegue ${serviceName(notEligible[0].service_id)}`, `${reqOp.first_name} doesn't perform ${serviceName(notEligible[0].service_id)}`);
-    detail = t('Abilita il servizio in Staff oppure scegli un’altra operatrice', 'Enable the service in Staff or pick another stylist');
+    detail = t('Scegli un’altra operatrice, oppure affidaglielo da «Altre…» sotto il servizio', 'Pick another stylist, or give it to her from “Others…” under the service');
   } else if (reqOp && dayRows) {
     const row = dayRows.find((r) => r.operator.id === reqOp.id);
     const v = row ? explainSlot(row, req.startMin, totalDur || step, { nowMin, sameClientId: clientId, t, rows: dayRows }) : null;

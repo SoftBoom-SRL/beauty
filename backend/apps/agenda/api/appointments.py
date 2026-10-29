@@ -61,6 +61,9 @@ def create_appointment(request, data: AppointmentCreateIn):
         force=data.force,
         client_overlap_ok=True,
         deposit_paid=data.deposit_paid,
+        # Il banco può affidare un servizio a un'operatrice che di solito non
+        # lo fa (vedi `resolution._chain_step`); l'app cliente no.
+        any_operator=True,
     )
     deposits.send_deposit_link(appointment)
     return _appointment_out(appointment, viewer=ctx)
@@ -115,7 +118,7 @@ def move_appointment(request, appointment_id: int, data: MoveIn):
             from_operator = salon_get(Operator, ctx, data.from_operator_id)
     appointment = appointment_services.move_appointment(
         appointment, data.start, operator=operator, from_operator=from_operator,
-        actor=ctx.user, force=data.force, client_overlap_ok=True,
+        actor=ctx.user, force=data.force, client_overlap_ok=True, any_operator=True,
     )
     return _appointment_out(appointment, viewer=ctx)
 
@@ -137,7 +140,7 @@ def split_appointment(request, appointment_id: int, data: SplitIn):
         operator = salon_get(Operator, ctx, data.operator_id, active=True)
     original, created = appointment_services.split_appointment(
         appointment, data.item_id, data.start, operator=operator, actor=ctx.user, force=data.force,
-        client_overlap_ok=True, item_ids=data.item_ids,
+        client_overlap_ok=True, item_ids=data.item_ids, any_operator=True,
     )
     return {
         "original": _appointment_out(original, viewer=ctx),
@@ -248,6 +251,7 @@ def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
         actor=ctx.user,
         expected_updated_at=data.expected_updated_at,
         client_overlap_ok=True,
+        any_operator=True,
     )
     return _appointment_out(appointment, viewer=ctx)
 
