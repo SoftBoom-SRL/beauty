@@ -382,14 +382,14 @@ def step_05_client_books(api, ctx, args):
                        body={"items": [{"service_id": ctx["svc_book"]["id"],
                                         "operator_id": operator_id}],
                              "start": slot["start"]})
-    if appt.get("created_via") != "app":
-        raise StepFail(f"created_via atteso 'app', ottenuto {appt.get('created_via')!r}")
+    # `created_via` non è nella risposta dell'app (ClientAppointmentOut lo
+    # tiene per il salone): lo controlla lo step 06, dalla dashboard.
     ctx["appt_a"] = {"id": appt["id"], "date": day, "start": slot["start"],
-                     "operator_id": appt["operator_id"],
+                     "operator_id": operator_id,
                      "service_id": ctx["svc_book"]["id"]}
     note = "" if day == today + timedelta(days=1) else f" (adattato: {day} per rispettare policy 24h)"
     return (f"appuntamento #{appt['id']} {ctx['svc_book']['name_it']} il {day} "
-            f"{slot['start'][11:16]} op={appt['operator_id']}, created_via=app{note}")
+            f"{slot['start'][11:16]} op={operator_id}{note}")
 
 
 def step_06_dashboard_sees_it(api, ctx, args):
@@ -402,6 +402,8 @@ def step_06_dashboard_sees_it(api, ctx, args):
                 if appt["id"] == a["id"] and op["id"] == a["operator_id"]), None)
     if hit is None:
         raise StepFail(f"appuntamento #{a['id']} non presente sotto l'operatrice {a['operator_id']} in /agenda/day")
+    if hit.get("created_via") != "app":
+        raise StepFail(f"created_via atteso 'app', ottenuto {hit.get('created_via')!r}")
     _, week = api.get("/api/agenda/week", token=ctx["staff_token"],
                       params={"start": a["date"].isoformat()},
                       label="GET /api/agenda/week")
@@ -409,7 +411,7 @@ def step_06_dashboard_sees_it(api, ctx, args):
                   for day in week for appt in day["appointments"])
     if not in_week:
         raise StepFail(f"appuntamento #{a['id']} assente da /agenda/week")
-    return (f"#{a['id']} (prenotato dall'APP) visibile in dashboard: /agenda/day sotto op "
+    return (f"#{a['id']} (prenotato dall'APP, created_via=app) visibile in dashboard: /agenda/day sotto op "
             f"{a['operator_id']} (status {hit['status']}) e in /agenda/week")
 
 
