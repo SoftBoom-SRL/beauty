@@ -28,6 +28,7 @@ import PrepaidForm from '../sell/PrepaidForm.jsx';
 import TotalsBox from '../sell/TotalsBox.jsx';
 import { useCoupon, useCouponRoom } from '../useCoupon.js';
 import usePackages from '../usePackages.js';
+import useClientCredit from '../useClientCredit.js';
 import {
   checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
   checkoutServiceLine, toApiLine,
@@ -108,6 +109,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const [pkgForm, setPkgForm] = useState(null);         // { opId, packageId }
   const [prepaidForm, setPrepaidForm] = useState(null); // { opId, serviceId, sessions, amt, edited }
   const packages = usePackages(!!pkgForm);
+  const credit = useClientCredit(appt?.client?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);   // CheckoutOut { sale, breakdown }
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
@@ -335,7 +337,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
             label={t('Buono sconto', 'Voucher')} placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
             style={{ marginBottom: 12 }} labelStyle={{ marginBottom: 6 }} t={t} lang={lang} />
           {dueCents > 0 ? (
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact allowDue={!!appt.client} />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact allowDue={!!appt.client} cards={credit} />
           ) : (
             <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--ok-tint)', color: 'var(--ok)', fontWeight: 600 }}>
               <Icon name="check" size={15} color="var(--ok)" stroke={2.4} />

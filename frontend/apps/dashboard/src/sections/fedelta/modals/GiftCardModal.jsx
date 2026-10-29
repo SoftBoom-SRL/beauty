@@ -37,14 +37,18 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
   // `sales`; una carta «Da pagare» la crea chi ha `marketing` (07-04).
   const [paid, setPaid] = useState(canCash);
   const [paidMethod, setPaidMethod] = useState('card');
+  // Credito che la cliente aveva già nel gestionale di prima (solo «Già pagato» a importo).
+  const [importedChoice, setImported] = useState(false);
   const [scheduled, setScheduled] = useState(false);
   const [deliveryDate, setDeliveryDate] = useState('');
   const [expiryMonths, setExpiryMonths] = useState(0); // 0 = never
 
   const prepaid = kind === 'prepaid';
+  const canImport = prepaid && type === 'amount';
+  const imported = canImport && importedChoice;
   const form = {
     kind, type, value, service, sessions, buyer, recipient, recipientName, byName: !prepaid && byName,
-    paid, paidMethod, scheduled, deliveryDate, expiryMonths, canCash, canPayLater,
+    paid, paidMethod, imported, scheduled, deliveryDate, expiryMonths, canCash, canPayLater,
   };
   const missing = giftCardMissing(form, t);
   const canSave = !missing.length;
@@ -218,13 +222,23 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
       )}
 
       <div className="t-meta" style={{ marginBottom: 8 }}>{t('Pagamento', 'Payment')}</div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: paid ? 10 : 16 }}>
-        <button style={{ ...segBtn(paid), opacity: canCash ? 1 : 0.5, cursor: canCash ? 'pointer' : 'not-allowed' }} disabled={!canCash} onClick={() => setPaid(true)}
+      <div style={{ display: 'flex', gap: 8, marginBottom: paid && !imported ? 10 : 16 }}>
+        <button style={{ ...segBtn(paid && !imported), opacity: canCash ? 1 : 0.5, cursor: canCash ? 'pointer' : 'not-allowed' }} disabled={!canCash} onClick={() => { setPaid(true); setImported(false); }}
           title={canCash ? undefined : t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required to take payment')}>{t('Pagata ora', 'Paid now')}</button>
-        <button style={{ ...segBtn(!paid), opacity: canPayLater ? 1 : 0.5, cursor: canPayLater ? 'pointer' : 'not-allowed' }} disabled={!canPayLater} onClick={() => setPaid(false)}
+        <button style={{ ...segBtn(!paid && !imported), opacity: canPayLater ? 1 : 0.5, cursor: canPayLater ? 'pointer' : 'not-allowed' }} disabled={!canPayLater} onClick={() => { setPaid(false); setImported(false); }}
           title={canPayLater ? undefined : t('Serve il permesso "marketing" per una carta da pagare dopo', 'The "marketing" permission is required for a card paid later')}>{t('Da pagare', 'Payment due')}</button>
+        {canImport && (
+          <button data-imported style={{ ...segBtn(imported), opacity: canCash ? 1 : 0.5, cursor: canCash ? 'pointer' : 'not-allowed' }} disabled={!canCash} onClick={() => setImported(true)}
+            title={t('Credito che la cliente aveva già nel gestionale di prima', 'Credit the client already had in the previous system')}>{t('Credito già esistente', 'Existing credit')}</button>
+        )}
       </div>
-      {paid && (
+      {imported && (
+        <div className="t-sm" style={{ color: 'var(--muted)', marginTop: -4, marginBottom: 16 }}>
+          {t('Il saldo che la cliente aveva sulla carta del gestionale di prima: si potrà spendere, ma non entra nella cassa di oggi.',
+             'The balance the client had on her card in the previous system: it can be spent, but it does not count in today’s register.')}
+        </div>
+      )}
+      {paid && !imported && (
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {PAY_METHODS.map(([k, it_, en_]) => (
             <button key={k} onClick={() => setPaidMethod(k)} style={pillBtn(paidMethod === k)}>{lang === 'en' ? en_ : it_}</button>

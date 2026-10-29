@@ -630,7 +630,18 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
     """
     if SaleLine.objects.filter(gift_card=card).exists():
         return None  # già venduta al banco: sarebbe un doppio conteggio
-    amount = Decimal(str(card.initial_value)).quantize(CENT)
+    return _gift_card_sale(salon, card, card.initial_value, method, actor, client=card.buyer_client)
+
+
+def record_gift_card_top_up(salon, card, amount, *, method: str, actor=None, receipt_issued=True):
+    """La ricarica di una carta (la «carta VIP» con credito): una vendita al banco
+    per l'importo caricato, così entra nella cassa del giorno e nei ricavi."""
+    client = card.recipient_client or card.buyer_client
+    return _gift_card_sale(salon, card, amount, method, actor, client=client, receipt_issued=receipt_issued)
+
+
+def _gift_card_sale(salon, card, amount, method, actor, *, client, receipt_issued=True):
+    amount = Decimal(str(amount)).quantize(CENT)
     if amount <= 0:
         return None
     if method not in Payment.Method.values:
@@ -639,9 +650,10 @@ def record_gift_card_cashed(salon, card, *, method: str, actor=None):
         sale = Sale.objects.create(
             salon=salon,
             kind=Sale.Kind.POS,
-            client=card.buyer_client,
+            client=client,
             total=amount,
             created_by=actor,
+            receipt_issued=receipt_issued,
         )
         SaleLine.objects.create(
             sale=sale,

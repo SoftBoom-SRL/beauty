@@ -20,6 +20,7 @@ import CartLine from './cart/CartLine.jsx';
 import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
 import usePackages from './usePackages.js';
+import useClientCredit from './useClientCredit.js';
 import {
   counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
 } from './lines.js';
@@ -46,6 +47,7 @@ export default function CartTab({ onGoHistory }) {
   const [cart, setCart] = useState([]);
   const [globalDisc, setGlobalDisc] = useState(0);
   const [clientSel, setClientSel] = useState(null);
+  const credit = useClientCredit(clientSel?.id ?? null, canSell);
   const [sellerId, setSellerId] = useState(() => operators[0]?.id ?? null);
   const [pay, setPay] = useState(emptyPayments());
   const [receipt, setReceipt] = useState(true);   // scontrino emesso
@@ -275,7 +277,7 @@ export default function CartTab({ onGoHistory }) {
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} cards={credit} />
             <ReceiptToggle value={receipt} onChange={setReceipt} t={t} style={{ marginTop: 12 }} />
           </div>
         </div>

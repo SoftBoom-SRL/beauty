@@ -173,6 +173,7 @@ const CASES = [
   [() => giftCardsApi.list(P), ['GET', '/api/marketing/gift-cards', { params: P }]],
   [() => giftCardsApi.create(B), ['POST', '/api/marketing/gift-cards', { body: B }]],
   [() => giftCardsApi.markPaid(121, { method: 'cash' }), ['POST', '/api/marketing/gift-cards/121/mark-paid', { body: { method: 'cash' } }]],
+  [() => giftCardsApi.topUp(121, { amount: '50.00', method: 'card' }), ['POST', '/api/marketing/gift-cards/121/top-up', { body: { amount: '50.00', method: 'card' } }]],
   [() => loyaltyApi.list(), ['GET', '/api/marketing/loyalty-programs']],
   [() => loyaltyApi.list({ active: true }), ['GET', '/api/marketing/loyalty-programs', { params: { active: true } }]],
   [() => loyaltyApi.create(B), ['POST', '/api/marketing/loyalty-programs', { body: B }]],

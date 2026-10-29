@@ -792,6 +792,61 @@ def step_19_history_and_delete_operator(api, ctx, args):
             f"operatrice nuova eliminata, {ctx['bb_op']['first_name']} (con storico) archiviata, nessuna delle due nel team")
 
 
+def step_20_vip_card(api, ctx, args):
+    """Carta VIP: credito portato dal gestionale di prima, ricarica in cassa, spesa al banco."""
+    need(ctx, "staff_token", "app_client_id")
+    tok, today = ctx["staff_token"], now_rome().date().isoformat()
+
+    def cash_in():
+        _, reg = api.get("/api/sales/register", token=tok, params={"date": today}, label="GET /api/sales/register")
+        return D(reg["cash_in"])
+
+    start = cash_in()
+    _, card = api.post("/api/marketing/gift-cards", token=tok,
+                       body={"kind": "prepaid", "value": "80.00", "recipient_client_id": ctx["app_client_id"],
+                             "imported": True},
+                       label="POST /api/marketing/gift-cards (credito già esistente)")
+    if card["payment_status"] != "paid" or D(card["balance"]) != D("80.00"):
+        raise StepFail(f"credito importato non spendibile: {short(card)}")
+    if cash_in() != start:
+        raise StepFail("il credito importato è entrato nella cassa di oggi")
+    _, card = api.post(f"/api/marketing/gift-cards/{card['id']}/top-up", token=tok,
+                       body={"amount": "50.00", "method": "card"},
+                       label="POST /api/marketing/gift-cards/{id}/top-up")
+    if D(card["balance"]) != D("130.00"):
+        raise StepFail(f"saldo dopo la ricarica errato: {short(card)}")
+    if cash_in() != start + D("50.00"):
+        raise StepFail("la ricarica non è entrata nella cassa di oggi")
+    _, wallet = api.get("/api/marketing/gift-cards", token=tok,
+                        params={"client_id": ctx["app_client_id"], "status": "active", "payment_status": "paid"},
+                        label="GET /api/marketing/gift-cards?client_id=…")
+    if not any(g["id"] == card["id"] for g in wallet["items"]):
+        raise StepFail("la carta non compare fra quelle della cliente")
+    _, products = api.get("/api/inventory/products", token=tok, params={"limit": 100},
+                          label="GET /api/inventory/products")
+    items = products["items"] if isinstance(products, dict) else products
+    product = next((p for p in items if p["active"] and p["usage"] in ("retail", "mixed")
+                    and D(p["stock_qty"]) >= 1 and D(p["sale_price"]) > 0), None)
+    if product is None:
+        raise StepFail("nessun prodotto in vendita con giacenza nel seed")
+    price = D(product["sale_price"])
+    api.post("/api/sales/pos", token=tok, body={
+        "client_id": ctx["app_client_id"],
+        "blocks": [{"operator_id": None, "lines": [
+            {"line_type": "product", "product_id": product["id"], "qty": 1, "unit_price": str(price)}]}],
+        "payments": [{"method": "gift_card", "amount": str(price), "gift_card_code": card["code"]}],
+    }, label="POST /api/sales/pos (pagata col credito)")
+    _, wallet = api.get("/api/marketing/gift-cards", token=tok, params={"client_id": ctx["app_client_id"]},
+                        label="GET /api/marketing/gift-cards?client_id=…")
+    after = next(g for g in wallet["items"] if g["id"] == card["id"])
+    if D(after["balance"]) != D("130.00") - price:
+        raise StepFail(f"saldo non scalato dalla spesa: {short(after)}")
+    if cash_in() != start + D("50.00"):
+        raise StepFail("la spesa col credito è contata come incasso")
+    return (f"credito importato €80 (cassa invariata), ricarica €50 con carta (+€50 in cassa), "
+            f"«{product['name']}» €{price} pagato col credito: saldo €{after['balance']}")
+
+
 STEPS = [
     ("Staff login (dashboard) + /auth/me", step_01_staff_login),
     ("Staff refresh token", step_02_staff_refresh),
@@ -812,6 +867,7 @@ STEPS = [
     ("Conto con prodotto, metà da saldare, senza scontrino", step_17_checkout_product_due_no_receipt),
     ("Cassa del giorno e saldo del conto", step_18_register_and_settle),
     ("Storico cliente con pagamenti + eliminazione operatrice", step_19_history_and_delete_operator),
+    ("Carta VIP: credito importato, ricarica, spesa", step_20_vip_card),
 ]
 
 

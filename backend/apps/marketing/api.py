@@ -47,6 +47,7 @@ from .gift_cards import (
     create_gift_card,
     gift_card_kpis,
     sell_gift_card,
+    top_up_gift_card,
 )
 from .loyalty import apply_program_data
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
@@ -67,6 +68,7 @@ from .schemas import (
     LoyaltyProgramOut,
     MarketingConsentIn,
     MarkPaidIn,
+    TopUpIn,
     WalletOut,
 )
 
@@ -287,7 +289,8 @@ def create_gift_card_staff(request, data: GiftCardIn):
     # carta intestata alla destinataria (il POS crea solo carte con un nome
     # scritto a mano), e un ruolo solo-marketing registrava incassi senza poter
     # vedere la cassa. Una carta che nasce da pagare resta del marketing.
-    require_scope(ctx, "sales" if data.paid else "marketing")
+    # Importare un credito crea saldo spendibile: è della cassa come un incasso.
+    require_scope(ctx, "sales" if data.paid or data.imported else "marketing")
     buyer = _get_client(ctx, data.buyer_client_id) if data.buyer_client_id else None
     # Gift card trattamento: il valore è (autoritativamente) il prezzo del servizio
     # per le sedute, e `sell_gift_card` ignora l'eventuale `value` inviato.
@@ -308,6 +311,18 @@ def create_gift_card_staff(request, data: GiftCardIn):
         actor=ctx.user,
         kind=data.kind,
         sessions=data.sessions,
+        imported=data.imported,
+    )
+
+
+@router.post("/gift-cards/{int:card_id}/top-up", auth=staff_auth, response=GiftCardOut)
+def top_up_gift_card_staff(request, card_id: int, data: TopUpIn):
+    """Ricarica di una carta a importo (la «carta VIP»): incasso in cassa."""
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    card = salon_get(GiftCard, ctx, card_id)
+    return top_up_gift_card(
+        ctx.salon, card, data.amount, method=data.method, actor=ctx.user, receipt_issued=data.receipt_issued
     )
 
 

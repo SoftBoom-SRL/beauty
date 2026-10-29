@@ -8,7 +8,7 @@
 // pagamenti in anticipo, sedute dei pacchetti) stanno in cima: è la prima cosa
 // da sapere quando chiama o arriva.
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon, ProgressBar, fmtEurNoFree } from '@youty/shared';
+import { Icon, ProgressBar, fmtEurNoFree, toastApiError } from '@youty/shared';
 import { DkModal } from '../../../ui/index.js';
 import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
@@ -16,6 +16,11 @@ import { dateLabel, rewardLabel } from '../helpers.js';
 import { couponsApi, giftCardsApi, loyaltyApi } from '../../../api/marketing.js';
 import { creditIcon, creditKind, creditOrigin, giverName, ownsCredit, sessionsLabel, sessionsLeftText, splitClientCredits } from '../../fedelta/credits.js';
 import { effectiveStatus } from '../../fedelta/meta.js';
+import { payMethods } from '../../pos/lib.js';
+import ReceiptToggle from '../../pos/ReceiptToggle.jsx';
+
+/** Carta a importo intestata alla cliente stessa: il suo credito prepagato («carta VIP»). */
+const isCredit = (g) => g.kind === 'prepaid' && g.gift_service_id == null;
 
 /* Caricamento fallito: non è «nessun coupon». Prima un errore di rete si
  * leggeva come elenco vuoto, e alla cliente si diceva che non aveva buoni. */
@@ -114,7 +119,9 @@ function LoadFailed({ msg, onRetry, t }) {
 }
 
 export default function WalletTab({ c }) {
-  const { t, lang, services, fireToast } = useDash();
+  const { t, lang, services, fireToast, hasScope } = useDash();
+  // Ricarica della carta a importo («carta VIP»): importo, metodo, scontrino.
+  const [topUp, setTopUp] = useState({ amt: '', method: 'card', receipt: true, busy: false });
   const [coupons, setCoupons] = useState(null);   // null = in caricamento · FAILED · []
   const [gifts, setGifts] = useState(null);
   const [loyalty, setLoyalty] = useState(null);   // [{ program, points } | { program, failed }]
@@ -174,6 +181,23 @@ export default function WalletTab({ c }) {
   const activeGifts = credits.others.filter((g) => g.status === 'active').length;
   const viewKind = giftView ? creditKind(giftView) : 'gift';
   const viewTreatment = !!giftView && giftView.gift_service_id != null;
+  const canTopUp = (g) => hasScope('sales') && g.gift_service_id == null && g.payment_status === 'paid'
+    && effectiveStatus(g) !== 'expired' && ownsCredit(g, c.id);
+  const doTopUp = async (g) => {
+    const amount = Number(String(topUp.amt).replace(',', '.'));
+    if (!(amount > 0)) { fireToast({ msg: t('Indica quanto ricaricare', 'Enter the top-up amount'), icon: 'alert' }); return; }
+    setTopUp((s) => ({ ...s, busy: true }));
+    try {
+      const card = await giftCardsApi.topUp(g.id, { amount: amount.toFixed(2), method: topUp.method, receipt_issued: topUp.receipt });
+      fireToast({ msg: t(`Ricaricata: saldo ${fmtEurNoFree(card.balance, 'it')}`, `Topped up: balance ${fmtEurNoFree(card.balance, 'en')}`), icon: 'check' });
+      setGiftView(card);
+      setTopUp({ amt: '', method: topUp.method, receipt: true, busy: false });
+      retry();
+    } catch (err) {
+      toastApiError(err, fireToast, t);
+      setTopUp((s) => ({ ...s, busy: false }));
+    }
+  };
 
   return (
     <div style={{ maxWidth: 660 }}>
@@ -305,7 +329,7 @@ export default function WalletTab({ c }) {
                 <QrGlyph code={g.code} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, fontSize: 15 }}>{isBuyer ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')}</span>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>{isCredit(g) ? t('Credito prepagato', 'Prepaid credit') : isBuyer ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')}</span>
                     <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 6 }}>{g.code}</span>
                     {g.payment_status === 'unpaid' && <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>{t('Da pagare', 'Unpaid')}</span>}
                     {/* un trattamento comprato per un'altra persona: quale, e quante sedute */}
@@ -365,7 +389,7 @@ export default function WalletTab({ c }) {
                 [t('Sedute', 'Sessions'), sessionsLeftText(giftView, t)],
                 ...(Number(giftView.sessions_total) > 1 ? [[t('Una seduta', 'One session'), fmtEurNoFree(giftView.session_value, lang)]] : []),
               ] : [
-                [t('Tipo', 'Type'), giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
+                [t('Tipo', 'Type'), isCredit(giftView) ? t('Credito prepagato', 'Prepaid credit') : giftView.buyer_client_id === c.id ? t('Acquistata · da regalare', 'Bought · to gift') : t('Ricevuta in regalo', 'Received as a gift')],
                 [giftView.buyer_client_id === c.id ? t('Destinataria', 'For') : t('Regalata da', 'From'), (giftView.buyer_client_id === c.id ? giftView.recipient_name : giftView.buyer_name) || '—'],
                 ...(viewTreatment ? [[t('Trattamento', 'Treatment'), [giftView.gift_service_name, sessionsLabel(giftView, t)].filter(Boolean).join(' · ')]] : []),
               ]),
@@ -380,6 +404,29 @@ export default function WalletTab({ c }) {
               </div>
             ))}
           </div>
+          {canTopUp(giftView) && (
+            <div data-top-up style={{ borderTop: '1px solid var(--hair)', paddingTop: 14, marginTop: 4 }}>
+              <div className="t-meta" style={{ marginBottom: 8 }}>{t('Ricarica', 'Top up')}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid var(--hair)', borderRadius: 9, padding: '7px 9px', background: 'var(--surface)' }}>
+                  <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
+                  <input type="text" inputMode="decimal" value={topUp.amt} placeholder="0,00" aria-label={t('Importo della ricarica', 'Top-up amount')}
+                    onChange={(e) => setTopUp((s) => ({ ...s, amt: e.target.value.replace(/[^0-9.,]/g, '') }))}
+                    style={{ border: 'none', outline: 'none', background: 'transparent', fontFamily: 'ui-monospace, monospace', fontWeight: 700, fontSize: 13.5, width: 70 }} />
+                </div>
+                {payMethods(t).filter(([k]) => k !== 'gift_card').map(([k, l]) => (
+                  <button key={k} type="button" className="dk-pill" aria-pressed={topUp.method === k} onClick={() => setTopUp((s) => ({ ...s, method: k }))}
+                    style={{ padding: '6px 11px', fontSize: 12.5, fontWeight: 700, background: topUp.method === k ? 'var(--ink)' : undefined, color: topUp.method === k ? '#fff' : undefined }}>{l}</button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                <div style={{ flex: 1 }}><ReceiptToggle value={topUp.receipt} onChange={(receipt) => setTopUp((s) => ({ ...s, receipt }))} t={t} /></div>
+                <button className="dk-btn dk-btn--clay" disabled={topUp.busy} onClick={() => doTopUp(giftView)}>
+                  <Icon name="plus" size={16} color="#fff" />{t('Ricarica', 'Top up')}
+                </button>
+              </div>
+            </div>
+          )}
         </DkModal>
       )}
     </div>
