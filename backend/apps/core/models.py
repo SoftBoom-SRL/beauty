@@ -40,6 +40,9 @@ class Salon(TimeStampedModel):
         max_length=64, null=True, blank=True, unique=True, editable=False
     )
     voice_api_key_created_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # Strumenti dell'assistente che il salone NON permette (vuota = tutti):
+    # cosa l'agente Yourang può leggere e fare, da Impostazioni › Assistente.
+    voice_disabled_tools = models.JSONField(default=list, blank=True)
     # Chiave con cui uno strumento esterno (n8n, Make, Zapier) legge gli
     # appuntamenti in arrivo per mandare messaggi per trattamento
     # (integrations.automation_key). Separata da quella vocale: revocarne una

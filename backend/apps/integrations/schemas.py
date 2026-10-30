@@ -50,6 +50,11 @@ class VoiceStatusOut(Schema):
     created_at: Optional[datetime] = None
     connected: bool
     needs_reconnect: bool
+    tools: list[str] = []  # strumenti permessi (voice.TOOL_NAMES)
+
+
+class VoiceToolsIn(Schema):
+    tools: list[str]
 
 
 class AutomationKeyOut(Schema):

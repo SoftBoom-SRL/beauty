@@ -207,6 +207,49 @@ _TOOLS = (
     ),
 )
 TOOL_NAMES = tuple(tool[0] for tool in _TOOLS)
+# Chi scrive ha bisogno di leggere: senza gli id dei servizi o dell'appuntamento
+# l'agente non prenota, non sposta e non annulla.
+NEEDS = {
+    "create_appointment": ("list_services", "check_availability"),
+    "reschedule_appointment": ("find_appointments", "check_availability"),
+    "cancel_appointment": ("find_appointments",),
+}
+NOT_ALLOWED = {
+    "success": False,
+    "error": "not_allowed",
+    "message": "Il salone non permette all'assistente di farlo: proponi alla cliente di contattare il salone",
+}
+
+
+def enabled_tools(salon) -> list[str]:
+    """Gli strumenti che il salone permette all'agente (di serie tutti)."""
+    off = set(salon.voice_disabled_tools or ())
+    on = [name for name in TOOL_NAMES if name not in off]
+    return [name for name in on if all(need in on for need in NEEDS.get(name, ()))]
+
+
+def refused(salon, tool: str) -> dict | None:
+    """La risposta per l'agente se lo strumento non è permesso, altrimenti None."""
+    return None if tool in enabled_tools(salon) else NOT_ALLOWED
+
+
+def set_tools(salon, tools, actor) -> None:
+    """Salva cosa l'agente può fare e, se l'assistente è attivo, lo riporta su Yourang.
+
+    Le rotte controllano comunque il permesso: se Yourang non risponde, uno
+    strumento spento resta installato ma risponde «non permesso».
+    """
+    wanted = set(tools) & set(TOOL_NAMES)
+    for name in list(wanted):
+        wanted.update(NEEDS.get(name, ()))
+    salon.voice_disabled_tools = [name for name in TOOL_NAMES if name not in wanted]
+    salon.save(update_fields=["voice_disabled_tools"])
+    log_activity(
+        salon, "integration.voice_tools", "Permessi dell'assistente Yourang aggiornati",
+        actor=actor, payload={"tools": enabled_tools(salon)},
+    )
+    if salon.voice_api_key_hash:
+        install(salon, actor)
 
 RECONNECT = "Ricollega Yourang dalle Impostazioni per attivare l'assistente vocale"
 
@@ -215,7 +258,7 @@ class VoiceSetupError(Exception):
     """L'installazione non è riuscita; il messaggio è per il titolare."""
 
 
-def tool_specs(base_url: str, key: str) -> list[dict]:
+def tool_specs(base_url: str, key: str, names=TOOL_NAMES) -> list[dict]:
     """Gli strumenti nel formato dell'external API Yourang (PUT /external-tools/{nome}).
 
     Il routing dei parametri va scritto: Yourang manda nel corpo ciò che non ha
@@ -239,6 +282,7 @@ def tool_specs(base_url: str, key: str) -> list[dict]:
             "is_enabled": True,
         }
         for name, display, method, where, path, description, schema in _TOOLS
+        if name in names
     ]
 
 
@@ -266,6 +310,7 @@ def status(salon) -> dict:
         "created_at": salon.voice_api_key_created_at,
         "connected": conn is not None,
         "needs_reconnect": needs_reconnect(conn),
+        "tools": enabled_tools(salon),
     }
 
 
@@ -290,8 +335,12 @@ def install(salon, actor) -> None:
     key = generate_key()
     with YourangClient(conn) as client:
         try:
-            for tool in tool_specs(settings.PUBLIC_API_URL, key):
+            allowed = enabled_tools(salon)
+            for tool in tool_specs(settings.PUBLIC_API_URL, key, allowed):
                 client.upsert_external_tool(tool)
+            for name in TOOL_NAMES:
+                if name not in allowed:
+                    client.delete_external_tool(name)
         except Exception as exc:  # noqa: BLE001 — qualunque guasto è un'installazione da ripetere
             raise _yourang_failure(exc) from exc
         rotate_key(salon, actor, key)
