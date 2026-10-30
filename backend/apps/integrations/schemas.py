@@ -78,3 +78,17 @@ class VoiceAppointmentIn(Schema):
     customer_name: str = ""
     customer_phone: Union[str, int] = ""
     notes: str = ""
+
+
+class VoiceRescheduleIn(Schema):
+    """Spostamento dell'agente vocale: tipi larghi come in VoiceAppointmentIn."""
+
+    appointment_id: Union[str, int] = ""
+    customer_phone: Union[str, int] = ""
+    date: str = ""
+    time: str = ""
+
+
+class VoiceCancelIn(Schema):
+    appointment_id: Union[str, int] = ""
+    customer_phone: Union[str, int] = ""

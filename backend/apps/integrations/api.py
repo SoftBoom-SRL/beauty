@@ -35,6 +35,8 @@ from .schemas import (
     ExchangeIn,
     StatusOut,
     VoiceAppointmentIn,
+    VoiceCancelIn,
+    VoiceRescheduleIn,
     VoiceStatusOut,
 )
 
@@ -242,12 +244,13 @@ def voice_services(request):
 
 
 @router.get("/voice/availability", auth=voice.voice_auth)
-def voice_availability(request, date: str = "", services: str = ""):
-    """Orari liberi («HH:MM») in quel giorno per i servizi indicati (id separati da virgola).
+def voice_availability(request, date: str = "", services: str = "", appointment_id: str = ""):
+    """Orari liberi («HH:MM») in quel giorno per i servizi indicati (id separati da virgola),
+    o per spostare l'appuntamento `appointment_id`.
 
     `times` vuoto: salone pieno o chiuso. `date_label` è la data da leggere alla cliente.
     """
-    return voice.availability_reply(request.auth, date, services)
+    return voice.availability_reply(request.auth, date, services, appointment_id)
 
 
 @router.post("/voice/appointments", auth=voice.voice_auth)
@@ -258,6 +261,25 @@ def voice_book(request, data: VoiceAppointmentIn):
     `alternatives`) o `invalid_request` (correggere quanto dice `message`).
     """
     return voice.booking_reply(request.auth, data)
+
+
+@router.get("/voice/appointments", auth=voice.voice_auth)
+def voice_find(request, customer_phone: str = ""):
+    """Prossimi appuntamenti della cliente con quel numero (e di chi si contatta tramite lei)."""
+    return voice.appointments_reply(request.auth, customer_phone)
+
+
+@router.post("/voice/appointments/reschedule", auth=voice.voice_auth)
+def voice_reschedule(request, data: VoiceRescheduleIn):
+    """Sposta un appuntamento della cliente. `error`: `unavailable` (con `alternatives`),
+    `too_late` (sotto il preavviso decide il salone) o `invalid_request`."""
+    return voice.reschedule_reply(request.auth, data)
+
+
+@router.post("/voice/appointments/cancel", auth=voice.voice_auth)
+def voice_cancel(request, data: VoiceCancelIn):
+    """Annulla un appuntamento della cliente. `error`: `too_late` o `invalid_request`."""
+    return voice.cancel_reply(request.auth, data)
 
 
 @router.get("/voice/assistant", auth=staff_auth, response=VoiceStatusOut)

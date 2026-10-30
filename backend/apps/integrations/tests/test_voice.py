@@ -1,10 +1,12 @@
 """Assistente vocale: l'agente Yourang legge servizi e orari e prenota al telefono."""
 
+import datetime as dt
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import httpx
 from django.test import override_settings
+from django.utils import timezone
 
 from apps.agenda.models import Appointment
 from apps.agenda.tests.base import RealShiftsTestBase
@@ -107,7 +109,10 @@ class VoiceInstallTests(VoiceTestBase):
         self.assertEqual([c.args[1] for c in puts], [f"/external-tools/{n}" for n in voice.TOOL_NAMES])
         tool = puts[1].kwargs["json"]
         self.assertEqual(tool["webhook_url"], "https://beautyapi.test/api/integrations/voice/availability")
-        self.assertEqual(tool["parameter_routing"], {"date": {"location": "query"}, "services": {"location": "query"}})
+        self.assertEqual(
+            tool["parameter_routing"],
+            {"date": {"location": "query"}, "services": {"location": "query"}, "appointment_id": {"location": "query"}},
+        )
         self.assertEqual(
             [c.args[1] for c in req.call_args_list if c.args[0] == "PATCH"],
             ["/agents/ag-1/tools/make-reservation", "/agents/ag-2/tools/make-reservation"],
@@ -255,3 +260,88 @@ class VoiceAddonTests(VoiceTestBase):
         appointment = Appointment.objects.get(id=data["appointment_id"])
         self.assertEqual([row.duration_min for row in appointment.items.all()], [60, 0])
         self.assertEqual(appointment.end, aware(self.day, 19))
+
+
+class VoiceRescheduleCancelTests(VoiceTestBase):
+    """Al telefono o in chat la cliente sposta e annulla, con le regole dell'app."""
+
+    def setUp(self):
+        super().setUp()
+        self.appt = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
+        self.phone = "333 000 0001"  # Anna, scritto come lo detta lei
+
+    def find(self, phone=None):
+        res = self.client.get(
+            f"/api/integrations/voice/appointments?customer_phone={phone or self.phone}", **self.auth
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        return res.json()
+
+    def call(self, action, **fields):
+        body = {"appointment_id": str(self.appt.id), "customer_phone": self.phone, **fields}
+        res = post_json(self.client, f"/api/integrations/voice/appointments/{action}", body, **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        return res.json()
+
+    def test_finds_the_callers_upcoming_appointments_only(self):
+        self.book(self.bea, self.marta, aware(self.day, 11), [(self.cut30, 30, 0)])
+        data = self.find()
+        self.assertEqual([a["appointment_id"] for a in data["appointments"]], [self.appt.id])
+        self.assertEqual((data["appointments"][0]["time"], data["appointments"][0]["services"]), ("10:00", ["Taglio"]))
+        self.assertEqual(self.find("+39 345 999 9999")["appointments"], [])
+
+    def test_a_daughter_booked_with_her_mothers_number_is_found_too(self):
+        daughter = Client.objects.create(salon=self.salon, first_name="Lia", last_name="R", contact_client=self.anna)
+        self.book(daughter, self.marta, aware(self.day, 12), [(self.cut30, 30, 0)])
+        self.assertEqual([a["client_name"] for a in self.find()["appointments"]], ["Anna", "Lia"])
+
+    def test_moving_checks_the_visits_own_times_and_moves_it(self):
+        times = self.client.get(
+            f"/api/integrations/voice/availability?date={self.day.isoformat()}&appointment_id={self.appt.id}", **self.auth
+        ).json()["times"]
+        self.assertIn("10:00", times)  # la visita stessa non occupa il suo orario
+        data = self.call("reschedule", date=self.day.isoformat(), time="15:00")
+        self.assertTrue(data["success"], data)
+        self.appt.refresh_from_db()
+        self.assertEqual(self.appt.start, aware(self.day, 15))
+        self.assertTrue(OutboxEvent.objects.filter(event_type="appointment.moved").exists())
+        self.assertTrue(self.call("reschedule", date=self.day.isoformat(), time="15:00")["success"])  # ritentativo
+
+    def test_a_taken_time_offers_alternatives(self):
+        for op, client in ((self.giulia, self.bea), (self.marta, self.bea)):
+            self.book(client, op, aware(self.day, 15), [(self.cut30, 30, 0)])
+        data = self.call("reschedule", date=self.day.isoformat(), time="15:00")
+        self.assertEqual(data["error"], "unavailable")
+        self.assertTrue(data["alternatives"])
+        self.assertNotIn("15:00", data["alternatives"])
+        self.appt.refresh_from_db()
+        self.assertEqual(self.appt.start, aware(self.day, 10))
+
+    def test_cancelling_frees_the_slot_and_counts_as_the_clients_cancellation(self):
+        data = self.call("cancel")
+        self.assertTrue(data["success"], data)
+        self.appt.refresh_from_db()
+        self.assertEqual(self.appt.status, Appointment.Status.CANCELLED)
+        self.assertTrue(OutboxEvent.objects.filter(event_type="appointment.cancelled").exists())
+        self.assertTrue(self.call("cancel")["success"])  # ritentativo
+        self.assertEqual(self.find()["appointments"], [])
+
+    def test_someone_elses_appointment_is_not_touched(self):
+        for action, extra in (("cancel", {}), ("reschedule", {"date": self.day.isoformat(), "time": "15:00"})):
+            data = self.call(action, customer_phone="+39 333 000 0002", **extra)  # Bea
+            self.assertEqual(data["error"], "invalid_request")
+        self.appt.refresh_from_db()
+        self.assertEqual((self.appt.status, self.appt.start), (Appointment.Status.CONFIRMED, aware(self.day, 10)))
+
+    def test_too_close_to_the_visit_the_salon_decides(self):
+        soon = self.book(self.anna, self.marta, timezone.now() + dt.timedelta(hours=3), [(self.cut30, 30, 0)])
+        for action, extra in (("cancel", {}), ("reschedule", {"date": self.day.isoformat(), "time": "15:00"})):
+            data = self.call(action, appointment_id=soon.id, **extra)
+            self.assertEqual(data["error"], "too_late", data)
+        soon.refresh_from_db()
+        self.assertEqual(soon.status, Appointment.Status.CONFIRMED)
+
+    def test_bad_ids_and_phones_are_answered_200(self):
+        self.assertEqual(self.call("cancel", appointment_id="domani")["error"], "invalid_request")
+        self.assertEqual(self.call("cancel", customer_phone="")["error"], "invalid_request")
+        self.assertEqual(self.find("abc")["error"], "invalid_request")
