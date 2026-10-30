@@ -1,7 +1,8 @@
 """Prenotazioni al telefono: l'agente vocale Yourang prenota mentre parla con la cliente.
 
-Come in food (Impostazioni → Assistente vocale): l'agente ha tre «strumenti
-esterni» (servizi, disponibilità, prenotazione) che chiamano le rotte
+Come in food (Impostazioni → Assistente vocale): l'agente ha degli «strumenti
+esterni» (servizi, disponibilità, prenotazione; ritrovare, spostare e annullare
+un appuntamento della cliente) che chiamano le rotte
 `/voice/...` con una chiave Bearer del salone. La chiave non passa dall'OAuth:
 il backend la genera e installa gli strumenti sull'org Yourang da sé, appena
 il salone si collega (`install`, più sotto); la chiave non esce dal server.
@@ -34,7 +35,7 @@ from apps.agenda.models import Appointment
 from apps.agenda.schemas import MAX_ITEMS_PER_REQUEST
 from apps.core.models import Salon
 from apps.core.services import default_location, log_activity
-from common.phone import normalize_phone
+from common.phone import find_client_by_phone, normalize_phone
 
 from .client import YourangClient
 from .models import YourangConnection
@@ -95,7 +96,7 @@ def revoke_key(salon, actor) -> None:
 # Prima il titolare generava la chiave, scaricava un file JSON e lo importava
 # sull'agente (Strumenti → Strumenti esterni → Importa), poi spegneva a mano la
 # prenotazione interna: troppi passi, e la chiave passava per le sue mani. Ora
-# il backend installa i tre strumenti sull'org (valgono per tutti gli agenti)
+# il backend installa gli strumenti sull'org (valgono per tutti gli agenti)
 # con l'external API, e la chiave non esce mai dal server.
 
 _DATE = {
@@ -105,6 +106,15 @@ _DATE = {
 _SERVICES = {
     "type": "string",
     "description": "Id dei servizi scelti, presi da list_services, separati da virgola, es. 12,15",
+}
+_PHONE = {
+    "type": "string",
+    "description": "Telefono della cliente in formato internazionale, es. +393331234567. "
+    "Se è d'accordo usa il numero da cui chiama o scrive",
+}
+_APPOINTMENT = {
+    "type": "string",
+    "description": "Id dell'appuntamento, preso da find_appointments",
 }
 
 # Le descrizioni le legge l'agente, non l'utente: per questo solo in italiano.
@@ -122,8 +132,14 @@ _TOOLS = (
         "Controlla gli orari liberi del salone in una data per i servizi scelti. Usalo SEMPRE prima di "
         'prenotare. Proponi solo orari presenti in "times"; se "times" è vuoto il salone è pieno o chiuso '
         "quel giorno: proponi un altro giorno. Se success è false, correggi i dati indicati in "
-        '"message" e riprova. Per dire la data alla cliente leggi "date_label".',
-        {"type": "object", "properties": {"date": _DATE, "services": _SERVICES}, "required": ["date", "services"]},
+        '"message" e riprova. Per dire la data alla cliente leggi "date_label". Per SPOSTARE un '
+        'appuntamento passa il suo "appointment_id" al posto dei servizi: gli orari sono quelli della '
+        "stessa visita.",
+        {
+            "type": "object",
+            "properties": {"date": _DATE, "services": _SERVICES, "appointment_id": _APPOINTMENT},
+            "required": ["date"],
+        },
     ),
     (
         "create_appointment", "Prenota appuntamento", "POST", "body", "appointments",
@@ -150,6 +166,45 @@ _TOOLS = (
             "required": ["date", "time", "services", "customer_name", "customer_phone"],
         },
     ),
+    (
+        "find_appointments", "Appuntamenti della cliente", "GET", "query", "appointments",
+        "Elenca i prossimi appuntamenti della cliente dal suo numero di telefono, con id, data "
+        '("date_label"), orario, servizi e operatrice. Usalo quando la cliente vuole spostare o '
+        "annullare: se ne ha più di uno chiedile quale. Se l'elenco è vuoto il numero non ha "
+        "appuntamenti: chiedi se ha prenotato con un altro numero.",
+        {"type": "object", "properties": {"customer_phone": _PHONE}, "required": ["customer_phone"]},
+    ),
+    (
+        "reschedule_appointment", "Sposta appuntamento", "POST", "body", "appointments/reschedule",
+        "Sposta un appuntamento della cliente a un nuovo giorno e orario, con gli stessi servizi. "
+        'Prima trova gli orari liberi con check_availability passando "appointment_id". Chiamalo SOLO '
+        "dopo aver letto alla cliente il nuovo giorno e orario e aver ricevuto un sì. Se success è "
+        'false: con "unavailable" proponi gli orari in "alternatives"; con "too_late" spiega che a '
+        "ridosso dell'appuntamento deve parlarne con il salone; con \"invalid_request\" correggi i "
+        "dati e riprova.",
+        {
+            "type": "object",
+            "properties": {
+                "appointment_id": _APPOINTMENT,
+                "customer_phone": _PHONE,
+                "date": _DATE,
+                "time": {"type": "string", "description": "Nuovo orario HH:MM, es. 15:30: uno di quelli di check_availability"},
+            },
+            "required": ["appointment_id", "customer_phone", "date", "time"],
+        },
+    ),
+    (
+        "cancel_appointment", "Annulla appuntamento", "POST", "body", "appointments/cancel",
+        "Annulla un appuntamento della cliente. Chiamalo SOLO dopo aver letto alla cliente quale "
+        "appuntamento (giorno, orario, servizi) e aver ricevuto un sì. Proponi prima di spostarlo, "
+        'se le va. Se success è false: con "too_late" spiega che a ridosso dell\'appuntamento deve '
+        'parlarne con il salone; con "invalid_request" correggi i dati e riprova.',
+        {
+            "type": "object",
+            "properties": {"appointment_id": _APPOINTMENT, "customer_phone": _PHONE},
+            "required": ["appointment_id", "customer_phone"],
+        },
+    ),
 )
 TOOL_NAMES = tuple(tool[0] for tool in _TOOLS)
 
@@ -161,7 +216,7 @@ class VoiceSetupError(Exception):
 
 
 def tool_specs(base_url: str, key: str) -> list[dict]:
-    """I tre strumenti nel formato dell'external API Yourang (PUT /external-tools/{nome}).
+    """Gli strumenti nel formato dell'external API Yourang (PUT /external-tools/{nome}).
 
     Il routing dei parametri va scritto: Yourang manda nel corpo ciò che non ha
     routing, e una GET il corpo non lo invia.
@@ -319,10 +374,13 @@ def services_reply(salon) -> list[dict]:
     ]
 
 
-def availability_reply(salon, date: str, services) -> dict:
+def availability_reply(salon, date: str, services, appointment_id="") -> dict:
     try:
         day = _parse_day(date)
-        times = list(_free_slots(salon, day, _parse_services(services)))
+        if str(appointment_id or "").strip():
+            times = list(_move_slots(salon, _open_appointment(salon, appointment_id), day))
+        else:
+            times = list(_free_slots(salon, day, _parse_services(services)))
     except HttpError as err:
         return _invalid(err)
     return {"success": True, "date": day.isoformat(), "date_label": date_label(day), "times": times}
@@ -336,9 +394,7 @@ def booking_reply(salon, data) -> dict:
         name = " ".join(str(data.customer_name or "").split())
         if not name:
             raise HttpError(400, "Manca il nome della cliente")
-        phone = normalize_phone(str(data.customer_phone or ""))
-        if not phone:
-            raise HttpError(400, "Telefono non valido: serve quello della cliente, es. +393331234567")
+        phone = _phone(data.customer_phone)
         appointment = book(
             salon, day=day, time=time, service_ids=service_ids, name=name, phone=phone,
             notes=str(data.notes or "")[:MAX_NOTES],
@@ -427,12 +483,179 @@ def _free_slots(salon, day, service_ids) -> dict:
 
 
 def _nearest_times(salon, day, service_ids, time) -> list[str]:
+    return _closest(_free_slots(salon, day, service_ids), time)
+
+
+def _closest(times, time) -> list[str]:
     def minutes(hhmm):
         hours, mins = hhmm.split(":")
         return int(hours) * 60 + int(mins)
 
-    times = sorted(_free_slots(salon, day, service_ids), key=lambda t: abs(minutes(t) - minutes(time)))
-    return sorted(times[:MAX_ALTERNATIVES])
+    return sorted(sorted(times, key=lambda t: abs(minutes(t) - minutes(time)))[:MAX_ALTERNATIVES])
+
+
+# ---- Spostare e annullare: la cliente al telefono o in chat -------------------
+# Le regole dell'app cliente: solo gli appuntamenti di chi chiama (dal numero,
+# l'id da solo non basta) e solo con CLIENT_MOVE_CANCEL_MIN_HOURS ore di
+# preavviso. Sotto la soglia decide il salone, come quando l'app rimanda a lui.
+
+AGENT_CANCEL_REASON = "Disdetta dalla cliente con l'assistente Yourang"
+MAX_LISTED = 10
+
+
+def appointments_reply(salon, customer_phone) -> dict:
+    try:
+        client_ids = _caller_client_ids(salon, _phone(customer_phone))
+    except HttpError as err:
+        return _invalid(err)
+    upcoming = (
+        Appointment.objects.filter(
+            salon=salon, client_id__in=client_ids,
+            status__in=Appointment.OPEN_STATUSES, start__gte=timezone.now(),
+        )
+        .select_related("operator", "client")
+        .order_by("start")[:MAX_LISTED]
+    )
+    return {"success": True, "appointments": [_appointment_out(a) for a in upcoming]}
+
+
+def reschedule_reply(salon, data) -> dict:
+    from apps.agenda.services.appointments import move_appointment
+    from apps.agenda.services.availability import _client_move_reassignment
+    from apps.agenda.services.transitions import client_notice_ok
+
+    try:
+        appointment = _callers_appointment(salon, data.appointment_id, data.customer_phone)
+        day = _parse_day(data.date)
+        time = _parse_time(data.time)
+        current = timezone.localtime(appointment.start)
+        if current.date() == day and f"{current:%H:%M}" == time:
+            # ritentativo dell'agente (risposta persa): è già lì
+            return {"success": True, **_appointment_out(appointment)}
+        if not client_notice_ok(appointment):
+            return _too_late("spostare")
+        slots = _move_slots(salon, appointment, day)
+        if time not in slots:
+            raise HttpError(409, "Orario non disponibile")
+        start = dt.datetime.fromisoformat(slots[time]["start"])
+        operator, from_operator = _client_move_reassignment(salon, appointment, start)
+        appointment = move_appointment(
+            appointment, start, operator=operator, from_operator=from_operator, allow_past=False,
+        )
+    except HttpError as err:
+        if err.status_code != 409:
+            return _invalid(err)
+        return {
+            "success": False,
+            "error": "unavailable",
+            "message": str(err),
+            "alternatives": _closest(_move_slots(salon, appointment, day), time),
+        }
+    return {"success": True, **_appointment_out(appointment)}
+
+
+def cancel_reply(salon, data) -> dict:
+    from apps.agenda.services.transitions import cancel_appointment, client_notice_ok
+
+    try:
+        appointment = _callers_appointment(
+            salon, data.appointment_id, data.customer_phone,
+            statuses=(*Appointment.OPEN_STATUSES, Appointment.Status.CANCELLED),
+        )
+    except HttpError as err:
+        return _invalid(err)
+    if appointment.status != Appointment.Status.CANCELLED:  # già annullato: ritentativo
+        if not client_notice_ok(appointment):
+            return _too_late("annullare")
+        appointment = cancel_appointment(appointment, reason=AGENT_CANCEL_REASON, by_client=True)
+    return {"success": True, "cancelled": True, **_appointment_out(appointment)}
+
+
+def _caller_client_ids(salon, phone) -> list[int]:
+    """La cliente del numero e chi in rubrica si contatta tramite lei (la figlia col numero della mamma)."""
+    from apps.clients.models import Client
+
+    holder = find_client_by_phone(salon, phone)
+    if holder is None:
+        return []
+    dependents = Client.objects.filter(salon=salon, contact_client=holder).values_list("id", flat=True)
+    return [holder.id, *dependents]
+
+
+def _callers_appointment(salon, appointment_id, phone, statuses=Appointment.OPEN_STATUSES) -> Appointment:
+    appointment = Appointment.objects.filter(
+        salon=salon, pk=_appointment_id(appointment_id),
+        client_id__in=_caller_client_ids(salon, _phone(phone)), status__in=statuses,
+    ).select_related("operator", "client").first()
+    if appointment is None:
+        raise HttpError(400, "Appuntamento non trovato per questo numero: cercalo con find_appointments")
+    return appointment
+
+
+def _open_appointment(salon, appointment_id) -> Appointment:
+    appointment = Appointment.objects.filter(
+        salon=salon, pk=_appointment_id(appointment_id), status__in=Appointment.OPEN_STATUSES,
+    ).first()
+    if appointment is None:
+        raise HttpError(400, "Appuntamento non trovato: usa l'id di find_appointments")
+    return appointment
+
+
+def _move_slots(salon, appointment, day) -> dict:
+    """{"HH:MM": slot} per spostare la visita: gli stessi orari che l'app propone spostando."""
+    from apps.agenda.services import availability
+
+    parsed, keep_service_ids = availability._visit_plan(appointment)
+    location = availability._client_move_location(salon, appointment)
+    if len(availability._unbookable_operator_ids(salon, parsed, location)) > 1:
+        raise HttpError(400, availability.CLIENT_MOVE_NEEDS_SALON_MESSAGE)
+    slots = availability.smart_slots(
+        salon,
+        availability.get_free_slots(
+            salon, day, parsed, location,
+            exclude_appointment_id=appointment.id, keep_service_ids=keep_service_ids,
+        ),
+    )
+    return {
+        f"{timezone.localtime(dt.datetime.fromisoformat(slot['start'])):%H:%M}": slot
+        for slot in slots
+    }
+
+
+def _appointment_out(appointment) -> dict:
+    start = timezone.localtime(appointment.start)
+    return {
+        "appointment_id": appointment.id,
+        "date": start.date().isoformat(),
+        "date_label": date_label(start.date()),
+        "time": f"{start:%H:%M}",
+        "services": [row.service.name_it for row in appointment.items.select_related("service")],
+        "operator": appointment.operator.first_name if appointment.operator_id else "",
+        "client_name": appointment.client.first_name,
+    }
+
+
+def _too_late(action: str) -> dict:
+    return {
+        "success": False,
+        "error": "too_late",
+        "message": f"Mancano meno di {settings.CLIENT_MOVE_CANCEL_MIN_HOURS} ore all'appuntamento: "
+        f"per {action}lo serve il salone",
+    }
+
+
+def _phone(value) -> str:
+    phone = normalize_phone(str(value or ""))
+    if not phone:
+        raise HttpError(400, "Telefono non valido: serve quello della cliente, es. +393331234567")
+    return phone
+
+
+def _appointment_id(value) -> int:
+    text = str(value or "").strip()
+    if not text.isdigit() or int(text) <= 0:
+        raise HttpError(400, "Appuntamento non valido: usa l'id di find_appointments")
+    return int(text)
 
 
 def _invalid(err: HttpError) -> dict:
