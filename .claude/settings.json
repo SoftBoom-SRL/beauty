@@ -1,7 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl -sS -X POST -H \"Authorization: Bearer *\" --data-binary @/tmp/op.sh https://beautyapi.yourang.ai/__agent-ops/beauty)"
+      "Bash(curl -sS -X POST -H @/tmp/ops-auth --data-binary @/tmp/op.sh https://beautyapi.yourang.ai/__agent-ops/beauty)"
     ]
   }
 }
