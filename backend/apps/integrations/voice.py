@@ -252,8 +252,11 @@ def _connection(salon) -> YourangConnection:
 
 
 def needs_reconnect(conn: YourangConnection | None) -> bool:
-    """Connessione nata prima degli scope `agents:*`: il token non può installare."""
-    return conn is not None and "agents:write" not in (conn.scope or "").split()
+    """Sempre falso col proxy: gli scope sono quelli concessi al portale nel
+    portals.yaml del proxy, non per connessione. Uno scope o una rotta che il
+    proxy non concede risponde 401/403, e `_yourang_failure` chiede di ricollegare."""
+    # ponytail: tenuto per il campo needs_reconnect della dashboard; via quando il cassetto non lo legge più
+    return False
 
 
 def status(salon) -> dict:

@@ -1,7 +1,7 @@
 """Aiuti condivisi dai moduli di test dell'integrazione Yourang.
 
 Solo ciò che serve a più di un modulo: la chiave di cifratura dei test, la firma
-dei webhook, le impostazioni del flusso diretto verso l'external API e il client
+dei webhook, le impostazioni del proxy davanti all'external API e il client
 httpx finto con i suoi aiuti. Niente classi con test: un modulo che le
 importasse le farebbe girare due volte.
 
@@ -12,23 +12,29 @@ I test stanno nei moduli test_<argomento>.py accanto a questo; tutti insieme:
 
 import hashlib
 import hmac
-from datetime import timedelta
 from unittest import mock
 
 import httpx
-from django.utils import timezone
 
-from apps.integrations import crypto
 from apps.integrations.models import YourangConnection
 
 # 32-byte hex key (openssl rand -hex 32) — stesso formato di food/real_estate.
 TEST_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
-API = "/api/external/v1"
-# Il flusso diretto verso l'external API: emittente e chiave dei token cifrati.
-# Da non confondere con OAUTH_SETTINGS di test_oauth (client OAuth, ricevitore
-# del webhook, origin del frontend).
-API_SETTINGS = dict(YOURANG_ISSUER_URL="https://yourang.invalid", ENCRYPTION_KEY=TEST_KEY)
+# Il proxy inoltra /v/<slug>/api/<path> all'external API di Yourang.
+API = "/v/beauty/api"
+PROXY_API_KEY = "chiave-del-portale"
+WEBHOOK_SECRET = "segreto-del-proxy"
+# Il proxy davanti all'external API: URL, API key del portale, segreto con cui
+# firma i webhook. Da non confondere con OAUTH_SETTINGS di test_oauth (origin
+# del frontend per il return_to).
+API_SETTINGS = dict(
+    YOURANG_PROXY_URL="https://connect.yourang.invalid",
+    YOURANG_PROXY_SLUG="beauty",
+    YOURANG_PROXY_API_KEY=PROXY_API_KEY,
+    YOURANG_PROXY_WEBHOOK_SECRET=WEBHOOK_SECRET,
+    ENCRYPTION_KEY=TEST_KEY,
+)
 
 
 def sign_webhook(body: bytes, ts: str, secret: str) -> str:
@@ -41,15 +47,8 @@ def sign_webhook(body: bytes, ts: str, secret: str) -> str:
 
 
 def _connection(salon, org, **extra):
-    """Connessione del flusso diretto, con un token ancora valido (niente refresh)."""
-    return YourangConnection.objects.create(
-        salon=salon,
-        yourang_org_id=org,
-        access_token_enc=crypto.encrypt("tok"),
-        refresh_token_enc=crypto.encrypt("ref"),
-        expires_at=timezone.now() + timedelta(hours=1),
-        **extra,
-    )
+    """Connessione collegata a un'org: i token li tiene il proxy, qui basta l'org."""
+    return YourangConnection.objects.create(salon=salon, yourang_org_id=org, **extra)
 
 
 class FakeHttp:

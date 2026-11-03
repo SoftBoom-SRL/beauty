@@ -298,13 +298,19 @@ STRIPE_CONNECT_CLIENT_ID = os.getenv("STRIPE_CONNECT_CLIENT_ID", "")
 YOURANG_API_URL = os.getenv("YOURANG_API_URL", "")
 YOURANG_API_KEY = os.getenv("YOURANG_API_KEY", "")
 
-# Yourang — connessione OAuth2/OIDC + sync (apps.integrations).
-# Stesse convenzioni dei portali food/real_estate. Il client OAuth (id/secret) e
-# la whitelist del redirect_uri sono provisionati lato Yourang.
-YOURANG_ISSUER_URL = os.getenv("YOURANG_ISSUER_URL", "")  # es. https://api.yourang.ai
-YOURANG_CLIENT_ID = os.getenv("YOURANG_CLIENT_ID", "")
-YOURANG_CLIENT_SECRET = os.getenv("YOURANG_CLIENT_SECRET", "")
-# URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook).
+# Yourang — collegamento e sync (apps.integrations) attraverso il proxy
+# connect.yourang.ai: il proxy è l'OAuth client, custodisce i token e
+# ri-firma i webhook. Valori in deploy/.env.proxy di Yourang (PROXY_BEAUTY_*).
+YOURANG_PROXY_URL = os.getenv("YOURANG_PROXY_URL", "")  # es. https://connect.yourang.ai
+YOURANG_PROXY_SLUG = os.getenv("YOURANG_PROXY_SLUG", "beauty")
+# = PROXY_BEAUTY_API_KEY: l'API key con cui il backend parla al proxy.
+YOURANG_PROXY_API_KEY = os.getenv("YOURANG_PROXY_API_KEY", "")
+# = PROXY_BEAUTY_OUT_SECRET: il segreto con cui il proxy firma i webhook verso di noi.
+YOURANG_PROXY_WEBHOOK_SECRET = os.getenv("YOURANG_PROXY_WEBHOOK_SECRET", "")
+# URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook):
+# qui serve solo a ricavare PUBLIC_API_URL. Il proxy consegna al webhook_url
+# del suo portals.yaml, e i YOURANG_ISSUER_URL/CLIENT_* del flusso diretto non
+# li legge più nessuno (restano su Coolify per un rollback all'immagine di prima).
 YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 # Origine pubblica di questo backend: gli strumenti dell'assistente vocale che
 # si installano su Yourang chiamano qui (/api/integrations/voice/...). Di
@@ -314,7 +320,8 @@ PUBLIC_API_URL = (
 ).rstrip("/")
 # Cifratura token a riposo (AES-256-GCM, come food/real_estate): openssl rand -hex 32
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
-# Origine della dashboard (per redirect_uri del popup OAuth).
+# Origine della dashboard: dove il proxy rimanda il popup. Deve essere
+# IDENTICA a portal_origin del proxy (https://beauty.yourang.ai), o 400.
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 # Mail in uscita: per ora gli inviti al team (il link per entrare). L'invito
 # «non arrivava» perché nessuno lo mandava: il codice si copiava a mano e non
