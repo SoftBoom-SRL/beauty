@@ -10,6 +10,7 @@ import { setSalonTz } from '../../../packages/shared/src/format.js';
 import { amountForType, depositFields, dropCurrent, ruleSentence } from '../src/sections/impostazioni/rules.js';
 import { todayRanges } from '../src/sections/impostazioni/hours.js';
 import { logDateLabel, salonDaysAgo } from '../src/sections/impostazioni/dates.js';
+import { toggleTool } from '../src/sections/impostazioni/voiceTools.js';
 import { findAll, installDom, loadComponent, mount, spy } from './grid-harness.mjs';
 
 const { default: ImpostazioniSection } = await loadComponent('apps/dashboard/src/sections/impostazioni/index.jsx', {
@@ -176,4 +177,14 @@ test('«Copia» (link dell\'app, del modulo, token d\'invito): «Copiato» solo 
     } finally { m.unmount(); }
   }
   assert.deepEqual(written, ['https://app.youty.it/the-parlour', 'https://app.youty.it/the-parlour']);
+});
+
+// Assistente Yourang: cosa può leggere e fare (impostazioni/voiceTools.js).
+
+test('assistente: scrivere accende le letture che servono, spegnere una lettura spegne chi ne ha bisogno', () => {
+  assert.deepEqual(toggleTool([], 'cancel_appointment', true), ['find_appointments', 'cancel_appointment']);
+  const all = toggleTool(['list_services'], 'create_appointment', true);
+  assert.deepEqual(all, ['list_services', 'check_availability', 'create_appointment']);
+  assert.deepEqual(toggleTool(all, 'check_availability', false), ['list_services']);
+  assert.deepEqual(toggleTool(all, 'create_appointment', false), ['list_services', 'check_availability']);
 });

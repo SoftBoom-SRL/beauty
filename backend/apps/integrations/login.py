@@ -20,20 +20,28 @@ Titolare: il primo che entra, finché non entra il titolare dell'org Yourang
 (claim `org_role` = "owner" dell'access token): da lì il titolare è lui. Così
 il salone attivato da un collega di Yourang per conto del cliente passa al
 cliente al suo primo accesso, senza cessioni a mano.
+
+Supporto Yourang (email verificata dei YOURANG_SUPPORT_EMAIL_DOMAINS): a ogni
+accesso riceve il ruolo «Supporto Yourang», con tutti i permessi. Prima chi
+entrava dopo il cliente restava senza ruolo e non poteva configurare niente, e
+il collega che aveva attivato il salone scendeva a Manager quando il cliente ne
+diventava titolare.
 """
 
 import logging
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
-from apps.accounts.models import Membership, User
+from apps.accounts.models import Membership, Role, User
 from apps.accounts.provisioning import create_salon_foundation
 from apps.accounts.sessions import session_payload
 from apps.accounts.team import make_owner
 from apps.core.services import log_activity
 from apps.core.models import Salon
 from common.auth import create_staff_tokens
+from common.permissions import SCOPES
 
 from . import client as yc
 from .connection import OrgConflict, attach_tokens, link_org
@@ -198,7 +206,33 @@ def _enter(
             payload={"to_membership_id": membership.id, "source": "yourang_org_owner"},
         )
         membership = _membership_for(salon, user)
+    if email_verified and is_support_email(email) and not membership.is_owner:
+        _grant_support_role(membership)
+        membership = _membership_for(salon, user)
     return membership, conn
+
+
+SUPPORT_ROLE = "Supporto Yourang"
+
+
+def is_support_email(email: str) -> bool:
+    return email.rpartition("@")[2].lower() in settings.YOURANG_SUPPORT_EMAIL_DOMAINS
+
+
+def _grant_support_role(membership: Membership) -> None:
+    """Tutti i permessi, a ogni accesso: il ruolo cambiato o tolto dal salone torna.
+
+    Ruolo di sistema, così il salone non ne riduce i permessi da Impostazioni › Team.
+    """
+    role, _ = Role.objects.get_or_create(
+        salon_id=membership.salon_id, name=SUPPORT_ROLE, defaults={"scopes": SCOPES, "is_system": True}
+    )
+    if role.scopes != SCOPES or not role.is_system:
+        role.scopes, role.is_system = SCOPES, True
+        role.save(update_fields=["scopes", "is_system"])
+    if membership.role_id != role.id:
+        membership.role = role
+        membership.save(update_fields=["role"])
 
 
 def login_with_yourang(code: str, code_verifier: str) -> dict:

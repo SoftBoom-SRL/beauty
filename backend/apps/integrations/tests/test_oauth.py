@@ -33,6 +33,7 @@ from apps.clients.models import Client
 from apps.core.models import Salon
 from apps.integrations import crypto
 from apps.integrations.models import YourangConnection, YourangOAuthState
+from common.permissions import SCOPES
 from common.testing import bearer, post_json
 
 from .base import TEST_KEY
@@ -540,6 +541,54 @@ class OrgOwnerTakesOwnershipTests(_FlowCase):
         session = self._login("org-op", "op@p.it", "owner")
         self.assertEqual(session["salon"]["id"], salon.id)
         self.assertFalse(session["is_owner"])
+
+
+@override_settings(YOURANG_SUPPORT_EMAIL_DOMAINS=["yourang.ai"])
+class SupportAccessTests(_FlowCase):
+    """Il supporto Yourang resta con tutti i permessi, anche quando il cliente entra.
+
+    Caso Nails Avenue Milano: il cliente era entrato per primo, i colleghi di
+    Yourang dopo, senza ruolo, e non potevano configurare niente.
+    """
+
+    _login = OrgOwnerTakesOwnershipTests._login
+
+    def _support(self, salon_id, email):
+        return Membership.objects.select_related("role").get(salon_id=salon_id, user__email=email)
+
+    def test_joining_after_the_client_gives_full_access(self):
+        client = self._login("org-nails", "nails@yahoo.com", "owner", "Nails Avenue")
+        session = self._login("org-nails", "maria@yourang.ai", "admin")
+        self.assertFalse(session["is_owner"])
+        self.assertEqual(sorted(session["scopes"]), sorted(SCOPES))
+        support = self._support(client["salon"]["id"], "maria@yourang.ai")
+        self.assertEqual(support.role.name, "Supporto Yourang")
+        self.assertTrue(support.role.is_system)  # il salone non può ridurne i permessi
+
+    def test_the_colleague_who_activated_it_gets_full_access_back(self):
+        first = self._login("org-chiara", "maria@yourang.ai", "admin", "Chiara")
+        self._login("org-chiara", "chiara@gmail.com", "owner")
+        self.assertEqual(self._support(first["salon"]["id"], "maria@yourang.ai").role.name, "Manager")
+        self._login("org-chiara", "maria@yourang.ai", "admin")
+        self.assertEqual(self._support(first["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
+
+    def test_a_role_changed_by_the_salon_comes_back_at_the_next_login(self):
+        client = self._login("org-nails", "nails@yahoo.com", "owner")
+        self._login("org-nails", "maria@yourang.ai", "admin")
+        Membership.objects.filter(user__email="maria@yourang.ai").update(role=None)
+        self._login("org-nails", "maria@yourang.ai", "admin")
+        self.assertEqual(self._support(client["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
+
+    def test_only_verified_support_emails(self):
+        from apps.integrations.login import login_with_yourang
+
+        client = self._login("org-nails", "nails@yahoo.com", "owner")
+        self._login("org-nails", "op@nails.it", "member")
+        self.assertIsNone(self._support(client["salon"]["id"], "op@nails.it").role)
+        with self.redeem(_token_resp("org-nails", "fake@yourang.ai", verified=False, name="x")), \
+                mock.patch("apps.integrations.sync._run_in_background"):
+            login_with_yourang("code", "verifier")
+        self.assertIsNone(self._support(client["salon"]["id"], "fake@yourang.ai").role)
 
 
 class ConcurrentFirstLoginTests(_FlowCase):
