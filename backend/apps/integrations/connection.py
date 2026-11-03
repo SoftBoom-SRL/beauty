@@ -7,25 +7,14 @@ su un salone collegato: un codice dell'org di un altro, riscattato con la
 sessione del titolare, spingeva l'anagrafica verso quell'org e i webhook di
 quella legittima finivano nel nulla.
 
-Qui stanno anche i token e il webhook di una connessione appena collegata
-(`attach_tokens`), che servono a entrambi i flussi: il connect li prendeva da
-login.py.
+Token e webhook non passano di qui: li custodisce il proxy, e il consenso
+provisiona da solo l'endpoint del webhook (client+org) verso il proxy.
 """
 
-import logging
-
 from django.apps import apps as django_apps
-from django.conf import settings
 from django.db import IntegrityError, transaction
 
-from . import client as yc
-from . import crypto
 from .models import YourangConnection
-
-logger = logging.getLogger("youty.integrations")
-
-# Eventi a cui si abbona il webhook registrato su Yourang.
-WEBHOOK_EVENT_TYPES = ["contact.*", "event.*"]
 
 
 class OrgConflict(Exception):
@@ -111,25 +100,3 @@ def same_link(conn):
     mai con un save() della copia letta all'inizio.
     """
     return YourangConnection.objects.filter(pk=conn.pk, yourang_org_id=conn.yourang_org_id)
-
-
-def attach_tokens(conn: YourangConnection, token_resp: dict, *, renew_webhook: bool = False) -> None:
-    """Token del flusso diretto sulla connessione e, se serve, il webhook.
-
-    Fuori dalla transazione del collegamento: registrare il webhook è una
-    chiamata a Yourang, e una rete lenta non deve tenere i lock del salone.
-    `renew_webhook`: registrarlo anche se c'è già un segreto (il connect lo fa
-    sempre, a una riconnessione il segreto di prima non vale più).
-    """
-    yc.store_tokens(conn, token_resp)
-    fields = ["access_token_enc", "refresh_token_enc", "expires_at", "scope", "updated_at"]
-    if settings.YOURANG_WEBHOOK_RECEIVER_URL and (renew_webhook or not conn.webhook_secret_enc):
-        try:
-            secret = yc.YourangClient(conn).register_webhook(
-                settings.YOURANG_WEBHOOK_RECEIVER_URL, WEBHOOK_EVENT_TYPES
-            )
-            conn.webhook_secret_enc = crypto.encrypt(secret)
-            fields.append("webhook_secret_enc")
-        except Exception:
-            logger.exception("Yourang webhook registration failed")
-    conn.save(update_fields=fields)

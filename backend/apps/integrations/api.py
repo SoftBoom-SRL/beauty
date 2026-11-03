@@ -1,13 +1,13 @@
-"""Rotte integrazione Yourang: connect OAuth (PKCE), webhook in ingresso, stato.
+"""Rotte integrazione Yourang: connect via proxy, webhook in ingresso, stato.
 
-Flusso "Collega Yourang" (come i portali food/real_estate, qui lato server Django):
+Flusso "Collega Yourang" (tutti i portali passano dal proxy connect.yourang.ai):
   1. dashboard apre un popup su /oauth-popup/start
-  2. la pagina chiama GET /oauth/start → riceve authorize_url e un nonce, che
-     tiene nel sessionStorage della SUA finestra, e va su Yourang
-  3. Yourang torna su /oauth-popup/done?code&state → POST /oauth/exchange,
-     con il nonce
-  4. exchange verifica il nonce, salva i token, registra il webhook e avvia la
-     prima sync (in background)
+  2. la pagina chiama GET /oauth/start → riceve l'URL di login sul proxy e un
+     nonce, che tiene nel sessionStorage della SUA finestra
+  3. il proxy fa consenso e PKCE e torna su /oauth-popup/done?state&yr_link
+     → POST /oauth/exchange, con il nonce
+  4. exchange verifica il nonce, riscatta il link code lato server e avvia la
+     prima sync (in background). Token e webhook li gestisce il proxy.
 """
 
 import json
@@ -25,8 +25,8 @@ from common.schemas import OkOut
 
 from . import client as yc
 from . import automation_key, crypto, sync, voice, webhooks
-from .connection import OrgConflict, attach_tokens, link_org, reset_remote_refs
-from .login import login_with_yourang
+from .connection import OrgConflict, link_org, reset_remote_refs
+from .login import login_with_link_code
 from .models import YourangConnection
 from .oauth import consume_state, start_flow
 from .schemas import (
@@ -58,14 +58,13 @@ def _status_out(conn: YourangConnection | None) -> dict:
         "status": conn.status,
         "connected_at": conn.connected_at,
         "last_sync_at": conn.last_sync_at,
-        "scope": conn.scope,
         "yourang_org_id": conn.yourang_org_id,
         "last_error": conn.last_error,
     }
 
 
 def _require_config() -> None:
-    if not (settings.YOURANG_ISSUER_URL and settings.YOURANG_CLIENT_ID):
+    if not (settings.YOURANG_PROXY_URL and settings.YOURANG_PROXY_API_KEY):
         raise HttpError(503, "Integrazione Yourang non configurata")
 
 
@@ -107,15 +106,15 @@ def oauth_login_start(request):
 
 @router.post("/yourang/oauth/exchange", auth=None)
 def oauth_exchange(request, data: ExchangeIn):
-    """Scambia il code. Lo `state` distingue i due flussi: con salone → connect;
+    """Riscatta il link code. Lo `state` distingue i due flussi: con salone → connect;
     senza → login con Yourang (provisiona/collega + conia la sessione staff)."""
     _require_config()
-    verifier, salon, user = consume_state(data)
+    salon, user = consume_state(data)
 
     # --- Login con Yourang: nessun salone nello stato ---
     if salon is None:
         try:
-            session = login_with_yourang(data.code, verifier)
+            session = login_with_link_code(data.code)
         except OrgConflict as exc:
             raise HttpError(409, str(exc)) from exc
         except Exception as exc:
@@ -125,11 +124,11 @@ def oauth_exchange(request, data: ExchangeIn):
 
     # --- Connect: collega il salone esistente ---
     try:
-        token_resp = yc.exchange_code(data.code, verifier)
+        identity = yc.redeem_link_code(data.code)
     except Exception as exc:
-        logger.exception("Yourang token exchange failed")
-        raise HttpError(502, "Scambio token con Yourang fallito") from exc
-    org = yc.org_id_from_access_token(token_resp["access_token"])
+        logger.exception("Yourang link code redemption failed")
+        raise HttpError(502, "Collegamento con Yourang fallito") from exc
+    org = str(identity.get("org_id") or "")
     if not org:
         raise HttpError(502, "Identità Yourang senza organizzazione")
 
@@ -143,10 +142,6 @@ def oauth_exchange(request, data: ExchangeIn):
         conn = link_org(salon, org, user)
     except OrgConflict as exc:
         raise HttpError(409, str(exc)) from exc
-    # Il connect registra sempre il webhook: a una riconnessione il segreto di
-    # prima non vale più.
-    attach_tokens(conn, token_resp, renew_webhook=True)
-
     # La prima sync (migliaia di chiamate su un salone grande) gira fuori dalla
     # richiesta: il suo esito compare in /status (last_sync_at, last_error).
     sync.schedule_initial_sync(conn)
@@ -191,18 +186,22 @@ def webhook(request):
         raise HttpError(400, "Payload non valido")
     org_id = str(payload.get("organization_id") or "")
 
-    conn = YourangConnection.objects.filter(yourang_org_id=org_id).first() if org_id else None
-    if conn is None:
-        return OkOut()  # org sconosciuta: ignora silenziosamente
-
-    secret = crypto.decrypt(conn.webhook_secret_enc)
+    # Un segreto solo per il portale: il proxy verifica la firma di Yourang e
+    # ri-firma con il suo (PROXY_BEAUTY_OUT_SECRET). Si verifica PRIMA di
+    # toccare il DB: l'org nel payload non vale finché la firma non la copre.
+    # Vuoto = fail-closed.
     if not crypto.verify_signature(
         body,
         request.headers.get("x-yourang-signature", ""),
         request.headers.get("x-yourang-timestamp", ""),
-        secret,
+        settings.YOURANG_PROXY_WEBHOOK_SECRET,
     ):
         raise HttpError(401, "Firma webhook non valida")
+
+    conn = YourangConnection.objects.filter(yourang_org_id=org_id).first() if org_id else None
+    if conn is None:
+        return OkOut()  # org sconosciuta: ignora silenziosamente
+
 
     # Payload Yourang: notifica sottile {type, resource, resource_id, organization_id}.
     # NB: `id` è l'id della consegna webhook (random), l'evento è in `resource_id`.

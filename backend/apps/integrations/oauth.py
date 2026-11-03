@@ -1,4 +1,7 @@
-"""Flusso OAuth di Yourang (Authorization Code + PKCE): avvio e consumo dello state.
+"""Flusso di collegamento a Yourang via proxy: avvio e consumo dello state.
+
+PKCE e token stanno nel proxy (connect.yourang.ai); qui restano lo state e il
+nonce della finestra, che legano il link code di ritorno a chi l'ha chiesto.
 
 Due flussi usano gli stessi passi: «Collega Yourang» dalle Impostazioni (lo
 state porta salone e utente) e «Accedi con Yourang» dalla pagina di login
@@ -7,19 +10,17 @@ parte che decide se il codice che torna da Yourang è davvero di chi ha
 avviato il flusso, e da quale flusso viene.
 """
 
-import logging
 import secrets
 from datetime import timedelta
+from urllib.parse import urlencode
 
-import httpx
+from django.conf import settings
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 from ninja.errors import HttpError
 
 from . import client as yc
 from .models import YourangOAuthState
-
-logger = logging.getLogger("youty.integrations")
 
 # Secondi di validità di uno state avviato e non ancora scambiato.
 STATE_TTL_SECONDS = 600
@@ -49,18 +50,15 @@ def window_nonce(state: str) -> str:
     return salted_hmac(NONCE_SALT, state).hexdigest()
 
 
+def _return_to(state: str) -> str:
+    # Lo state viaggia nel return_to: il proxy confronta solo schema+host+porta
+    # con portal_origin e aggiunge ?yr_link= senza toccare il resto. Così il
+    # modo (con o senza salone) e il nonce della finestra restano qui.
+    return f"{settings.FRONTEND_ORIGIN.rstrip('/')}/oauth-popup/done?{urlencode({'state': state})}"
+
+
 def start_flow(salon=None, user=None) -> dict:
-    verifier, challenge = yc.make_pkce()
     state = secrets.token_urlsafe(24)
-    # L'URL si costruisce PRIMA di salvare lo state: chiede a Yourang il
-    # documento di discovery, se non è già in memoria. Salvato prima, con
-    # Yourang irraggiungibile l'errore di rete arrivava all'utente come un 500
-    # e la riga di un flusso che non poteva partire restava a database.
-    try:
-        authorize_url = yc.build_authorize_url(state, challenge, nonce=secrets.token_urlsafe(16))
-    except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("Yourang: discovery non riuscita, flusso OAuth non avviato: %s", exc)
-        raise HttpError(503, "Yourang non risponde: riprova tra qualche minuto") from exc
     # Le righe dei flussi mai conclusi (popup chiuso, errore) si cancellavano
     # solo allo scambio, cioè mai, e la tabella cresceva senza fine. Quelle
     # scadute, che lo scambio rifiuterebbe comunque, si tolgono qui: ogni avvio
@@ -68,12 +66,14 @@ def start_flow(salon=None, user=None) -> dict:
     YourangOAuthState.objects.filter(
         created_at__lt=timezone.now() - timedelta(seconds=STATE_TTL_SECONDS)
     ).delete()
-    YourangOAuthState.objects.create(state=state, code_verifier=verifier, salon=salon, user=user)
-    return {"authorize_url": authorize_url, "nonce": window_nonce(state)}
+    # PKCE vive nel proxy: il verifier qui resta vuoto (la colonna serve al
+    # flusso diretto, se si torna indietro).
+    YourangOAuthState.objects.create(state=state, code_verifier="", salon=salon, user=user)
+    return {"authorize_url": yc.proxy_login_url(_return_to(state)), "nonce": window_nonce(state)}
 
 
 def consume_state(data) -> tuple:
-    """Verifica il nonce e consuma lo state: ritorna (verifier PKCE, salone, utente).
+    """Verifica il nonce e consuma lo state: ritorna (salone, utente).
 
     Lo state vale una volta sola: si cancella appena letto, anche quando è
     scaduto. Salone e utente sono None nel flusso «Accedi con Yourang».
@@ -91,8 +91,8 @@ def consume_state(data) -> tuple:
     if st is None:
         raise HttpError(400, "Stato OAuth non valido o scaduto")
     age = (timezone.now() - st.created_at).total_seconds()
-    verifier, salon, user = st.code_verifier, st.salon, st.user
+    salon, user = st.salon, st.user
     st.delete()
     if age > STATE_TTL_SECONDS:
         raise HttpError(400, "Stato OAuth scaduto: riprova")
-    return verifier, salon, user
+    return salon, user

@@ -129,13 +129,19 @@ class VoiceInstallTests(VoiceTestBase):
         self.assertIn("riprova", res.json()["detail"])
         self.assertEqual(self.services().status_code, 200)
 
-    def test_a_connection_from_before_the_agents_scope_asks_to_reconnect(self):
-        YourangConnection.objects.filter(pk=self.conn.pk).update(scope="openid contacts:write")
-        self.assertTrue(self.client.get("/api/integrations/voice/assistant", **self.owner).json()["needs_reconnect"])
-        with self.yourang() as req:
+    def test_a_route_the_proxy_does_not_allow_asks_to_reconnect(self):
+        """Gli scope stanno nel portals.yaml del proxy, non sulla connessione:
+        il cassetto non chiede più di ricollegare a priori, e un 403 del proxy
+        (rotta o scope non concessi al portale) diventa il messaggio RECONNECT."""
+        YourangConnection.objects.filter(pk=self.conn.pk).update(scope="")
+        self.assertFalse(self.client.get("/api/integrations/voice/assistant", **self.owner).json()["needs_reconnect"])
+
+        def forbidden(method, path, **kwargs):
+            raise httpx.HTTPStatusError("x", request=Mock(), response=Mock(status_code=403))
+
+        with patch("apps.integrations.client.YourangClient._request", side_effect=forbidden):
             res = self.client.post("/api/integrations/voice/assistant", **self.owner)
         self.assertEqual((res.status_code, res.json()["detail"]), (409, voice.RECONNECT))
-        req.assert_not_called()
 
     def test_switching_off_revokes_the_key_and_removes_the_tools(self):
         with self.yourang() as req:

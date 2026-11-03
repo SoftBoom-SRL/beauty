@@ -1,23 +1,24 @@
-"""Login con Yourang: da un'identità Yourang (OAuth) a una sessione staff beauty.
+"""Login con Yourang: da un'identità Yourang (dal proxy) a una sessione staff beauty.
 
 Porta il pattern di food (`provisionOrLinkYourangUser`) su Django: risolve o
-provisiona Salone + Utente + Membership a partire dal claim `org` del token e
-dall'id_token OIDC, poi conia i token staff e (best-effort) collega+sincronizza.
+provisiona Salone + Utente + Membership a partire dall'identità che il proxy
+restituisce per il link code (org_id, email, name), poi conia i token staff e
+(best-effort) collega+sincronizza.
 
 Precedenza (il SALONE si risolve dall'org, l'UTENTE sempre dall'identità Yourang):
   A. `org` già mappata su un salone (login precedente / connect) → entra lì come
      membro (owner solo se il salone non ha ancora nessuno). La connessione non
-     si ridefinisce: si rimette in piedi solo se è senza token o in errore.
+     si ridefinisce: si rimette in piedi solo se è in errore.
   B. utente noto per email VERIFICATA, con saloni senza connessione:
      - è TITOLARE di uno solo di essi → lo adotta e lo collega all'org;
      - altrimenti (non titolare, o titolare di più d'uno) → entra nel primo
        SENZA collegarlo: il collegamento si fa dalle Impostazioni, dal titolare.
   C. altrimenti → provisiona utente (se serve) + salone nuovo, collegato.
 
-Nome del salone nuovo: quello dell'org Yourang (claim `org_name`), se c'è.
+Nome del salone nuovo: quello dell'org Yourang (`org_name`), se c'è.
 
 Titolare: il primo che entra, finché non entra il titolare dell'org Yourang
-(claim `org_role` = "owner" dell'access token): da lì il titolare è lui. Così
+(`org_role` = "owner" nell'identità): da lì il titolare è lui. Così
 il salone attivato da un collega di Yourang per conto del cliente passa al
 cliente al suo primo accesso, senza cessioni a mano.
 """
@@ -36,7 +37,7 @@ from apps.core.models import Salon
 from common.auth import create_staff_tokens
 
 from . import client as yc
-from .connection import OrgConflict, attach_tokens, link_org
+from .connection import OrgConflict, link_org
 from .models import YourangConnection
 from .sync import schedule_initial_sync, split_name
 
@@ -136,18 +137,13 @@ def _resolve_salon(org: str, email: str, email_verified: bool) -> tuple[Salon | 
 
 
 def _needs_repair(salon: Salon) -> bool:
-    """La connessione del salone è rimasta senza token o in errore.
+    """La connessione del salone è in errore (o non c'è): l'accesso la rimette in piedi.
 
-    Succede a tutti i saloni dopo il ritorno al flusso OAuth diretto (la 0005
-    riporta le colonne dei token vuote): il primo accesso con Yourang la
-    rimette in piedi, come faceva prima di ogni accesso.
+    Non si guarda più se ci sono token: li tiene il proxy, e il login che è
+    appena passato dal proxy ha già rinnovato il grant di questa org.
     """
     conn = YourangConnection.objects.filter(salon=salon).first()
-    return (
-        conn is None
-        or not conn.access_token_enc
-        or conn.status != YourangConnection.Status.CONNECTED
-    )
+    return conn is None or conn.status != YourangConnection.Status.CONNECTED
 
 
 def _enter(
@@ -201,25 +197,25 @@ def _enter(
     return membership, conn
 
 
-def login_with_yourang(code: str, code_verifier: str) -> dict:
-    token_resp = yc.exchange_code(code, code_verifier)
-    org = yc.org_id_from_access_token(token_resp["access_token"])
-    # Assente con un Yourang che non lo emette ancora: si resta alla regola del primo accesso.
-    access_claims = yc.claims_from_token(token_resp["access_token"])
-    org_role = str(access_claims.get("org_role") or "")
-    org_name = str(access_claims.get("org_name") or "").strip()
+def login_with_link_code(code: str) -> dict:
+    identity = yc.redeem_link_code(code)
+    org = str(identity.get("org_id") or "")
+    # `org_role`/`org_name` il proxy oggi non li passa: assenti, si resta alla
+    # regola del primo accesso e al nome di chi entra (come con un Yourang che
+    # non li emetteva). Letti qui, tornano a valere quando il proxy li passa.
+    org_role = str(identity.get("org_role") or "")
+    org_name = str(identity.get("org_name") or "").strip()
     if not org:
         # Stesso controllo che fa già il connect (api.py): senza organizzazione
         # non c'è nulla da collegare, e proseguire significava provisionare un
         # salone nuovo e vuoto a OGNI accesso — più la riga di connessione
         # riscritta con yourang_org_id="", che spegne il routing dei webhook.
         raise ValueError("Identità Yourang senza organizzazione")
-    idc = yc.claims_from_token(token_resp.get("id_token"))
-    email = (idc.get("email") or "").strip()
+    email = (identity.get("email") or "").strip()
     if not email:
-        raise ValueError("Email non disponibile dal token Yourang")
-    email_verified = bool(idc.get("email_verified"))
-    name = (idc.get("name") or "").strip() or email.split("@")[0]
+        raise ValueError("Email non disponibile dall'identità Yourang")
+    email_verified = bool(identity.get("email_verified"))
+    name = (identity.get("name") or "").strip() or email.split("@")[0]
 
     # Tutto il primo accesso in una transazione. Due accessi simultanei della
     # stessa org (doppio clic, due dispositivi) correvano su slug del salone,
@@ -238,7 +234,6 @@ def login_with_yourang(code: str, code_verifier: str) -> dict:
             logger.info("Yourang login: accesso concorrente della stessa org, si riprova")
 
     if conn is not None:
-        attach_tokens(conn, token_resp)
         # La prima sync (migliaia di chiamate su un salone grande) parte fuori
         # dalla richiesta; il suo esito finisce su last_sync_at / last_error.
         schedule_initial_sync(conn)
