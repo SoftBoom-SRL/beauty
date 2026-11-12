@@ -20,6 +20,8 @@ export const voiceApi = {
   status: () => api.get('/api/integrations/voice/assistant'),
   install: () => api.post('/api/integrations/voice/assistant'),
   uninstall: () => api.del('/api/integrations/voice/assistant'),
+  /* cosa l'agente può leggere e fare: nomi di impostazioni/voiceTools.js */
+  setTools: (tools) => api.put('/api/integrations/voice/assistant/tools', { tools }),
 };
 
 /* Chiave per n8n / Make / Zapier: rispondono { active, created_at }, e

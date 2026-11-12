@@ -224,6 +224,7 @@ const CASES = [
   [() => voiceApi.status(), ['GET', '/api/integrations/voice/assistant']],
   [() => voiceApi.install(), ['POST', '/api/integrations/voice/assistant']],
   [() => voiceApi.uninstall(), ['DELETE', '/api/integrations/voice/assistant']],
+  [() => voiceApi.setTools(['list_services']), ['PUT', '/api/integrations/voice/assistant/tools', { body: { tools: ['list_services'] } }]],
 ];
 
 const expected = ([method, path, rest = {}]) => ({ method, path, ...rest });

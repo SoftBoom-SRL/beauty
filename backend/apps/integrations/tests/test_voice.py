@@ -1,6 +1,7 @@
 """Assistente vocale: l'agente Yourang legge servizi e orari e prenota al telefono."""
 
 import datetime as dt
+import json
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
@@ -121,6 +122,24 @@ class VoiceInstallTests(VoiceTestBase):
         self.assertEqual(self.services().status_code, 401)
         self.auth = {"HTTP_AUTHORIZATION": f"Bearer {tool['auth_config']['token']}"}
         self.assertEqual(self.services().status_code, 200)
+
+    def test_choosing_what_the_agent_may_do_reinstalls_only_those_tools(self):
+        with self.yourang():
+            self.client.post("/api/integrations/voice/assistant", **self.owner)
+        with self.yourang() as req:
+            res = self.client.put(
+                "/api/integrations/voice/assistant/tools", data='{"tools": ["cancel_appointment"]}',
+                content_type="application/json", **self.owner,
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        # Annullare porta con sé la lettura degli appuntamenti, senza la quale non saprebbe quale.
+        self.assertEqual(res.json()["tools"], ["find_appointments", "cancel_appointment"])
+        calls = [(c.args[0], c.args[1].rsplit("/", 1)[1]) for c in req.call_args_list if "external-tools" in c.args[1]]
+        self.assertEqual([n for m, n in calls if m == "PUT"], ["find_appointments", "cancel_appointment"])
+        self.assertEqual(
+            [n for m, n in calls if m == "DELETE"],
+            ["list_services", "check_availability", "create_appointment", "reschedule_appointment"],
+        )
 
     def test_a_failed_upload_keeps_the_key_the_agent_already_has(self):
         with self.yourang(fail_on="PUT"):
@@ -345,3 +364,45 @@ class VoiceRescheduleCancelTests(VoiceTestBase):
         self.assertEqual(self.call("cancel", appointment_id="domani")["error"], "invalid_request")
         self.assertEqual(self.call("cancel", customer_phone="")["error"], "invalid_request")
         self.assertEqual(self.find("abc")["error"], "invalid_request")
+
+
+class VoiceToolPermissionTests(VoiceTestBase):
+    """Il salone decide cosa l'agente legge e fa; le rotte lo rispettano anche se Yourang non è aggiornato."""
+
+    def set_tools(self, tools, auth=None):
+        with patch.object(voice, "install"):  # l'installazione su Yourang la prova VoiceInstallTests
+            return self._put(tools, auth)
+
+    def _put(self, tools, auth):
+        return self.client.put(
+            "/api/integrations/voice/assistant/tools", data=json.dumps({"tools": tools}),
+            content_type="application/json", **(auth or self.staff_auth(("integrations",))),
+        )
+
+    def test_everything_is_allowed_by_default(self):
+        self.assertEqual(voice.enabled_tools(self.salon), list(voice.TOOL_NAMES))
+
+    def test_a_tool_switched_off_answers_not_allowed(self):
+        res = self.set_tools(["list_services", "check_availability"])
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.json()["tools"], ["list_services", "check_availability"])
+        self.assertEqual(self.services().status_code, 200)
+        self.assertIsInstance(self.services().json(), list)
+        self.assertEqual(self.book_call()["error"], "not_allowed")
+        self.assertFalse(Appointment.objects.exists())
+        found = self.client.get("/api/integrations/voice/appointments?customer_phone=3330000001", **self.auth)
+        self.assertEqual(found.json()["error"], "not_allowed")
+
+    def test_writing_brings_the_reads_it_needs(self):
+        self.set_tools(["create_appointment"])
+        self.salon.refresh_from_db()
+        self.assertEqual(
+            voice.enabled_tools(self.salon), ["list_services", "check_availability", "create_appointment"]
+        )
+        self.salon.voice_disabled_tools = ["list_services"]  # salvato a mano: prenotare resta spento
+        self.assertNotIn("create_appointment", voice.enabled_tools(self.salon))
+
+    def test_only_who_manages_integrations_decides(self):
+        self.assertEqual(self.set_tools([], self.staff_auth(("agenda",), email="desk2@x.it")).status_code, 403)
+        self.salon.refresh_from_db()
+        self.assertEqual(voice.enabled_tools(self.salon), list(voice.TOOL_NAMES))

@@ -306,6 +306,14 @@ YOURANG_CLIENT_ID = os.getenv("YOURANG_CLIENT_ID", "")
 YOURANG_CLIENT_SECRET = os.getenv("YOURANG_CLIENT_SECRET", "")
 # URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook).
 YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
+# Domini del supporto Yourang: chi entra con «Accedi con Yourang» e un'email
+# verificata di questi domini ha sempre accesso completo al salone (ruolo
+# «Supporto Yourang»), anche dopo che il cliente ne è diventato titolare.
+YOURANG_SUPPORT_EMAIL_DOMAINS = [
+    d.strip().lower()
+    for d in os.getenv("YOURANG_SUPPORT_EMAIL_DOMAINS", "yourang.ai,reddoak.com").split(",")
+    if d.strip()
+]
 # Origine pubblica di questo backend: gli strumenti dell'assistente vocale che
 # si installano su Yourang chiamano qui (/api/integrations/voice/...). Di
 # serie la si ricava dal webhook receiver, che sta sullo stesso backend.

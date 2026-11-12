@@ -1,15 +1,17 @@
-// VoiceDrawer.jsx — assistente vocale: l'agente Yourang prenota al telefono
-// (backend: apps/integrations/voice.py). Un interruttore: il backend installa
-// gli strumenti sull'org Yourang da sé (anche appena il salone si collega).
+// VoiceDrawer.jsx — assistente Yourang: l'agente legge e prenota al telefono e
+// in chat (backend: apps/integrations/voice.py). Un interruttore: il backend
+// installa gli strumenti sull'org Yourang da sé (anche appena il salone si
+// collega). Sotto, cosa l'agente può leggere e fare (voiceTools.js).
 // Prima il titolare generava una chiave, scaricava un file JSON e lo importava
 // su Yourang a mano: troppi passi per chi gestisce un salone.
 import { useEffect, useState } from 'react';
-import { Icon, fmtDateIt, toastApiError } from '@youty/shared';
+import { Icon, Toggle, fmtDateIt, toastApiError } from '@youty/shared';
 import DkDrawer from '../../ui/DkDrawer.jsx';
 import DrawerHead from '../../ui/DrawerHead.jsx';
 import DkConfirm from '../../ui/DkConfirm.jsx';
 import { useDash } from '../../ctx.jsx';
 import { voiceApi } from '../../api/integrations.js';
+import { VOICE_TOOLS, toggleTool } from './voiceTools.js';
 
 export default function VoiceDrawer({ onClose, onChange, onReconnect }) {
   const { t, fireToast } = useDash();
@@ -30,13 +32,25 @@ export default function VoiceDrawer({ onClose, onChange, onReconnect }) {
     finally { setBusy(false); }
   };
 
+  const setTool = async (name, on) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      setStatus(await voiceApi.setTools(toggleTool(status.tools || [], name, on)));
+      fireToast({ msg: t('Permessi dell’assistente aggiornati', 'Assistant permissions updated'), icon: 'check' });
+    } catch (err) {
+      toastApiError(err, fireToast, t);
+      voiceApi.status().then(setStatus).catch(() => {}); // salvati anche se Yourang non ha risposto
+    } finally { setBusy(false); }
+  };
+
   const active = !!status?.active;
   const reconnect = status && (!status.connected || status.needs_reconnect);
 
   return (
     <DkDrawer open onClose={onClose}>
-      <DrawerHead onClose={onClose} title={t('Assistente vocale', 'Voice assistant')}
-        sub={t('L’agente Yourang prenota gli appuntamenti al telefono', 'The Yourang agent books appointments over the phone')} />
+      <DrawerHead onClose={onClose} title={t('Assistente Yourang', 'Yourang assistant')}
+        sub={t('Al telefono e in chat: cosa può leggere e cosa può fare', 'On the phone and in chat: what it may read and do')} />
 
       <div className="scroll" style={{ flex: 1, overflowY: 'auto', padding: '18px 22px 30px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
@@ -49,8 +63,8 @@ export default function VoiceDrawer({ onClose, onChange, onReconnect }) {
         </div>
 
         <div className="t-sm" style={{ color: 'var(--muted)', lineHeight: 1.5, marginBottom: 18 }}>
-          {t('L’agente vocale di Yourang legge i servizi e gli orari liberi e prenota per la cliente durante la chiamata, come dall’app: stessa disponibilità, caparra e conferma su WhatsApp. Non devi configurare niente su Yourang.',
-             'The Yourang voice agent reads services and free times and books for the client during the call, just like the app: same availability, deposit and WhatsApp confirmation. Nothing to set up on Yourang.')}
+          {t('L’agente Yourang legge servizi e orari liberi e prenota, sposta o annulla per la cliente, come dall’app: stessa disponibilità, caparra e preavviso. Tocca solo gli appuntamenti del numero della cliente. Non devi configurare niente su Yourang.',
+             'The Yourang agent reads services and free times and books, reschedules or cancels for the client, just like the app: same availability, deposit and notice. It only touches appointments for the client’s own number. Nothing to set up on Yourang.')}
         </div>
 
         {reconnect ? (
@@ -82,6 +96,21 @@ export default function VoiceDrawer({ onClose, onChange, onReconnect }) {
             )}
           </div>
         )}
+
+        {status && [[false, t('Cosa può leggere', 'What it may read')], [true, t('Cosa può fare', 'What it may do')]].map(([write, head]) => (
+          <div key={head} data-voice-tools={write ? 'write' : 'read'} style={{ marginTop: 24 }}>
+            <div className="t-meta" style={{ marginBottom: 6 }}>{head}</div>
+            {VOICE_TOOLS.filter((tool) => tool.write === write).map((tool) => {
+              const on = (status.tools || []).includes(tool.name);
+              return (
+                <div key={tool.name} data-tool={tool.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: '1px solid var(--hair)' }}>
+                  <div style={{ flex: 1, fontSize: 14 }}>{t(tool.it, tool.en)}</div>
+                  <Toggle on={on} onChange={(v) => setTool(tool.name, v)} label={t(tool.it, tool.en)} />
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       <DkConfirm

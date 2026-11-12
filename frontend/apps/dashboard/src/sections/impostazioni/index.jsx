@@ -282,8 +282,8 @@ export default function ImpostazioniSection() {
               </div>
             </div>
           )}
-          <Row icon="phone" label={t('Assistente vocale', 'Voice assistant')} tag="Yourang"
-            sub={t('L’agente Yourang prenota gli appuntamenti al telefono', 'The Yourang agent books appointments over the phone')}
+          <Row icon="phone" label={t('Assistente Yourang', 'Yourang assistant')} tag="Yourang"
+            sub={t('Al telefono e in chat: cosa può leggere e cosa può fare', 'On the phone and in chat: what it may read and do')}
             value={voice?.active ? t('Attivo', 'Active') : t('Non attivo', 'Off')}
             onClick={() => setVoiceOpen(true)} />
           <Row icon="link" label={t('Automazioni esterne', 'External automations')} tag="n8n"
