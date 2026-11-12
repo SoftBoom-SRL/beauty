@@ -206,7 +206,9 @@ def _enter(
             payload={"to_membership_id": membership.id, "source": "yourang_org_owner"},
         )
         membership = _membership_for(salon, user)
-    if email_verified and is_support_email(email) and not membership.is_owner:
+    # Anche da titolare: quando il cliente ne prende la titolarità, make_owner
+    # tiene il ruolo che c'è, e senza questo il collega scendeva a Manager.
+    if email_verified and is_support_email(email):
         _grant_support_role(membership)
         membership = _membership_for(salon, user)
     return membership, conn

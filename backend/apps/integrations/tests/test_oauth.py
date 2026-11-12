@@ -565,12 +565,14 @@ class SupportAccessTests(_FlowCase):
         self.assertEqual(support.role.name, "Supporto Yourang")
         self.assertTrue(support.role.is_system)  # il salone non può ridurne i permessi
 
-    def test_the_colleague_who_activated_it_gets_full_access_back(self):
+    def test_the_colleague_who_activated_it_keeps_full_access_when_the_client_enters(self):
         first = self._login("org-chiara", "maria@yourang.ai", "admin", "Chiara")
         self._login("org-chiara", "chiara@gmail.com", "owner")
-        self.assertEqual(self._support(first["salon"]["id"], "maria@yourang.ai").role.name, "Manager")
-        self._login("org-chiara", "maria@yourang.ai", "admin")
-        self.assertEqual(self._support(first["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
+        # Subito, senza un nuovo accesso: la sessione già aperta non perde nulla.
+        support = self._support(first["salon"]["id"], "maria@yourang.ai")
+        self.assertFalse(support.is_owner)
+        self.assertEqual(support.role.name, "Supporto Yourang")
+        self.assertEqual(sorted(support.role.scopes), sorted(SCOPES))
 
     def test_a_role_changed_by_the_salon_comes_back_at_the_next_login(self):
         client = self._login("org-nails", "nails@yahoo.com", "owner")
