@@ -40,6 +40,8 @@ def cash_movements(salon, start, end) -> dict:
       DOPO la fine del periodo: per il mese scorso, il saldo pagato questo mese
       è denaro di questo mese, non di quello.
     - `settled`: i pagamenti arrivati nel periodo per vendite di prima (i saldi).
+    - `written_off`: gli abbuoni sulle vendite del periodo (`Sale.written_off`):
+      venduto che non entrerà mai in cassa, né adesso né dopo.
     - `gift_card_redeemed`: i pagamenti con gift card arrivati nel periodo,
       saldi compresi: denaro già incassato quando la carta fu venduta. Un saldo
       pagato con una gift card entra in `settled` ed esce da qui, e la cassa
@@ -54,6 +56,7 @@ def cash_movements(salon, start, end) -> dict:
     )
     payments = Payment.objects.filter(sale__salon=salon, sale__deposit_appointment__isnull=True)
     still_due = billed.aggregate(t=Sum("amount_due"))["t"] or zero
+    written_off = billed.aggregate(t=Sum("written_off"))["t"] or zero
     paid_later = (
         payments.filter(sale__in=billed, created_at__gte=end).aggregate(t=Sum("amount"))["t"] or zero
     )
@@ -69,6 +72,7 @@ def cash_movements(salon, start, end) -> dict:
     return {
         "due_left": still_due + paid_later,
         "settled": settled,
+        "written_off": written_off,
         "gift_card_redeemed": gift_card_redeemed,
         "package_sold": package_sold,
     }
@@ -83,7 +87,7 @@ def day_summary(salon, today: dt.date) -> dict:
     """Incassi del giorno `today` (box agenda, e al passaggio sulla testata di un
     giorno in vista settimana): {total, count, checkout_total, pos_total,
     gift_card_sold, package_sold, gift_card_redeemed, deposit_used, deposit_cashed,
-    deposit_refunded, due_left, settled, cash_in}.
+    deposit_refunded, due_left, settled, written_off, cash_in}.
 
     `total` è il venduto di oggi: le vendite-caparra restano fuori, perché sono
     un anticipo sul conto che al checkout verrà fatturato per intero — contarle
@@ -95,10 +99,10 @@ def day_summary(salon, today: dt.date) -> dict:
     oggi (rimborso all'annullamento, eccedenza al conto, restituzione a mano):
     denaro uscito. `due_left` è la parte del venduto di oggi lasciata da
     saldare e `settled` i saldi arrivati oggi per conti di altri giorni
-    (vedi `cash_movements`). `cash_in` è quello entrato davvero oggi, al netto
-    di quello uscito:
+    (vedi `cash_movements`), `written_off` gli abbuoni sul venduto di oggi.
+    `cash_in` è quello entrato davvero oggi, al netto di quello uscito:
     total + deposit_cashed − gift_card_redeemed − deposit_used − deposit_refunded
-    − due_left + settled.
+    − due_left − written_off + settled.
     Così né un regalo né un anticipo vengono contati due volte, una caparra
     restituita non resta in cassa, e un conto lasciato da saldare entra il
     giorno in cui la cliente lo paga.
@@ -134,9 +138,10 @@ def day_summary(salon, today: dt.date) -> dict:
         "deposit_refunded": deposit_refunded,
         "due_left": moves["due_left"],
         "settled": moves["settled"],
+        "written_off": moves["written_off"],
         "cash_in": (
             total + deposit_cashed - moves["gift_card_redeemed"] - deposit_used - deposit_refunded
-            - moves["due_left"] + moves["settled"]
+            - moves["due_left"] - moves["written_off"] + moves["settled"]
         ),
     }
 

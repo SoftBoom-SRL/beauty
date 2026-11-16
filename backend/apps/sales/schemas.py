@@ -60,6 +60,11 @@ class SaleIn(Schema):
     # (`Sale.amount_due`, poi POST /{id}/settle). Serve la cliente; pagare più
     # del dovuto resta un errore.
     leave_due: bool = False
+    # Vero = la cliente paga meno del dovuto e la differenza è abbuonata
+    # (arrotondamento, omaggio): il conto si chiude senza niente da saldare e
+    # la differenza resta scritta sulla vendita (`written_off`). Non è un
+    # incasso: la cassa del giorno non la conta. Non serve la cliente.
+    write_off: bool = False
     # Falso = incasso registrato senza scontrino fiscale (`Sale.receipt_issued`).
     receipt_issued: bool = True
 
@@ -128,6 +133,8 @@ class SaleOut(Schema):
     deposit_deducted: Decimal
     # Quanto la cliente deve ancora su questo conto (0 = saldato).
     amount_due: Decimal = Decimal("0.00")
+    # Abbuono: la parte del conto lasciata perdere chiudendolo (non incassata).
+    written_off: Decimal = Decimal("0.00")
     receipt_issued: bool = True
     created_at: datetime
 
@@ -214,6 +221,8 @@ class TodaySummaryOut(Schema):
     due_left: Decimal = Decimal("0.00")
     # Saldi arrivati oggi per conti di giorni precedenti: entrati, già in `cash_in`.
     settled: Decimal = Decimal("0.00")
+    # Abbuoni sul venduto di oggi: mai entrati, già tolti da `cash_in`.
+    written_off: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
 
 

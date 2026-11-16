@@ -273,3 +273,52 @@ class CashComesWhenItArrivesTests(DueTestBase):
         summary = today_summary(self.salon)
         self.assertEqual((summary["due_left"], summary["settled"]), (Decimal("0.00"), Decimal("0.00")))
         self.assertEqual(summary["cash_in"], Decimal("100.00"))
+
+
+class WriteOffTests(DueTestBase):
+    """Abbuono: la cliente paga meno e il salone lascia perdere la differenza.
+
+    Prima l'unica strada era lasciarla «da saldare»: un debito della cliente
+    che restava aperto per sempre (Beauty Boutique, 11/2026).
+    """
+
+    def _write_off(self, paid):
+        appointment = self._appointment()
+        return post_json(self.client, f"/api/sales/checkout/{appointment.id}", {
+            "blocks": [{"operator_id": self.giulia.id, "lines": [self._line(self.colore, "100.00")]}],
+            "payments": [{"method": "cash", "amount": paid}],
+            "write_off": True,
+        }, **self.auth)
+
+    def test_the_difference_is_written_off_and_nothing_is_left_due(self):
+        res = self._write_off("97.50")
+        self.assertEqual(res.status_code, 200, res.content)
+        sale = res.json()["sale"]
+        self.assertEqual(Decimal(sale["total"]), Decimal("100.00"))
+        self.assertEqual(Decimal(sale["amount_due"]), Decimal("0.00"))
+        self.assertEqual(Decimal(sale["written_off"]), Decimal("2.50"))
+        self.assertIn("abbuono € 2.50", ActivityLog.objects.get(type="sale.created").summary)
+
+    def test_the_write_off_is_not_cash_in(self):
+        self.assertEqual(self._write_off("97.50").status_code, 200)
+        summary = today_summary(self.salon)
+        self.assertEqual(summary["total"], Decimal("100.00"))
+        self.assertEqual(summary["written_off"], Decimal("2.50"))
+        self.assertEqual(summary["due_left"], Decimal("0.00"))
+        self.assertEqual(summary["cash_in"], Decimal("97.50"))
+
+    def test_paying_more_than_the_bill_is_still_refused(self):
+        res = self._write_off("120.00")
+        self.assertEqual(res.status_code, 422, res.content)
+        self.assertFalse(Sale.objects.exists())
+
+    def test_a_walk_in_sale_can_be_rounded_down(self):
+        """L'abbuono non è un debito: non serve sapere chi è la cliente."""
+        res = post_json(self.client, "/api/sales/pos", {
+            "blocks": [{"operator_id": self.giulia.id, "lines": [self._line(self.piega, "30.50")]}],
+            "payments": [{"method": "cash", "amount": "30.00"}],
+            "write_off": True,
+        }, **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(Decimal(res.json()["written_off"]), Decimal("0.50"))
+        self.assertEqual(Decimal(res.json()["amount_due"]), Decimal("0.00"))

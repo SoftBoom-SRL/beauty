@@ -366,13 +366,13 @@ export function slotReassignment(items, assignment) {
  *  quando è diverso dal venduto, con le voci che fanno la differenza — gift
  *  card usate e caparre detratte (denaro entrato un altro giorno), caparre
  *  incassate oggi, caparre restituite oggi, la parte del venduto di oggi
- *  lasciata da saldare e i saldi arrivati oggi per conti di altri giorni.
+ *  lasciata da saldare, gli abbuoni e i saldi arrivati oggi per conti di altri giorni.
  *  Prima compariva solo con gift card riscattate (05-16). `cash_in` arriva già
  *  al netto di tutto: qui non si sottrae niente. Confronto in centesimi. */
 export function cashUpLines(summary) {
   if (!summary) return null;
   const cents = (v) => Math.round(Number(v || 0) * 100);
-  const parts = ['deposit_cashed', 'gift_card_redeemed', 'deposit_used', 'deposit_refunded', 'due_left', 'settled']
+  const parts = ['deposit_cashed', 'gift_card_redeemed', 'deposit_used', 'deposit_refunded', 'due_left', 'written_off', 'settled']
     .filter((key) => cents(summary[key]) > 0)
     .map((key) => ({ key, amount: Number(summary[key]) }));
   return { show: cents(summary.cash_in) !== cents(summary.total), cashIn: Number(summary.cash_in || 0), parts };

@@ -420,9 +420,10 @@ def _sales_figures(salon, sales_qs, start: datetime, end: datetime) -> dict:
         "deposit_cashed": deposit_cashed,
         "due_left": moves["due_left"],
         "settled": moves["settled"],
+        "written_off": moves["written_off"],
         "cash_in": (
             revenue + deposit_cashed - gift_card_redeemed - deposit_used
-            - moves["due_left"] + moves["settled"]
+            - moves["due_left"] - moves["written_off"] + moves["settled"]
         ),
         "sales_count": sales_count,
         "avg_ticket": avg_ticket,

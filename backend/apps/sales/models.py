@@ -50,6 +50,13 @@ class Sale(models.Model):
     # nuovi `Payment` (con la loro data), che lo riducono. Il venduto resta
     # `total` dal giorno della vendita; il denaro entra in cassa quando arriva.
     amount_due = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_default=0)
+    # Abbuono: la differenza che il salone lascia perdere chiudendo il conto
+    # (arrotondamento, omaggio: 52,50 € pagati 50). Prima l'unica strada per
+    # chiudere un conto pagato in meno era lasciarlo «da saldare», e restava
+    # un debito della cliente per sempre (Beauty Boutique, 11/2026). Non è
+    # denaro entrato: la cassa del giorno lo toglie da `cash_in` come il
+    # dovuto, ma non resta niente da saldare. Il venduto resta `total`.
+    written_off = models.DecimalField(max_digits=10, decimal_places=2, default=0, db_default=0)
     # Scontrino fiscale battuto o no. Il salone usa il gestionale come registro
     # di TUTTI gli incassi, anche quelli senza scontrino: la cassa del giorno e
     # lo storico cliente li devono mostrare, distinti (Beauty Boutique, 10/2026).

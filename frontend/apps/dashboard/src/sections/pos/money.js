@@ -112,15 +112,25 @@ export const paymentsMatch = (paidCents, dueCents) => Math.abs(paidCents - dueCe
 /* ---------------- payments model ----------------
  * One shared shape for the single/split payment editor:
  *   { split: bool, method: 'cash', giftCode: '', rows: [{ method, amt, code, sessions? }],
- *     leaveDue: bool, payNow: '' }
+ *     leaveDue: bool, payNow: '', writeOff: bool }
  * `amt` è in euro come lo si legge nel campo (numero o testo digitato);
  * resolvePayments() turns it into the API `payments[]` array.
  * `leaveDue`: la cliente paga adesso meno del dovuto (`payNow` col pagamento
  * unico, la somma delle righe con quello diviso) e il resto resta da saldare
  * (`leave_due` del checkout e del banco). `sessions` su una riga gift card: le
- * sedute che scala (carte a sedute, vedi giftPrefill). */
+ * sedute che scala (carte a sedute, vedi giftPrefill). `writeOff`: con
+ * `leaveDue`, la differenza non resta da saldare ma è abbuonata
+ * (arrotondamento, omaggio: `write_off` del checkout e del banco). */
 
-export const emptyPayments = () => ({ split: false, method: 'cash', giftCode: '', rows: [], leaveDue: false, payNow: '' });
+export const emptyPayments = () => ({ split: false, method: 'cash', giftCode: '', rows: [], leaveDue: false, payNow: '', writeOff: false });
+
+/** Cosa dice al server la parte non pagata adesso (`leftCents`): niente,
+ *  «resta da saldare» (`leave_due`) o «abbuonata» (`write_off`: il conto si
+ *  chiude e la differenza non conta come incasso). */
+export function dueFlags(v, leftCents) {
+  if (!(leftCents > 0)) return {};
+  return v?.writeOff ? { write_off: true } : { leave_due: true };
+}
 
 function rowToApi(r) {
   const p = { method: r.method, amount: centsToApi(toCents(r.amt)) };

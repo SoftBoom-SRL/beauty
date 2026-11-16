@@ -225,6 +225,11 @@ export default function HistoryTab() {
                         </span>
                       )}
                       {s.receipt_issued === false && <NoReceiptBadge t={t} />}
+                      {Number(s.written_off) > 0 && (
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--ok)', background: 'var(--ok-tint)', padding: '2px 8px', borderRadius: 99 }}>
+                          {t('Abbuono', 'Written off')} {money(s.written_off, lang)}
+                        </span>
+                      )}
                       {dueNow && (
                         <span style={{ fontSize: 11.5, fontWeight: 800, color: 'var(--warn)', background: 'var(--warn-tint)', padding: '2px 8px', borderRadius: 99 }}>
                           {t('Da saldare', 'Left to pay')} {money(s.amount_due, lang)}
@@ -299,6 +304,13 @@ export default function HistoryTab() {
                             </span>
                           ))}
                         </div>
+                        {/* l'abbuono resta scritto: la differenza lasciata perdere chiudendo il conto */}
+                        {Number(det.written_off) > 0 && (
+                          <div className="t-sm" style={{ display: 'flex', justifyContent: 'space-between', padding: '0 0 10px', color: 'var(--ok)', fontWeight: 700 }}>
+                            <span>{t('Abbuono (arrotondamento / omaggio, non incassato)', 'Written off (rounding / gift, not cashed)')}</span>
+                            <span className="t-num">−{money(det.written_off, lang)}</span>
+                          </div>
+                        )}
                         {Number(det.amount_due) > 0 && (
                           <div style={{ padding: '10px 0 12px', borderTop: '1px solid var(--hair)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

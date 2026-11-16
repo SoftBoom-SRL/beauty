@@ -501,10 +501,11 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - `reports.cash_movements(salon, start, end)`: il denaro entra quando arriva.
   `due_left` = parte delle vendite del periodo non pagata nel periodo (dovuto
   ancora aperto + saldi arrivati dopo), `settled` = pagamenti del periodo per
-  vendite di prima, `gift_card_redeemed` = pagamenti con gift card del periodo,
+  vendite di prima, `written_off` = abbuoni sulle vendite del periodo,
+  `gift_card_redeemed` = pagamenti con gift card del periodo,
   `package_sold`. Lo usano il riepilogo di oggi e i KPI degli insight
   (`cash_in` = venduto + caparre incassate − gift card − caparre detratte
-  − caparre restituite − due_left + settled).
+  − caparre restituite − due_left − written_off + settled).
 - Stripe (`stripe_service.py`): `_client()` → HttpError(503, "Stripe non configurato") se
   manca STRIPE_SECRET_KEY; `ensure_customer(client)`, `create_setup_intent(client)`,
   link di pagamento della caparra, rimborsi, `charge_full_amount(appointment)` (off-session sul
@@ -518,8 +519,10 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   body {blocks:[{operator_id, lines:[{line_type, service_id?, product_id?, package_id?, qty,
   unit_price, discount_pct?, is_gift?, value?, recipient_name?, gift_service_id?, sessions?,
   kind?}]}], payments:[{method, amount, gift_card_code?, sessions?}], coupon_code?,
-  leave_due?, extra_appointment_ids?} →
-  finalize_sale(kind=checkout, deposit_deducted = caparre ancora in cassa, allow_due=leave_due);
+  leave_due?, write_off?, extra_appointment_ids?} →
+  finalize_sale(kind=checkout, deposit_deducted = caparre ancora in cassa, allow_due=leave_due,
+  write_off); con `write_off` si paga meno del dovuto e la differenza è un abbuono
+  (`Sale.written_off`, niente da saldare, non è incasso; non serve la cliente);
   appuntamento → closed; emit `visit.completed` {client, services, total};
   response: sale + breakdown per operatrice.
   Già incassato (400): la visita ha la sua vendita o `paid_in_sale`.
@@ -536,7 +539,7 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - GET `/checkout/{appointment_id}/other-visits` (scope sales) → [AppointmentOut]: le
   altre visite aperte della cliente nello stesso giorno, ancora da incassare (la
   sezione «Altre visite oggi» della cassa).
-- POST `/pos` (scope sales) {client_id?, blocks, payments, coupon_code?, leave_due?} →
+- POST `/pos` (scope sales) {client_id?, blocks, payments, coupon_code?, leave_due?, write_off?} →
   finalize_sale(kind=pos). Vendita gift card dal POS: line_type gift_card con {value,
   recipient_name?} (o a trattamento: gift_service_id, sessions, kind); pacchetto:
   line_type package con {package_id}.
@@ -546,12 +549,12 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id,
   due (solo i conti da saldare);
   response include KPI header {revenue, count, items_count, due_total} sul filtro corrente.
-  SaleOut porta `amount_due`; ogni pagamento la sua `created_at`.
+  SaleOut porta `amount_due` e `written_off` (abbuono); ogni pagamento la sua `created_at`.
 - GET `/{id}` → dettaglio con righe (anche `package_id`/`package_name`), pagamenti e
   `covered_appointment_ids` (conto unico).
 - GET `/today-summary` (staff_auth) → {total, count, checkout_total, pos_total,
   gift_card_sold, package_sold, gift_card_redeemed, deposit_used, deposit_cashed,
-  deposit_refunded, due_left, settled, cash_in} di oggi (il box dell'agenda): il
+  deposit_refunded, due_left, settled, written_off, cash_in} di oggi (il box dell'agenda): il
   venduto per data della vendita, `cash_in` il denaro arrivato oggi (vedi `cash_movements`).
 - POST `/appointments/{appointment_id}/charge-no-show` (scope sales) → charge_full_amount, log.
   Solo su appuntamenti no_show; un solo addebito per appuntamento (no_show_payment_intent_id +

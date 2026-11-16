@@ -27,7 +27,7 @@ import {
 import useProductCatalog from './useProductCatalog.js';
 import { salesApi } from '../../api/sales.js';
 import {
-  centsToEur, dueLeftCents, emptyPayments, lineCents, money, opName,
+  centsToEur, dueFlags, dueLeftCents, emptyPayments, lineCents, money, opName,
   paymentsError, resolvePayments, saleTotals, toCents,
 } from './lib.js';
 
@@ -137,7 +137,7 @@ export default function CartTab({ onGoHistory }) {
   const changeClient = (c) => {
     setClientSel(c);
     // Senza cliente non si lascia niente da saldare: il conto torna da pagare per intero.
-    if (!c) setPay((p) => ({ ...p, leaveDue: false, payNow: '' }));
+    if (!c) setPay((p) => ({ ...p, leaveDue: false, payNow: '', writeOff: false }));
     // Un buono intestato vale solo per la sua cliente (come in findCoupon).
     if (coupon?.client_id && coupon.client_id !== (c?.id ?? null)) {
       setCoupon(null);
@@ -160,7 +160,7 @@ export default function CartTab({ onGoHistory }) {
         blocks: [{ operator_id: seller ? seller.id : null, lines: cart.map(asApiLine) }],
         payments: resolvePayments(pay, totalCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
-        ...(leftCents > 0 ? { leave_due: true } : {}),
+        ...dueFlags(pay, leftCents),
         receipt_issued: receipt,
       });
       setDone(sale);
@@ -277,7 +277,7 @@ export default function CartTab({ onGoHistory }) {
 
           {/* metodo di pagamento — in basso */}
           <div style={{ margin: '18px 0 0' }}>
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} cards={credit} />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={totalCents} t={t} lang={lang} compact allowDue={!!clientSel} allowWriteOff cards={credit} />
             <ReceiptToggle value={receipt} onChange={setReceipt} t={t} style={{ marginTop: 12 }} />
           </div>
         </div>
@@ -296,7 +296,8 @@ export default function CartTab({ onGoHistory }) {
           </button>
           <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 9, textAlign: 'center' }}>
             {!canSell ? t('Serve il permesso "vendite" per incassare', 'The "sales" permission is required')
-              : leftCents > 0 ? t(`Resta da saldare ${money(centsToEur(leftCents), 'it')} · registrazione non fiscale`, `${money(centsToEur(leftCents), 'en')} left to pay · non-fiscal record`)
+              : leftCents > 0 && pay.writeOff ? t(`Abbuono ${money(centsToEur(leftCents), 'it')} · registrazione non fiscale`, `${money(centsToEur(leftCents), 'en')} written off · non-fiscal record`)
+                : leftCents > 0 ? t(`Resta da saldare ${money(centsToEur(leftCents), 'it')} · registrazione non fiscale`, `${money(centsToEur(leftCents), 'en')} left to pay · non-fiscal record`)
                 : t('Registrazione non fiscale', 'Non-fiscal record')}
           </div>
         </div>
@@ -305,7 +306,9 @@ export default function CartTab({ onGoHistory }) {
       {/* conferma prima di finalizzare la vendita */}
       <ConfirmPaymentModal open={confirmOpen} saving={saving} onBack={() => setConfirmOpen(false)} onConfirm={complete}
         summary={<>{itemCount} {t('articoli', 'items')} · {money(centsToEur(collectCents), lang)}{seller ? ' · ' + opName(seller) : ''}</>}
-        note={leftCents > 0 ? t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`) : null}
+        note={!(leftCents > 0) ? null
+          : pay.writeOff ? t(`Abbuono (non incassato): ${money(centsToEur(leftCents), 'it')}`, `Written off (not cashed): ${money(centsToEur(leftCents), 'en')}`)
+            : t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`)}
         t={t} />
     </div>
   );

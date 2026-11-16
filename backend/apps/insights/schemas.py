@@ -23,6 +23,8 @@ class KpisOut(Schema):
     # saldi arrivati nel periodo per vendite di prima: già dentro `cash_in`.
     due_left: Decimal = Decimal("0.00")
     settled: Decimal = Decimal("0.00")
+    # Abbuoni sulle vendite del periodo: venduto mai incassato, già fuori da `cash_in`.
+    written_off: Decimal = Decimal("0.00")
     cash_in: Decimal = Decimal("0.00")
     sales_count: int
     avg_ticket: Decimal

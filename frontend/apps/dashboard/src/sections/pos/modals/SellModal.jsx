@@ -39,7 +39,7 @@ import { stayMateIds } from '../../agenda/lib/stay.js';
 import { salesApi } from '../../../api/sales.js';
 import { useResource } from '../../../hooks/useResource.js';
 import {
-  centsToEur, dueLeftCents, giftLabel, lineCents,
+  centsToEur, dueFlags, dueLeftCents, giftLabel, lineCents,
   money, opName, paymentsError, resolvePayments, saleTotals, svcLabel, toCents,
 } from '../lib.js';
 
@@ -213,9 +213,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
     `Caparra eccedente da restituire: ${money(centsToEur(excessCents), 'it')}. Se è stata pagata online torna sulla carta della cliente, altrimenti va restituita in cassa.`,
     `Excess deposit to return: ${money(centsToEur(excessCents), 'en')}. If it was paid online it goes back to the client's card, otherwise return it at the desk.`,
   );
-  const dueNote = leftCents > 0
-    ? t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`)
-    : null;
+  const dueNote = !(leftCents > 0) ? null
+    : pay.writeOff
+      ? t(`Abbuono (non incassato): ${money(centsToEur(leftCents), 'it')}`, `Written off (not cashed): ${money(centsToEur(leftCents), 'en')}`)
+      : t(`Resta da saldare: ${money(centsToEur(leftCents), 'it')}`, `Left to pay: ${money(centsToEur(leftCents), 'en')}`);
 
   const applyCoupon = () => cp.applyCoupon({ baseCents: couponBaseCents, clientId: appt.client?.id ?? null });
   const gifts = visitGifts(visitsInBill);
@@ -233,7 +234,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
         })),
         payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
-        ...(leftCents > 0 ? { leave_due: true } : {}),
+        ...dueFlags(pay, leftCents),
         ...(included.length ? { extra_appointment_ids: included } : {}),
         receipt_issued: receipt,
       };
@@ -337,7 +338,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
             label={t('Buono sconto', 'Voucher')} placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}
             style={{ marginBottom: 12 }} labelStyle={{ marginBottom: 6 }} t={t} lang={lang} />
           {dueCents > 0 ? (
-            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact allowDue={!!appt.client} cards={credit} />
+            <PaymentsPanel value={pay} onChange={setPay} dueCents={dueCents} t={t} lang={lang} compact allowDue={!!appt.client} allowWriteOff cards={credit} />
           ) : (
             <div className="t-sm" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 13px', borderRadius: 12, background: 'var(--ok-tint)', color: 'var(--ok)', fontWeight: 600 }}>
               <Icon name="check" size={15} color="var(--ok)" stroke={2.4} />
