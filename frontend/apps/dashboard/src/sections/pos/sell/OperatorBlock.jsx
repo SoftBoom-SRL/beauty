@@ -1,10 +1,11 @@
 // sell/OperatorBlock.jsx — il blocco di un'operatrice nel check-out
-// (SellModal): chi è, quanto ha venduto, le sue righe (sconto su servizi,
-// prodotti e pacchetti, omaggio, togli per le righe aggiunte) e sotto, come `children`,
+// (SellModal): chi è, quanto ha venduto, le sue righe (prezzo dei servizi,
+// sconto su servizi, prodotti e pacchetti, omaggio, togli per le righe
+// aggiunte) e sotto, come `children`,
 // il modo per aggiungerne altre.
 import { Avatar, Icon, NumInput } from '@youty/shared';
 import { lineAmount, money } from '../lib.js';
-import { canDiscountLine } from '../lines.js';
+import { canDiscountLine, canEditPrice, pricePatch } from '../lines.js';
 
 const lineIcon = (l) => (
   l.kind === 'prepaid' ? 'wallet'
@@ -38,6 +39,14 @@ export default function OperatorBlock({ lines, subtotal, color, initials, label,
             <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, color: l.is_gift ? 'var(--ok)' : 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {l.name}{l.line_type === 'gift_card' && l.recipient_name ? ' · ' + l.recipient_name : ''}
             </span>
+            {canEditPrice(l) && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid var(--hair)', borderRadius: 8, padding: '3px 6px', height: 26, boxSizing: 'border-box', background: 'var(--surface)', flexShrink: 0 }} title={t('Prezzo del servizio', 'Service price')}>
+                <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
+                <NumInput min={0} max={99999} value={l.unit_price} aria-label={t('Prezzo del servizio', 'Service price')}
+                  onChange={(price) => onPatch(l.key, pricePatch(l, price))}
+                  style={{ width: 52, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
+              </div>
+            )}
             {canDiscountLine(l) && (
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid var(--hair)', borderRadius: 8, padding: '3px 6px', height: 26, boxSizing: 'border-box', background: 'var(--surface)', flexShrink: 0 }} title={discountTitle(l, t)}>
                 <NumInput integer min={0} max={100} value={l.discount_pct}

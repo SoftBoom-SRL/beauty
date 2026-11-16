@@ -6,9 +6,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptItemLine, canDiscountLine, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  apptItemLine, canDiscountLine, canEditPrice, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
   checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine,
-  giftLineName, needsClient, packageSummary, prepaidValue, toApiLine, visitItemLine,
+  giftLineName, needsClient, packageSummary, prepaidValue, pricePatch, toApiLine, visitItemLine,
 } from '../src/sections/pos/lines.js';
 
 const item = { id: 41, operator_id: 7, service_id: 3, service_name: 'Taglio', price: '35.00' };
@@ -145,4 +145,16 @@ test('check-out: lo sconto si dà anche al singolo servizio, non a gift card e o
   assert.equal(canDiscountLine(checkoutGiftLine('gl1', 7, 50, '', 'it')), false);
   // il 20% sul servizio parte con la riga
   assert.equal(toApiLine({ ...svc, discount_pct: 20 }, checkoutDiscountPct({ ...svc, discount_pct: 20 })).discount_pct, 20);
+});
+
+test('check-out: il prezzo del servizio si cambia prima di incassare e parte quello', () => {
+  const svc = apptItemLine(item, 0);
+  assert.equal(canEditPrice(svc), true);
+  assert.equal(canEditPrice({ ...svc, is_gift: true }), false);
+  assert.equal(canEditPrice(checkoutProductLine('pl1', 7, shampoo)), false);
+  const edited = { ...svc, ...pricePatch(svc, 28.5) };
+  assert.equal(toApiLine(edited, 0).unit_price, '28.50');
+  // la riga di una visita tiene il prezzo nuovo anche come prezzo di partenza
+  const visit = visitItemLine(1, item, 0);
+  assert.deepEqual(pricePatch(visit, 28.5), { unit_price: 28.5, list_price: 28.5 });
 });

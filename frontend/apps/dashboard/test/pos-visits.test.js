@@ -63,3 +63,10 @@ test('le carte delle visite del conto una volta sola, e la caparra detraibile', 
   assert.equal(depositCentsOf({ deposit_status: 'paid', deposit_amount: '30.00' }), 3000);
   assert.equal(depositCentsOf({ deposit_status: 'required', deposit_amount: '30.00' }), 0);
 });
+
+test('il prezzo cambiato a mano resta quando si spunta un’altra visita', () => {
+  const first = checkoutState([], [mani]);
+  const edited = first.lines.map((l) => ({ ...l, unit_price: 25, list_price: 25 }));
+  const { lines } = checkoutState(edited, [mani, piedi]);
+  assert.equal(lines.find((l) => l.key === 'v1_11_0').unit_price, 25);
+});

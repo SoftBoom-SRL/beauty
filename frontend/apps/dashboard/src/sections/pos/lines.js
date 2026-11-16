@@ -55,6 +55,19 @@ export const checkoutPrepaidLine = (key, opId, service, sessions, value, lang) =
  *  non si poteva fare il 20% su uno solo (Beauty Boutique, 11/2026). Le gift
  *  card no (il server lo rifiuta: si cambia il valore), gli omaggi neppure. */
 export const canDiscountLine = (l) => l.line_type !== 'gift_card' && !l.is_gift;
+/** Vero se il prezzo della riga del check-out si può cambiare prima di
+ *  incassare: i servizi (un ritocco, una cliente abituale), non gli omaggi.
+ *  Prima il servizio partiva sempre col prezzo di listino e si poteva solo
+ *  scontare in percentuale (Beauty Boutique, 11/2026). */
+export const canEditPrice = (l) => l.line_type === 'service' && !l.is_gift;
+/** La modifica di una riga col prezzo nuovo (in euro). Una riga di una visita
+ *  cambia anche `list_price`: è il prezzo da cui checkoutState (visits.js)
+ *  riparte quando si spunta o si toglie un'altra visita del conto, e senza il
+ *  prezzo scritto a mano tornava quello di listino. */
+export const pricePatch = (l, price) => ({
+  unit_price: price,
+  ...(l.visit_id != null ? { list_price: price } : {}),
+});
 /** Sconto che parte per una riga del check-out: niente sugli omaggi. */
 export const checkoutDiscountPct = (l) => (l.is_gift ? 0 : (l.discount_pct || 0));
 
