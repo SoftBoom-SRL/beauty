@@ -654,3 +654,87 @@ class WalletSpendableTests(GiftCardTestBase):
             reward.id: True,
         })
         self.assertEqual(self._wallet(self.sofia), {for_daughter.id: True})
+
+
+class GiftCardCancelTests(GiftCardTestBase):
+    """Annullare una carta creata per errore (Beauty Boutique 11/2026).
+
+    Una carta da 220 € intestata alla cliente sbagliata non si poteva togliere:
+    DELETE e PATCH davano 404 e la dashboard non aveva un pulsante, quindi il
+    credito restava spendibile da chi non doveva averlo.
+    """
+
+    def _paid_card(self, value="220"):
+        res = self._post(
+            "/api/marketing/gift-cards",
+            {"value": value, "paid": True, "paid_method": "cash", "recipient_client_id": self.sofia.id},
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        return GiftCard.objects.get(pk=res.json()["id"])
+
+    def test_cancelled_card_stays_listed_with_zero_balance_and_cannot_be_spent(self):
+        from apps.core.models import ActivityLog
+
+        card = self._paid_card()
+        res = self._post(
+            f"/api/marketing/gift-cards/{card.id}/cancel", {"reason": "Intestata alla cliente sbagliata"}
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body["status"], "cancelled")
+        self.assertEqual(Decimal(body["balance"]), Decimal("0"))
+        self.assertEqual(body["cancel_reason"], "Intestata alla cliente sbagliata")
+        self.assertIsNotNone(body["cancelled_at"])
+
+        card.refresh_from_db()
+        self.assertEqual(card.status, GiftCard.Status.CANCELLED)
+        self.assertEqual(card.initial_value, Decimal("220.00"))
+        # Il saldo che aveva resta nel registro attività.
+        log = ActivityLog.objects.get(salon=self.salon, type="giftcard.cancelled")
+        self.assertEqual(log.payload["balance"], "220.00")
+
+        # Resta nell'elenco (anche col filtro «Annullate») ma fuori dai KPI.
+        listed = self._get("/api/marketing/gift-cards", {"status": "cancelled"})
+        self.assertEqual([c["id"] for c in listed["items"]], [card.id])
+        everything = self._get("/api/marketing/gift-cards")
+        self.assertEqual(Decimal(everything["kpi"]["redeemed_total"]), Decimal("0"))
+        self.assertEqual(Decimal(everything["kpi"]["outstanding"]), Decimal("0"))
+        self.assertEqual(Decimal(everything["kpi"]["sold_total"]), Decimal("0"))
+
+        # Non si spende, non si ricarica, non si annulla due volte.
+        with self.assertRaises(HttpError) as err:
+            redeem_gift_card(self.salon, card.code, Decimal("10"))
+        self.assertEqual(err.exception.status_code, 422)
+        res = self._post(
+            f"/api/marketing/gift-cards/{card.id}/top-up", {"amount": "50", "method": "cash"}
+        )
+        self.assertEqual(res.status_code, 422, res.content)
+        res = self._post(f"/api/marketing/gift-cards/{card.id}/cancel", {})
+        self.assertEqual(res.status_code, 422, res.content)
+
+        # E sparisce dal portafoglio della cliente nell'app.
+        from ..wallet import client_wallet
+
+        self.assertEqual(client_wallet(self.salon, self.sofia)["gift_cards"], [])
+
+    def test_cancelling_a_paid_card_needs_the_cash_desk(self):
+        card = self._paid_card()
+        promo = self._staff("promo@parlour.it", ["marketing"])
+        res = self._post(f"/api/marketing/gift-cards/{card.id}/cancel", {}, auth=promo)
+        self.assertEqual(res.status_code, 403, res.content)
+        card.refresh_from_db()
+        self.assertEqual(card.status, GiftCard.Status.ACTIVE)
+
+        # Una carta ancora da pagare la annulla anche il marketing.
+        res = self._post("/api/marketing/gift-cards", {"value": "30", "paid": False})
+        unpaid_id = res.json()["id"]
+        res = self._post(f"/api/marketing/gift-cards/{unpaid_id}/cancel", {}, auth=promo)
+        self.assertEqual(res.status_code, 200, res.content)
+
+    def test_a_card_of_another_salon_is_not_found(self):
+        other = Salon.objects.create(name="Altro", slug="altro")
+        card = create_gift_card(other, Decimal("50"))
+        res = self._post(f"/api/marketing/gift-cards/{card.id}/cancel", {})
+        self.assertEqual(res.status_code, 404, res.content)
+        card.refresh_from_db()
+        self.assertEqual(card.status, GiftCard.Status.ACTIVE)

@@ -290,7 +290,14 @@ def gift_card_kpis(qs) -> dict:
     # «Venduto» è il denaro davvero incassato: le carte ancora da pagare non
     # sono ricavi, e i premi fedeltà (paid_method="loyalty") non li ha pagati
     # nessuno — contarli gonfiava il KPI di soldi mai entrati in cassa.
-    sold = Q(payment_status=GiftCard.PaymentStatus.PAID) & ~Q(paid_method__in=NOT_CASHED_METHODS)
+    # Le carte annullate (create per errore) restano fuori da tutti e tre: il
+    # saldo azzerato le farebbe contare per intero come «già riscattato».
+    live = ~Q(status=GiftCard.Status.CANCELLED)
+    sold = (
+        Q(payment_status=GiftCard.PaymentStatus.PAID)
+        & ~Q(paid_method__in=NOT_CASHED_METHODS)
+        & live
+    )
     # «Da spendere» è il credito che il salone deve ancora onorare: solo carte
     # attive, pagate e non scadute.
     spendable = (
@@ -304,6 +311,7 @@ def gift_card_kpis(qs) -> dict:
             Sum(
                 F("initial_value") - F("balance"),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
+                filter=live,
             ),
             _ZERO,
         ),
@@ -506,5 +514,46 @@ def top_up_gift_card(salon, card, amount, *, method: str, actor=None, receipt_is
             f"Ricarica gift card {card.code}: +€{amount} ({method}), saldo €{card.balance}",
             actor=actor,
             payload={"gift_card_id": card.id, "amount": str(amount), "method": method, "top_up": True},
+        )
+    return card
+
+
+def cancel_gift_card(salon, card, *, reason: str = "", actor=None) -> GiftCard:
+    """Annulla una carta creata per errore: stato «annullata», saldo e sedute a zero.
+
+    Una carta intestata alla cliente sbagliata (Beauty Boutique 11/2026) non si
+    poteva togliere in nessun modo: DELETE e PATCH non esistono, e il credito
+    restava spendibile da chi non doveva averlo. La carta non si cancella: resta
+    nell'elenco e nello storico, ma non si riscatta, non si ricarica e non si
+    incassa più (tutti chiedono una carta attiva o esaurita). Il saldo che aveva
+    resta nel registro attività. Se era stata pagata in cassa, l'eventuale
+    rimborso alla cliente si fa dalla cassa: qui non si tocca la vendita.
+    """
+    reason = (reason or "").strip()
+    with transaction.atomic():
+        card = GiftCard.objects.select_for_update().get(pk=card.pk)
+        if card.status == GiftCard.Status.CANCELLED:
+            raise HttpError(422, "Gift card già annullata")
+        old_balance = card.balance
+        card.status = GiftCard.Status.CANCELLED
+        card.balance = Decimal("0.00")
+        card.sessions_left = 0
+        card.cancelled_at = timezone.now()
+        card.cancel_reason = reason[:255]
+        card.save(
+            update_fields=["status", "balance", "sessions_left", "cancelled_at", "cancel_reason"]
+        )
+        log_activity(
+            salon,
+            "giftcard.cancelled",
+            f"Gift card {card.code} annullata (saldo €{old_balance})"
+            + (f": {card.cancel_reason}" if card.cancel_reason else ""),
+            actor=actor,
+            payload={
+                "gift_card_id": card.id,
+                "code": card.code,
+                "balance": str(old_balance),
+                "reason": card.cancel_reason,
+            },
         )
     return card

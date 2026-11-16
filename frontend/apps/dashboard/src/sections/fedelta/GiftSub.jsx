@@ -5,6 +5,7 @@ import { GroupedFilterMenu } from '../../ui/index.js';
 import QrMini from './QrMini.jsx';
 import Pager from './Pager.jsx';
 import GiftCardModal from './modals/GiftCardModal.jsx';
+import { ConfirmModal } from '../clienti/components.jsx';
 import { GC_STATUS_META, effectiveStatus, isMaskedCode } from './meta.js';
 import { shortDate } from './dates.js';
 import { creditIcon, creditKind, creditOrigin, sessionsLabel } from './credits.js';
@@ -50,6 +51,9 @@ export default function GiftSub() {
   const [loading, setLoading] = useState(true);
   const [edit, setEdit] = useState(null);
   const [markingId, setMarkingId] = useState(null);
+  const [cancelling, setCancelling] = useState(null);   // carta da annullare (conferma aperta)
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelBusy, setCancelBusy] = useState(false);
 
   // la ricerca si scrive in `query` con un ritardo, e riporta alla prima pagina
   useEffect(() => {
@@ -95,6 +99,26 @@ export default function GiftSub() {
       reload();
     } catch (err) {
       toastApiError(err, fireToast, t);
+    }
+  };
+
+  // Una carta pagata la annulla chi ha la cassa, una da pagare il marketing:
+  // la stessa regola del server (cancel_gift_card_staff).
+  const canCancel = (g) => (g.payment_status === 'paid' ? canCash : canWrite);
+
+  const cancelCard = async () => {
+    if (!cancelling || cancelBusy) return;
+    setCancelBusy(true);
+    try {
+      await giftCardsApi.cancel(cancelling.id, { reason: cancelReason.trim() });
+      fireToast({ msg: t('Gift card annullata', 'Gift card cancelled'), icon: 'check' });
+      setCancelling(null);
+      setCancelReason('');
+      reload();
+    } catch (err) {
+      toastApiError(err, fireToast, t);
+    } finally {
+      setCancelBusy(false);
     }
   };
 
@@ -158,7 +182,7 @@ export default function GiftSub() {
         </div>
         <GroupedFilterMenu t={t} groups={[
           { label: t('Tipo', 'Type'), value: kindF, set: setFilter(setKindF), opts: [['all', t('Tutte', 'All')], ['gift', t('Regali', 'Gifts')], ['prepaid', t('Già pagati', 'Prepaid')], ['package', t('Pacchetti', 'Packages')]] },
-          { label: t('Stato', 'Status'), value: statusF, set: setFilter(setStatusF), opts: [['all', t('Tutte', 'All')], ['active', t('Attive', 'Active')], ['redeemed', t('Esaurite', 'Redeemed')], ['expired', t('Scadute', 'Expired')]] },
+          { label: t('Stato', 'Status'), value: statusF, set: setFilter(setStatusF), opts: [['all', t('Tutte', 'All')], ['active', t('Attive', 'Active')], ['redeemed', t('Esaurite', 'Redeemed')], ['expired', t('Scadute', 'Expired')], ['cancelled', t('Annullate', 'Cancelled')]] },
           { label: t('Pagamento', 'Payment'), value: payF, set: setFilter(setPayF), opts: [['all', t('Tutti', 'All')], ['paid', t('Pagate', 'Paid')], ['unpaid', t('Da pagare', 'Unpaid')]] },
         ]} />
       </div>
@@ -184,8 +208,9 @@ export default function GiftSub() {
             // ultime due sono di una cliente sola (chi paga è chi riceve)
             const kind = creditKind(g);
             const sessions = sessionsLabel(g, t, { always: kind === 'package' });
+            const cancelled = status === 'cancelled';
             return (
-              <div key={g.id} className="dk-card" style={{ padding: 18, opacity: status === 'redeemed' || status === 'expired' ? 0.72 : 1, borderLeft: '3px solid ' + (due ? 'var(--warn)' : status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
+              <div key={g.id} className="dk-card" style={{ padding: 18, opacity: status === 'redeemed' || status === 'expired' || cancelled ? 0.72 : 1, borderLeft: '3px solid ' + (due ? 'var(--warn)' : status === 'active' ? 'var(--clay)' : 'var(--faint)') }}>
                 <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
                   {masked ? (
                     <div title={t('Codice visibile a chi ha i permessi marketing o vendite', 'Code visible with the marketing or sales permission')}
@@ -258,11 +283,19 @@ export default function GiftSub() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--hair)', position: 'relative' }}>
                   <span className="t-sm" style={{ color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                     <Icon name="calendar" size={13} color="var(--muted-2)" />
-                    {g.expires_at ? t('Scade: ', 'Expires: ') + dateLabel(g.expires_at, lang) : t('Nessuna scadenza', 'No expiry')}
+                    {cancelled
+                      ? t('Annullata', 'Cancelled') + (g.cancelled_at ? ' · ' + dateLabel(g.cancelled_at, lang) : '') + (g.cancel_reason ? ' · ' + g.cancel_reason : '')
+                      : g.expires_at ? t('Scade: ', 'Expires: ') + dateLabel(g.expires_at, lang) : t('Nessuna scadenza', 'No expiry')}
                   </span>
                   {due && canCash && status === 'active' && (
                     <button className="dk-btn dk-btn--ghost" style={{ marginLeft: 'auto', height: 32, fontSize: 12.5 }} onClick={() => setMarkingId(markingId === g.id ? null : g.id)}>
                       <Icon name="check" size={14} />{t('Segna pagata', 'Mark paid')}
+                    </button>
+                  )}
+                  {!cancelled && canCancel(g) && (
+                    <button className="dk-btn dk-btn--ghost" style={{ marginLeft: due && canCash && status === 'active' ? 0 : 'auto', height: 32, fontSize: 12.5, color: 'var(--danger)' }}
+                      onClick={() => { setCancelReason(''); setCancelling(g); }}>
+                      <Icon name="x" size={14} color="var(--danger)" />{t('Annulla', 'Cancel')}
                     </button>
                   )}
                   {markingId === g.id && (
@@ -287,6 +320,22 @@ export default function GiftSub() {
       )}
 
       <Pager count={total} limit={LIMIT} offset={offset} setOffset={setOffset} t={t} />
+
+      {cancelling && (
+        <ConfirmModal t={t}
+          title={t('Annullare la gift card?', 'Cancel this gift card?')}
+          sub={`${cancelling.code} · ${fmtEurNoFree(Number(cancelling.balance), lang)}`}
+          body={<React.Fragment>
+            {t('La carta resta nello storico ma il saldo va a zero e non si potrà più usare né ricaricare. Non rimborsa niente: se è stata pagata, l’eventuale rimborso si fa dalla cassa.', 'The card stays in the history but its balance goes to zero and it can no longer be used or topped up. Nothing is refunded: if it was paid, any refund is done from the till.')}
+            <input className="dk-input" value={cancelReason} maxLength={255} onChange={(e) => setCancelReason(e.target.value)}
+              placeholder={t('Motivo (es. intestata alla cliente sbagliata)', 'Reason (e.g. issued to the wrong client)')}
+              style={{ display: 'block', width: '100%', marginTop: 12, boxSizing: 'border-box' }} />
+          </React.Fragment>}
+          confirmLabel={t('Annulla gift card', 'Cancel gift card')}
+          busy={cancelBusy}
+          onConfirm={cancelCard}
+          onClose={() => { if (!cancelBusy) setCancelling(null); }} />
+      )}
 
       {edit && (
         <GiftCardModal onClose={() => setEdit(null)} onSaved={handleSaved} t={t} lang={lang} fireToast={fireToast} services={services}

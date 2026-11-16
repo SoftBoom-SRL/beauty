@@ -23,6 +23,8 @@ export const GC_STATUS_META = {
   active: { it: 'Attiva', en: 'Active', color: 'var(--ok)', bg: 'var(--ok-tint)' },
   redeemed: { it: 'Esaurita', en: 'Redeemed', color: 'var(--muted)', bg: 'var(--paper-2)' },
   expired: { it: 'Scaduta', en: 'Expired', color: 'var(--danger)', bg: 'var(--danger-tint)' },
+  // creata per errore e annullata: senza questa voce si leggeva «Attiva»
+  cancelled: { it: 'Annullata', en: 'Cancelled', color: 'var(--muted)', bg: 'var(--paper-2)' },
 };
 
 export const LOYALTY_TYPES = [

@@ -377,7 +377,7 @@ export default function WalletTab({ c }) {
             <div className="t-num" style={{ fontSize: 32, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted-2)', lineHeight: 1 }}>{fmtEurNoFree(giftView.balance, lang)}</div>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 99, color: giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)', background: giftView.status === 'active' ? 'var(--ok-tint)' : 'var(--paper-2)' }}>
               <Icon name={giftView.status === 'active' ? 'clock' : 'check'} size={13} color={giftView.status === 'active' ? 'var(--ok)' : 'var(--muted)'} />
-              {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : effectiveStatus(giftView) === 'expired' ? t('Scaduta', 'Expired') : t('Esaurita', 'Spent')}
+              {giftView.status === 'active' ? t('Attiva · da riscattare', 'Active · to redeem') : effectiveStatus(giftView) === 'expired' ? t('Scaduta', 'Expired') : giftView.status === 'cancelled' ? t('Annullata', 'Cancelled') : t('Esaurita', 'Spent')}
             </span>
           </div>
           <div style={{ borderTop: '1px solid var(--hair)' }}>

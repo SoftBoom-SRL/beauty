@@ -61,6 +61,9 @@ class GiftCard(models.Model):
         ACTIVE = "active", "Attiva"
         REDEEMED = "redeemed", "Esaurita"
         EXPIRED = "expired", "Scaduta"
+        # Creata per errore (o intestata alla cliente sbagliata): resta nello
+        # storico ma non si spende più, e il saldo va a zero (vedi cancel_gift_card).
+        CANCELLED = "cancelled", "Annullata"
 
     class Kind(models.TextChoices):
         # Comprata da qualcuno per qualcun altro (o per sé, come buono).
@@ -123,6 +126,10 @@ class GiftCard(models.Model):
     delivery_date = models.DateField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
+    # Annullamento: quando e perché. Il saldo che aveva la carta resta nel
+    # registro attività (`giftcard.cancelled`), perché qui `balance` va a zero.
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.CharField(max_length=255, blank=True, default="", db_default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

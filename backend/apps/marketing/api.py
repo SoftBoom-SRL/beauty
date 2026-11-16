@@ -43,6 +43,7 @@ from .gift_cards import (
     CLIENT_GIFT_CARD_MAX,
     CLIENT_GIFT_CARD_MIN,
     CLIENT_GIFT_CARD_PER_DAY,
+    cancel_gift_card,
     cash_gift_card,
     create_gift_card,
     gift_card_kpis,
@@ -52,6 +53,7 @@ from .gift_cards import (
 from .loyalty import apply_program_data
 from .models import Communication, Coupon, GiftCard, LoyaltyAccount, LoyaltyProgram
 from .schemas import (
+    CancelGiftCardIn,
     ClientGiftCardIn,
     CommunicationIn,
     CommunicationOut,
@@ -334,6 +336,23 @@ def mark_gift_card_paid(request, card_id: int, data: MarkPaidIn):
     require_scope(ctx, "sales")
     card = salon_get(GiftCard, ctx, card_id)
     return cash_gift_card(ctx.salon, card, method=data.method, actor=ctx.user)
+
+
+@router.post("/gift-cards/{int:card_id}/cancel", auth=staff_auth, response=GiftCardOut)
+def cancel_gift_card_staff(request, card_id: int, data: CancelGiftCardIn):
+    """Annulla una gift card creata per errore.
+
+    La carta resta nell'elenco con stato `cancelled`, saldo e sedute a zero, e
+    non si può più usare, ricaricare o incassare. `reason` resta sulla carta
+    (`cancel_reason`) e nel registro attività insieme al saldo che aveva. Non
+    rimborsa niente: se era stata pagata, il rimborso si fa dalla cassa.
+    """
+    ctx = request.auth
+    card = salon_get(GiftCard, ctx, card_id)
+    # Togliere un credito già pagato è della cassa, come crearlo pagato o
+    # ricaricarlo; una carta ancora da pagare resta del marketing.
+    require_scope(ctx, "sales" if card.payment_status == GiftCard.PaymentStatus.PAID else "marketing")
+    return cancel_gift_card(ctx.salon, card, reason=data.reason, actor=ctx.user)
 
 
 # ---- Programmi fedeltà -------------------------------------------------------

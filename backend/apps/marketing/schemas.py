@@ -107,6 +107,9 @@ class GiftCardOut(Schema):
     session_value: Decimal = Decimal("0.00")
     package_id: Optional[int] = None
     package_name: Optional[str] = None
+    # Valorizzati solo sulle carte annullate (status «cancelled»).
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: str = ""
 
     @staticmethod
     def resolve_code(obj, context):
@@ -148,6 +151,12 @@ class GiftCardListOut(Schema):
 
 class MarkPaidIn(Schema):
     method: str = Field(max_length=20)  # come GiftCardIn.paid_method
+
+
+class CancelGiftCardIn(Schema):
+    """Annullamento di una carta: il motivo (facoltativo) resta sulla carta e nel registro."""
+
+    reason: str = Field("", max_length=255)
 
 
 class TopUpIn(Schema):
