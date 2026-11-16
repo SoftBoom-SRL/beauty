@@ -542,10 +542,11 @@ spiegazione nel §3, riquadro sotto *Storage persistente*.
 
 ### 9.3 Variabili da togliere e da controllare
 
-Togli le `YOURANG_PROXY_*`, che il backend non legge più, e controlla che ci
-siano `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID`,
-`YOURANG_CLIENT_SECRET` e `YOURANG_WEBHOOK_RECEIVER_URL` (§3, riquadro in fondo
-alle variabili). Controlla poi che `SECRET_KEY` sia lunga almeno 32 caratteri e che
+Aggiungi le `YOURANG_PROXY_*` (senza, «Collega Yourang» e il login con Yourang
+rispondono 503) e controlla che ci sia `YOURANG_WEBHOOK_RECEIVER_URL`. **Lascia**
+`ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID` e
+`YOURANG_CLIENT_SECRET`: il backend non le legge più, ma servono all'immagine di
+prima se si torna indietro (§3, variabili di Yourang). Controlla poi che `SECRET_KEY` sia lunga almeno 32 caratteri e che
 `ALLOWED_HOSTS` non contenga `*`, altrimenti il primo avvio con il codice nuovo
 si ferma prima di gunicorn: è il comportamento voluto descritto nel §3.
 
