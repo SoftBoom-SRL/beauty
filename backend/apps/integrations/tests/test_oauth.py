@@ -527,14 +527,14 @@ class SupportAccessTests(_FlowCase):
         self.assertEqual(self._support(client["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
 
     def test_only_verified_support_emails(self):
-        from apps.integrations.login import login_with_yourang
+        from apps.integrations.login import login_with_link_code
 
         client = self._login("org-nails", "nails@yahoo.com", "owner")
         self._login("org-nails", "op@nails.it", "member")
         self.assertIsNone(self._support(client["salon"]["id"], "op@nails.it").role)
-        with self.redeem(_token_resp("org-nails", "fake@yourang.ai", verified=False, name="x")), \
+        with self.redeem(_identity("org-nails", "fake@yourang.ai", verified=False, name="x")), \
                 mock.patch("apps.integrations.sync._run_in_background"):
-            login_with_yourang("code", "verifier")
+            login_with_link_code("code")
         self.assertIsNone(self._support(client["salon"]["id"], "fake@yourang.ai").role)
 
 
