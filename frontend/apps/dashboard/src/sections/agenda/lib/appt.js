@@ -10,6 +10,9 @@ export const aDur = (a) => a.total_duration_min ?? a.duration_min ?? 0;
 export const aEndMin = (a) => aStartMin(a) + aDur(a);
 export const svcLabel = (a) => (a.items || []).map((i) => i.service_name).join(' + ');
 export const firstName = (full) => String(full || '').split(' ')[0];
+// C'è una nota sull'appuntamento? Una nota di soli spazi non conta: il segno
+// sul blocco prometterebbe qualcosa da leggere che non c'è.
+export const hasNote = (a) => String(a?.note || '').trim() !== '';
 export const lastName = (full) => String(full || '').trim().split(/\s+/).slice(1).join(' ');
 
 /** Nome da mostrare in agenda: solo nome di battesimo; in caso di omonimia tra le
