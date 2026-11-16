@@ -27,7 +27,7 @@ const OPS = [
 const sara = (date) => ({
   id: 42, start: `${date}T15:00:00+02:00`, client_name: 'Sara Bianchi', client_phone: '', operator_id: 1,
   status: 'confirmed', duration_min: 30, total_price: '30.00', deposit_status: 'none', note: '', gifts: [],
-  items: [{ service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' }],
+  items: [{ id: 7, service_id: 1, operator_id: 1, duration_min: 30, soak_min: 0, service_name: 'Manicure' }],
 });
 const weekPayload = (days) => days.map((date, i) => ({
   date, count: i === 3 ? 1 : 0, by_status: {}, appointments: i === 3 ? [sara(date)] : [],
@@ -657,4 +657,58 @@ test('in settimana la colonna di una disattivata ha il suo nome', async () => {
   // gli altri giorni non hanno la sua colonna
   const other = find(g.root(), (el) => el.type?.name === 'WeekDayHeader' && el.props.index === 2);
   assert.equal(findAll(other.type(other.props), (el) => el.props?.title?.startsWith('Marta')).length, 0);
+});
+
+/* 16/11 (Chiara Beauty Boutique, punto 12): in settimana il bordo inferiore
+ * di un blocco non si trascinava, e per accorciare un appuntamento bisognava
+ * aprirlo o passare alla vista giorno. */
+function withPuts(g) {
+  const puts = [];
+  globalThis.__api.put = (url, body) => { puts.push({ url, body }); return Promise.resolve({}); };
+  return puts;
+}
+const handleOf = (block) => find(block, (el) => el.props?.['data-resize'] === '');
+
+test('in settimana il bordo inferiore accorcia il servizio', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const puts = withPuts(g);
+  const handle = handleOf(g.block().type(g.block().props));
+  assert.ok(handle, 'il blocco ha la maniglia');
+  handle.props.onPointerDown(ptr(430, 440, { id: 1 }));
+  g.root().props.onPointerMove(ptr(430, 440 - 15 * PXM, { id: 1 }));   // −15'
+  g.m.render();
+  assert.equal(g.block().props.a.endMin - g.block().props.a.startMin, 15, 'il blocco segue il bordo');
+  g.root().props.onPointerUp(ptr(430, 440 - 15 * PXM, { id: 1 }));
+  await tick();
+  assert.equal(g.api.posts.length, 0, 'non è uno spostamento');
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].url, '/api/agenda/appointments/42');
+  assert.deepEqual(puts[0].body.items, [{ id: 7, service_id: 1, operator_id: 1, duration_min: 15 }]);
+});
+
+test('in settimana un tocco sulla maniglia non cambia la durata', async () => {
+  const g = setup();
+  await loadWeek(g, W1);
+  const puts = withPuts(g);
+  handleOf(g.block().type(g.block().props)).props.onPointerDown(ptr(430, 440));
+  g.root().props.onPointerMove(ptr(430, 441));
+  g.root().props.onPointerUp(ptr(430, 441));
+  await tick();
+  assert.equal(puts.length, 0);
+  assert.equal(g.cb.onOpenAppt.calls.length, 0, 'e non apre il dettaglio');
+});
+
+test('in settimana accorciando la prima parte la seconda slitta', async () => {
+  const g = setup();
+  await loadMista(g);
+  const puts = withPuts(g);
+  handleOf(partOf(g, 1).type(partOf(g, 1).props)).props.onPointerDown(ptr(430, 300, { id: 1 }));
+  g.root().props.onPointerMove(ptr(430, 300 - 10 * PXM, { id: 1 }));   // −10'
+  g.m.render();
+  assert.equal(partOf(g, 2).props.a.startMin, 10 * 60 + 20, 'la piega comincia alle 10:20');
+  g.root().props.onPointerUp(ptr(430, 300 - 10 * PXM, { id: 1 }));
+  await tick();
+  assert.equal(puts.length, 1);
+  assert.deepEqual(puts[0].body.items.map((it) => [it.id, it.duration_min]), [[501, 20], [502, 60]]);
 });

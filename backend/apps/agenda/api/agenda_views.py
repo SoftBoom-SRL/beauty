@@ -251,6 +251,11 @@ def agenda_week(request, start: str, location_id: int = None):
                         "total_price": a.total_price,
                         "forced": a.forced,
                         "deposit_status": a.deposit_status,
+                        # Il bordo inferiore di un blocco cambia la durata
+                        # anche in settimana: con `updated_at` il PUT scrive
+                        # solo se la visita non è cambiata altrove (412),
+                        # come in vista giorno.
+                        "updated_at": a.updated_at,
                         # L'anteprima al passaggio del mouse è la stessa della
                         # vista giorno: senza la nota il riquadro di avviso
                         # («allergia alla tinta») spariva in settimana.

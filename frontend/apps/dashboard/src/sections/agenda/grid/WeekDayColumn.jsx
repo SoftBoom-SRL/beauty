@@ -6,7 +6,7 @@
 // nei test fa parte di WeekView.
 import { timeLabel } from '@youty/shared';
 import { WEEK_DAY_BORDER, WEEK_TODAY_BG, opColumnTint, weekLayout } from '../lib.js';
-import { offLabel, weekColOf } from '../lib/week.js';
+import { offLabel, weekColOf, weekResizeItem } from '../lib/week.js';
 import ClosedHours from './ClosedHours.jsx';
 import GridLines from './GridLines.jsx';
 import NowLine from './NowLine.jsx';
@@ -31,7 +31,7 @@ const lanePos = (a) => {
 export default function WeekDayColumn({
   day, index, width, isToday, isTargetDay, dragging, dg, movingObjs = [], marks, g0, g1, pxm, nowMin, opening = null,
   ghost, ghostDate, ghostSpans, openApptId, canWrite, t, colorOf, itemColor, stays = null, linked = null, verticalText = true,
-  onDayAreaClick, onEmptyClick, onBlockDown, onHover, onLeave,
+  onDayAreaClick, onEmptyClick, onBlockDown, onResizeDown = null, onHover, onLeave,
 }) {
   // il centro chiuso quel giorno lo dice il giorno intero; aperto, con i
   // turni, ogni operatrice ha il suo fuori turno (`o.shift`, lib/week.js)
@@ -108,6 +108,7 @@ export default function WeekDayColumn({
                   stay={stays?.get(a.id)} linked={!!linked?.has(a.id) && a.id !== openApptId}
                   joinTop={a._joinTop} joinBottom={a._joinBottom} vertical={verticalText} {...lanePos(a)}
                   onDown={(e, opts) => onBlockDown(e, a, index, opts)}
+                  onResizeDown={onResizeDown && weekResizeItem(a) ? (e) => onResizeDown(e, a, index) : null}
                   onHover={onHover} onLeave={onLeave}
                 />
               );
