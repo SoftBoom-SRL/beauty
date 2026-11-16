@@ -1,7 +1,7 @@
 // SlotMenu — il menu di uno spazio della griglia (clic su uno slot, o tasto
 // destro su un blocco): esito dello slot, «Sposta qui» con un appuntamento
 // aperto nel pannello, nuova prenotazione e pausa (con la sua durata).
-// `slotMenu` = { opId, startMin, x, y, verdict?, ghostHit?, mode?, dur? }.
+// `slotMenu` = { opId, startMin, x, y, verdict?, ghostHit?, mode?, dur?, note? }.
 import React from 'react';
 import { Icon, NumInput, fmtDateIt, isoAtMin, timeLabel, toDateStr } from '@youty/shared';
 import { BREAK_DEFAULT_MIN, BREAK_PRESETS, aStartMin, firstName } from '../lib.js';
@@ -10,7 +10,7 @@ export default function SlotMenu({ slotMenu, setSlotMenu, operators, openAppt, d
   return (
     <React.Fragment>
       <div onClick={() => setSlotMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 95 }} />
-      <div className="dk-card" style={{ position: 'fixed', boxSizing: 'border-box', top: Math.min(slotMenu.y, window.innerHeight - (slotMenu.mode === 'break' ? 300 : 130)), left: Math.min(slotMenu.x, window.innerWidth - 246), zIndex: 96, width: 234, padding: 6, boxShadow: 'var(--sh-pop)', overflow: 'hidden' }}>
+      <div className="dk-card" style={{ position: 'fixed', boxSizing: 'border-box', top: Math.min(slotMenu.y, window.innerHeight - (slotMenu.mode === 'break' ? 345 : 130)), left: Math.min(slotMenu.x, window.innerWidth - 246), zIndex: 96, width: 234, padding: 6, boxShadow: 'var(--sh-pop)', overflow: 'hidden' }}>
         <div style={{ padding: '8px 10px 6px' }}>
           <div className="t-meta">{firstName((operators.find((o) => o.id === slotMenu.opId) || {}).first_name)} · {timeLabel(slotMenu.startMin)}</div>
           {/* Lo slot «non libero» resta prenotabile: qui si avvisa in ambra,
@@ -43,9 +43,15 @@ export default function SlotMenu({ slotMenu, setSlotMenu, operators, openAppt, d
               <span className="t-sm" style={{ color: 'var(--muted-2)' }}>min</span>
             </div>
             <div className="t-sm" style={{ color: 'var(--muted-2)', marginBottom: 10, padding: '0 2px' }}>{timeLabel(slotMenu.startMin)}–{timeLabel(slotMenu.startMin + (slotMenu.dur || BREAK_DEFAULT_MIN))}</div>
+            {/* Il motivo (pranzo, formazione, visita medica…) finisce nella
+                nota della pausa e si legge sul blocco in agenda: senza, chi
+                guardava la griglia vedeva solo «Pausa» e doveva chiedere. */}
+            <input value={slotMenu.note || ''} maxLength={255} onChange={(e) => { const note = e.target.value; setSlotMenu((m) => ({ ...m, note })); }}
+              placeholder={t('Motivo (facoltativo)', 'Reason (optional)')} aria-label={t('Motivo della pausa', 'Break reason')}
+              style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--hair)', borderRadius: 8, padding: '7px 9px', fontSize: 13, outline: 'none', marginBottom: 10, background: 'var(--surface)' }} />
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="dk-btn dk-btn--ghost" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => setSlotMenu((m) => ({ ...m, mode: null }))}>{t('Indietro', 'Back')}</button>
-              <button className="dk-btn dk-btn--clay" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => onAddBreak(slotMenu.opId, slotMenu.startMin, slotMenu.dur || BREAK_DEFAULT_MIN)}><Icon name="check" size={15} color="#fff" />{t('Aggiungi', 'Add')}</button>
+              <button className="dk-btn dk-btn--clay" style={{ flex: 1, minWidth: 0, height: 36, padding: '0 6px', boxSizing: 'border-box' }} onClick={() => onAddBreak(slotMenu.opId, slotMenu.startMin, slotMenu.dur || BREAK_DEFAULT_MIN, (slotMenu.note || '').trim())}><Icon name="check" size={15} color="#fff" />{t('Aggiungi', 'Add')}</button>
             </div>
           </div>
         ) : (
