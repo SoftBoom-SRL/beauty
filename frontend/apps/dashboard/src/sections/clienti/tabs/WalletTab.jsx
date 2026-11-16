@@ -14,6 +14,7 @@ import { useDash, useLive } from '../../../ctx.jsx';
 import { QrGlyph } from '../components.jsx';
 import { dateLabel, rewardLabel } from '../helpers.js';
 import { couponsApi, giftCardsApi, loyaltyApi } from '../../../api/marketing.js';
+import { vipBonusCents } from '../../fedelta/vipBonus.js';
 import { creditIcon, creditKind, creditOrigin, giverName, ownsCredit, sessionsLabel, sessionsLeftText, splitClientCredits } from '../../fedelta/credits.js';
 import { effectiveStatus } from '../../fedelta/meta.js';
 import { payMethods } from '../../pos/lib.js';
@@ -120,7 +121,7 @@ function LoadFailed({ msg, onRetry, t }) {
 }
 
 export default function WalletTab({ c }) {
-  const { t, lang, services, fireToast, hasScope } = useDash();
+  const { t, lang, services, fireToast, hasScope, settings } = useDash();
   // Ricarica della carta a importo («carta VIP»): importo, metodo, scontrino.
   const [topUp, setTopUp] = useState({ amt: '', method: 'card', receipt: true, busy: false });
   const [coupons, setCoupons] = useState(null);   // null = in caricamento · FAILED · []
@@ -422,6 +423,12 @@ export default function WalletTab({ c }) {
                     style={{ padding: '6px 11px', fontSize: 12.5, fontWeight: 700, background: topUp.method === k ? 'var(--info)' : undefined, borderColor: topUp.method === k ? 'var(--info)' : undefined, color: topUp.method === k ? '#fff' : undefined }}>{l}</button>
                 ))}
               </div>
+              {/* il bonus della carta VIP (Impostazioni), detto prima di ricaricare */}
+              {vipBonusCents(settings?.gift_card_bonus_rules, topUp.amt) > 0 && (
+                <div data-vip-bonus="" className="t-sm" style={{ marginTop: 8, color: 'var(--ok)', fontWeight: 700 }}>
+                  {t(`+ bonus ${fmtEurNoFree(vipBonusCents(settings.gift_card_bonus_rules, topUp.amt) / 100, 'it')} di credito (in cassa solo il pagato)`, `+ ${fmtEurNoFree(vipBonusCents(settings.gift_card_bonus_rules, topUp.amt) / 100, 'en')} bonus credit (only what is paid goes in the register)`)}
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
                 <div style={{ flex: 1 }}><ReceiptToggle value={topUp.receipt} onChange={(receipt) => setTopUp((s) => ({ ...s, receipt }))} t={t} /></div>
                 <button className="dk-btn dk-btn--clay" disabled={topUp.busy} onClick={() => doTopUp(giftView)}>

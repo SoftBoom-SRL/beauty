@@ -19,6 +19,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from ninja.errors import HttpError
 
+from apps.core.models import SalonSettings
 from apps.core.services import log_activity
 from apps.sales.models import Payment, SaleLine
 from common.money import MAX_MONEY
@@ -176,6 +177,56 @@ def _created_summary(card) -> str:
     if card.kind == GiftCard.Kind.PREPAID:
         return f"Già pagato {card.code}: {what}"
     return f"Gift card {card.code} da €{card.initial_value}"
+
+
+def vip_bonus_for(salon, amount) -> Decimal:
+    """Il bonus della carta VIP per un carico di `amount` €: quello della soglia
+    più alta raggiunta (Impostazioni, `gift_card_bonus_rules`), 0 senza regole.
+
+    Beauty Boutique 11/2026: «paga 500 € e riceve 600 € di credito». Prima il
+    bonus si aggiungeva a mano caricando 600 €, e in cassa risultavano 600 €
+    incassati invece di 500.
+    """
+    rules = SalonSettings.objects.filter(salon=salon).values_list("gift_card_bonus_rules", flat=True).first()
+    amount = Decimal(str(amount))
+    best = Decimal("0.00")
+    best_min = None
+    for rule in rules or []:
+        min_amount = Decimal(str(rule.get("min_amount", "0")))
+        if amount >= min_amount and (best_min is None or min_amount > best_min):
+            best_min, best = min_amount, Decimal(str(rule.get("bonus", "0")))
+    return best if best > 0 else Decimal("0.00")
+
+
+def add_vip_bonus(salon, card, paid, *, actor=None) -> Decimal:
+    """Aggiunge alla carta a importo il bonus del carico `paid`, senza incasso.
+
+    Da chiamare nella transazione della vendita o della ricarica, con la carta
+    già scritta: il credito sale del bonus (anche il valore iniziale, così
+    «speso» resta giusto), in cassa resta solo `paid`. Il bonus è una riga
+    dello storico della carta (`GiftCardAdjustment`) col suo motivo.
+    """
+    if card.gift_service_id:
+        return Decimal("0.00")
+    bonus = vip_bonus_for(salon, paid)
+    if bonus <= 0 or card.balance + bonus > MAX_MONEY or card.initial_value + bonus > MAX_MONEY:
+        return Decimal("0.00")
+    card.balance += bonus
+    card.initial_value += bonus
+    card.save(update_fields=["balance", "initial_value"])
+    note = f"Bonus VIP: caricati € {Decimal(str(paid)).quantize(Decimal('0.01'))}, credito +€ {bonus}"
+    GiftCardAdjustment.objects.create(
+        salon=salon, gift_card=card, delta=bonus, balance_after=card.balance, note=note, created_by=actor,
+    )
+    log_activity(
+        salon,
+        "giftcard.adjusted",
+        f"{note} sulla gift card {card.code}, saldo €{card.balance}",
+        actor=actor,
+        payload={"gift_card_id": card.id, "delta": str(bonus), "balance": str(card.balance),
+                 "note": note, "bonus": True},
+    )
+    return bonus
 
 
 def has_remaining_q() -> Q:
@@ -435,6 +486,8 @@ def sell_gift_card(
             from apps.sales.services import record_gift_card_cashed  # lazy
 
             record_gift_card_cashed(salon, card, method=paid_method, actor=actor)
+            # il bonus della carta VIP: credito in più, in cassa solo il pagato
+            add_vip_bonus(salon, card, card.initial_value, actor=actor)
     return card
 
 
@@ -508,6 +561,9 @@ def top_up_gift_card(salon, card, amount, *, method: str, actor=None, receipt_is
         card.sessions_left = 1
         card.save(update_fields=["balance", "initial_value", "status", "sessions_left"])
         record_gift_card_top_up(salon, card, amount, method=method, actor=actor, receipt_issued=receipt_issued)
+        # il bonus della carta VIP (paga 500, carica 600): dopo la vendita, che
+        # resta dell'importo pagato
+        add_vip_bonus(salon, card, amount, actor=actor)
         log_activity(
             salon,
             "giftcard.paid",

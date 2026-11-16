@@ -98,3 +98,18 @@ test('carta VIP: la modifica del saldo, con il motivo e senza incasso', () => {
   assert.ok(adjustBody('set', '', 'x', t).error);
   assert.equal(movementLabel({ kind: 'adjust' }, t), 'Modifica manuale');
 });
+
+/* Bonus della carta VIP (Beauty Boutique 16/11, «paga 500 € e riceve 600 €»):
+ * la ricarica lo dice prima di confermare, con la stessa regola del server. */
+test('bonus carta VIP: vale la soglia più alta raggiunta', async () => {
+  const { vipBonusCents } = await import('../src/sections/fedelta/vipBonus.js');
+  const rules = [{ min_amount: '500.00', bonus: '100.00' }, { min_amount: '200.00', bonus: '30.00' }];
+  assert.equal(vipBonusCents(rules, '199,99'), 0);
+  assert.equal(vipBonusCents(rules, '200'), 3000);
+  assert.equal(vipBonusCents(rules, '499.99'), 3000);
+  assert.equal(vipBonusCents(rules, '500'), 10000);
+  assert.equal(vipBonusCents(rules, '1000'), 10000);
+  assert.equal(vipBonusCents([], '500'), 0);
+  assert.equal(vipBonusCents(null, '500'), 0);
+  assert.equal(vipBonusCents(rules, ''), 0);
+});

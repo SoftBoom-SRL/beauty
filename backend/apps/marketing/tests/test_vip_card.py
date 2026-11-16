@@ -2,9 +2,11 @@
 che si ricarica in cassa e si spende ai conti, più il credito portato dal
 gestionale di prima senza contarlo come incasso di oggi."""
 
+import json
 from decimal import Decimal
 
 from apps.catalog.models import Service, ServiceCategory
+from apps.core.models import SalonSettings
 from apps.sales.models import Payment, Sale
 
 from ..gift_cards import redeem_gift_card
@@ -89,3 +91,82 @@ class VipCardTests(GiftCardTestBase):
         self.assertEqual(self._top_up(card, auth=auth).status_code, 403)
         card.refresh_from_db()
         self.assertEqual(card.balance, Decimal("100.00"))
+
+
+class VipBonusTests(GiftCardTestBase):
+    """Beauty Boutique 11/2026: «paga 500 € e riceve 600 € di credito». In cassa
+    entra solo il pagato; il credito comprende il bonus, che resta nello
+    storico della carta."""
+
+    _sell = VipCardTests._sell
+    _top_up = VipCardTests._top_up
+    _cash_in = VipCardTests._cash_in
+
+    def setUp(self):
+        super().setUp()
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"gift_card_bonus_rules": [
+            {"min_amount": "200.00", "bonus": "30.00"},
+            {"min_amount": "500.00", "bonus": "100.00"},
+        ]})
+
+    def test_a_top_up_over_the_threshold_gets_the_bonus_but_not_in_the_register(self):
+        card = self._sell(value="20.00")
+        self.assertEqual(self._top_up(card, "500.00", "card").status_code, 200)
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("620.00"))
+        self.assertEqual(Payment.objects.get(method="card").amount, Decimal("500.00"))
+        self.assertEqual(self._cash_in(), Decimal("520.00"))
+        moves = self._get(f"/api/marketing/gift-cards/{card.id}/movements")
+        bonus = [m for m in moves if m["kind"] == "adjust"]
+        self.assertEqual([Decimal(m["amount"]) for m in bonus], [Decimal("100.00")])
+        self.assertIn("Bonus VIP", bonus[0]["note"])
+
+    def test_the_highest_threshold_reached_wins_and_below_none(self):
+        card = self._sell(value="20.00")
+        self._top_up(card, "300.00", "cash")
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("350.00"))   # 20 + 300 + 30
+        self._top_up(card, "199.99", "cash")
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("549.99"))   # sotto la prima soglia: niente
+
+    def test_selling_the_card_paid_gets_the_bonus(self):
+        card = self._sell(value="500.00")
+        self.assertEqual(card.balance, Decimal("600.00"))
+        self.assertEqual(self._cash_in(), Decimal("500.00"))
+
+    def test_no_bonus_on_imported_credit(self):
+        card = self._sell(value="800.00", imported=True, paid=False, paid_method="")
+        self.assertEqual(card.balance, Decimal("800.00"))
+
+    def test_a_card_sold_at_the_till_gets_the_bonus(self):
+        from unittest.mock import patch
+
+        from apps.sales.services import finalize_sale
+        from apps.sales.tests.base import PATCH_LOYALTY, _blocks
+
+        with patch(PATCH_LOYALTY):
+            sale = finalize_sale(
+                self.salon, kind=Sale.Kind.POS, client=self.sofia,
+                blocks=_blocks([{"line_type": "gift_card", "value": Decimal("500.00"), "qty": 1}]),
+                payments=[{"method": "cash", "amount": Decimal("500.00")}],
+            )
+        card = GiftCard.objects.get(salon=self.salon)
+        self.assertEqual(sale.total, Decimal("500.00"))
+        self.assertEqual(card.balance, Decimal("600.00"))
+
+    def test_the_rules_are_saved_in_order_and_validated(self):
+        put = lambda rules: self.client.put(  # noqa: E731
+            "/api/core/settings", json.dumps({"gift_card_bonus_rules": rules}),
+            content_type="application/json", **self.auth,
+        )
+        res = put([{"min_amount": "500", "bonus": "100"}, {"min_amount": "200", "bonus": "30"}])
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(
+            [(Decimal(r["min_amount"]), Decimal(r["bonus"])) for r in res.json()["gift_card_bonus_rules"]],
+            [(Decimal("200"), Decimal("30")), (Decimal("500"), Decimal("100"))],
+        )
+        self.assertEqual(put([{"min_amount": "0", "bonus": "10"}]).status_code, 400)
+        self.assertEqual(put([{"min_amount": "100", "bonus": "10"}, {"min_amount": "100", "bonus": "20"}]).status_code, 400)
+        self.assertEqual(put([]).status_code, 200)
+        self.assertEqual(SalonSettings.objects.get(salon=self.salon).gift_card_bonus_rules, [])

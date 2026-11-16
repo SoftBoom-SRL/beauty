@@ -133,6 +133,8 @@ def clean_settings_payload(payload: dict, current: SalonSettings) -> tuple[dict,
             if len(cleaned) > 30:
                 raise HttpError(400, "Troppe motivazioni (max 30)")
             payload[key] = cleaned
+    if "gift_card_bonus_rules" in payload:
+        payload["gift_card_bonus_rules"] = clean_bonus_rules(payload["gift_card_bonus_rules"])
     if "opening_hours_week" in payload:
         try:
             payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
@@ -142,6 +144,33 @@ def clean_settings_payload(payload: dict, current: SalonSettings) -> tuple[dict,
         if "opening_hours" not in payload:
             payload["opening_hours"] = opening_hours_text(payload["opening_hours_week"])
     return payload, default_lang
+
+
+MAX_BONUS_RULES = 10
+
+
+def clean_bonus_rules(rules) -> list[dict]:
+    """Le soglie del bonus della carta VIP, validate e in ordine di soglia.
+
+    Importi positivi entro il tetto dei soldi, una regola per soglia (due
+    regole «da 500 €» non direbbero quale vale), al più MAX_BONUS_RULES. Si
+    salvano come stringhe a due decimali: il JSON non ha Decimal.
+    """
+    cleaned = {}
+    for rule in rules or []:
+        try:
+            min_amount = Decimal(str(rule["min_amount"])).quantize(Decimal("0.01"))
+            bonus = Decimal(str(rule["bonus"])).quantize(Decimal("0.01"))
+        except (KeyError, TypeError, InvalidOperation):
+            raise HttpError(400, "Regola del bonus non valida: servono importo minimo e bonus")
+        if min_amount <= 0 or bonus <= 0 or min_amount > MAX_MONEY or bonus > MAX_MONEY:
+            raise HttpError(400, "Importo minimo e bonus devono essere maggiori di zero")
+        if min_amount in cleaned:
+            raise HttpError(400, f"Due regole del bonus con la stessa soglia (€ {min_amount})")
+        cleaned[min_amount] = bonus
+    if len(cleaned) > MAX_BONUS_RULES:
+        raise HttpError(400, f"Troppe regole del bonus (max {MAX_BONUS_RULES})")
+    return [{"min_amount": str(m), "bonus": str(cleaned[m])} for m in sorted(cleaned)]
 
 
 def deposit_rule_fields(data: DepositRuleIn) -> dict:
