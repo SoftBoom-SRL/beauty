@@ -70,6 +70,21 @@ export function earnFields(type, metric, ratio) {
 /* Codici di coupon e gift card: chi non ha i permessi marketing o vendite li
  * riceve mascherati («••••1234», contratto C21). Non vanno offerti come
  * codici da usare (QR, pagamento). */
+/* Utilizzi di un coupon (`max_uses`: 1, N o null = senza limite; `uses` quelli
+ * fatti). Ogni buono era monouso: un codice promozionale per tutte le clienti
+ * andava creato una volta per cliente (Beauty Boutique, 11/2026). */
+/** La scelta della maschera: 'one' | 'many' | 'unlimited'. */
+export const usesMode = (maxUses) => (maxUses == null ? 'unlimited' : Number(maxUses) > 1 ? 'many' : 'one');
+/** `max_uses` da mandare per la scelta fatta: N almeno 2 nella scelta «più volte». */
+export const maxUsesFor = (mode, n) => (mode === 'unlimited' ? null : mode === 'many' ? Math.max(2, Math.trunc(Number(n)) || 2) : 1);
+/** «Usato 2/5», «Usato 3 volte · senza limite»; null per un monouso (lo dice già lo stato). */
+export function couponUsesLabel(c, t) {
+  const uses = Number(c?.uses) || 0;
+  if (c?.max_uses == null) return t(`Usato ${uses} ${uses === 1 ? 'volta' : 'volte'} · senza limite`, `Used ${uses}× · unlimited`);
+  if (Number(c.max_uses) > 1) return t(`Usato ${uses}/${c.max_uses}`, `Used ${uses}/${c.max_uses}`);
+  return null;
+}
+
 export const isMaskedCode = (code) => typeof code === 'string' && code.includes('•');
 
 /** Stato di un coupon o di una gift card come va mostrato: «attivo» ma oltre

@@ -695,7 +695,11 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `cre
   (e del cliente se client-bound), altrimenti HttpError 404/422.
 
 **Endpoint staff** (/api/marketing) — scritture scope marketing, log
-- CRUD `/coupons` (filtri origin/status/q) + POST `/coupons/{id}/redeem` {sale_id?} → redeemed.
+- CRUD `/coupons` (filtri origin/status/q) + POST `/coupons/{id}/redeem` {sale_id?} → un utilizzo.
+  `max_uses`: 1 (default, monouso), N, o null = senza limite; `uses` conta gli utilizzi
+  (cassa e redeem, `coupons.consume_coupon`: una UPDATE condizionata). All'ultimo
+  utilizzo il coupon diventa `redeemed`; `sale_id`/`redeemed_at` sono dell'ultimo.
+  In modifica `max_uses` non può scendere a quelli già fatti (422).
   Un coupon intestato si lega solo a una vendita della stessa cliente: su quella
   di un'altra, o senza cliente, 422 «Coupon riservato a un altro cliente:
   intestalo alla vendita» (come in cassa).

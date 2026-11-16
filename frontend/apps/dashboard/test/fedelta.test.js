@@ -7,7 +7,7 @@ import { test } from 'node:test';
 
 import { setSalonTz } from '@youty/shared';
 import { addMonthsClamped, endOfSalonDayIso, expiryInMonthsIso, salonDay, shortDate } from '../src/sections/fedelta/dates.js';
-import { earnFields, earnMetricsFor, effectiveStatus, isMaskedCode, STAMP_METRICS } from '../src/sections/fedelta/meta.js';
+import { couponUsesLabel, earnFields, earnMetricsFor, effectiveStatus, isMaskedCode, maxUsesFor, STAMP_METRICS, usesMode } from '../src/sections/fedelta/meta.js';
 
 test('tessera a timbri: mai «per euro», rapporto 1 (C18)', () => {
   // il modello vuoto della dashboard nasce per_euro: scegliendo «A timbri» partiva così,
@@ -71,4 +71,18 @@ test('scadenze e date sull\u2019orologio del salone, non del dispositivo (14-13,
   } finally {
     setSalonTz('Europe/Rome');
   }
+});
+
+test('coupon: una volta, N volte o senza limite', () => {
+  const t = (it) => it;
+  assert.equal(usesMode(1), 'one');
+  assert.equal(usesMode(5), 'many');
+  assert.equal(usesMode(null), 'unlimited');
+  assert.equal(maxUsesFor('one', 7), 1);
+  assert.equal(maxUsesFor('many', 5), 5);
+  assert.equal(maxUsesFor('many', 1), 2);   // «più volte» vuol dire almeno due
+  assert.equal(maxUsesFor('unlimited', 5), null);
+  assert.equal(couponUsesLabel({ max_uses: 1, uses: 1 }, t), null);
+  assert.equal(couponUsesLabel({ max_uses: 5, uses: 2 }, t), 'Usato 2/5');
+  assert.equal(couponUsesLabel({ max_uses: null, uses: 1 }, t), 'Usato 1 volta · senza limite');
 });
