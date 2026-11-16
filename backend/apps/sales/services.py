@@ -662,6 +662,26 @@ def record_gift_card_top_up(salon, card, amount, *, method: str, actor=None, rec
     return _gift_card_sale(salon, card, amount, method, actor, client=client, receipt_issued=receipt_issued)
 
 
+def record_membership_sale(salon, client, amount, *, method: str, actor=None, receipt_issued=True):
+    """L'iscrizione o il rinnovo della «Exclusive Card»: una vendita al banco di
+    una riga `membership`, così la quota entra nella cassa del giorno e nei ricavi."""
+    amount = Decimal(str(amount)).quantize(CENT)
+    if amount <= 0:
+        return None
+    if method not in Payment.Method.values:
+        method = Payment.Method.OTHER
+    with transaction.atomic():
+        sale = Sale.objects.create(
+            salon=salon, kind=Sale.Kind.POS, client=client, total=amount,
+            created_by=actor, receipt_issued=receipt_issued,
+        )
+        SaleLine.objects.create(
+            sale=sale, line_type=SaleLine.LineType.MEMBERSHIP, qty=1, unit_price=amount, amount=amount,
+        )
+        Payment.objects.create(sale=sale, method=method, amount=amount, created_at=sale.created_at)
+    return sale
+
+
 def _gift_card_sale(salon, card, amount, method, actor, *, client, receipt_issued=True):
     amount = Decimal(str(amount)).quantize(CENT)
     if amount <= 0:

@@ -158,6 +158,13 @@ class SalonSettings(TimeStampedModel):
     # soglia più alta raggiunta. Vuota (o null, il codice di prima durante un
     # deploy) = nessun bonus. Vedi marketing.gift_cards.vip_bonus_for.
     gift_card_bonus_rules = models.JSONField(default=list, blank=True, null=True)
+    # «Exclusive Card»: iscrizione annuale a pagamento che dà uno sconto sui
+    # prodotti finché è attiva. {"enabled": bool, "price": "30.00",
+    # "renewal_price": "25.00", "product_discount_pct": 10}: `price` per chi si
+    # iscrive (o torna dopo la scadenza), `renewal_price` per chi rinnova prima
+    # della scadenza (l'anno si aggiunge alla scadenza attuale). Vuoto (o null,
+    # il codice di prima durante un deploy) = non attiva. Vedi marketing.exclusive.
+    exclusive_card = models.JSONField(default=dict, blank=True, null=True)
     # Stripe Connect: account del salone collegato dal titolare. Le caparre
     # online e gli addebiti no-show passano su questo account.
     stripe_account_id = models.CharField(max_length=64, blank=True, default="")

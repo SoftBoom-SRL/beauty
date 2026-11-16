@@ -28,6 +28,18 @@ class GiftCardBonusRule(Schema):
     bonus: Decimal
 
 
+class ExclusiveCardSettings(Schema):
+    """La «Exclusive Card», iscrizione annuale a pagamento: `price` per chi si
+    iscrive (o torna dopo la scadenza), `renewal_price` per chi rinnova prima
+    della scadenza, `product_discount_pct` lo sconto sui prodotti in cassa
+    finché è attiva."""
+
+    enabled: bool = False
+    price: Decimal = Decimal("0")
+    renewal_price: Decimal = Decimal("0")
+    product_discount_pct: int = 0
+
+
 class SettingsOut(Schema):
     logo_url: Optional[str] = None
     brand_color: str
@@ -68,6 +80,8 @@ class SettingsOut(Schema):
     # carica almeno `min_amount` riceve `bonus` di credito in più (in cassa
     # entra solo quello che paga). Vuota = nessun bonus.
     gift_card_bonus_rules: list[GiftCardBonusRule] = []
+    # Exclusive Card (vuota = non attiva).
+    exclusive_card: ExclusiveCardSettings = ExclusiveCardSettings()
     # Pagamenti online: Stripe Connect del salone (sola lettura, si gestisce da /api/sales/stripe/connect).
     stripe_connected: bool = False
     # none | incomplete | pending | active (vedi sales.stripe_service.account_state)
@@ -98,6 +112,7 @@ class SettingsIn(Schema):
     cancel_reasons: Optional[list[str]] = None
     no_show_reasons: Optional[list[str]] = None
     gift_card_bonus_rules: Optional[list[GiftCardBonusRule]] = None
+    exclusive_card: Optional[ExclusiveCardSettings] = None
 
 
 class SalonOut(Schema):

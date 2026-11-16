@@ -190,6 +190,39 @@ class GiftCardAdjustment(models.Model):
         return f"{self.gift_card_id} {self.delta:+} → {self.balance_after}"
 
 
+class ExclusiveMembership(models.Model):
+    """Iscrizione di una cliente alla «Exclusive Card» (vedi marketing.exclusive).
+
+    Una riga per cliente: l'iscrizione e ogni rinnovo spostano `expires_on` e
+    sono vendite al banco (riga `membership`), così entrano in cassa. È attiva
+    fino a `expires_on` compreso, nel fuso del salone. Il salone la chiedeva
+    per la fidelity annuale da 30 € con sconto sui prodotti, che teneva su
+    un foglio a parte (Beauty Boutique, 11/2026).
+    """
+
+    salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="+")
+    client = models.ForeignKey(
+        "clients.Client", on_delete=models.CASCADE, related_name="exclusive_memberships"
+    )
+    # Dall'ultima iscrizione: un rinnovo prima della scadenza non lo cambia,
+    # un ritorno dopo la scadenza sì.
+    started_on = models.DateField()
+    expires_on = models.DateField()
+    renewals = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["expires_on", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["salon", "client"], name="uq_exclusive_salon_client"),
+        ]
+        indexes = [models.Index(fields=["salon", "expires_on"])]
+
+    def __str__(self):
+        return f"{self.client_id} → {self.expires_on}"
+
+
 class LoyaltyProgram(models.Model):
     """Programma fedeltà: accumulo punti/timbri e premio alla soglia."""
 

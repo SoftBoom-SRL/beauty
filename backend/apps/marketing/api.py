@@ -27,7 +27,7 @@ from common.permissions import require_scope
 from common.schemas import OkOut
 from common.utils import salon_get
 
-from . import wallet
+from . import exclusive, wallet
 from .codes import COUPON_CODE_LENGTH, codes_hidden, mark_expired_if_past, status_q, unique_code
 from .communications import (
     already_sent,
@@ -62,6 +62,9 @@ from .schemas import (
     CouponIn,
     CouponOut,
     CouponRedeemIn,
+    ExclusiveMembershipOut,
+    ExclusiveQuoteOut,
+    ExclusiveSubscribeIn,
     GiftCardAdjustIn,
     GiftCardIn,
     GiftCardListOut,
@@ -388,6 +391,51 @@ def cancel_gift_card_staff(request, card_id: int, data: CancelGiftCardIn):
 
 
 # ---- Programmi fedeltà -------------------------------------------------------
+
+
+# ---- Exclusive Card -------------------------------------------------------------
+
+
+@router.get("/exclusive-cards", auth=staff_auth, response=list[ExclusiveMembershipOut])
+def list_exclusive_cards(
+    request, status: Optional[str] = None, days: Optional[int] = None, client_id: Optional[int] = None
+):
+    """Iscritte alla Exclusive Card, per scadenza.
+
+    `status`: `active`, `expiring` (attive che scadono entro `days` giorni, 30
+    se manca) o `expired`; senza, tutte. `client_id` per una cliente sola.
+    """
+    return exclusive.members(request.auth.salon, status=status, days=days, client_id=client_id)
+
+
+@router.get("/exclusive-cards/client/{int:client_id}", auth=staff_auth, response=ExclusiveQuoteOut)
+def exclusive_card_of_client(request, client_id: int):
+    """L'iscrizione della cliente (null se non c'è) e quanto pagherebbe adesso
+    per iscriversi o rinnovare, con la nuova scadenza."""
+    ctx = request.auth
+    client = _get_client(ctx, client_id)
+    current = exclusive.membership_of(ctx.salon, client)
+    return {
+        **exclusive.quote_for(ctx.salon, client),
+        "membership": exclusive.membership_out(current) if current else None,
+    }
+
+
+@router.post("/exclusive-cards/client/{int:client_id}/subscribe", auth=staff_auth, response=ExclusiveMembershipOut)
+def subscribe_exclusive_card(request, client_id: int, data: ExclusiveSubscribeIn):
+    """Iscrive la cliente alla Exclusive Card o la rinnova, e incassa la quota.
+
+    Iscrizione attiva: rinnovo anticipato al prezzo di rinnovo, un anno in più
+    dalla scadenza attuale. Nuova o scaduta: prezzo pieno, un anno da oggi. La
+    quota entra in cassa come vendita al banco.
+    """
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    client = _get_client(ctx, client_id)
+    membership = exclusive.subscribe(
+        ctx.salon, client, method=data.method, actor=ctx.user, receipt_issued=data.receipt_issued
+    )
+    return exclusive.membership_out(membership)
 
 
 @router.get("/loyalty-programs", auth=staff_auth, response=list[LoyaltyProgramOut])

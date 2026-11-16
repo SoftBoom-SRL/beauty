@@ -110,6 +110,18 @@ export const counterPrepaidLine = (key, service, sessions, value, lang) => ({
  *  come i prodotti (il server lo ammette; le gift card no). */
 export const counterDiscountPct = (l, saleDisc) => ((l.line_type !== 'product' && l.line_type !== 'package') || l.is_gift ? 0 : (l.disc > 0 ? l.disc : saleDisc || 0));
 
+/** Exclusive Card attiva: i prodotti del conto partono con il suo sconto.
+ *  `field` è il campo dello sconto della riga (`discount_pct` al check-out,
+ *  `disc` al banco). Una riga già scontata a mano resta com'è; tolta la
+ *  cliente (o scaduta la carta, `pct` 0) lo sconto messo da qui se ne va.
+ *  Lo sconto si legge e si cambia sulla riga come ogni altro. */
+export const applyExclusiveDiscount = (lines, pct, field) => lines.map((l) => {
+  if (l.line_type !== 'product' || l.is_gift) return l;
+  if (pct > 0 && !(l[field] > 0)) return { ...l, [field]: pct, exclusive: true };
+  if (!(pct > 0) && l.exclusive) return { ...l, [field]: 0, exclusive: false };
+  return l;
+});
+
 /* Pacchetti e trattamenti già pagati diventano sedute DELLA cliente: senza
  * cliente il server rifiuta la vendita (422). Vero se nel conto ce n'è uno. */
 export const needsClient = (lines) => (lines || []).some((l) => l.line_type === 'package' || l.kind === 'prepaid');

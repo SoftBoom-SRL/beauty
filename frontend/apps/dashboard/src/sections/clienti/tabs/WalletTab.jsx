@@ -20,6 +20,7 @@ import { effectiveStatus } from '../../fedelta/meta.js';
 import { payMethods } from '../../pos/lib.js';
 import ReceiptToggle from '../../pos/ReceiptToggle.jsx';
 import CardMovements from './CardMovements.jsx';
+import ExclusiveCardBox from './ExclusiveCardBox.jsx';
 
 /** Carta a importo intestata alla cliente stessa: il suo credito prepagato («carta VIP»). */
 const isCredit = (g) => g.kind === 'prepaid' && g.gift_service_id == null;
@@ -205,6 +206,8 @@ export default function WalletTab({ c }) {
 
   return (
     <div style={{ maxWidth: 660 }}>
+      {/* Exclusive Card (fidelity annuale): stato, iscrizione e rinnovo */}
+      <ExclusiveCardBox clientId={c.id} />
       {/* —— 0 · TRATTAMENTI GIÀ PAGATI —— la prima cosa da sapere */}
       {hasCredits && (
         <PaidTreatments open={credits.open} closed={credits.closed} clientId={c.id} onOpen={setGiftView} t={t} lang={lang} />

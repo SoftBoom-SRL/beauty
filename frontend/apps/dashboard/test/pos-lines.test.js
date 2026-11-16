@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptItemLine, canDiscountLine, canEditPrice, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  applyExclusiveDiscount, apptItemLine, canDiscountLine, canEditPrice, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
   checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine,
   giftLineName, needsClient, packageSummary, prepaidValue, pricePatch, toApiLine, visitItemLine,
 } from '../src/sections/pos/lines.js';
@@ -157,4 +157,20 @@ test('check-out: il prezzo del servizio si cambia prima di incassare e parte que
   // la riga di una visita tiene il prezzo nuovo anche come prezzo di partenza
   const visit = visitItemLine(1, item, 0);
   assert.deepEqual(pricePatch(visit, 28.5), { unit_price: 28.5, list_price: 28.5 });
+});
+
+test('Exclusive Card: i prodotti partono col suo sconto, le righe scontate a mano restano', () => {
+  const lines = [
+    { key: 'a', line_type: 'product', disc: 0, is_gift: false },
+    { key: 'b', line_type: 'product', disc: 25, is_gift: false },
+    { key: 'c', line_type: 'service', disc: 0, is_gift: false },
+    { key: 'd', line_type: 'product', disc: 0, is_gift: true },
+  ];
+  const on = applyExclusiveDiscount(lines, 10, 'disc');
+  assert.deepEqual(on.map((l) => l.disc), [10, 25, 0, 0]);
+  // tolta la cliente (o carta scaduta): va via solo lo sconto messo dalla carta
+  const off = applyExclusiveDiscount(on, 0, 'disc');
+  assert.deepEqual(off.map((l) => l.disc), [0, 25, 0, 0]);
+  const co = applyExclusiveDiscount([{ line_type: 'product', discount_pct: 0 }], 15, 'discount_pct');
+  assert.equal(co[0].discount_pct, 15);
 });
