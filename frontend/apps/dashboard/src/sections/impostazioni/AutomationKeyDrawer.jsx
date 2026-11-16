@@ -13,6 +13,7 @@ import { CopyField } from './lib.jsx';
 
 const ENDPOINT = API_URL + '/api/integrations/automation/appointments';
 const BIRTHDAYS = API_URL + '/api/integrations/automation/birthdays';
+const VISITS = API_URL + '/api/integrations/automation/visits';
 
 export default function AutomationKeyDrawer({ onClose, onChange }) {
   const { t, fireToast } = useDash();
@@ -60,6 +61,11 @@ export default function AutomationKeyDrawer({ onClose, onChange }) {
 
         <div className="t-sm" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Compleanni (GET, parametro date AAAA-MM-GG; senza, oggi)', 'Birthdays (GET, date parameter YYYY-MM-DD; none = today)')}</div>
         <div style={{ marginBottom: 16 }}><CopyField value={BIRTHDAYS} t={t} fireToast={fireToast} /></div>
+
+        {/* le visite incassate con `first_visit`: la richiesta di recensione
+            alla cliente nuova, che l'evento visit.completed porta solo a Yourang */}
+        <div className="t-sm" style={{ fontWeight: 600, marginBottom: 6 }}>{t('Visite incassate (GET, parametri start ed end come gli appuntamenti; first_visit = prima visita)', 'Paid visits (GET, start and end parameters as for appointments; first_visit = first visit)')}</div>
+        <div style={{ marginBottom: 16 }}><CopyField value={VISITS} t={t} fireToast={fireToast} /></div>
 
         {status?.key && (
           <>

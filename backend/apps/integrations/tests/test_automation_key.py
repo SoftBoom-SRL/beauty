@@ -189,3 +189,75 @@ class AutomationFirstTimeTest(RealShiftsTestBase):
             self.assertEqual(self.flags(rows[earlier.id]), (False, [None]), origin)
             # Il taglio lo ha fatto qui: quello si sa. La manicure no.
             self.assertEqual(self.flags(rows[later.id]), (False, [False, None]), origin)
+
+
+class AutomationVisitsTest(RealShiftsTestBase):
+    """Visite incassate per n8n (Discord 1571903891501744218, punto 15).
+
+    `first_visit` arrivava solo con l'evento visit.completed, cioè solo a
+    Yourang: n8n non aveva modo di sapere chi era alla prima visita.
+    """
+
+    VISITS = "/api/integrations/automation/visits"
+
+    def setUp(self):
+        self.key = automation_key.rotate_key(self.salon, None)
+
+    def sale(self, client, when, kind="checkout", appointment=None):
+        from decimal import Decimal
+
+        from apps.sales.models import Sale, SaleLine
+
+        sale = Sale.objects.create(
+            salon=self.salon, kind=kind, client=client, total=Decimal("30.00"), appointment=appointment
+        )
+        SaleLine.objects.create(
+            sale=sale, line_type=SaleLine.LineType.SERVICE, service=self.cut30,
+            qty=1, unit_price=Decimal("30.00"), amount=Decimal("30.00"),
+        )
+        Sale.objects.filter(pk=sale.pk).update(created_at=when)
+        return sale
+
+    def fetch(self, start, end, key=None):
+        query = urlencode({"start": start.isoformat(), "end": end.isoformat()})
+        return self.client.get(f"{self.VISITS}?{query}", HTTP_AUTHORIZATION=f"Bearer {key or self.key}")
+
+    def test_lists_paid_visits_in_window_with_first_visit(self):
+        appointment = self.book(self.anna, self.giulia, aware(self.day, 10), [(self.cut30, 30, 0)])
+        first = self.sale(self.anna, aware(self.day, 10, 40), appointment=appointment)
+        # Bea è un'abituale: una visita incassata una settimana fa.
+        self.sale(self.bea, aware(self.day, 10) - dt.timedelta(days=7))
+        again = self.sale(self.bea, aware(self.day, 11))
+        # Un prodotto al banco non è una visita, né prima né dopo.
+        self.sale(self.anna, aware(self.day, 9), kind="pos")
+        self.sale(self.anna, aware(self.day, 12), kind="pos")
+
+        response = self.fetch(aware(self.day, 10), aware(self.day, 12))
+
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()
+        self.assertEqual([r["sale_id"] for r in rows], [first.id, again.id])
+        self.assertIs(rows[0]["first_visit"], True)
+        self.assertEqual(rows[0]["appointment_id"], appointment.id)
+        self.assertEqual(rows[0]["phone"], "+393330000001")
+        self.assertEqual(rows[0]["services"], ["Taglio"])
+        self.assertEqual(rows[0]["total"], "30.00")
+        self.assertIs(rows[1]["first_visit"], False)
+
+    def test_a_later_visit_does_not_change_the_first(self):
+        # Riletta il giorno dopo, la prima visita resta la prima.
+        first = self.sale(self.anna, aware(self.day, 10))
+        self.sale(self.anna, aware(self.day, 10) + dt.timedelta(days=1))
+
+        [row] = self.fetch(aware(self.day, 9), aware(self.day, 11)).json()
+        self.assertEqual(row["sale_id"], first.id)
+        self.assertIs(row["first_visit"], True)
+
+    def test_key_window_and_salon_are_checked(self):
+        self.sale(self.anna, aware(self.day, 10))
+        other = Salon.objects.create(name="Altro", slug="altro-visits")
+        other_key = automation_key.rotate_key(other, None)
+        self.assertEqual(self.fetch(aware(self.day, 9), aware(self.day, 11), key=other_key).json(), [])
+        self.assertEqual(self.fetch(aware(self.day, 9), aware(self.day, 11), key="yta_sbagliata").status_code, 401)
+        start = aware(self.day, 9)
+        self.assertEqual(self.fetch(start, start + dt.timedelta(days=8)).status_code, 400)
