@@ -1,12 +1,12 @@
-"""Firma dei webhook e cifratura dei segreti Yourang (crypto.py)."""
+"""Firma dei webhook Yourang (crypto.py)."""
 
 import time
 
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase
 
 from apps.integrations import crypto
 
-from .base import TEST_KEY, sign_webhook
+from .base import sign_webhook
 
 
 class SignatureTests(SimpleTestCase):
@@ -35,13 +35,3 @@ class SignatureTests(SimpleTestCase):
         self.assertFalse(
             crypto.verify_signature(body, "sha256=dëadbeef", ts, self.secret)
         )
-
-
-@override_settings(ENCRYPTION_KEY=TEST_KEY)
-class CryptoRoundTripTests(SimpleTestCase):
-    def test_round_trip(self):
-        self.assertEqual(crypto.decrypt(crypto.encrypt("token-abc")), "token-abc")
-
-    def test_empty(self):
-        self.assertEqual(crypto.encrypt(""), "")
-        self.assertEqual(crypto.decrypt(""), "")

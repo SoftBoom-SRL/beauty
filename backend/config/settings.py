@@ -309,8 +309,7 @@ YOURANG_PROXY_API_KEY = os.getenv("YOURANG_PROXY_API_KEY", "")
 YOURANG_PROXY_WEBHOOK_SECRET = os.getenv("YOURANG_PROXY_WEBHOOK_SECRET", "")
 # URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook):
 # qui serve solo a ricavare PUBLIC_API_URL. Il proxy consegna al webhook_url
-# del suo portals.yaml, e i YOURANG_ISSUER_URL/CLIENT_* del flusso diretto non
-# li legge più nessuno (restano su Coolify per un rollback all'immagine di prima).
+# del suo portals.yaml.
 YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 # Domini del supporto Yourang: chi entra con «Accedi con Yourang» e un'email
 # verificata di questi domini ha sempre accesso completo al salone (ruolo
@@ -326,8 +325,6 @@ YOURANG_SUPPORT_EMAIL_DOMAINS = [
 PUBLIC_API_URL = (
     os.getenv("PUBLIC_API_URL", "") or YOURANG_WEBHOOK_RECEIVER_URL.split("/api/", 1)[0]
 ).rstrip("/")
-# Cifratura token a riposo (AES-256-GCM, come food/real_estate): openssl rand -hex 32
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 # Origine della dashboard: dove il proxy rimanda il popup. Deve essere
 # IDENTICA a portal_origin del proxy (https://beauty.yourang.ai), o 400.
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")

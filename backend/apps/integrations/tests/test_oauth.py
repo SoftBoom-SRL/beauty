@@ -168,9 +168,8 @@ class ConnectStateTests(_FlowCase):
         conn = YourangConnection.objects.get(salon=self.salon)
         self.assertEqual((conn.yourang_org_id, conn.connected_by_id), ("org-legit", self.owner.id))
         redeem.assert_called_once_with("c")
-        # Né token né registrazione del webhook: li gestisce il proxy (e la
+        # Nessuna registrazione del webhook: la gestisce il proxy (e la
         # PUT /webhook-subscription attraverso il proxy è un 403).
-        self.assertEqual((conn.access_token_enc, conn.webhook_secret_enc), ("", ""))
         api.assert_not_called()
         background.assert_called_once_with(conn.pk)  # la sync non gira nella richiesta
 
@@ -192,7 +191,7 @@ class FlowStartTests(_FlowCase):
 
         now = timezone.now()
         for state, age in (("scaduto", STATE_TTL_SECONDS + 60), ("in-corso", STATE_TTL_SECONDS - 60)):
-            YourangOAuthState.objects.create(state=state, code_verifier="v")
+            YourangOAuthState.objects.create(state=state)
             YourangOAuthState.objects.filter(state=state).update(created_at=now - timedelta(seconds=age))
         new, _ = self.start("login")
         # Quello in corso resta: chi l'ha avviato può ancora concluderlo.

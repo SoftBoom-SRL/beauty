@@ -18,9 +18,6 @@ import httpx
 
 from apps.integrations.models import YourangConnection
 
-# 32-byte hex key (openssl rand -hex 32) — stesso formato di food/real_estate.
-TEST_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-
 # Il proxy inoltra /v/<slug>/api/<path> all'external API di Yourang.
 API = "/v/beauty/api"
 PROXY_API_KEY = "chiave-del-portale"
@@ -33,7 +30,6 @@ API_SETTINGS = dict(
     YOURANG_PROXY_SLUG="beauty",
     YOURANG_PROXY_API_KEY=PROXY_API_KEY,
     YOURANG_PROXY_WEBHOOK_SECRET=WEBHOOK_SECRET,
-    ENCRYPTION_KEY=TEST_KEY,
 )
 
 
