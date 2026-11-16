@@ -42,10 +42,12 @@ from .gift_cards import (
     CLIENT_GIFT_CARD_MAX,
     CLIENT_GIFT_CARD_MIN,
     CLIENT_GIFT_CARD_PER_DAY,
+    adjust_gift_card,
     cancel_gift_card,
     cash_gift_card,
     create_gift_card,
     gift_card_kpis,
+    gift_card_movements,
     sell_gift_card,
     top_up_gift_card,
 )
@@ -60,8 +62,10 @@ from .schemas import (
     CouponIn,
     CouponOut,
     CouponRedeemIn,
+    GiftCardAdjustIn,
     GiftCardIn,
     GiftCardListOut,
+    GiftCardMovementOut,
     GiftCardOut,
     LoyaltyAccountOut,
     LoyaltyEnrollIn,
@@ -328,6 +332,32 @@ def top_up_gift_card_staff(request, card_id: int, data: TopUpIn):
     return top_up_gift_card(
         ctx.salon, card, data.amount, method=data.method, actor=ctx.user, receipt_issued=data.receipt_issued
     )
+
+
+@router.post("/gift-cards/{int:card_id}/adjust", auth=staff_auth, response=GiftCardOut)
+def adjust_gift_card_staff(request, card_id: int, data: GiftCardAdjustIn):
+    """Modifica manuale del saldo di una carta a importo (la «carta VIP»), senza incasso.
+
+    `amount` sposta il saldo (+50, −20) oppure `new_balance` lo fissa; `note`
+    (il motivo) è obbligatoria. Nessuna vendita né pagamento: la cassa non
+    cambia. Il movimento compare in GET /gift-cards/{id}/movements.
+    """
+    ctx = request.auth
+    # Il saldo è credito già pagato: lo tocca chi tocca la cassa, come la ricarica.
+    require_scope(ctx, "sales")
+    card = salon_get(GiftCard, ctx, card_id)
+    return adjust_gift_card(
+        ctx.salon, card, note=data.note, delta=data.amount, new_balance=data.new_balance, actor=ctx.user
+    )
+
+
+@router.get("/gift-cards/{int:card_id}/movements", auth=staff_auth, response=list[GiftCardMovementOut])
+def gift_card_movements_staff(request, card_id: int):
+    """Storico dei movimenti della carta, dal più vecchio: emissione o carichi in
+    cassa, utilizzi, modifiche manuali del saldo (con il motivo), annullamento."""
+    ctx = request.auth
+    card = salon_get(GiftCard, ctx, card_id)
+    return gift_card_movements(card)
 
 
 @router.post("/gift-cards/{int:card_id}/mark-paid", auth=staff_auth, response=GiftCardOut)

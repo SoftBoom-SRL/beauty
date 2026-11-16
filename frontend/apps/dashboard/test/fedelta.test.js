@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import { setSalonTz } from '@youty/shared';
 import { addMonthsClamped, endOfSalonDayIso, expiryInMonthsIso, salonDay, shortDate } from '../src/sections/fedelta/dates.js';
+import { adjustBody, movementLabel } from '../src/sections/fedelta/movements.js';
 import { couponUsesLabel, earnFields, earnMetricsFor, effectiveStatus, isMaskedCode, maxUsesFor, STAMP_METRICS, usesMode } from '../src/sections/fedelta/meta.js';
 
 test('tessera a timbri: mai «per euro», rapporto 1 (C18)', () => {
@@ -85,4 +86,15 @@ test('coupon: una volta, N volte o senza limite', () => {
   assert.equal(couponUsesLabel({ max_uses: 1, uses: 1 }, t), null);
   assert.equal(couponUsesLabel({ max_uses: 5, uses: 2 }, t), 'Usato 2/5');
   assert.equal(couponUsesLabel({ max_uses: null, uses: 1 }, t), 'Usato 1 volta · senza limite');
+});
+
+test('carta VIP: la modifica del saldo, con il motivo e senza incasso', () => {
+  const t = (it) => it;
+  assert.deepEqual(adjustBody('add', '25,50', ' Bonus ', t), { body: { amount: '25.50', note: 'Bonus' } });
+  assert.deepEqual(adjustBody('remove', '10', 'Errore', t), { body: { amount: '-10.00', note: 'Errore' } });
+  assert.deepEqual(adjustBody('set', '0', 'Chiusa', t), { body: { new_balance: '0.00', note: 'Chiusa' } });
+  assert.ok(adjustBody('add', '10', '   ', t).error);   // il motivo è obbligatorio
+  assert.ok(adjustBody('add', '0', 'x', t).error);
+  assert.ok(adjustBody('set', '', 'x', t).error);
+  assert.equal(movementLabel({ kind: 'adjust' }, t), 'Modifica manuale');
 });
