@@ -46,7 +46,7 @@ import {
 const newKey = (prefix) => prefix + Date.now() + Math.round(Math.random() * 1e4);
 
 export default function SellModal({ appointment, onDone, onClose }) {
-  const { t, lang, services, operators, opColors, fireToast, hasScope } = useDash();
+  const { t, lang, services, serviceCategories, operators, opColors, fireToast, hasScope } = useDash();
   const appt = appointment || null;
   const canSell = hasScope('sales');
 
@@ -300,7 +300,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
               {pick && pick.opId === oid
                 ? <LinePicker type={pick.type} q={pickQ} onQ={setPickQ} onClose={closeForms}
                   items={pickerList} products={products} searching={productSearching}
-                  onPick={(x) => (pick.type === 'product' ? addProduct(oid, x) : addService(oid, x))} t={t} lang={lang} />
+                  onPick={(x) => (pick.type === 'product' ? addProduct(oid, x) : addService(oid, x))} t={t} lang={lang} categories={serviceCategories} />
                 : giftForm && giftForm.opId === oid ? <GiftCardForm form={giftForm} setForm={setGiftForm} onAdd={addGiftCard} onCancel={closeForms} t={t} />
                   : pkgForm && pkgForm.opId === oid ? <PackageForm packages={packages} services={services} form={pkgForm} setForm={setPkgForm} onAdd={addPackage} onCancel={closeForms} t={t} lang={lang} />
                     : prepaidForm && prepaidForm.opId === oid ? <PrepaidForm services={services} form={prepaidForm} setForm={setPrepaidForm} onAdd={addPrepaid} onCancel={closeForms} t={t} lang={lang} />
