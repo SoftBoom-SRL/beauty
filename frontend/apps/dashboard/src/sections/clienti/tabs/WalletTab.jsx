@@ -416,7 +416,7 @@ export default function WalletTab({ c }) {
                 </div>
                 {payMethods(t).filter(([k]) => k !== 'gift_card').map(([k, l]) => (
                   <button key={k} type="button" className="dk-pill" aria-pressed={topUp.method === k} onClick={() => setTopUp((s) => ({ ...s, method: k }))}
-                    style={{ padding: '6px 11px', fontSize: 12.5, fontWeight: 700, background: topUp.method === k ? 'var(--ink)' : undefined, color: topUp.method === k ? '#fff' : undefined }}>{l}</button>
+                    style={{ padding: '6px 11px', fontSize: 12.5, fontWeight: 700, background: topUp.method === k ? 'var(--info)' : undefined, borderColor: topUp.method === k ? 'var(--info)' : undefined, color: topUp.method === k ? '#fff' : undefined }}>{l}</button>
                 ))}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
