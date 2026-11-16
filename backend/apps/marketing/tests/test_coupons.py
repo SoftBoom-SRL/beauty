@@ -189,8 +189,9 @@ class CouponApiTests(OwnerTestBase):
         original_update = QuerySet.update
 
         def fake_update(qs, **fields):
-            # Zero righe aggiornate = qualcun altro l'ha già consumato.
-            if qs.model is Coupon and fields.get("status") == Coupon.Status.REDEEMED:
+            # Zero righe aggiornate = qualcun altro l'ha già consumato
+            # (l'UPDATE del consumo è quello che conta un utilizzo).
+            if qs.model is Coupon and "uses" in fields:
                 return 0
             return original_update(qs, **fields)
 
@@ -321,3 +322,73 @@ class CouponUpdateRaceTests(GiftCardTestBase):
         coupon.refresh_from_db()
         self.assertEqual((coupon.kind, coupon.value, coupon.client_id, coupon.status),
                          ("percent", Decimal("20"), self.sofia.id, "active"))
+
+
+class CouponMaxUsesTests(OwnerTestBase):
+    """Utilizzi massimi: 1 (come prima), N o senza limite (Beauty Boutique, 11/2026)."""
+
+    def _create(self, **fields):
+        payload = {"kind": "amount", "value": "10", **fields}
+        return self.client.post(
+            "/api/marketing/coupons", data=json.dumps(payload),
+            content_type="application/json", **self.auth,
+        )
+
+    def _redeem(self, coupon_id):
+        return self.client.post(
+            f"/api/marketing/coupons/{coupon_id}/redeem", data="{}",
+            content_type="application/json", **self.auth,
+        )
+
+    def test_by_default_a_coupon_is_single_use(self):
+        res = self._create()
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual((res.json()["max_uses"], res.json()["uses"]), (1, 0))
+
+    def test_a_coupon_with_three_uses_is_used_three_times(self):
+        coupon_id = self._create(max_uses=3).json()["id"]
+        for n in (1, 2):
+            res = self._redeem(coupon_id)
+            self.assertEqual(res.status_code, 200, res.content)
+            self.assertEqual((res.json()["uses"], res.json()["status"]), (n, "active"))
+        res = self._redeem(coupon_id)
+        self.assertEqual((res.json()["uses"], res.json()["status"]), (3, "redeemed"))
+        self.assertEqual(self._redeem(coupon_id).status_code, 422)
+
+    def test_an_unlimited_coupon_stays_active(self):
+        coupon_id = self._create(max_uses=None).json()["id"]
+        for _ in range(5):
+            self.assertEqual(self._redeem(coupon_id).status_code, 200)
+        coupon = Coupon.objects.get(pk=coupon_id)
+        self.assertEqual((coupon.uses, coupon.status, coupon.max_uses), (5, "active", None))
+
+    def test_the_till_burns_one_use_per_sale(self):
+        from apps.sales.models import Sale
+
+        coupon = Coupon.objects.create(
+            salon=self.salon, code="PRIMAVERA", kind="amount", value=Decimal("10"), max_uses=2
+        )
+        first = Sale.objects.create(salon=self.salon, kind="pos", total=Decimal("40"))
+        second = Sale.objects.create(salon=self.salon, kind="pos", total=Decimal("40"))
+        self.assertTrue(mark_coupon_redeemed(coupon, first))
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.uses, coupon.status), (1, "active"))
+        self.assertTrue(mark_coupon_redeemed(coupon, second))
+        self.assertFalse(mark_coupon_redeemed(coupon, first))
+        coupon.refresh_from_db()
+        self.assertEqual((coupon.uses, coupon.status, coupon.sale_id), (2, "redeemed", second.id))
+
+    def test_the_limit_cannot_go_below_the_uses_already_made(self):
+        coupon_id = self._create(max_uses=5).json()["id"]
+        self._redeem(coupon_id)
+        self._redeem(coupon_id)
+        url = f"/api/marketing/coupons/{coupon_id}"
+        body = {"kind": "amount", "value": "10", "max_uses": 2}
+        res = self.client.put(url, data=json.dumps(body), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 422, res.content)
+        body["max_uses"] = 0
+        self.assertEqual(self._create(max_uses=0).status_code, 422)
+        body["max_uses"] = None
+        res = self.client.put(url, data=json.dumps(body), content_type="application/json", **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertIsNone(res.json()["max_uses"])

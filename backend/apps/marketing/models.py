@@ -38,6 +38,13 @@ class Coupon(models.Model):
     sale = models.ForeignKey(
         "sales.Sale", on_delete=models.SET_NULL, null=True, blank=True, related_name="coupons"
     )
+    # Quante volte si può usare: 1 (come sempre), N, o NULL = senza limite.
+    # Ogni buono era monouso: un codice promozionale per tutte le clienti
+    # («PRIMAVERA10») andava creato una volta per cliente (Beauty Boutique,
+    # 11/2026). `uses` conta gli utilizzi; all'ultimo il buono diventa
+    # «utilizzato». `sale` e `redeemed_at` sono quelli dell'ultimo utilizzo.
+    max_uses = models.PositiveIntegerField(null=True, blank=True, default=1, db_default=1)
+    uses = models.PositiveIntegerField(default=0, db_default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -12,7 +12,6 @@ from typing import Optional
 
 from django.db import transaction
 from django.db.models import Count, Q
-from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 from ninja.pagination import LimitOffsetPagination, paginate
@@ -38,7 +37,7 @@ from .communications import (
     settle_due_communications,
 )
 from .consent import record_marketing_consent
-from .coupons import validate_coupon_value
+from .coupons import consume_coupon, validate_coupon_value, validate_max_uses
 from .gift_cards import (
     CLIENT_GIFT_CARD_MAX,
     CLIENT_GIFT_CARD_MIN,
@@ -119,6 +118,7 @@ def create_coupon(request, data: CouponIn):
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
     value = validate_coupon_value(data.kind, data.value)
+    max_uses = validate_max_uses(data.max_uses)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     coupon = Coupon.objects.create(
         salon=ctx.salon,
@@ -128,6 +128,7 @@ def create_coupon(request, data: CouponIn):
         value=value,
         origin=Coupon.Origin.MANUAL,
         expires_at=data.expires_at,
+        max_uses=max_uses,
     )
     log_activity(
         ctx.salon,
@@ -149,15 +150,18 @@ def update_coupon(request, coupon_id: int, data: CouponIn):
     if data.kind not in Coupon.Kind.values:
         raise HttpError(422, "Tipo coupon non valido")
     value = validate_coupon_value(data.kind, data.value)
+    max_uses = validate_max_uses(data.max_uses, coupon.uses)
     client = _get_client(ctx, data.client_id) if data.client_id else None
     # UPDATE condizionato a status='active', solo sui campi della maschera. Il
     # save() completo della copia letta a inizio richiesta riscriveva anche
     # status e vendita: se nel frattempo la cassa aveva consumato il buono
     # (mark_coupon_redeemed), tornava «attivo» e senza vendita — scontrino
     # scontato e buono di nuovo spendibile.
+    # Condizionato anche agli utilizzi letti: uno arrivato dalla cassa nel
+    # frattempo può aver superato il limite nuovo.
     updated = Coupon.objects.filter(
-        pk=coupon.pk, salon=ctx.salon, status=Coupon.Status.ACTIVE
-    ).update(client=client, kind=data.kind, value=value, expires_at=data.expires_at)
+        pk=coupon.pk, salon=ctx.salon, status=Coupon.Status.ACTIVE, uses=coupon.uses
+    ).update(client=client, kind=data.kind, value=value, expires_at=data.expires_at, max_uses=max_uses)
     if not updated:
         raise HttpError(422, "Coupon appena utilizzato o scaduto: non è più modificabile")
     coupon.refresh_from_db()
@@ -209,10 +213,8 @@ def redeem_coupon(request, coupon_id: int, data: CouponRedeemIn):
     # decidere chi arriva primo. Con il leggi-poi-scrivi di prima, due banchi che
     # battevano lo stesso codice nello stesso istante lo trovavano attivo
     # entrambi e lo scalavano due volte.
-    now = timezone.now()
-    updated = Coupon.objects.filter(
-        pk=coupon.pk, salon=ctx.salon, status=Coupon.Status.ACTIVE
-    ).update(status=Coupon.Status.REDEEMED, redeemed_at=now, sale=sale)
+    # Un utilizzo: un buono a più utilizzi resta attivo finché ne ha.
+    updated = consume_coupon(ctx.salon, coupon.pk, sale)
     if not updated:
         raise HttpError(422, "Coupon non più valido")
     coupon.refresh_from_db()

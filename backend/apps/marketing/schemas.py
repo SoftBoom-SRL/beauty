@@ -15,6 +15,8 @@ class CouponIn(Schema):
     kind: str  # percent | amount
     value: Decimal
     expires_at: Optional[datetime] = None
+    # Quante volte si può usare: 1 (monouso, il default), N, o null = senza limite.
+    max_uses: Optional[int] = 1
 
 
 class CouponOut(Schema):
@@ -28,12 +30,23 @@ class CouponOut(Schema):
     client_name: Optional[str] = None
     sale_id: Optional[int] = None
     expires_at: Optional[datetime] = None
+    # Ultimo utilizzo (con `sale_id`); `uses` su `max_uses` (null = senza limite).
     redeemed_at: Optional[datetime] = None
+    max_uses: Optional[int] = 1
+    uses: int = 0
     created_at: datetime
 
     @staticmethod
     def resolve_code(obj, context):
         return code_for(obj, context)
+
+    @staticmethod
+    def resolve_uses(obj):
+        # I buoni usati prima che si contassero gli utilizzi hanno `uses` 0:
+        # un monouso «utilizzato» è stato usato una volta.
+        if not obj.uses and obj.status == "redeemed" and obj.redeemed_at:
+            return 1
+        return obj.uses
 
     @staticmethod
     def resolve_status(obj):

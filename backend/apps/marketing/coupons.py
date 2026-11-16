@@ -8,6 +8,7 @@ cambiate.
 
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.db.models import Case, F, Q, Value, When
 from django.utils import timezone
 from ninja.errors import HttpError
 
@@ -68,16 +69,47 @@ def coupon_discount(coupon, base) -> Decimal:
     return min(value, base).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def mark_coupon_redeemed(coupon, sale) -> bool:
-    """Consuma il coupon legandolo alla vendita; False se qualcuno l'ha già usato.
+def validate_max_uses(max_uses, uses: int = 0):
+    """Utilizzi massimi di un buono: None (senza limite) o almeno 1, e mai
+    meno di quelli già fatti (il buono tornerebbe «attivo» e oltre il limite)."""
+    if max_uses is None:
+        return None
+    if max_uses < 1:
+        raise HttpError(422, "Gli utilizzi massimi devono essere almeno 1 (o senza limite)")
+    if max_uses <= uses:
+        raise HttpError(422, f"Il coupon è già stato usato {uses} volte: indica un numero più alto")
+    return max_uses
 
-    Una sola UPDATE filtrata su status='active': è il database a decidere chi
-    arriva primo, come nell'endpoint di riscatto. Con il leggi-poi-scrivi, due
-    banchi che battono lo stesso codice nello stesso istante lo troverebbero
-    attivo entrambi e lo scalerebbero due volte.
+
+def consume_coupon(salon, coupon_id: int, sale=None) -> bool:
+    """Un utilizzo del coupon, legato alla vendita; False se non è più usabile.
+
+    Una sola UPDATE filtrata su status='active' e sugli utilizzi rimasti: è il
+    database a decidere chi arriva primo. Con il leggi-poi-scrivi, due banchi
+    che battono lo stesso codice nello stesso istante lo troverebbero attivo
+    entrambi e lo scalerebbero due volte (o oltre il limite). All'ultimo
+    utilizzo il buono diventa «utilizzato»; senza limite resta attivo.
     """
     return bool(
-        Coupon.objects.filter(pk=coupon.pk, status=Coupon.Status.ACTIVE).update(
-            status=Coupon.Status.REDEEMED, redeemed_at=timezone.now(), sale=sale
+        Coupon.objects.filter(pk=coupon_id, salon=salon, status=Coupon.Status.ACTIVE)
+        .filter(Q(max_uses__isnull=True) | Q(uses__lt=F("max_uses")))
+        .update(
+            uses=F("uses") + 1,
+            status=Case(
+                When(
+                    max_uses__isnull=False,
+                    max_uses__lte=F("uses") + 1,
+                    then=Value(Coupon.Status.REDEEMED.value),
+                ),
+                default=F("status"),
+            ),
+            redeemed_at=timezone.now(),
+            sale=sale,
         )
     )
+
+
+def mark_coupon_redeemed(coupon, sale) -> bool:
+    """Consuma un utilizzo del coupon legandolo alla vendita; False se qualcuno
+    l'ha già finito (vedi `consume_coupon`)."""
+    return consume_coupon(coupon.salon_id, coupon.pk, sale)
