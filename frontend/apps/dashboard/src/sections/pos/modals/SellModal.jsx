@@ -29,8 +29,9 @@ import TotalsBox from '../sell/TotalsBox.jsx';
 import { useCoupon, useCouponRoom } from '../useCoupon.js';
 import usePackages from '../usePackages.js';
 import useClientCredit from '../useClientCredit.js';
+import useExclusiveDiscount from '../useExclusiveDiscount.js';
 import {
-  checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  applyExclusiveDiscount, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
   checkoutServiceLine, toApiLine,
 } from '../lines.js';
 import { blockOperatorIds, checkoutState, depositCentsOf, visitGifts } from '../visits.js';
@@ -110,6 +111,9 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const [prepaidForm, setPrepaidForm] = useState(null); // { opId, serviceId, sessions, amt, edited }
   const packages = usePackages(!!pkgForm);
   const credit = useClientCredit(appt?.client?.id ?? null);
+  // Exclusive Card della cliente: i prodotti aggiunti partono col suo sconto
+  const exclusivePct = useExclusiveDiscount(appt?.client?.id ?? null);
+  useEffect(() => { setLines((ls) => applyExclusiveDiscount(ls, exclusivePct, 'discount_pct')); }, [exclusivePct]);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);   // CheckoutOut { sale, breakdown }
   const [confirmOpen, setConfirmOpen] = useState(false); // conferma prima di finalizzare
@@ -154,7 +158,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const closeForms = () => { setPick(null); setPickQ(''); setGiftForm(null); setPkgForm(null); setPrepaidForm(null); };
 
   const addProduct = (opId, p) => {
-    setLines((ls) => [...ls, checkoutProductLine(newKey('pl'), opId, p)]);
+    setLines((ls) => [...ls, ...applyExclusiveDiscount([checkoutProductLine(newKey('pl'), opId, p)], exclusivePct, 'discount_pct')]);
     closeForms();
   };
   const addService = (opId, s) => {

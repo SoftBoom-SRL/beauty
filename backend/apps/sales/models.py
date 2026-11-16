@@ -92,6 +92,8 @@ class SaleLine(models.Model):
         # Pacchetto di listino venduto: crea le sedute della cliente
         # (marketing.GiftCard di tipo «package», una per servizio).
         PACKAGE = "package"
+        # Iscrizione o rinnovo della «Exclusive Card» (marketing.exclusive).
+        MEMBERSHIP = "membership"
 
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="lines")
     operator = models.ForeignKey(

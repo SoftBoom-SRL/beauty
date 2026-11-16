@@ -135,6 +135,8 @@ def clean_settings_payload(payload: dict, current: SalonSettings) -> tuple[dict,
             payload[key] = cleaned
     if "gift_card_bonus_rules" in payload:
         payload["gift_card_bonus_rules"] = clean_bonus_rules(payload["gift_card_bonus_rules"])
+    if "exclusive_card" in payload:
+        payload["exclusive_card"] = clean_exclusive_card(payload["exclusive_card"])
     if "opening_hours_week" in payload:
         try:
             payload["opening_hours_week"] = normalize_opening_hours_week(payload["opening_hours_week"])
@@ -171,6 +173,32 @@ def clean_bonus_rules(rules) -> list[dict]:
     if len(cleaned) > MAX_BONUS_RULES:
         raise HttpError(400, f"Troppe regole del bonus (max {MAX_BONUS_RULES})")
     return [{"min_amount": str(m), "bonus": str(cleaned[m])} for m in sorted(cleaned)]
+
+
+def clean_exclusive_card(conf) -> dict:
+    """Le impostazioni della «Exclusive Card», validate (vedi marketing.exclusive).
+
+    Quote fra 0 e il tetto dei soldi (0 = iscrizione gratuita), sconto sui
+    prodotti da 0 a 100. Gli importi si salvano come stringhe a due decimali:
+    il JSON non ha Decimal.
+    """
+    conf = conf or {}
+    try:
+        price = Decimal(str(conf.get("price") or 0)).quantize(Decimal("0.01"))
+        renewal = Decimal(str(conf.get("renewal_price") or 0)).quantize(Decimal("0.01"))
+        pct = int(conf.get("product_discount_pct") or 0)
+    except (TypeError, ValueError, InvalidOperation):
+        raise HttpError(400, "Impostazioni della Exclusive Card non valide")
+    if not (0 <= price <= MAX_MONEY and 0 <= renewal <= MAX_MONEY):
+        raise HttpError(400, "Quota della Exclusive Card non valida")
+    if not 0 <= pct <= 100:
+        raise HttpError(400, "Lo sconto sui prodotti va da 0 a 100%")
+    return {
+        "enabled": bool(conf.get("enabled")),
+        "price": str(price),
+        "renewal_price": str(renewal),
+        "product_discount_pct": pct,
+    }
 
 
 def deposit_rule_fields(data: DepositRuleIn) -> dict:

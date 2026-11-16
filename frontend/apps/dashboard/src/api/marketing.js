@@ -23,6 +23,16 @@ export const giftCardsApi = {
   movements: (id) => api.get(`/api/marketing/gift-cards/${id}/movements`),
 };
 
+// Exclusive Card: iscrizione annuale a pagamento (quote e sconto in Impostazioni)
+export const exclusiveApi = {
+  // { status: 'active' | 'expiring' | 'expired', days, client_id }
+  list: (params) => api.get('/api/marketing/exclusive-cards', { params }),
+  // { renewal, amount, expires_on, membership | null }
+  ofClient: (clientId) => api.get(`/api/marketing/exclusive-cards/client/${clientId}`),
+  // { method, receipt_issued }: iscrive o rinnova e incassa la quota
+  subscribe: (clientId, body) => api.post(`/api/marketing/exclusive-cards/client/${clientId}/subscribe`, body),
+};
+
 export const loyaltyApi = {
   list: (params) => api.get('/api/marketing/loyalty-programs', { params }),
   create: (body) => api.post('/api/marketing/loyalty-programs', body),

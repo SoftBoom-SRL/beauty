@@ -61,6 +61,7 @@ LIVE_FEED_SCOPES = {
     "supplier.": ("inventory",),
     "coupon.": ("marketing",),
     "giftcard.": ("marketing", "sales"),
+    "exclusive.": ("marketing", "sales"),
     "loyalty.": ("marketing",),
     # I programmi fedeltà hanno eventi loro, `loyalty_program.*`, che non
     # cominciano con `loyalty.`: senza questo prefisso un programma creato,

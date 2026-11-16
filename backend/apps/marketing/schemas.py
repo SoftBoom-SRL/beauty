@@ -201,6 +201,44 @@ class TopUpIn(Schema):
     receipt_issued: bool = True
 
 
+# ---- Exclusive Card -----------------------------------------------------------
+
+
+class ExclusiveMembershipOut(Schema):
+    """Iscrizione di una cliente alla Exclusive Card. Attiva fino a `expires_on`
+    compreso (fuso del salone); `days_left` è negativo quando è scaduta."""
+
+    id: int
+    client_id: int
+    client_name: str
+    phone: str = ""
+    lang: str = "it"
+    wa: bool = False
+    marketing: bool = False
+    started_on: str
+    expires_on: str
+    active: bool
+    days_left: int
+    renewals: int
+
+
+class ExclusiveQuoteOut(Schema):
+    """Quanto paga adesso la cliente: `renewal` = rinnovo anticipato
+    (iscrizione ancora attiva); `expires_on` la nuova scadenza."""
+
+    renewal: bool
+    amount: Decimal
+    expires_on: date
+    membership: Optional[ExclusiveMembershipOut] = None
+
+
+class ExclusiveSubscribeIn(Schema):
+    """Iscrizione o rinnovo: come paga la cliente la quota (non con gift card)."""
+
+    method: str = Field(max_length=20)
+    receipt_issued: bool = True
+
+
 # ---- Fedeltà -----------------------------------------------------------------
 
 

@@ -27,7 +27,7 @@ from .models import Client
 # Righe di vendita che da sole non fanno una visita: chi compra un buono da
 # regalare o un pacchetto di sedute paga al banco, ma in poltrona non si è
 # seduta. Vedi `_counter_visits`.
-NOT_A_VISIT_LINES = ("gift_card", "package")
+NOT_A_VISIT_LINES = ("gift_card", "package", "membership")
 
 # Affidabilità: si parte da 100 e ogni giorno con un no-show negli ultimi 12
 # mesi toglie 25 punti, ogni giorno con un annullamento tardivo 10. Era un

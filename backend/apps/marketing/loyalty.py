@@ -167,7 +167,8 @@ def _loyalty_basis(sale) -> dict:
     sold_cards = Decimal("0")
     gift_card_lines = other_lines = services = 0
     for line in sale.lines.all():
-        if line.line_type in ("gift_card", "package"):
+        # la quota della Exclusive Card è come una carta venduta: non fa punti
+        if line.line_type in ("gift_card", "package", "membership"):
             gift_card_lines += 1
             sold_cards += Decimal(str(line.amount))
         else:

@@ -17,6 +17,7 @@ import PasswordDrawer from './PasswordDrawer.jsx';
 import PaymentsDrawer from './PaymentsDrawer.jsx';
 import ReasonsDrawer from './ReasonsDrawer.jsx';
 import BonusDrawer from './BonusDrawer.jsx';
+import ExclusiveDrawer from './ExclusiveDrawer.jsx';
 import VoiceDrawer from './VoiceDrawer.jsx';
 import AutomationKeyDrawer from './AutomationKeyDrawer.jsx';
 import { CopyField } from './lib.jsx';
@@ -70,6 +71,7 @@ export default function ImpostazioniSection() {
   const [payOpen, setPayOpen] = useState(false);
   const [reasonsOpen, setReasonsOpen] = useState(false);
   const [bonusOpen, setBonusOpen] = useState(false);
+  const [exclusiveOpen, setExclusiveOpen] = useState(false);
   const [yourang, setYourang] = useState(null);   // { connected, last_sync_at, ... }
   const [voice, setVoice] = useState(null);       // assistente vocale: { active, created_at }
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -257,6 +259,10 @@ export default function ImpostazioniSection() {
           sub={t('Credito in più a chi carica almeno una soglia (es. paga 500 €, riceve 600 €)', 'Extra credit for whoever loads at least a threshold (e.g. pays €500, gets €600)')}
           value={settings?.gift_card_bonus_rules?.length ? t(`${settings.gift_card_bonus_rules.length} soglie`, `${settings.gift_card_bonus_rules.length} thresholds`) : t('Off', 'Off')}
           onClick={() => setBonusOpen(true)} />
+        <Row icon="star" label="Exclusive Card"
+          sub={t('Iscrizione annuale a pagamento con sconto sui prodotti', 'Paid yearly membership with a discount on products')}
+          value={settings?.exclusive_card?.enabled ? t('Attiva', 'On') : t('Off', 'Off')}
+          onClick={() => setExclusiveOpen(true)} />
       </Group>
 
       {/* YOURANG — connessione OAuth + sync (permesso «integrations»; il titolare ce l'ha).
@@ -365,6 +371,7 @@ export default function ImpostazioniSection() {
       {payOpen && <PaymentsDrawer onClose={() => setPayOpen(false)} />}
       {reasonsOpen && <ReasonsDrawer onClose={() => setReasonsOpen(false)} />}
       {bonusOpen && <BonusDrawer onClose={() => setBonusOpen(false)} />}
+      {exclusiveOpen && <ExclusiveDrawer onClose={() => setExclusiveOpen(false)} />}
       {voiceOpen && <VoiceDrawer onClose={() => setVoiceOpen(false)} onChange={loadVoice} onReconnect={connectYourang} />}
       {autoKeyOpen && <AutomationKeyDrawer onClose={() => setAutoKeyOpen(false)} onChange={loadAutoKey} />}
     </div>

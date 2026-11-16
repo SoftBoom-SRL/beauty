@@ -375,6 +375,22 @@ def automation_birthdays(request, date: str = None):
     return automation_key.birthdays(request.auth, date)
 
 
+@router.get("/automation/exclusive-cards", auth=automation_key.automation_auth)
+def automation_exclusive_cards(request, status: str = None, days: int = None):
+    """Iscritte alla Exclusive Card con la scadenza, per il promemoria di rinnovo.
+
+    Stessa chiave degli appuntamenti. `status`: `active`, `expiring` (attive che
+    scadono entro `days` giorni, 30 se manca) o `expired`; senza, tutte. Per
+    ogni iscritta: `client_id`, `client_name`, `phone`, `lang`, `wa`,
+    `marketing`, `started_on`, `expires_on` (AAAA-MM-GG, compreso), `active`,
+    `days_left` (negativo se scaduta), `renewals`.
+    Uso tipico: ogni mattina `?status=expiring&days=7`.
+    """
+    from apps.marketing import exclusive  # lazy: il marketing non serve al resto del modulo
+
+    return exclusive.members(request.auth, status=status, days=days)
+
+
 @router.get("/automation/key", auth=staff_auth, response=AutomationKeyOut)
 def automation_key_status(request):
     """Se la chiave per gli strumenti esterni è attiva, e da quando."""

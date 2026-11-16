@@ -3,7 +3,7 @@
 // Al banco si vendono anche pacchetti e trattamenti già pagati (sedute della
 // cliente scelta), si lascia da saldare una parte del conto (con la cliente) e
 // si saldano i conti che la cliente ha lasciato aperti (DuesBanner).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Avatar, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ClientPicker from './ClientPicker.jsx';
@@ -21,8 +21,9 @@ import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
 import usePackages from './usePackages.js';
 import useClientCredit from './useClientCredit.js';
+import useExclusiveDiscount from './useExclusiveDiscount.js';
 import {
-  counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
+  applyExclusiveDiscount, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
 } from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
 import { salesApi } from '../../api/sales.js';
@@ -48,6 +49,9 @@ export default function CartTab({ onGoHistory }) {
   const [globalDisc, setGlobalDisc] = useState(0);
   const [clientSel, setClientSel] = useState(null);
   const credit = useClientCredit(clientSel?.id ?? null, canSell);
+  // Exclusive Card della cliente: i prodotti partono col suo sconto
+  const exclusivePct = useExclusiveDiscount(clientSel?.id ?? null);
+  useEffect(() => { setCart((c) => applyExclusiveDiscount(c, exclusivePct, 'disc')); }, [exclusivePct]);
   const [sellerId, setSellerId] = useState(() => operators[0]?.id ?? null);
   const [pay, setPay] = useState(emptyPayments());
   const [receipt, setReceipt] = useState(true);   // scontrino emesso
@@ -76,7 +80,7 @@ export default function CartTab({ onGoHistory }) {
         fireToast({ msg: t('Giacenza insufficiente', 'Not enough stock'), icon: 'alert' });
         return c;
       }
-      return [...c, counterProductLine('p' + p.id + '_' + Date.now(), p, stock)];
+      return [...c, ...applyExclusiveDiscount([counterProductLine('p' + p.id + '_' + Date.now(), p, stock)], exclusivePct, 'disc')];
     });
   };
   const addGiftCard = () => {

@@ -5,6 +5,7 @@ import SubTabs from '../../ui/SubTabs.jsx';
 import CouponSub from './CouponSub.jsx';
 import LoyaltySub from './LoyaltySub.jsx';
 import GiftSub from './GiftSub.jsx';
+import ExclusiveSub from './ExclusiveSub.jsx';
 
 export default function FedeltaSection() {
   const { t, subTab, setSubTab } = useDash();
@@ -14,11 +15,12 @@ export default function FedeltaSection() {
     ['coupon', t('Coupon', 'Coupons')],
     ['fedelta', t('Fedeltà', 'Loyalty')],
     ['gift', t('Gift card', 'Gift cards')],
+    ['exclusive', 'Exclusive Card'],
   ];
   return (
     <div className="dk-page" style={{ maxWidth: 1120 }}>
       <SubTabs tabs={tabs} value={sub} onChange={setSubTab} />
-      {sub === 'coupon' ? <CouponSub /> : sub === 'fedelta' ? <LoyaltySub /> : <GiftSub />}
+      {sub === 'coupon' ? <CouponSub /> : sub === 'fedelta' ? <LoyaltySub /> : sub === 'exclusive' ? <ExclusiveSub /> : <GiftSub />}
     </div>
   );
 }
