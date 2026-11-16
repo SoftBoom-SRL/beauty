@@ -74,12 +74,14 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
     </div>
   );
 
+  // Il metodo scelto è pieno di blu (--info): col nero dell'inchiostro, accanto
+  // ai bottoni bianchi, in cassa non si capiva al volo quale fosse attivo.
   const methodBtn = (active, k, label, onPick, small) => (
-    <button key={k} onClick={onPick} style={{
+    <button key={k} type="button" onClick={onPick} aria-pressed={active} style={{
       flex: 1, padding: small ? '8px 4px' : '10px 4px', borderRadius: small ? 9 : 10,
-      fontSize: small ? 12 : 13, fontWeight: 600, cursor: 'pointer',
-      border: '1px solid ' + (active ? 'var(--ink)' : 'var(--hair)'),
-      background: active ? 'var(--ink)' : 'var(--surface)', color: active ? '#fff' : 'var(--ink)',
+      fontSize: small ? 12 : 13, fontWeight: active ? 700 : 600, cursor: 'pointer',
+      border: '1px solid ' + (active ? 'var(--info)' : 'var(--hair)'),
+      background: active ? 'var(--info)' : 'var(--surface)', color: active ? '#fff' : 'var(--ink)',
       whiteSpace: 'nowrap',
     }}>{label}</button>
   );
