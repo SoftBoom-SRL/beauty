@@ -347,6 +347,21 @@ def automation_appointments(request, start: str, end: str):
     return automation_key.upcoming(request.auth, start, end)
 
 
+@router.get("/automation/visits", auth=automation_key.automation_auth)
+def automation_visits(request, start: str, end: str):
+    """Visite incassate (conti di appuntamenti) chiuse fra `start` (incluso) ed `end` (escluso), massimo 7 giorni.
+
+    Stessa chiave degli appuntamenti; `start`/`end` come negli appuntamenti.
+    Per ogni visita: `sale_id`, `appointment_id`, `closed_at` (ISO), cliente
+    (`client_id`, `client_name`, `phone`, `lang`, `wa`, `marketing`),
+    `services` (nomi), `total` e `first_visit` (true se è la prima visita
+    incassata della cliente). Le vendite al banco non ci sono.
+    Uso tipico: ogni ora, la finestra dell'ora appena passata, per mandare la
+    richiesta di recensione a chi è alla prima visita.
+    """
+    return automation_key.visits(request.auth, start, end)
+
+
 @router.get("/automation/birthdays", auth=automation_key.automation_auth)
 def automation_birthdays(request, date: str = None):
     """Clienti attive che compiono gli anni il giorno `date` (AAAA-MM-GG; senza, oggi nel fuso del salone).

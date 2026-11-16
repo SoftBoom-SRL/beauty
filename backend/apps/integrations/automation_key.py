@@ -92,6 +92,58 @@ def upcoming(salon, start: str, end: str) -> list[dict]:
     return [_event_payload(a) for a in appointments]
 
 
+def visits(salon, start: str, end: str) -> list[dict]:
+    """Visite incassate (conti di appuntamenti) chiuse in [start, end), con `first_visit`.
+
+    Lo stesso contenuto dell'evento `visit.completed`, ma da leggere: l'evento
+    arriva solo a Yourang, e n8n (che non riceve i webhook del salone) non
+    aveva modo di sapere chi era alla prima visita per mandarle la richiesta
+    di recensione. Le vendite al banco (prodotti, caparre) non sono visite.
+    """
+    from apps.sales.models import Sale  # lazy: le vendite non servono al resto del modulo
+
+    first, last = _parse_moment(start, "start"), _parse_moment(end, "end")
+    if last <= first or last - first > MAX_WINDOW:
+        raise HttpError(400, "Intervallo non valido (massimo 7 giorni)")
+    sales = (
+        Sale.objects.filter(
+            salon=salon, kind=Sale.Kind.CHECKOUT, client__isnull=False,
+            created_at__gte=first, created_at__lt=last,
+        )
+        .select_related("client", "client__contact_client")
+        .prefetch_related("lines__service")
+        .order_by("created_at", "id")
+    )
+    rows = []
+    for sale in sales:
+        client = sale.client
+        # Prima visita: nessun conto di appuntamento della cliente prima di
+        # questo, come nell'evento. «Prima» per data O per id: un conto
+        # riportato a una data passata conta, e uno registrato prima conta
+        # anche se il suo orario coincide. Una query per conto: la finestra è
+        # di al massimo 7 giorni.
+        earlier = (
+            Sale.objects.filter(salon=salon, client=client, kind=Sale.Kind.CHECKOUT)
+            .filter(Q(created_at__lt=sale.created_at) | Q(id__lt=sale.id))
+            .exclude(pk=sale.pk)
+        )
+        rows.append({
+            "sale_id": sale.id,
+            "appointment_id": sale.appointment_id,
+            "closed_at": sale.created_at.isoformat(),
+            "client_id": client.id,
+            "client_name": client.full_name,
+            "phone": client.contact_phone,
+            "lang": client.lang,
+            "wa": client.wa,
+            "marketing": bool((client.consents or {}).get("marketing")),
+            "services": [line.service.name_it for line in sale.lines.all() if line.service_id],
+            "total": str(sale.total),
+            "first_visit": not earlier.exists(),
+        })
+    return rows
+
+
 def birthdays(salon, date: str | None = None) -> list[dict]:
     """Clienti attive che compiono gli anni il giorno `date` (oggi, se manca).
 
