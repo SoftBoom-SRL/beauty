@@ -310,10 +310,10 @@ export function useAgendaMutations({
     }
   };
 
-  const addBreak = async (opId, startMin, dur) => {
+  const addBreak = async (opId, startMin, dur, note = '') => {
     setSlotMenu(null);
     try {
-      await agendaApi.createPause({ operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN });
+      await agendaApi.createPause({ operator_id: opId, start: isoAtMin(date, startMin), duration_min: dur || BREAK_DEFAULT_MIN, note });
       const o = operators.find((x) => x.id === opId);
       fireToast({
         msg: breakAddedText(t, o?.first_name, startMin),
