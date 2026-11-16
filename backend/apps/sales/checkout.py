@@ -269,7 +269,8 @@ def _close_deposit_link(appointment) -> None:
 
 
 def _emit_visit_completed(salon, appointment, sale) -> None:
-    """`visit.completed`: la visita incassata, con i servizi fatti e il totale.
+    """`visit.completed`: la visita incassata, con i servizi fatti, il totale e
+    `first_visit` (true alla prima visita incassata della cliente).
 
     Uno per conto. Con il conto unico parte solo per la visita principale, con
     i servizi di TUTTE le visite incassate (le righe del conto sono di tutte):
@@ -284,6 +285,16 @@ def _emit_visit_completed(salon, appointment, sale) -> None:
     ]
     from apps.agenda.services.messages import appointment_event_key  # lazy
 
+    # Prima visita: nessun altro conto di un appuntamento per questa cliente
+    # (contano anche quelli importati dal gestionale di prima). Senza, n8n non
+    # sapeva distinguere una cliente nuova e la richiesta di recensione «dopo la
+    # prima visita» partiva a tutte (Beauty Boutique, 11/2026). Le vendite al
+    # banco (solo prodotti, caparre) non sono visite.
+    first_visit = not (
+        Sale.objects.filter(salon=salon, client=client, kind=Sale.Kind.CHECKOUT)
+        .exclude(pk=sale.pk)
+        .exists()
+    )
     # Con la chiave dell'appuntamento: la richiesta di recensione non parte
     # prima di un suo messaggio ancora trattenuto (ordinati, non fusi).
     emit_event(
@@ -298,6 +309,7 @@ def _emit_visit_completed(salon, appointment, sale) -> None:
             "lang": client.lang,
             "services": service_names,
             "total": str(sale.total),
+            "first_visit": first_visit,
         },
         coalesce_key=appointment_event_key(appointment.id),
     )
