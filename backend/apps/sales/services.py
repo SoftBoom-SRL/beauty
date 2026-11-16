@@ -404,6 +404,12 @@ def _sell_gift_card(salon, sale, line, data: dict, *, client, gift_services: dic
     )
     line.gift_card = card
     line.save(update_fields=["gift_card"])
+    if card is not None and card.payment_status == card.PaymentStatus.PAID:
+        from apps.marketing.gift_cards import add_vip_bonus  # lazy
+
+        # Il bonus della carta VIP sul pagato della riga (dopo sconto e
+        # buono): la vendita resta quella, il credito sale del bonus.
+        add_vip_bonus(salon, card, line.amount, actor=actor)
 
 
 def finalize_sale(

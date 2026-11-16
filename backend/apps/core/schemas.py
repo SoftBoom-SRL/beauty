@@ -20,6 +20,14 @@ class LocationIn(Schema):
     is_default: bool = False
 
 
+class GiftCardBonusRule(Schema):
+    """Una soglia del bonus della carta VIP: chi carica almeno `min_amount` €
+    riceve `bonus` € di credito in più."""
+
+    min_amount: Decimal
+    bonus: Decimal
+
+
 class SettingsOut(Schema):
     logo_url: Optional[str] = None
     brand_color: str
@@ -56,6 +64,10 @@ class SettingsOut(Schema):
     # Motivazioni personalizzate (vuote = predefinite della dashboard).
     cancel_reasons: list[str] = []
     no_show_reasons: list[str] = []
+    # Bonus della carta VIP: [{min_amount, bonus}] per soglia crescente; chi
+    # carica almeno `min_amount` riceve `bonus` di credito in più (in cassa
+    # entra solo quello che paga). Vuota = nessun bonus.
+    gift_card_bonus_rules: list[GiftCardBonusRule] = []
     # Pagamenti online: Stripe Connect del salone (sola lettura, si gestisce da /api/sales/stripe/connect).
     stripe_connected: bool = False
     # none | incomplete | pending | active (vedi sales.stripe_service.account_state)
@@ -85,6 +97,7 @@ class SettingsIn(Schema):
     automation_delay_seconds: Optional[int] = None
     cancel_reasons: Optional[list[str]] = None
     no_show_reasons: Optional[list[str]] = None
+    gift_card_bonus_rules: Optional[list[GiftCardBonusRule]] = None
 
 
 class SalonOut(Schema):

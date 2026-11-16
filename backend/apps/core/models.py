@@ -152,6 +152,12 @@ class SalonSettings(TimeStampedModel):
     # (lista di stringhe; vuota = quelle predefinite della dashboard).
     cancel_reasons = models.JSONField(default=list, blank=True)
     no_show_reasons = models.JSONField(default=list, blank=True)
+    # Bonus della «carta VIP»: chi carica almeno `min_amount` riceve `bonus` di
+    # credito in più (paga 500 €, ha 600 € da spendere). Lista di
+    # {"min_amount": "500.00", "bonus": "100.00"}, ordinata per soglia; vale la
+    # soglia più alta raggiunta. Vuota (o null, il codice di prima durante un
+    # deploy) = nessun bonus. Vedi marketing.gift_cards.vip_bonus_for.
+    gift_card_bonus_rules = models.JSONField(default=list, blank=True, null=True)
     # Stripe Connect: account del salone collegato dal titolare. Le caparre
     # online e gli addebiti no-show passano su questo account.
     stripe_account_id = models.CharField(max_length=64, blank=True, default="")
