@@ -28,7 +28,7 @@ export const WEEK_TALL_PX = 44;
  * lungo. Stretto e basso: le iniziali. Prima, sotto i 26 px non c'era scritto
  * niente, e sopra si leggevano «Gre…» o i puntini (il titolare, 16/10).
  * `moving` = copia che segue il puntatore durante il drag (non riceve eventi). */
-export default function WeekBlock({ a, left, width, colorOf, itemColor, moving = false, highlight = false, stay = null, linked = false, joinTop = false, joinBottom = false, vertical = true, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onHover, onLeave }) {
+export default function WeekBlock({ a, left, width, colorOf, itemColor, moving = false, highlight = false, stay = null, linked = false, joinTop = false, joinBottom = false, vertical = true, pxm = PXM, g0 = DK_START, canWrite, t, onDown, onResizeDown, onHover, onLeave }) {
   const h = (a.endMin - a.startMin) * pxm;
   const client = String(a.client_name || '');
   const words = client.split(' ');
@@ -174,6 +174,17 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
         {cont ? main?.service_name || '' : initialsOf(client)}
         {h >= 30 && <span className="dk-wblock__ini-t tabnum">{timeLabel(a.startMin)}</span>}
       </div>
+      {/* Il bordo inferiore del tempo attivo cambia la durata del servizio,
+          come in vista giorno: per accorciare un appuntamento bisognava
+          aprirlo o passare alla vista giorno (16/11). Sopra la posa, che
+          resta com'è. */}
+      {canWrite && !moving && onResizeDown && (
+        <div className="dk-resize-handle" data-resize="" onPointerDown={onResizeDown}
+          title={t('Trascina per cambiare la durata', 'Drag to change the duration')}
+          style={{ position: 'absolute', left: barW, right: 0, top: soak > 0 ? h - soak - 5 : undefined, bottom: soak > 0 ? undefined : 0, height: 7, cursor: 'ns-resize', display: 'grid', placeItems: 'center', touchAction: 'none', zIndex: 5 }}>
+          <div style={{ width: 18, height: 2.5, borderRadius: 99, background: 'rgba(17,24,39,0.35)' }} />
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import datetime as dt
 from decimal import Decimal
 
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from apps.core.models import Location
 from common.auth import create_staff_tokens
@@ -152,6 +153,28 @@ class ReadEndpointsTests(AgendaTestBase):
         ).json()
         booked = [a for row in week for a in row["appointments"]]
         self.assertEqual([a["note"] for a in booked], ["allergia alla tinta"])
+
+    def test_the_week_view_carries_updated_at_for_the_resize(self):
+        # la durata si cambia anche dalla settimana: il PUT manda
+        # expected_updated_at, e senza il campo non c'era niente da mandare
+        from apps.accounts.models import Membership
+
+        Membership.objects.filter(user=self.user).update(is_owner=True)
+        with self._windows({self.op1.id: [(8 * 60, 20 * 60)]}):
+            appt = create_appointment(
+                self.salon, self.client_obj,
+                [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, 10), via="dashboard",
+            )
+        week = self.client.get(
+            "/api/agenda/week", {"start": self.day.isoformat()}, **self.auth
+        ).json()
+        booked = [a for row in week for a in row["appointments"]]
+        appt.refresh_from_db()
+        self.assertEqual(len(booked), 1)
+        # il JSON lo porta al millesimo, e al millesimo lo confronta il PUT
+        sent = parse_datetime(booked[0]["updated_at"])
+        self.assertEqual(sent, appt.updated_at.replace(microsecond=appt.updated_at.microsecond // 1000 * 1000))
 
     def test_the_month_view_stops_at_six_weeks(self):
         from apps.accounts.models import Membership

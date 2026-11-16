@@ -390,3 +390,59 @@ export const hoverShape = (a) => ({
   client: { full_name: a.client_name, phone: a.client_phone },
   total_duration_min: a.duration_min,
 });
+
+/* ---- Durata dal bordo inferiore (vista settimana) ---------------------------
+ * In vista giorno il bordo inferiore di un servizio si trascina per
+ * cambiarne la durata; in settimana no: per accorciare un appuntamento
+ * bisognava aprirlo o passare alla vista giorno (richiesta del 16/11). */
+
+/** Il servizio con tempo del blocco: quello di cui il bordo cambia la durata
+ *  (gli aggiuntivi si fanno durante e non hanno tempo loro). null se il
+ *  payload non porta gli id dei servizi. */
+export function weekResizeItem(a) {
+  const item = timedItems(a?.items)[0];
+  return item && item.id != null ? item : null;
+}
+
+/** Il blocco `a` ridimensionato, a passi di 5 minuti: la durata nuova del suo
+ *  servizio dal `dy` in px. Un tocco sulla maniglia non cambia niente (come in
+ *  vista giorno, resizeStep); mai sotto i 5 minuti né oltre la mezzanotte. */
+export function weekResizeDur(d, dy, pxm) {
+  const raw = d.origDur + dy / pxm;
+  if (Math.abs(raw - d.origDur) < 2.5) return d.origDur;
+  const itemStart = d.origEnd - d.soak - d.origDur;
+  return Math.max(5, Math.min(24 * 60 - itemStart - d.soak, Math.round(raw / 5) * 5));
+}
+
+/** Il corpo di PUT /api/agenda/appointments/{id} con la durata nuova del
+ *  servizio `itemId`: tutta la lista dei servizi della visita (`visitItems`
+ *  di una parte), come il ridimensionamento della vista giorno. Con
+ *  `updated_at` il server scrive solo se la visita non è cambiata nel
+ *  frattempo (412). null se mancano gli id dei servizi. */
+export function weekResizeBody(a, itemId, dur, force) {
+  const all = a.visitItems || a.items || [];
+  if (!all.length || all.some((it) => it.id == null)) return null;
+  const items = all.map((it) => ({
+    id: it.id, service_id: it.service_id, operator_id: it.operator_id ?? a.operator_id,
+    duration_min: it.id === itemId ? dur : it.duration_min,
+  }));
+  const body = { items, force: !!force };
+  if (a.updated_at) body.expected_updated_at = a.updated_at;
+  return body;
+}
+
+/** I blocchi di un giorno con il ridimensionamento `r` in corso (o in
+ *  attesa della risposta): il blocco si allunga o si accorcia, e le parti
+ *  dopo della stessa visita slittano, perché i servizi sono concatenati e il
+ *  server le scriverà così. */
+export function weekResized(list, r) {
+  if (!r) return list;
+  const delta = r.ndur - r.origDur;
+  if (!delta) return list;
+  return list.map((a) => {
+    if (a.id !== r.id) return a;
+    if ((a.key ?? a.id) === r.key) return { ...a, endMin: a.endMin + delta };
+    if (a.startMin >= r.origEnd) return { ...a, startMin: a.startMin + delta, endMin: a.endMin + delta };
+    return a;
+  });
+}

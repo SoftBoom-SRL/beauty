@@ -12,7 +12,7 @@
 // che segue il cursore. Il 409 del server («occupato / fuori turno») non ferma
 // niente: la POST si ripete con `force: true`, come nella vista giorno.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { toastApiError, minutesOfDay, nowMinutes, todayStr } from '@youty/shared';
+import { ApiError, toastApiError, minutesOfDay, nowMinutes, todayStr } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import ApptHoverCard from './grid/ApptHoverCard.jsx';
 import DayMoneyCard from './grid/DayMoneyCard.jsx';
@@ -30,6 +30,7 @@ import { splitText, weekMovedText } from './lib/toastText.js';
 import * as agendaApi from './agendaApi.js';
 import {
   weekDays, fixedColumns, trimWeek, weekColOf, weekBestSnap, weekDropChanged, weekMoveBody, weekSplitBody, whereLabel, movingBlocks, weekGhostSpans, hoverShape,
+  weekResizeItem, weekResizeDur, weekResizeBody, weekResized,
 } from './lib/week.js';
 
 import { useWeekData } from './hooks/useWeekData.js';
@@ -60,6 +61,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   const opFirsts = operators.map((o) => o.first_name); // per la disambiguazione omonimie
   const [opTip, setOpTip] = useState(null); // { name, x, y }
   const [pending, setPending] = useState(null);   // { id, dayIdx, ns, nop, fromOp }: la visita resta dove è stata lasciata durante la POST
+  const [pendingResize, setPendingResize] = useState(null);   // il ridimensionamento in PUT: il blocco resta com'è stato lasciato
   // Anteprima al passaggio del mouse, come nella vista giorno: in settimana i
   // blocchi sono stretti e il solo `title` del browser arriva tardi e dice poco.
   const [hover, setHover] = useState(null);
@@ -197,6 +199,10 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     closedByHours: (date) => hoursSet && !openingFor(settings, date).length,
     keep: (date) => (ghost && date === ghostDate ? ghostOps : []),
   });
+  /* Il ridimensionamento in corso (o in attesa della risposta): il blocco
+   * segue il bordo, le parti dopo della stessa visita slittano (weekResized). */
+  const rz = drag.current?.mode === 'resize' ? drag.current : pendingResize;
+  if (rz && dayData[rz.dayIdx]) dayData[rz.dayIdx] = { ...dayData[rz.dayIdx], list: weekResized(dayData[rz.dayIdx].list, rz) };
   const visibleDays = dayData.filter((d) => !d.hidden);
   const lastVisible = dayData.reduce((last, d, i) => (d.hidden ? last : i), -1);
   // larghezza minima di un giorno a larghezza 1, e con lo zoom di lato
@@ -253,6 +259,29 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
   }
 
+  /* Bordo inferiore di un blocco: la durata del suo servizio, come in vista
+   * giorno. Il gesto è lo stesso trascinamento (pointer catturato, Esc,
+   * rotella), con `mode: 'resize'`. */
+  function onResizeDown(e, a, dayIdx) {
+    if (!canWrite) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    if (e.isPrimary === false) return;
+    const item = weekResizeItem(a);
+    if (!item) return;
+    e.preventDefault();
+    e.stopPropagation();   // il blocco sotto non deve cominciare uno spostamento
+    startGesture();
+    setHover(null);
+    drag.current = {
+      mode: 'resize', id: a.id, key: a.key ?? a.id, obj: a, itemId: item.id, pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY, cx: e.clientX, cy: e.clientY,
+      startScroll: scrollRef.current?.scrollTop || 0,
+      origDur: item.duration_min, ndur: item.duration_min, origEnd: a.endMin, soak: a.soakMin || 0,
+      dayIdx, origDayIdx: dayIdx, moved: false,
+    };
+    try { scrollRef.current?.setPointerCapture?.(e.pointerId); } catch { /* non supportato */ }
+  }
+
   // aggancio al vicino, come in vista giorno (weekBestSnap)
   const snapTol = snapTolerance(step);
 
@@ -262,7 +291,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (!canWrite || otherPointer(e)) return;
     d.cx = e.clientX; d.cy = e.clientY;
     track(d);
-    if (d.moved) followEdge(d.cx, d.cy);
+    // la durata si allunga solo in verticale
+    if (d.moved) followEdge(d.cx, d.cy, { x: d.mode !== 'resize' });
   }
   // La rotella durante il trascinamento sposta l'orario sotto il puntatore:
   // i minuti tengono conto anche dello scorrimento (come in vista giorno).
@@ -272,6 +302,12 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   }
   function track(d) {
     const dy = dragDy(d, scrollRef.current?.scrollTop || 0);
+    if (d.mode === 'resize') {
+      d.ndur = weekResizeDur(d, dy, pxm);
+      d.moved = d.moved || Math.abs(dy) > 2;
+      force((x) => x + 1);
+      return;
+    }
     const dx = d.cx - d.startX;
     const { dayIdx, opId } = targetFromX(d.cx);
     const rawMin = d.orig + dy / pxm;
@@ -295,6 +331,11 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     if (otherPointer(e)) return;   // si solleva un altro dito: il trascinamento continua
     const d = endDrag();
     if (!d) return;
+    if (d.mode === 'resize') {
+      if (d.moved) markDropped();
+      if (d.moved && d.ndur !== d.origDur && canWrite) commitResize(d);
+      return;
+    }
     if (!d.moved) { openDetail(d.obj); return; }   // click semplice → dettaglio; il drag no
     markDropped();   // il click nativo che segue non apre niente
     if (weekDropChanged(d) && canWrite) {
@@ -374,6 +415,36 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
     }
   }
 
+  /* La durata nuova del servizio: si scrive tutta la lista dei servizi
+   * della visita, come in vista giorno (resizeItem). Allungare sopra una
+   * collega o oltre il turno si fa e basta (si riprova forzando); se la
+   * visita è cambiata altrove (412) non si forza: si ricarica e lo si dice. */
+  async function commitResize(d, opts = {}) {
+    const body = weekResizeBody(d.obj, d.itemId, d.ndur, opts.force);
+    if (!body) return;
+    setPendingResize(d);
+    try {
+      await agendaApi.updateAppointment(d.id, body);
+      fireToast({ msg: t('Durata aggiornata', 'Duration updated'), icon: 'check' });
+      await refetchWeek();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 412) {
+        fireToast({ msg: t('L\'appuntamento è cambiato nel frattempo: settimana ricaricata, riprova', 'The appointment changed in the meantime: week reloaded, try again'), icon: 'alert' });
+        await refetchWeek();
+        return;
+      }
+      if (retryForced(err, opts.force, canWrite)) {
+        await commitResize(d, { ...opts, force: true });
+        return;
+      }
+      setPendingResize(null);
+      await refetchWeek();
+      toastApiError(err, fireToast, t);
+    } finally {
+      setPendingResize(null);
+    }
+  }
+
   async function openDetail(appt) {
     // Con la prenotazione aperta il dettaglio non si apre (la sostituirebbe):
     // lo dice la sezione, senza nemmeno caricarlo.
@@ -423,7 +494,8 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
   }
 
   const dg = drag.current;
-  const dragging = !!(dg && dg.moved);
+  // il ridimensionamento non è uno spostamento: niente copia né badge
+  const dragging = !!(dg && dg.moved && dg.mode !== 'resize');
   // i blocchi in trascinamento, già nel giorno/operatrice/orario di arrivo:
   // quello premuto, o tutta la visita se la si prende per la barra
   const movingObjs = dragging ? movingBlocks(dg, dayData) : [];
@@ -492,7 +564,7 @@ export default function WeekView({ weekStart, operators, colorOf, itemColor, now
               opening={hoursSet ? openingFor(settings, d.date) : null}
               ghost={ghost} ghostDate={ghostDate} ghostSpans={ghostSpans} openApptId={openApptId} canWrite={canWrite} t={t}
               colorOf={colorOf} itemColor={itemColor} stays={stays} linked={linked} verticalText={verticalText}
-              onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onHover={openHover} onLeave={closeHover}
+              onDayAreaClick={onDayAreaClick} onEmptyClick={onEmptyClick} onBlockDown={onBlockDown} onResizeDown={onResizeDown} onHover={openHover} onLeave={closeHover}
             />
           );
         })}
