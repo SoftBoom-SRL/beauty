@@ -4,7 +4,7 @@
 // (anche durante il trascinamento) e i gestori del puntatore.
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
-import { DK_START, PXM, TONE_BORDER, blockLook, laneCss } from '../lib.js';
+import { DK_START, PXM, TONE_BORDER, blockLook, hasNote, laneCss } from '../lib.js';
 import { creditIcon, creditTitle } from '../../fedelta/credits.js';
 
 /* ---------- service block (one per AppointmentService) ---------- */
@@ -126,6 +126,14 @@ export default function ItemBlock({ block, startMin, activeMin, soakMin, g0 = DK
           <span title={t(`Stessa permanenza: ${stay.size} appuntamenti di fila della cliente`, `Same stay: ${stay.size} back-to-back appointments of this client`)}
             style={{ display: 'inline-grid', verticalAlign: 'middle', marginRight: 4, marginTop: -2 }}>
             <Icon name="link" size={12} color={ink.ink} stroke={2.2} />
+          </span>
+        )}
+        {/* c'è una nota: il segno sul primo servizio, il testo al passaggio
+            del mouse (e nella scheda): prima per saperlo bisognava aprirlo */}
+        {isFirst && hasNote(appt) && (
+          <span data-note="" role="img" aria-label={t('Con nota', 'Has a note')} title={appt.note}
+            style={{ display: 'inline-grid', verticalAlign: 'middle', marginRight: 4, marginTop: -2 }}>
+            <Icon name="message" size={12} color={ink.ink} stroke={2.2} />
           </span>
         )}
         {!client && giftMark}

@@ -7,7 +7,7 @@
 // disegnano attaccati (`joinTop`/`joinBottom`), come un blocco solo.
 // Senza hook: i test lo disegnano chiamandolo come una funzione.
 import { Icon, statusMeta, timeLabel } from '@youty/shared';
-import { DK_START, PXM, addonGroups, blockLook, initialsOf } from '../lib.js';
+import { DK_START, PXM, addonGroups, blockLook, hasNote, initialsOf } from '../lib.js';
 import { creditIcon, creditsTitle } from '../../fedelta/credits.js';
 
 /** Da quanti px di altezza un blocco stretto scrive il nome per lungo. */
@@ -55,7 +55,9 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
    * dove serve davvero (e dove la vista giorno lo lascia da tempo). */
   // conclusa: la spunta, una volta per gruppo di servizi attaccati
   const doneMark = a.status === 'closed' && !cont;
-  const flags = !!(depositDue || gifts.length || doneMark);
+  // la nota: una volta per visita, sul primo servizio (come la caparra)
+  const noteMark = !cont && (!isPart || a.part === 1) && hasNote(a);
+  const flags = !!(depositDue || gifts.length || doneMark || noteMark);
   const sm = statusMeta(a.status, t);
   // arrivata / in corso: il pallino accanto al nome, come in vista giorno
   const showStatusDot = !cont && (a.status === 'checked_in' || a.status === 'in_progress');
@@ -137,6 +139,7 @@ export default function WeekBlock({ a, left, width, colorOf, itemColor, moving =
               <Icon name="check" size={8} color="#FFFFFF" stroke={3.4} />
             </span>
           )}
+          {noteMark && <span data-note="" title={a.note} style={{ display: 'grid' }}><Icon name="message" size={10} color={ink.sub} stroke={2.2} /></span>}
           {depositDue && <span title={t('Caparra da versare', 'Deposit due')} style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--warn)' }} />}
           {/* il trattamento già pagato col suo tipo: regalo, pagato in
               anticipo, pacchetto (e le sedute nel tooltip) */}

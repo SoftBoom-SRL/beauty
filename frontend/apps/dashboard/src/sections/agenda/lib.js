@@ -14,7 +14,7 @@ export {
 } from './constants.js';
 
 export {
-  aStartMin, aDur, aEndMin, svcLabel, firstName, lastName, opDisplay, initialsOf, fmtMoney,
+  aStartMin, aDur, aEndMin, svcLabel, firstName, hasNote, lastName, opDisplay, initialsOf, fmtMoney,
   itemBlocks, apptRevenue,
 } from './lib/appt.js';
 
