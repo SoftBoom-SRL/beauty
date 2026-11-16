@@ -116,6 +116,36 @@ class CheckoutApiTests(TestCase):
         # la quota già restituita non può essere detratta di nuovo
         self.assertEqual(self._checkout(paid="80.00").status_code, 400)
 
+    def test_visit_completed_says_whether_it_is_the_first_visit(self):
+        """`first_visit` per n8n: la richiesta di recensione alla cliente nuova (11/2026).
+
+        Senza il dato n8n non distingueva una cliente nuova da una abituale.
+        Una vendita al banco precedente (un prodotto) non è una visita.
+        """
+        from django.utils import timezone
+
+        from apps.agenda.models import AppointmentService
+
+        Sale.objects.create(
+            salon=self.salon, kind=Sale.Kind.POS, client=self.client_obj, total=Decimal("20.00")
+        )
+        self.assertEqual(self._checkout().status_code, 200)
+        first = OutboxEvent.objects.get(event_type="visit.completed")
+        self.assertIs(first.payload["first_visit"], True)
+
+        # La visita dopo non è più la prima.
+        self.appointment = self.Appointment.objects.create(
+            salon=self.salon, client=self.client_obj, operator=self.operator,
+            start=timezone.now() + timezone.timedelta(days=8),
+        )
+        AppointmentService.objects.create(
+            appointment=self.appointment, service=self.service, operator=self.operator,
+            duration_min=60, price=Decimal("100.00"),
+        )
+        self.assertEqual(self._checkout().status_code, 200)
+        second = OutboxEvent.objects.filter(event_type="visit.completed").exclude(pk=first.pk).get()
+        self.assertIs(second.payload["first_visit"], False)
+
     def test_paying_the_whole_bill_without_the_deposit_is_refused(self):
         self._deposit("30.00")
         response = self._checkout(paid="100.00")
