@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  allocateSettlement, centsToApi, couponDiscountCents, dueLeftCents, emptyPayments, giftLabel, giftPrefill,
+  allocateSettlement, centsToApi, couponDiscountCents, dueFlags, dueLeftCents, emptyPayments, giftLabel, giftPrefill,
   giftPrefillRows, isSessionCard, lineCents, paymentsError, resolvePayments, saleTotals, toCents,
 } from '../src/sections/pos/money.js';
 
@@ -241,4 +241,14 @@ test('pagamento diviso: la riga di una carta a sedute non si pareggia da sola', 
   assert.equal(canBalance({ rows }, 0, false), true, 'si è cambiata la carta: il contante si pareggia');
   assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, false), true);
   assert.equal(canBalance({ rows: [{ method: 'cash', amt: '10' }, { method: 'card', amt: '20' }] }, 0, true), false, 'con «Lascia da saldare» mai');
+});
+
+test('la parte non pagata adesso: resta da saldare oppure abbuono', () => {
+  const v = { ...emptyPayments(), leaveDue: true, payNow: '50' };
+  assert.equal(emptyPayments().writeOff, false);
+  assert.deepEqual(dueFlags(v, 250), { leave_due: true });
+  assert.deepEqual(dueFlags({ ...v, writeOff: true }, 250), { write_off: true });
+  // pagato tutto: nessuna bandierina, anche con l'abbuono acceso
+  assert.deepEqual(dueFlags({ ...v, writeOff: true }, 0), {});
+  assert.equal(dueLeftCents(v, toCents('52.50')), 250);
 });

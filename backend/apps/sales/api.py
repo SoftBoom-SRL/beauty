@@ -58,7 +58,8 @@ router = Router(tags=["sales"])
 def checkout(request, appointment_id: int, data: CheckoutIn):
     """Chiude il conto di una visita (e, con `extra_appointment_ids`, di altre visite
     della stessa cliente nello stesso giorno: conto unico). Con `leave_due` la
-    cliente può pagare meno del dovuto e il resto resta da saldare."""
+    cliente può pagare meno del dovuto e il resto resta da saldare; con
+    `write_off` la differenza è abbuonata e il conto si chiude."""
     ctx = request.auth
     require_scope(ctx, "sales")
     salon_get(Appointment, ctx, appointment_id)  # 404 fuori dal salone
@@ -98,6 +99,7 @@ def pos_sale(request, data: PosIn):
         coupon_code=payload["coupon_code"],
         actor=ctx.user,
         allow_due=payload["leave_due"],
+        write_off=payload["write_off"],
         receipt_issued=payload["receipt_issued"],
     )
     return serializers.sale_detail(sale)

@@ -57,3 +57,9 @@ test('conti da saldare: la parte lasciata aperta e i saldi di altri giorni fanno
   // un server senza le due voci: niente di nuovo
   assert.deepEqual(cashUpLines(summary({ deposit_used: '30.00', cash_in: '120.00' })).parts.map((p) => p.key), ['deposit_used']);
 });
+
+test('un abbuono di oggi (52,50 pagati 50) compare fra le voci dell’incassato', () => {
+  const r = cashUpLines(summary({ written_off: '2.50', cash_in: '147.50' }));
+  assert.equal(r.show, true);
+  assert.deepEqual(r.parts, [{ key: 'written_off', amount: 2.5 }]);
+});

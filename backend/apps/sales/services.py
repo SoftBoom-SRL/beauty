@@ -311,7 +311,9 @@ def _check_payments(payments: list[dict]) -> Decimal:
     return sum((Decimal(str(p.get("amount") or 0)) for p in payments), Decimal("0.00"))
 
 
-def _left_due(paid_total: Decimal, due_total: Decimal, *, client, allow_due: bool) -> Decimal:
+def _left_due(
+    paid_total: Decimal, due_total: Decimal, *, client, allow_due: bool, write_off: bool = False
+) -> Decimal:
     """Quanto del conto resta da saldare dopo i pagamenti di adesso (0.00 = saldato).
 
     Senza `allow_due` i pagamenti devono coincidere col dovuto (totale meno
@@ -319,16 +321,18 @@ def _left_due(paid_total: Decimal, due_total: Decimal, *, client, allow_due: boo
     40 di un conto da 100 e i 60 restano scritti sulla vendita (`amount_due`),
     da saldare un altro giorno. Più del dovuto resta un errore (il resto non è
     di nessuno), e un debito si lascia solo a una cliente con nome: su una
-    vendita anonima nessuno saprebbe a chi chiederlo.
+    vendita anonima nessuno saprebbe a chi chiederlo. Con `write_off` la
+    differenza non è un debito ma un abbuono (`Sale.written_off`): basta
+    pagare meno, la cliente non serve.
     """
     gap = due_total - paid_total
     if abs(gap) <= PAYMENT_TOLERANCE:
         return Decimal("0.00")
-    if not allow_due:
+    if not (allow_due or write_off):
         raise HttpError(422, "I pagamenti non corrispondono al totale")
     if gap < 0:
         raise HttpError(422, "I pagamenti superano il totale da pagare")
-    if client is None:
+    if client is None and not write_off:
         raise HttpError(422, "Per lasciare un conto da saldare scegli la cliente")
     return gap.quantize(CENT)
 
@@ -416,6 +420,7 @@ def finalize_sale(
     actor=None,
     allow_due: bool = False,
     receipt_issued: bool = True,
+    write_off: bool = False,
 ) -> Sale:
     """Core condiviso checkout/POS: valida, crea Sale/righe/pagamenti e integra le altre app.
 
@@ -428,6 +433,8 @@ def finalize_sale(
     allow_due = la cliente può pagare meno del dovuto: il resto va in `Sale.amount_due`
                 (vedi `_left_due`)
     receipt_issued = falso se l'incasso non ha scontrino fiscale (`Sale.receipt_issued`)
+    write_off = la cliente paga meno del dovuto e la differenza è abbuonata
+                (`Sale.written_off`): il conto si chiude senza niente da saldare
 
     Una riga «package» vende un pacchetto di listino: le sue sedute nascono qui,
     nella transazione della vendita (`marketing.credits.create_package_credits`),
@@ -459,7 +466,12 @@ def finalize_sale(
         deposit_deducted = total
 
     paid_total = _check_payments(payments)
-    amount_due = _left_due(paid_total, total - deposit_deducted, client=client, allow_due=allow_due)
+    amount_due = _left_due(
+        paid_total, total - deposit_deducted, client=client, allow_due=allow_due, write_off=write_off
+    )
+    written_off = Decimal("0.00")
+    if write_off:
+        written_off, amount_due = amount_due, Decimal("0.00")
 
     first_method = payments[0].get("method", "") if payments else ""
     gift_services = _gift_services(salon, prepared)
@@ -475,6 +487,7 @@ def finalize_sale(
             coupon_discount=discount,
             deposit_deducted=deposit_deducted,
             amount_due=amount_due,
+            written_off=written_off,
             receipt_issued=receipt_issued,
             created_by=actor,
         )
@@ -542,6 +555,8 @@ def finalize_sale(
         client_label = f" — {client.full_name}" if client else ""
         coupon_label = f" (coupon {coupon.code} −€ {discount})" if coupon is not None else ""
         due_label = f", da saldare € {amount_due}" if amount_due > 0 else ""
+        if written_off > 0:
+            due_label += f", abbuono € {written_off}"
         log_activity(
             salon,
             "sale.created",
@@ -555,6 +570,7 @@ def finalize_sale(
                 "coupon_discount": str(discount),
                 "deposit_deducted": str(deposit_deducted),
                 "amount_due": str(amount_due),
+                "written_off": str(written_off),
                 "receipt_issued": receipt_issued,
                 "client_id": client.id if client else None,
                 "appointment_id": appointment.id if appointment else None,

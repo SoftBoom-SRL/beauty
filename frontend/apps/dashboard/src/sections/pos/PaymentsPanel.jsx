@@ -7,7 +7,9 @@
 // pagamento unico si scrive quanto paga, con quello diviso le righe possono
 // sommare meno del dovuto, e il resto resta da saldare. `dueToggleLabel` è la
 // scritta dell'interruttore («Lascia da saldare» in cassa, «Paga solo una
-// parte» nel saldo di un conto).
+// parte» nel saldo di un conto). `allowWriteOff`: con «Lascia da saldare» la
+// differenza si può abbuonare invece di lasciarla da saldare (`writeOff`):
+// arrotondamento o omaggio, il conto si chiude e non conta come incasso.
 // `cards`: le carte a importo della cliente (useClientCredit). Un clic paga con
 // la carta; se il saldo non basta, la carta paga il suo saldo e il resto va in
 // contanti (pagamento diviso).
@@ -15,12 +17,13 @@ import { Icon } from '@youty/shared';
 import { PAYMENT_TOLERANCE_CENTS, canBalance, centsToEur, divHalfUp, dueLeftCents, paymentsMatch, toCents } from './money.js';
 import { money, payMethods, sanitizeAmtInput } from './lib.js';
 
-export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, dueToggleLabel, cards = [] }) {
+export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, compact = false, allowDue = false, allowWriteOff = false, dueToggleLabel, cards = [] }) {
   const methods = payMethods(t);
   const set = (patch) => onChange({ ...v, ...patch });
   const setRow = (i, patch) => set({ rows: v.rows.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
   const removeRow = (i) => set({ rows: v.rows.filter((_, j) => j !== i) });
   const leaveDue = allowDue && !!v.leaveDue;
+  const writeOff = leaveDue && allowWriteOff && !!v.writeOff;
 
   const rowsSum = v.rows.reduce((s, r) => s + toCents(r.amt), 0);
   const ok = paymentsMatch(rowsSum, dueCents);
@@ -106,13 +109,24 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
   );
 
   // «Resta da saldare»: quanto la cliente lascia sul conto con questi pagamenti.
+  // Con l'abbuono la stessa cifra non resta da saldare: si lascia perdere.
+  const noteColor = over ? 'var(--danger)' : writeOff ? 'var(--ok)' : 'var(--warn)';
   const dueNote = leaveDue && (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, marginTop: 10, background: over ? 'var(--danger-tint)' : 'var(--warn-tint)' }}>
-      <span className="t-sm" style={{ fontWeight: 700, color: over ? 'var(--danger)' : 'var(--warn)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-        <Icon name={over ? 'alert' : 'clock'} size={14} color={over ? 'var(--danger)' : 'var(--warn)'} />
-        {over ? t('Più del dovuto', 'More than due') : t('Resta da saldare', 'Left to pay')}
-      </span>
-      <span className="t-num" style={{ fontWeight: 700, color: over ? 'var(--danger)' : 'var(--warn)' }}>{money(centsToEur(over ? 0 : leftCents), lang)}</span>
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 10, background: over ? 'var(--danger-tint)' : writeOff ? 'var(--ok-tint)' : 'var(--warn-tint)' }}>
+        <span className="t-sm" style={{ fontWeight: 700, color: noteColor, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name={over ? 'alert' : writeOff ? 'gift' : 'clock'} size={14} color={noteColor} />
+          {over ? t('Più del dovuto', 'More than due') : writeOff ? t('Abbuono (non incassato)', 'Written off (not cashed)') : t('Resta da saldare', 'Left to pay')}
+        </span>
+        <span className="t-num" style={{ fontWeight: 700, color: noteColor }}>{money(centsToEur(over ? 0 : leftCents), lang)}</span>
+      </div>
+      {allowWriteOff && (
+        <button type="button" onClick={() => set({ writeOff: !v.writeOff })} aria-pressed={writeOff}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 6, cursor: 'pointer', background: 'transparent', border: 'none', padding: 0, fontSize: 12.5, fontWeight: 700, color: writeOff ? 'var(--ok)' : 'var(--muted)' }}>
+          <Icon name={writeOff ? 'check' : 'plus'} size={13} color={writeOff ? 'var(--ok)' : 'var(--muted)'} />
+          {t('Azzera il residuo (arrotondamento / omaggio)', 'Write off the rest (rounding / gift)')}
+        </button>
+      )}
     </div>
   );
 
@@ -121,7 +135,7 @@ export default function PaymentsPanel({ value: v, onChange, dueCents, t, lang, c
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 12 }}>
         <div className="t-meta" style={{ flex: 1 }}>{t('Metodo di pagamento', 'Payment method')}</div>
         {allowDue && (
-          <button onClick={() => set({ leaveDue: !v.leaveDue, payNow: '' })} aria-pressed={leaveDue}
+          <button onClick={() => set({ leaveDue: !v.leaveDue, payNow: '', writeOff: false })} aria-pressed={leaveDue}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 12.5, fontWeight: 700, color: leaveDue ? 'var(--warn)' : 'var(--muted)' }}>
             <Icon name={leaveDue ? 'check' : 'clock'} size={13} color={leaveDue ? 'var(--warn)' : 'var(--muted)'} />
             {dueToggleLabel || t('Lascia da saldare', 'Leave to pay later')}

@@ -69,6 +69,7 @@ function DailyCashUp({ t, lang, summary, onOpenLog }) {
     deposit_used: t('caparre detratte', 'deposits deducted'),
     deposit_refunded: t('caparre rimborsate', 'deposits refunded'),
     due_left: t('da saldare', 'left to pay'),
+    written_off: t('abbuoni', 'written off'),
     settled: t('saldi incassati', 'balances collected'),
   };
   return (
