@@ -86,7 +86,6 @@ class VoiceInstallTests(VoiceTestBase):
         super().setUp()
         self.conn = _connection(
             self.salon, "org-voce", status=YourangConnection.Status.CONNECTED,
-            scope="openid contacts:write agents:read agents:write",
         )
         self.owner = self.staff_auth(email="titolare@voce.it", owner=True)
 
@@ -152,7 +151,6 @@ class VoiceInstallTests(VoiceTestBase):
         """Gli scope stanno nel portals.yaml del proxy, non sulla connessione:
         il cassetto non chiede più di ricollegare a priori, e un 403 del proxy
         (rotta o scope non concessi al portale) diventa il messaggio RECONNECT."""
-        YourangConnection.objects.filter(pk=self.conn.pk).update(scope="")
         self.assertFalse(self.client.get("/api/integrations/voice/assistant", **self.owner).json()["needs_reconnect"])
 
         def forbidden(method, path, **kwargs):

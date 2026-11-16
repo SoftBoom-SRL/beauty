@@ -68,7 +68,7 @@ def start_flow(salon=None, user=None) -> dict:
     ).delete()
     # PKCE vive nel proxy: il verifier qui resta vuoto (la colonna serve al
     # flusso diretto, se si torna indietro).
-    YourangOAuthState.objects.create(state=state, code_verifier="", salon=salon, user=user)
+    YourangOAuthState.objects.create(state=state, salon=salon, user=user)
     return {"authorize_url": yc.proxy_login_url(_return_to(state)), "nonce": window_nonce(state)}
 
 

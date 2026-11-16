@@ -30,7 +30,6 @@ class StatusOut(Schema):
     status: str = "disconnected"
     connected_at: Optional[datetime] = None
     last_sync_at: Optional[datetime] = None
-    scope: str = ""
     yourang_org_id: str = ""
     # Ultimo errore di sincronizzazione ("" se nessuno): la riga diceva
     # «Connesso · sincronizzati» anche con la sync ferma o parziale.

@@ -10,10 +10,6 @@ class YourangConnectionAdmin(ModelAdmin):
     list_filter = ("status",)
     search_fields = ("salon__name", "yourang_org_id")
     readonly_fields = (
-        "access_token_enc",
-        "refresh_token_enc",
-        "webhook_secret_enc",
-        "expires_at",
         "connected_at",
         "updated_at",
     )

@@ -262,11 +262,10 @@ può essere necessaria a seconda di dove sta il proxy.
 | `DEFAULT_FROM_EMAIL` | `youty <no-reply@MAILGUN_DOMAIN>` | Il mittente. Deve stare sul dominio di invio, altrimenti le mail finiscono nello spam o vengono rifiutate. Chi invita è nel *Rispondi a*. |
 | `EMAIL_HOST`, `EMAIL_PORT` (`587`), `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`/`EMAIL_USE_SSL` | vuote | In alternativa a Mailgun, un server SMTP qualunque (anche quello SMTP di Mailgun, `smtp.mailgun.org` o `smtp.eu.mailgun.org`). Si usano solo se `MAILGUN_API_KEY`/`MAILGUN_DOMAIN` mancano. `465` accende da solo SSL. |
 
-> **Se stai aggiornando un deploy del flusso diretto**, aggiungi le
-> `YOURANG_PROXY_*` e **lascia** `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`,
-> `YOURANG_CLIENT_ID` e `YOURANG_CLIENT_SECRET`: il backend non le legge più, ma
-> servono all'immagine di prima se si torna indietro. Si tolgono con la PR che
-> toglie le colonne dei token (dopo che ogni salone è passato dal proxy).
+> `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID` e
+> `YOURANG_CLIENT_SECRET` appartengono al flusso diretto: il backend non le legge
+> più e, dopo `integrations.0008`, non esistono più nemmeno le colonne dei token
+> che servivano. Si tolgono da Coolify (§9.6).
 
 `entrypoint.sh` esegue `migrate` e `collectstatic` a ogni avvio, e crea il superuser
 al primo (poi lo salta). Dopo il primo deploy **rimuovi `DJANGO_SUPERUSER_PASSWORD`**
@@ -542,11 +541,9 @@ spiegazione nel §3, riquadro sotto *Storage persistente*.
 
 ### 9.3 Variabili da togliere e da controllare
 
-Aggiungi le `YOURANG_PROXY_*` (senza, «Collega Yourang» e il login con Yourang
-rispondono 503) e controlla che ci sia `YOURANG_WEBHOOK_RECEIVER_URL`. **Lascia**
-`ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`, `YOURANG_CLIENT_ID` e
-`YOURANG_CLIENT_SECRET`: il backend non le legge più, ma servono all'immagine di
-prima se si torna indietro (§3, variabili di Yourang). Controlla poi che `SECRET_KEY` sia lunga almeno 32 caratteri e che
+Controlla che ci siano le `YOURANG_PROXY_*` e `YOURANG_WEBHOOK_RECEIVER_URL`
+(§3, variabili di Yourang); `ENCRYPTION_KEY` e `YOURANG_ISSUER_URL`/`CLIENT_*`
+non servono più (§9.6). Controlla poi che `SECRET_KEY` sia lunga almeno 32 caratteri e che
 `ALLOWED_HOSTS` non contenga `*`, altrimenti il primo avvio con il codice nuovo
 si ferma prima di gunicorn: è il comportamento voluto descritto nel §3.
 
@@ -627,6 +624,23 @@ Dopo il deploy:
   al momento, ma i filtri dell'elenco clienti leggono il valore scritto a mano.
 - Programma lo stesso comando ogni notte (vedi *Job schedulati*).
 
+
+### 9.6 Via i token locali di Yourang (contract di YR-502)
+
+`integrations.0008` toglie le colonne del flusso diretto: `access_token_enc`,
+`refresh_token_enc`, `expires_at`, `scope` e `webhook_secret_enc` dalla
+connessione, `code_verifier` dallo state del popup. È **distruttiva**: i token
+cifrati non si recuperano, e da qui l'immagine del flusso diretto non riparte più.
+Va in produzione solo quando sono vere tutte e tre:
+
+1. #56 è in produzione e i webhook di Yourang puntano al proxy
+   (`set_oauth_client_webhook.py --retarget-existing`, runbook del proxy).
+2. Ogni salone è rientrato dal proxy: `SCARD proxy:grants:beauty` su
+   `redis-proxy` è pari al numero di saloni collegati.
+3. Il client secret di `beauty-crm` è stato ruotato (runbook del proxy, passo 6).
+
+Dopo il deploy togli da Coolify `ENCRYPTION_KEY`, `YOURANG_ISSUER_URL`,
+`YOURANG_CLIENT_ID` e `YOURANG_CLIENT_SECRET`: nessuno le legge più.
 ## Deploy automatico
 
 Ogni push su `main` fa partire il deploy dei tre servizi (`beauty-api`,
