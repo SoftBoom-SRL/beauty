@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  apptItemLine, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
+  apptItemLine, canDiscountLine, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
   checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine,
   giftLineName, needsClient, packageSummary, prepaidValue, toApiLine, visitItemLine,
 } from '../src/sections/pos/lines.js';
@@ -135,4 +135,14 @@ test('conto unico: le righe di un’altra visita sanno da che visita vengono', (
   assert.equal(line.list_price, 35);
   assert.equal(line.extra, false);
   assert.equal(line.operator_id, 7);
+});
+
+test('check-out: lo sconto si dà anche al singolo servizio, non a gift card e omaggi', () => {
+  const svc = apptItemLine(item, 0);
+  assert.equal(canDiscountLine(svc), true);
+  assert.equal(canDiscountLine(checkoutProductLine('pl1', 7, shampoo)), true);
+  assert.equal(canDiscountLine({ ...svc, is_gift: true }), false);
+  assert.equal(canDiscountLine(checkoutGiftLine('gl1', 7, 50, '', 'it')), false);
+  // il 20% sul servizio parte con la riga
+  assert.equal(toApiLine({ ...svc, discount_pct: 20 }, checkoutDiscountPct({ ...svc, discount_pct: 20 })).discount_pct, 20);
 });

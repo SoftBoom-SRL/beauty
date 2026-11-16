@@ -49,6 +49,12 @@ export const checkoutPrepaidLine = (key, opId, service, sessions, value, lang) =
   name: prepaidLineName(service, sessions, lang), value, recipient_name: '',
   qty: 1, discount_pct: 0, is_gift: false, extra: true,
 });
+/** Vero se la riga del check-out si può scontare: servizi, prodotti e
+ *  pacchetti. Lo sconto si poteva dare solo a prodotti e pacchetti, e un
+ *  servizio si scontava solo col buono sul totale: con due servizi nel conto
+ *  non si poteva fare il 20% su uno solo (Beauty Boutique, 11/2026). Le gift
+ *  card no (il server lo rifiuta: si cambia il valore), gli omaggi neppure. */
+export const canDiscountLine = (l) => l.line_type !== 'gift_card' && !l.is_gift;
 /** Sconto che parte per una riga del check-out: niente sugli omaggi. */
 export const checkoutDiscountPct = (l) => (l.is_gift ? 0 : (l.discount_pct || 0));
 
