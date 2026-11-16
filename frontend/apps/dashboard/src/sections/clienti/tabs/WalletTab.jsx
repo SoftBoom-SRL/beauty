@@ -18,6 +18,7 @@ import { creditIcon, creditKind, creditOrigin, giverName, ownsCredit, sessionsLa
 import { effectiveStatus } from '../../fedelta/meta.js';
 import { payMethods } from '../../pos/lib.js';
 import ReceiptToggle from '../../pos/ReceiptToggle.jsx';
+import CardMovements from './CardMovements.jsx';
 
 /** Carta a importo intestata alla cliente stessa: il suo credito prepagato («carta VIP»). */
 const isCredit = (g) => g.kind === 'prepaid' && g.gift_service_id == null;
@@ -183,6 +184,8 @@ export default function WalletTab({ c }) {
   const viewTreatment = !!giftView && giftView.gift_service_id != null;
   const canTopUp = (g) => hasScope('sales') && g.gift_service_id == null && g.payment_status === 'paid'
     && effectiveStatus(g) !== 'expired' && ownsCredit(g, c.id);
+  // Modifica manuale del saldo: come la ricarica (cassa, carta a importo sua), ma senza incasso.
+  const canAdjust = (g) => canTopUp(g) && g.status !== 'cancelled';
   const doTopUp = async (g) => {
     const amount = Number(String(topUp.amt).replace(',', '.'));
     if (!(amount > 0)) { fireToast({ msg: t('Indica quanto ricaricare', 'Enter the top-up amount'), icon: 'alert' }); return; }
@@ -426,6 +429,10 @@ export default function WalletTab({ c }) {
                 </button>
               </div>
             </div>
+          )}
+          {giftView.gift_service_id == null && (
+            <CardMovements card={giftView} canAdjust={canAdjust(giftView)} t={t} lang={lang} fireToast={fireToast}
+              onAdjusted={(card) => { setGiftView(card); retry(); }} />
           )}
         </DkModal>
       )}

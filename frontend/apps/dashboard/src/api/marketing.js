@@ -18,6 +18,9 @@ export const giftCardsApi = {
   topUp: (id, body) => api.post(`/api/marketing/gift-cards/${id}/top-up`, body),
   // carta creata per errore: resta nello storico, saldo a zero, non più spendibile
   cancel: (id, body) => api.post(`/api/marketing/gift-cards/${id}/cancel`, body),
+  // saldo cambiato a mano, senza incasso: { amount (+/−) | new_balance, note }
+  adjust: (id, body) => api.post(`/api/marketing/gift-cards/${id}/adjust`, body),
+  movements: (id) => api.get(`/api/marketing/gift-cards/${id}/movements`),
 };
 
 export const loyaltyApi = {

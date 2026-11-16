@@ -20,11 +20,11 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from apps.core.services import log_activity
-from apps.sales.models import Payment
+from apps.sales.models import Payment, SaleLine
 from common.money import MAX_MONEY
 
 from .codes import GIFT_CARD_CODE_LENGTH, mark_expired_if_past, not_expired_q, unique_code
-from .models import GiftCard
+from .models import GiftCard, GiftCardAdjustment
 
 # Metodo di pagamento delle carte che il programma fedeltà regala come premio:
 # nascono «pagate» ma nessuno le ha pagate. Non sono ricavi (KPI «Venduto») e
@@ -557,3 +557,94 @@ def cancel_gift_card(salon, card, *, reason: str = "", actor=None) -> GiftCard:
             },
         )
     return card
+
+
+def adjust_gift_card(salon, card, *, note: str, delta=None, new_balance=None, actor=None) -> GiftCard:
+    """Modifica manuale del saldo di una carta a importo, senza incasso.
+
+    `delta` (+/−) o `new_balance` (il saldo nuovo), uno dei due; `note` è il
+    motivo, obbligatorio: resta nello storico della carta (`GiftCardAdjustment`)
+    e nel registro attività. Nessuna vendita, nessun pagamento: la cassa non
+    cambia. Anche il valore iniziale si sposta di `delta`, così «speso»
+    (iniziale − saldo) resta quello che la cliente ha davvero speso. Solo carte
+    a importo pagate, non annullate né scadute; a saldo zero la carta è esaurita.
+    """
+    note = (note or "").strip()
+    if not note:
+        raise HttpError(422, "Scrivi il motivo della modifica del saldo")
+    if (delta is None) == (new_balance is None):
+        raise HttpError(422, "Indica di quanto cambia il saldo oppure il saldo nuovo")
+    if card.gift_service_id:
+        raise HttpError(422, "Si modifica il saldo solo delle carte a importo")
+    if mark_expired_if_past(card):
+        raise HttpError(422, "Gift card scaduta: il saldo non si può modificare")
+    with transaction.atomic():
+        card = GiftCard.objects.select_for_update().get(pk=card.pk)
+        if card.payment_status != GiftCard.PaymentStatus.PAID:
+            raise HttpError(422, "Gift card non ancora pagata: incassala prima di modificarne il saldo")
+        if card.status not in (GiftCard.Status.ACTIVE, GiftCard.Status.REDEEMED):
+            raise HttpError(422, "Gift card non attiva")
+        if new_balance is not None:
+            delta = Decimal(str(new_balance)) - card.balance
+        delta = Decimal(str(delta)).quantize(Decimal("0.01"))
+        if delta == 0:
+            raise HttpError(422, "Il saldo è già questo")
+        balance = card.balance + delta
+        if balance < 0:
+            raise HttpError(422, f"Il saldo non può scendere sotto zero (oggi è € {card.balance})")
+        if balance > MAX_MONEY or card.initial_value + delta > MAX_MONEY:
+            raise HttpError(422, "Saldo fuori scala")
+        card.balance = balance
+        card.initial_value = max(card.initial_value + delta, balance)
+        card.status = GiftCard.Status.ACTIVE if balance > 0 else GiftCard.Status.REDEEMED
+        card.sessions_left = 1 if balance > 0 else 0
+        card.save(update_fields=["balance", "initial_value", "status", "sessions_left"])
+        GiftCardAdjustment.objects.create(
+            salon=salon, gift_card=card, delta=delta, balance_after=balance, note=note[:255],
+            created_by=actor,
+        )
+        log_activity(
+            salon,
+            "giftcard.adjusted",
+            f"Saldo gift card {card.code} modificato: {'+' if delta > 0 else '−'}€{abs(delta)}, "
+            f"saldo €{balance} ({note[:120]})",
+            actor=actor,
+            payload={"gift_card_id": card.id, "delta": str(delta), "balance": str(balance), "note": note[:255]},
+        )
+    return card
+
+
+def gift_card_movements(card) -> list[dict]:
+    """Lo storico della carta, dal più vecchio: carichi, utilizzi, modifiche, annullamento.
+
+    - `load`: la carta venduta o ricaricata in cassa (le righe di vendita della
+      carta); se non ne ha (importata, premio fedeltà, creata a mano) la sua
+      emissione è `issued`, col valore di partenza.
+    - `use`: i pagamenti fatti con la carta (negativi).
+    - `adjust`: le modifiche manuali, col motivo.
+    - `cancel`: l'annullamento, col motivo.
+    `amount` è il movimento sul saldo (positivo = credito in più).
+    """
+    rows = []
+    loads = list(
+        SaleLine.objects.filter(gift_card=card).select_related("sale").order_by("sale__created_at", "id")
+    )
+    for line in loads:
+        rows.append({"at": line.sale.created_at, "kind": "load", "amount": line.amount,
+                     "note": "", "sale_id": line.sale_id})
+    adjustments = list(card.adjustments.select_related("created_by"))
+    if not loads:
+        issued = card.initial_value - sum((a.delta for a in adjustments), Decimal("0.00"))
+        rows.append({"at": card.created_at, "kind": "issued", "amount": issued, "note": "", "sale_id": None})
+    for payment in Payment.objects.filter(gift_card=card).order_by("created_at", "id"):
+        rows.append({"at": payment.created_at, "kind": "use", "amount": -payment.amount,
+                     "note": "", "sale_id": payment.sale_id})
+    for adj in adjustments:
+        who = adj.created_by.get_full_name() if adj.created_by else ""
+        rows.append({"at": adj.created_at, "kind": "adjust", "amount": adj.delta,
+                     "note": adj.note, "sale_id": None, "by": who or ""})
+    if card.status == GiftCard.Status.CANCELLED and card.cancelled_at:
+        rows.append({"at": card.cancelled_at, "kind": "cancel", "amount": None,
+                     "note": card.cancel_reason, "sale_id": None})
+    rows.sort(key=lambda r: r["at"])
+    return rows

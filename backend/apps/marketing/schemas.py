@@ -172,6 +172,27 @@ class CancelGiftCardIn(Schema):
     reason: str = Field("", max_length=255)
 
 
+class GiftCardAdjustIn(Schema):
+    """Modifica manuale del saldo, senza incasso: `amount` (+/−) oppure `new_balance`, e il motivo."""
+
+    amount: Optional[Decimal] = None
+    new_balance: Optional[Decimal] = Field(None, ge=0)
+    note: str = Field(..., max_length=255)
+
+
+class GiftCardMovementOut(Schema):
+    """Un movimento della carta: `issued` (emissione senza vendita), `load` (venduta o
+    ricaricata in cassa), `use` (pagamento con la carta), `adjust` (modifica manuale,
+    con `note` e `by`), `cancel` (annullamento). `amount` è la variazione del saldo."""
+
+    at: datetime
+    kind: str
+    amount: Optional[Decimal] = None
+    note: str = ""
+    by: str = ""
+    sale_id: Optional[int] = None
+
+
 class TopUpIn(Schema):
     """Ricarica di una carta a importo: quanto si carica e come lo paga la cliente."""
 

@@ -1,5 +1,6 @@
 from decimal import ROUND_DOWN, Decimal
 
+from django.conf import settings
 from django.db import models
 
 
@@ -160,6 +161,33 @@ class GiftCard(models.Model):
         if left <= 1:
             return self.balance
         return (Decimal(self.balance) / left).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+
+
+class GiftCardAdjustment(models.Model):
+    """Modifica manuale del saldo di una carta, con il motivo (vedi adjust_gift_card).
+
+    Il saldo della «carta VIP» non si poteva correggere: un errore di carico o
+    un credito concordato con la cliente si sistemava solo con una ricarica,
+    che però entra in cassa come incasso (Beauty Boutique, 11/2026). Qui il
+    saldo cambia senza denaro, e la riga resta nello storico della carta.
+    """
+
+    salon = models.ForeignKey("core.Salon", on_delete=models.CASCADE, related_name="+")
+    gift_card = models.ForeignKey(GiftCard, on_delete=models.CASCADE, related_name="adjustments")
+    # Di quanto è cambiato il saldo: positivo = credito aggiunto, negativo = tolto.
+    delta = models.DecimalField(max_digits=10, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=10, decimal_places=2)
+    note = models.CharField(max_length=255)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"{self.gift_card_id} {self.delta:+} → {self.balance_after}"
 
 
 class LoyaltyProgram(models.Model):

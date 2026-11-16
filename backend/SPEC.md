@@ -681,6 +681,13 @@ Moduli: `codes.py` (codici e mascheramento), `coupons.py`, `gift_cards.py`, `cre
   `gift_service` valore = prezzo × sedute; prepaid = acquirente e destinataria la stessa
   cliente). `has_remaining_q()`: carte con saldo o con sedute di un trattamento ancora da
   fare — la regola di agenda (`spendable_gift_cards`), caparra e portafoglio.
+- `gift_cards.adjust_gift_card(salon, card, *, note, delta=None, new_balance=None, actor=None)`:
+  modifica manuale del saldo di una carta a importo pagata e attiva/esaurita, senza
+  vendita né pagamento; `note` obbligatoria; saldo mai sotto zero; anche
+  `initial_value` si sposta di `delta`. Riga `GiftCardAdjustment` + log `giftcard.adjusted`.
+  Endpoint POST `/gift-cards/{id}/adjust` {amount? (+/−) | new_balance?, note} (scope sales)
+  e GET `/gift-cards/{id}/movements` → [{at, kind issued|load|use|adjust|cancel, amount,
+  note, by, sale_id}] dal più vecchio (`gift_cards.gift_card_movements`).
 - `credits.create_package_credits(salon, *, package, client, amount, sale=None, line=None,
   paid_method="", actor=None, expires_at=None)`: una carta kind=package per servizio del
   pacchetto (sedute = qty), importo diviso in proporzione al listino, scadenza
