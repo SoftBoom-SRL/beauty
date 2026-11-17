@@ -806,7 +806,7 @@ helper `periods.period_range(period, date)` → (start, end).
   avg_frequency (appuntamenti closed / clienti distinti),
   clients_by_category [{category, count}] }.
   Ogni KPI fallito per dati mancanti → 0, mai errore.
-- GET `/revenue-series?period=&granularity=day|week|month` → [{date, revenue}].
+- GET `/revenue-series?period=&granularity=day|week|month` → [{date, revenue, sales_count}] (sales_count = passaggi in cassa, senza le caparre).
 - GET `/revenue-by-category?period=` → [{category (ServiceCategory name_it), revenue}]
   (righe service via service.category; righe product → "Prodotti").
 - GET `/occupancy-by-weekday?period=` → [{weekday 0-6, occupancy_pct}].

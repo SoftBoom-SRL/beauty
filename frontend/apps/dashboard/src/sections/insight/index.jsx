@@ -157,6 +157,15 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
       year: t('Andamento · per mese', 'Trend · by month'),
     }[period];
 
+  const salesTitle = isCustom
+    ? t('Passaggi cassa · intervallo scelto', 'Checkouts · selected range')
+    : {
+      month: t('Passaggi cassa · giorno per giorno', 'Checkouts · day by day'),
+      quarter: t('Passaggi cassa · per settimana', 'Checkouts · by week'),
+      year: t('Passaggi cassa · per mese', 'Checkouts · by month'),
+    }[period];
+  const totalSales = series.reduce((sum, p) => sum + Number(p.sales_count || 0), 0);
+
   return (
     <div className="dk-page" style={{ maxWidth: 1240 }}>
       {/* period selector */}
@@ -234,6 +243,15 @@ function InsightOwner({ t, lang, clientCategories, fireToast, setDrawer }) {
                   )}
                 </div>
                 <BarTrend points={series} granularity={granularity} lang={lang} t={t} />
+              </div>
+
+              {/* Passaggi in cassa (scontrini chiusi, senza le caparre) per giorno/settimana/mese */}
+              <div className="dk-card" style={{ padding: 22 }}>
+                <div style={{ marginBottom: 16 }}>
+                  <div className="t-meta" style={{ whiteSpace: 'nowrap' }}>{salesTitle}</div>
+                  <div className="t-num" style={{ fontSize: 28, marginTop: 6 }}>{totalSales}</div>
+                </div>
+                <BarTrend points={series} granularity={granularity} lang={lang} t={t} valueKey="sales_count" format={(v) => String(v)} />
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>

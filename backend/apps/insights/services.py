@@ -213,11 +213,18 @@ def revenue_series(
         )
         .annotate(bucket=trunc("created_at", output_field=DateField()))
         .values("bucket")
-        .annotate(revenue=Sum("total"))
+        # `sales_count`: i passaggi in cassa del giorno (scontrini), sulla
+        # stessa base di `sales_count` dei KPI. Il salone li voleva giorno per
+        # giorno e i KPI davano solo il totale del periodo (Beauty Boutique, 11/2026).
+        .annotate(revenue=Sum("total"), sales_count=Count("id"))
     )
-    by_bucket = {row["bucket"]: row["revenue"] or ZERO for row in rows}
+    by_bucket = {row["bucket"]: row for row in rows}
     buckets = _buckets(dates_in_range(start, end), granularity)
-    return [{"date": b, "revenue": by_bucket.get(b, ZERO)} for b in buckets]
+    points = []
+    for b in buckets:
+        row = by_bucket.get(b, {})
+        points.append({"date": b, "revenue": row.get("revenue") or ZERO, "sales_count": row.get("sales_count", 0)})
+    return points
 
 
 def revenue_by_category(salon, period: str, date: date_cls | None = None, date_from: date_cls | None = None, date_to: date_cls | None = None) -> list[dict]:

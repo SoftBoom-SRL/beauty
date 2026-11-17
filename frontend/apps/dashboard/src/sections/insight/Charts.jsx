@@ -19,22 +19,25 @@ function shortLabel(dateStr, granularity, lang) {
 }
 
 /** Revenue trend bars — one bar per point in `points` ({date, revenue}). Ports
- * BarTrend() from the prototype; labels thin out when there are many points. */
-export function BarTrend({ points, granularity, lang, t }) {
+ * BarTrend() from the prototype; labels thin out when there are many points.
+ * `valueKey` / `format` scelgono il dato della barra: di serie il venduto in €,
+ * per i passaggi in cassa `sales_count` contato a numero intero. */
+export function BarTrend({ points, granularity, lang, t, valueKey = 'revenue', format }) {
+  const fmt = format || ((v) => fmtEur(v, lang));
   if (!points || !points.length) {
     return <div className="t-sm" style={{ color: 'var(--muted-2)', textAlign: 'center', padding: '30px 0' }}>{t('Nessun dato nel periodo', 'No data in this period')}</div>;
   }
-  const vals = points.map((p) => Number(p.revenue));
+  const vals = points.map((p) => Number(p[valueKey] || 0));
   const max = Math.max(1, ...vals);
   const labelEvery = Math.max(1, Math.ceil(points.length / 10));
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: points.length > 20 ? 3 : 8, height: 150 }}>
       {points.map((p, i) => {
-        const v = Number(p.revenue);
+        const v = Number(p[valueKey] || 0);
         const isLast = i === points.length - 1;
         const showLabel = isLast || i % labelEvery === 0;
         return (
-          <div key={p.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
+          <div key={p.date} title={`${shortLabel(p.date, granularity, lang)} · ${fmt(v)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, height: '100%', justifyContent: 'flex-end' }}>
             <div style={{
               width: '100%', maxWidth: 40, height: (v / max) * 100 + '%', minHeight: v > 0 ? 3 : 0,
               borderRadius: '7px 7px 0 0', background: isLast ? 'var(--clay)' : 'var(--paper-2)',
@@ -42,7 +45,7 @@ export function BarTrend({ points, granularity, lang, t }) {
             }}>
               {isLast && v > 0 && (
                 <span className="t-num" style={{ position: 'absolute', top: -22, left: '50%', transform: 'translateX(-50%)', fontSize: 12, color: 'var(--clay-ink)', whiteSpace: 'nowrap' }}>
-                  {fmtEur(v, lang)}
+                  {fmt(v)}
                 </span>
               )}
             </div>
