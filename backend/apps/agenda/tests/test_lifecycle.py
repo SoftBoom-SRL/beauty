@@ -17,7 +17,15 @@ from apps.core.models import ActivityLog, OutboxEvent, Salon
 from ..models import Appointment, AppointmentService, UndoEntry
 from ..services.appointments import create_appointment
 from ..services.locking import _lock_and_reload, lock_salon
-from ..services.transitions import cancel_appointment, check_in, mark_no_show, start_appointment
+from ..services.transitions import (
+    cancel_appointment,
+    check_in,
+    mark_no_show,
+    remove_from_agenda,
+    start_appointment,
+)
+from common.testing import bearer, post_json
+
 from .base import AgendaTestBase, RealShiftsTestBase, _aware
 
 
@@ -447,3 +455,90 @@ class CheckInAndStartTogetherTests(_StaffMixin, AgendaTestBase):
         resp = post_json(self.client, f"/api/agenda/appointments/{empty.id}/check-in", {}, **auth)
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(resp.json()["status"], "checked_in")
+
+
+class RemoveFromAgendaTests(AgendaTestBase):
+    """Visita già incassata (contanti, scontrino non emesso) tolta dall'agenda.
+
+    Prima non si poteva: un conto chiuso non ha «Cancella», e la visita restava
+    sulla griglia. Il salone vuole che sparisca dall'agenda ma che l'incasso
+    resti in cassa e nello storico della cliente (risposta A, 17/11).
+    """
+
+    def setUp(self):
+        from apps.accounts.models import Membership, Role, User
+
+        user = User.objects.create_user(email="banco@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Banco di prova", scopes=["agenda"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        self.auth = bearer(user, self.salon)
+        self.hours = {self.op1.id: [(9 * 60, 18 * 60)]}
+
+    def _book(self, hour=10):
+        with self._windows(self.hours):
+            return create_appointment(
+                self.salon, self.client_obj, [{"service_id": self.svc60.id, "operator_id": self.op1.id}],
+                _aware(self.day, hour), via="dashboard",
+            )
+
+    def _day_ids(self):
+        with self._windows(self.hours):
+            res = self.client.get("/api/agenda/day", {"date": self.day.isoformat()}, **self.auth)
+        self.assertEqual(res.status_code, 200, res.content)
+        return {a["id"] for row in res.json() for a in row["appointments"]}
+
+    def test_paid_visit_leaves_the_agenda_but_stays_closed_and_frees_the_slot(self):
+        from apps.sales.models import Sale
+
+        paid = self._book()
+        Appointment.objects.filter(pk=paid.pk).update(status=Appointment.Status.CLOSED)
+        sale = Sale.objects.create(
+            salon=self.salon, kind=Sale.Kind.CHECKOUT, appointment=paid, client=self.client_obj,
+            total=Decimal("50.00"),
+        )
+        self.assertIn(paid.id, self._day_ids())
+        events_before = OutboxEvent.objects.count()
+
+        res = post_json(
+            self.client, f"/api/agenda/appointments/{paid.id}/remove-from-agenda",
+            {"reason": "contanti senza scontrino"}, **self.auth,
+        )
+
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertIsNotNone(res.json()["removed_from_agenda_at"])
+        paid.refresh_from_db()
+        # resta chiusa: l'incasso non si tocca e la visita resta nello storico
+        self.assertEqual(paid.status, Appointment.Status.CLOSED)
+        self.assertTrue(Sale.objects.filter(pk=sale.pk, appointment=paid).exists())
+        self.assertNotIn(paid.id, self._day_ids())
+        # nessun messaggio alla cliente
+        self.assertEqual(OutboxEvent.objects.count(), events_before)
+        self.assertTrue(
+            ActivityLog.objects.filter(type="appointment.removed_from_agenda", payload__appointment_id=paid.id).exists()
+        )
+        # lo slot è di nuovo libero: si prenota lì senza forzare
+        self.assertIsNotNone(self._book())
+
+    def test_a_visit_not_yet_paid_is_cancelled_not_removed(self):
+        open_visit = self._book()
+        with self.assertRaises(HttpError) as err:
+            remove_from_agenda(open_visit)
+        self.assertEqual(err.exception.status_code, 400)
+        open_visit.refresh_from_db()
+        self.assertIsNone(open_visit.removed_from_agenda_at)
+        self.assertIn(open_visit.id, self._day_ids())
+
+    def test_removing_needs_the_agenda_permission(self):
+        from apps.accounts.models import Membership, Role, User
+
+        paid = self._book()
+        Appointment.objects.filter(pk=paid.pk).update(status=Appointment.Status.CLOSED)
+        user = User.objects.create_user(email="mag2@theparlour.it", password="x" * 10)
+        role = Role.objects.create(salon=self.salon, name="Solo magazzino", scopes=["inventory"])
+        Membership.objects.create(user=user, salon=self.salon, role=role)
+        res = post_json(
+            self.client, f"/api/agenda/appointments/{paid.id}/remove-from-agenda", {}, **bearer(user, self.salon)
+        )
+        self.assertEqual(res.status_code, 403, res.content)
+        paid.refresh_from_db()
+        self.assertIsNone(paid.removed_from_agenda_at)

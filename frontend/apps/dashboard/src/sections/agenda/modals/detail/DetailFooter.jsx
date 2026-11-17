@@ -10,7 +10,7 @@ import { canMarkNoShow } from '../rules.js';
 export default function DetailFooter({
   appt, t, itemsEditable, dirty, itemsDirty, noteDirty, savingItems, editItems, terminal, canWrite, busy,
   saveChanges, checkIn, startAppt, checkout, startReschedule, onDiscard, onNoShow, onCancel, oneStepCheckIn = false,
-  stayToCash = 0,
+  stayToCash = 0, onRemoveFromAgenda,
 }) {
   return (
     <React.Fragment>
@@ -91,6 +91,17 @@ export default function DetailFooter({
           <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }}
             onClick={onCancel}>
             <Icon name="x" size={14} color="var(--danger)" />{t('Cancella', 'Cancel booking')}
+          </button>
+        </div>
+      )}
+      {/* Visita già incassata (es. contanti con scontrino non emesso): un conto
+          chiuso non ha «Cancella», e la reception non riusciva a toglierla
+          dalla griglia. Sparisce dall'agenda, l'incasso resta in cassa. */}
+      {appt.status === 'closed' && canWrite && !appt.removed_from_agenda_at && onRemoveFromAgenda && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button className="dk-btn dk-btn--danger" style={{ flex: 1, height: 34, fontSize: 12.5 }} disabled={busy}
+            onClick={onRemoveFromAgenda}>
+            <Icon name="x" size={14} color="var(--danger)" />{t('Togli dall’agenda', 'Remove from calendar')}
           </button>
         </div>
       )}

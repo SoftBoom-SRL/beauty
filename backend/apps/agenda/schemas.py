@@ -275,6 +275,8 @@ class AppointmentOut(Schema):
     created_via: str
     cancel_reason: str
     cancelled_late: bool
+    # Visita incassata tolta dall'agenda (`remove-from-agenda`): quando.
+    removed_from_agenda_at: Optional[dt.datetime] = None
     auto_released: bool = False
     forced: bool = False
     # Conto unico: la vendita (di un'altra visita della cliente) che ha incassato anche questa.

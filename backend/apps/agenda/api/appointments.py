@@ -213,6 +213,23 @@ def cancel_appointment(request, appointment_id: int, data: CancelIn):
     )
 
 
+@router.post("/appointments/{int:appointment_id}/remove-from-agenda", auth=staff_auth, response=AppointmentOut)
+def remove_from_agenda(request, appointment_id: int, data: ReasonIn):
+    """Toglie dall'agenda un appuntamento già incassato (stato `closed`).
+
+    La visita sparisce dalle viste dell'agenda e lo slot torna libero, ma resta
+    chiusa: la vendita rimane nella cassa del giorno, nei report e nello
+    storico della cliente. Nessun messaggio alla cliente. Su un appuntamento
+    non ancora incassato è un 400: lì si usa `/cancel`.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    appointment = salon_get(Appointment, ctx, appointment_id)
+    return _appointment_out(
+        transitions.remove_from_agenda(appointment, reason=data.reason, actor=ctx.user), viewer=ctx
+    )
+
+
 @router.put("/appointments/{int:appointment_id}", auth=staff_auth, response=AppointmentOut)
 def update_appointment(request, appointment_id: int, data: AppointmentUpdateIn):
     """Modifica trattamenti e/o nota dell'appuntamento.

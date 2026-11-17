@@ -13,7 +13,7 @@ from .. import undo as undo_log
 from ..models import Appointment, UndoEntry
 from .deposits import close_deposit_link_after_commit
 from .freed_slots import _appointment_spans, emit_with_freed_slots
-from .locking import _lock_and_reload
+from .locking import _lock_and_reload, _lock_row
 from .messages import _event_payload, _withdraw_deposit_messages, emit_appointment_event
 from .refunds import settle_deposit_refund
 
@@ -268,4 +268,40 @@ def cancel_appointment(
             )
     if appointment.deposit_status == Appointment.DepositStatus.REFUND_DUE:
         settle_deposit_refund(appointment, actor=actor)
+    return appointment
+
+
+def remove_from_agenda(appointment: Appointment, *, reason: str = "", actor=None) -> Appointment:
+    """Toglie dall'agenda una visita GIÀ INCASSATA, lasciando l'incasso dov'è.
+
+    Il caso: pagamento in contanti con «scontrino non emesso», e la reception
+    vuole che la visita non resti sulla griglia. «Cancella» non si poteva usare
+    (un conto chiuso non si annulla) e, se si fosse potuto, lo stato
+    «annullato» avrebbe tolto la visita anche dallo storico della cliente e dai
+    report, mentre il salone vuole che l'incasso resti (risposta A, 17/11).
+
+    La visita resta quindi «chiusa» con la sua vendita: cambia solo
+    `removed_from_agenda_at`, che la toglie dalle viste dell'agenda e dalle
+    occupazioni (lo slot torna libero). Nessun messaggio alla cliente: per lei
+    la visita c'è stata. Rifarlo su una visita già tolta non cambia niente.
+    """
+    with transaction.atomic():
+        _lock_row(appointment)
+        if appointment.status != Appointment.Status.CLOSED:
+            raise HttpError(
+                400,
+                "Si toglie dall'agenda solo un appuntamento già incassato: "
+                "per gli altri usa «Cancella».",
+            )
+        if appointment.removed_from_agenda_at:
+            return appointment
+        appointment.removed_from_agenda_at = timezone.now()
+        appointment.save(update_fields=["removed_from_agenda_at", "updated_at"])
+        log_activity(
+            appointment.salon,
+            "appointment.removed_from_agenda",
+            f"Appuntamento incassato di {appointment.client.full_name} tolto dall'agenda",
+            actor=actor,
+            payload={"appointment_id": appointment.id, "reason": reason},
+        )
     return appointment

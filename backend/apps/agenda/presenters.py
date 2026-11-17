@@ -136,6 +136,7 @@ def _appointment_out(appointment, gifts_by_client=None, viewer=None) -> dict:
         "created_via": appointment.created_via,
         "cancel_reason": appointment.cancel_reason,
         "cancelled_late": appointment.cancelled_late,
+        "removed_from_agenda_at": appointment.removed_from_agenda_at,
         "auto_released": appointment.auto_released,
         "forced": appointment.forced,
         # Conto unico: la vendita di un'altra visita della cliente che ha

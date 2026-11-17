@@ -25,12 +25,14 @@ router = Router()
 def _visible_appointments(salon, location_id, **dates):
     """Le visite non annullate del periodo (`dates`), con la cliente, in ordine d'inizio.
 
+    Fuori anche le visite incassate tolte dall'agenda (`remove_from_agenda`).
+
     Con `location_id`, come per le operatrici: la sede richiesta più gli
     appuntamenti senza sede (prenotazioni dall'app o importate), che altrimenti
     sparirebbero. Ogni vista aggiunge i suoi prefetch.
     """
     appointments = (
-        Appointment.objects.filter(salon=salon, **dates)
+        Appointment.objects.filter(salon=salon, removed_from_agenda_at__isnull=True, **dates)
         .exclude(status=Appointment.Status.CANCELLED)
         .select_related("client")
         .order_by("start")

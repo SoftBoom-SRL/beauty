@@ -83,6 +83,11 @@ class Appointment(TimeStampedModel):
     )
     cancel_reason = models.CharField(max_length=255, blank=True)
     cancelled_late = models.BooleanField(default=False)
+    # Visita già incassata tolta dall'agenda dalla reception (es. pagata in
+    # contanti senza scontrino): sparisce dalla griglia e lo slot torna libero,
+    # ma resta «chiusa», quindi l'incasso rimane in cassa, nei report e nello
+    # storico della cliente. Lo stato «annullato» l'avrebbe tolta anche da lì.
+    removed_from_agenda_at = models.DateTimeField(null=True, blank=True)
     # Evento Yourang collegato (prenotazione importata via webhook/sync).
     yourang_event_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     # PaymentIntent Stripe della caparra pagata online (serve per il rimborso) e

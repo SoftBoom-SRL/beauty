@@ -10,6 +10,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ApiError, toastApiError, nameIn, Icon, timeLabel, fmtDateIt, toDateStr, statusMeta, depositMeta } from '@youty/shared';
 import DkPanel from '../../../ui/DkPanel.jsx';
+import DkConfirm from '../../../ui/DkConfirm.jsx';
 import FlowSteps from '../FlowSteps.jsx';
 import { useDash } from '../../../ctx.jsx';
 import { serviceColor } from '../../../ui/palette.js';
@@ -61,6 +62,8 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   // la caparra resta al salone. Prima la reception poteva solo annullare «come
   // salone», e la penale non si applicava mai.
   const [cancelByClient, setCancelByClient] = useState(false);
+  // conferma di «Togli dall'agenda» (visita già incassata)
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const cancelMinHours = settings?.cancel_min_hours ?? 24;
   const [busy, setBusy] = useState(false);
   const noShowReasons = customReasons(settings?.no_show_reasons, NOSHOW_REASONS);
@@ -437,6 +440,17 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
     if (alive.current) onClose();
   }
 
+  /* visita incassata tolta dall'agenda: l'incasso resta in cassa e nello storico */
+  async function removeFromAgenda() {
+    const ok = await lifecycle('remove-from-agenda', {},
+      t('Tolto dall’agenda · l’incasso resta in cassa', 'Removed from calendar · the payment stays in the till'), 'x');
+    if (!alive.current) return;
+    setConfirmRemove(false);
+    if (!ok) return;
+    onMutate?.();
+    onClose();
+  }
+
   /* caparra restituita alla cliente (DepositCard, «Segna rimborsata») */
   const markRefunded = async () => {
     if (busy) return;
@@ -517,8 +531,21 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
           saveChanges={saveChanges} checkIn={checkIn} startAppt={startAppt} oneStepCheckIn={!!settings?.checkin_starts_treatment} checkout={checkout} startReschedule={startReschedule}
           stayToCash={stayToCash}
           onDiscard={discardDraft} onNoShow={openNoShow} onCancel={openCancel}
+          onRemoveFromAgenda={() => setConfirmRemove(true)}
         />
       )}>
+      <DkConfirm
+        open={confirmRemove}
+        busy={busy}
+        onClose={() => setConfirmRemove(false)}
+        onConfirm={removeFromAgenda}
+        title={t('Togliere dall’agenda?', 'Remove from calendar?')}
+        message={t('L’appuntamento sparisce dall’agenda e lo spazio torna libero.', 'The appointment disappears from the calendar and the slot is freed.')}
+        detail={t('L’incasso resta nella cassa del giorno e nello storico della cliente. Alla cliente non arriva nessun messaggio.',
+          'The payment stays in the day’s till and in the client’s history. The client gets no message.')}
+        confirmLabel={t('Togli dall’agenda', 'Remove from calendar')}
+        cancelLabel={t('Annulla', 'Cancel')}
+      />
       {/* client meta bar */}
       <ClientMetaBar appt={appt} sm={sm} clientDetail={clientDetail} t={t} lang={lang} openClient={openClient} />
 
