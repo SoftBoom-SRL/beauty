@@ -42,8 +42,12 @@ class KpisOut(Schema):
 
 
 class RevenuePointOut(Schema):
+    """Un punto dell'andamento: venduto e passaggi in cassa (vendite chiuse,
+    senza le caparre) del giorno, della settimana o del mese."""
+
     date: date_type
     revenue: Decimal
+    sales_count: int = 0
 
 
 class CategoryRevenueOut(Schema):

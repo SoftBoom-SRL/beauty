@@ -334,6 +334,9 @@ class DepositIsNotCountedTwiceTests(TestCase):
         of_today = [point for point in series if point["date"] == today]
         self.assertEqual(len(of_today), 1)
         self.assertEqual(of_today[0]["revenue"], 100)
+        # un solo passaggio in cassa: la caparra non è un secondo scontrino
+        self.assertEqual(of_today[0]["sales_count"], 1)
+        self.assertTrue(all(point["sales_count"] == 0 for point in series if point["date"] != today))
 
 
 class RebookingOfPastPeriodsTests(_Base):
