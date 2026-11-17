@@ -50,7 +50,10 @@ def _busy_map(
 
     previous = day - dt.timedelta(days=1)
     appointments = (
-        Appointment.objects.filter(salon=salon, start__date__in=(previous, day))
+        # una visita incassata tolta dall'agenda non occupa più lo slot
+        Appointment.objects.filter(
+            salon=salon, start__date__in=(previous, day), removed_from_agenda_at__isnull=True
+        )
         .exclude(status__in=Appointment.INACTIVE_STATUSES)
         .prefetch_related("items")
     )
