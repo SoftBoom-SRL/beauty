@@ -15,6 +15,8 @@ export const salesApi = {
   dues: (clientId) => api.get('/api/sales/dues', { params: { client_id: clientId } }),
   // pagamento (anche parziale) di quanto resta da saldare su una vendita
   settle: (id, body) => api.post(`/api/sales/${id}/settle`, body),
+  // annulla un conto chiuso per sbaglio (solo il titolare): la vendita sparisce, la visita torna da incassare
+  void: (id) => api.post(`/api/sales/${id}/void`),
   // la cassa di un giorno (YYYY-MM-DD): pagamenti arrivati, totali per metodo e scontrino
   register: (date) => api.get('/api/sales/register', { params: { date } }),
 };

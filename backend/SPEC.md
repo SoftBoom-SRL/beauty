@@ -498,6 +498,14 @@ create_appointment collision → 409, cancel late → deposito forfeited.
 - `settle_sale(salon, sale_id, payments)`: lock del salone, poi della vendita;
   aggiunge i pagamenti con la data di adesso e riduce `amount_due` (400 se già
   saldato, 422 se si paga più di quanto resta); log `sale.settled`.
+- `voiding.void_sale(salon, sale_id)`: annulla un conto chiuso per sbaglio. Lock
+  del salone, poi della vendita; 422 con il motivo di `void_blocker(sale)` se il
+  conto ha caparra, buono, gift card/pacchetti/Exclusive Card o pagamento con
+  gift card (o è caparra / addebito no-show). Rimette a magazzino gli scarichi
+  della vendita (movimento «adjustment»), `marketing.loyalty.reverse_loyalty`,
+  le visite chiuse (`appointment` e `paid_in_sale`) tornano `in_progress` e
+  visibili in agenda (log `appointment.reopened`); log `sale.voided` con righe e
+  pagamenti, poi la vendita si cancella.
 - `reports.cash_movements(salon, start, end)`: il denaro entra quando arriva.
   `due_left` = parte delle vendite del periodo non pagata nel periodo (dovuto
   ancora aperto + saldi arrivati dopo), `settled` = pagamenti del periodo per
@@ -544,6 +552,8 @@ create_appointment collision → 409, cancel late → deposito forfeited.
   recipient_name?} (o a trattamento: gift_service_id, sessions, kind); pacchetto:
   line_type package con {package_id}.
 - POST `/{id}/settle` (scope sales) {payments:[…]} → settle_sale; response: dettaglio vendita.
+- POST `/{id}/void` (scope sales + titolare) → void_sale; response {sale_id, total,
+  reopened_appointment_ids}. Il dettaglio vendita porta `void_blocker` ("" = annullabile).
 - GET `/dues?client_id=` (scope sales) → {client_id, amount_due, sales:[SaleOut]}: i
   conti da saldare della cliente, dal più vecchio.
 - GET `/` (paginate, scope sales) filtri: kind, date_from/to (data inesistente → 400), q (nome cliente), operator_id,

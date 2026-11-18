@@ -2,6 +2,7 @@
 // KPI header, filters (kind, dates, text, operator, «da saldare»), expandable rows loading
 // GET /api/sales/{id}. Un conto con qualcosa da saldare ha il suo segno e, aperto, «Salda»
 // (POST /api/sales/{id}/settle): il denaro entra nella cassa del giorno in cui arriva.
+// Il titolare annulla da qui un conto chiuso per sbaglio (VoidSale).
 import { useEffect, useState } from 'react';
 import { Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
@@ -13,13 +14,15 @@ import {
 import { lineGrossCents, paidLater, saleLineLabel } from './history.js';
 import { salesApi } from '../../api/sales.js';
 import NoReceiptBadge from './NoReceiptBadge.jsx';
+import VoidSale from './VoidSale.jsx';
 import { useDebounced } from '../../hooks/useDebounced.js';
 import { useLatestRequest } from '../../hooks/useLatestRequest.js';
 
 const LIMIT = 50;
 
 export default function HistoryTab() {
-  const { t, lang, operators, services, fireToast, hasScope } = useDash();
+  const { t, lang, operators, services, fireToast, hasScope, session } = useDash();
+  const isOwner = !!session?.is_owner;
 
   /* ---- filters ---- */
   const [q, setQ] = useState('');
@@ -40,6 +43,8 @@ export default function HistoryTab() {
   const [details, setDetails] = useState({}); // sale id -> SaleDetailOut | 'loading' | 'error'
   const [settle, setSettle] = useState(null);  // { id, pay }: il saldo aperto su una vendita
   const [settleBusy, setSettleBusy] = useState(false);
+  // Cambia dopo un incasso annullato: l'elenco e i KPI si rileggono.
+  const [reloadKey, setReloadKey] = useState(0);
 
   const params = (offset) => ({
     kind: kind || null, date_from: dateFrom || null, date_to: dateTo || null,
@@ -67,7 +72,12 @@ export default function HistoryTab() {
         toastApiError(err, fireToast, t);
       })
       .finally(() => { if (req.isLatest(seq)) setLoading(false); });
-  }, [kind, dateFrom, dateTo, qDeb, opId, dueOnly, receipt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [kind, dateFrom, dateTo, qDeb, opId, dueOnly, receipt, reloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onVoided = (id) => {
+    setDetails((d) => { const next = { ...d }; delete next[id]; return next; });
+    setReloadKey((k) => k + 1);
+  };
 
   const loadMore = async () => {
     const seq = req.begin();
@@ -338,6 +348,9 @@ export default function HistoryTab() {
                           </div>
                         )}
                       </div>
+                    )}
+                    {isOwner && det && det !== 'loading' && det !== 'error' && (
+                      <VoidSale key={det.id} sale={det} onVoided={onVoided} fireToast={fireToast} t={t} lang={lang} />
                     )}
                     <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 8 }}>{t('Registrazione non fiscale', 'Non-fiscal record')} · #{s.id}</div>
                   </div>

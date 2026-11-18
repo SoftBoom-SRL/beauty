@@ -8,6 +8,7 @@ funzioni private, e lo storico della scheda cliente (clients) importava
 from decimal import Decimal
 
 from .models import Sale, SaleLine
+from .voiding import void_blocker
 
 
 def operator_name(operator) -> str:
@@ -79,6 +80,7 @@ def sale_detail(sale: Sale) -> dict:
         "covered_appointment_ids": list(
             sale.covered_appointments.order_by("start", "id").values_list("id", flat=True)
         ),
+        "void_blocker": void_blocker(sale),
     }
 
 
