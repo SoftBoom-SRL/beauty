@@ -326,6 +326,35 @@ def accrue_loyalty(sale):
             )
 
 
+def reverse_loyalty(sale):
+    """Toglie i punti che la vendita aveva accreditato (vendita annullata in cassa).
+
+    I punti si ricalcolano con le regole di oggi (`_points_earned`): un
+    programma cambiato nel frattempo può togliere più o meno di quanto aveva
+    dato. Il saldo non scende sotto zero, e un premio già emesso resta della
+    cliente: si toglie solo quello che c'è.
+    """
+    client = sale.client
+    if client is None:
+        return
+    basis = None
+    for program in LoyaltyProgram.objects.filter(salon=sale.salon, active=True):
+        with transaction.atomic():
+            account = (
+                LoyaltyAccount.objects.select_for_update()
+                .filter(program=program, client=client)
+                .first()
+            )
+            if account is None:
+                continue
+            if basis is None:
+                basis = _loyalty_basis(sale)
+            earned = _points_earned(sale, program, basis)
+            if earned <= 0:
+                continue
+            LoyaltyAccount.objects.filter(pk=account.pk).update(points=max(0, account.points - earned))
+
+
 def apply_program_data(program: LoyaltyProgram, ctx, data: LoyaltyProgramIn):
     """Valida i campi del programma e li scrive su `program` (creazione o modifica).
 

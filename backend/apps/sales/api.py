@@ -46,8 +46,10 @@ from .schemas import (
     StripeConnectStartOut,
     StripeConnectStatusOut,
     TodaySummaryOut,
+    VoidOut,
 )
 from .services import finalize_sale, record_no_show_charge, settle_sale
+from .voiding import void_sale
 
 router = Router(tags=["sales"])
 
@@ -117,6 +119,23 @@ def settle(request, sale_id: int, data: SettleIn):
     salon_get(Sale, ctx, sale_id)  # 404 fuori dal salone
     sale = settle_sale(ctx.salon, sale_id, data.dict()["payments"], actor=ctx.user)
     return serializers.sale_detail(sale)
+
+
+@router.post("/{int:sale_id}/void", auth=staff_auth, response=VoidOut)
+def void(request, sale_id: int):
+    """Annulla un passaggio cassa chiuso per sbaglio (solo il titolare).
+
+    La vendita sparisce da storico, cassa del giorno e report; i prodotti
+    tornano a magazzino, i punti fedeltà accreditati si tolgono e le visite
+    che chiudeva tornano «in corso», da incassare di nuovo. Solo per conti di
+    servizi e prodotti pagati in contanti, carta, bonifico o altro: negli altri
+    casi 422 con il motivo (lo stesso di `void_blocker` nel dettaglio).
+    """
+    ctx = request.auth
+    require_scope(ctx, "sales")
+    require_owner(ctx)
+    salon_get(Sale, ctx, sale_id)  # 404 fuori dal salone
+    return void_sale(ctx.salon, sale_id, actor=ctx.user)
 
 
 @router.get("/dues", auth=staff_auth, response=ClientDuesOut)

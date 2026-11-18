@@ -168,6 +168,17 @@ class SaleDetailOut(SaleOut):
     payments: list[PaymentOut]
     # Conto unico: le altre visite chiuse con questa vendita (oltre ad `appointment_id`).
     covered_appointment_ids: list[int] = []
+    # Perché il conto non si può annullare dalla cassa (`POST /{id}/void`);
+    # vuoto = si può (solo il titolare).
+    void_blocker: str = ""
+
+
+class VoidOut(Schema):
+    """Vendita annullata: l'id che aveva, il totale e le visite tornate da incassare."""
+
+    sale_id: int
+    total: Decimal
+    reopened_appointment_ids: list[int]
 
 
 class OperatorBreakdownOut(Schema):

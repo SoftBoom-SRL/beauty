@@ -159,6 +159,7 @@ const CASES = [
   [() => salesApi.otherVisits(101), ['GET', '/api/sales/checkout/101/other-visits']],
   [() => salesApi.dues(12), ['GET', '/api/sales/dues', { params: { client_id: 12 } }]],
   [() => salesApi.settle(91, B), ['POST', '/api/sales/91/settle', { body: B }]],
+  [() => salesApi.void(91), ['POST', '/api/sales/91/void']],
   [() => salesApi.register('2026-11-03'), ['GET', '/api/sales/register', { params: { date: '2026-11-03' } }]],
   [() => stripeConnectApi.status(), ['GET', '/api/sales/stripe/connect/status']],
   [() => stripeConnectApi.start(), ['POST', '/api/sales/stripe/connect/start', { body: {} }]],
