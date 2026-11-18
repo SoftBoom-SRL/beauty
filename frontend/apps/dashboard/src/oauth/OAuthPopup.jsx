@@ -1,7 +1,7 @@
 // OAuthPopup.jsx — standalone popup page for the Yourang OAuth flow.
 // Rendered outside the dashboard shell (main.jsx branches on the pathname).
-//   /oauth-popup/start?mode=login|connect → get authorize URL, redirect there
-//   /oauth-popup/done                      → exchange the code, notify opener, close
+//   /oauth-popup/start?mode=login|connect → get the proxy login URL, redirect there
+//   /oauth-popup/done                      → redeem the link code, notify opener, close
 // Two modes:
 //   login   → from the login page (no session): backend provisions/links a salon
 //             and returns a staff session; opener applies it and enters the app.
@@ -9,7 +9,7 @@
 // Same origin as the opener → api carries the staff Bearer (connect), and
 // postMessage targets window.location.origin.
 // The start page keeps the nonce of the flow in sessionStorage and the done page
-// sends it back with code and state (see flow.js): a code that was not asked for
+// sends it back with link code and state (see flow.js): a code that was not asked for
 // by this window is never exchanged.
 import { useEffect, useState } from 'react';
 import { staffAuth, useT } from '@youty/shared';
@@ -48,13 +48,14 @@ export default function OAuthPopup({ path }) {
           window.location.replace(res.authorize_url);
           return;
         }
-        // /oauth-popup/done — Yourang redirected back with ?code&state
+        // /oauth-popup/done — the proxy redirected back with ?state (ours, in
+        // return_to) and ?yr_link (the one-time code the backend redeems)
         const params = new URLSearchParams(window.location.search);
         const err = params.get('error');
         if (err) throw new Error(err);
-        const code = params.get('code');
+        const code = params.get('yr_link');
         const state = params.get('state');
-        if (!code || !state) throw new Error('missing code/state');
+        if (!code || !state) throw new Error('missing yr_link/state');
         const flow = takeFlow(storage);
         if (!flow) {
           // Nessun flusso avviato da questa finestra: il codice non si scambia
