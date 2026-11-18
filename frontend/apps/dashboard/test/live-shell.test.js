@@ -133,7 +133,9 @@ function topbar(tab, extra = {}) {
   const openModal = spy();
   globalThis.__dash = {
     t: (it) => it, lang: 'it', tab, setTab: () => {}, search: '', setSearch: () => {}, openModal, modal: null,
-    session: { user: { id: 1, name: 'Sole Rossi' } }, live: null, agendaDate: null, ...extra,
+    session: { user: { id: 1, name: 'Sole Rossi' } }, live: null, agendaDate: null,
+    // come il contesto vero: la barra lo usa per la ricerca degli appuntamenti
+    hasScope: () => true, setDeepLink: () => {}, ...extra,
   };
   return { m: mount(Topbar), fire: (e) => dom.fire('keydown', e), openModal };
 }

@@ -1,4 +1,5 @@
-// Topbar.jsx — real date, section title, client search, notifications, pulsante
+// Topbar.jsx — real date, section title, client search (con gli appuntamenti
+// delle clienti trovate, ApptSearchResults), notifications, pulsante
 // «Prenota», avatar.
 //
 // Il pulsante di creazione è UNO in tutta l'app: in agenda ce n'erano due (questo
@@ -12,6 +13,8 @@ import { Avatar, EmptyState, Icon, fmtDateIt, salonTzOpts } from '@youty/shared'
 import { useDash } from '../ctx.jsx';
 import { useClickAway } from '../hooks/useClickAway.js';
 import { hasOpenLayer } from '../ui/layers.js';
+import ApptSearchResults from './ApptSearchResults.jsx';
+import { apptLink } from './apptSearch.js';
 
 const TITLES = {
   agenda: ['Agenda', 'Agenda'],
@@ -68,6 +71,17 @@ export default function Topbar() {
   }, [tab, modal, openBooking]);
 
   const [notifOpen, setNotifOpen] = useState(false);
+  /* Gli appuntamenti sotto la ricerca: si aprono scrivendo, si chiudono al
+   * clic fuori, con Esc o scegliendone uno (che si apre in agenda). */
+  const [apptOpen, setApptOpen] = useState(false);
+  const searchRef = useRef(null);
+  useClickAway(searchRef, apptOpen, () => setApptOpen(false), POPOVER_AWAY);
+  const canSeeAgenda = hasScope('agenda');
+  const pickAppt = (h) => {
+    setApptOpen(false);
+    setDeepLink(apptLink(h.id));
+    setTab('agenda');
+  };
   const [newMenu, setNewMenu] = useState(false);
   const notifRef = useRef(null);
   const newRef = useRef(null);
@@ -86,13 +100,17 @@ export default function Topbar() {
       </div>
       <div style={{ flex: 1 }} />
 
-      {/* shared search — jumps to Clienti */}
-      <div className="dk-search">
-        <Icon name="search" size={18} color="var(--muted-2)" />
-        <input value={search}
-          onChange={(e) => { setSearch(e.target.value); if (tab !== 'clienti') setTab('clienti'); }}
-          placeholder={t('Cerca clienti…', 'Search clients…')} />
-        {search && <button onClick={() => setSearch('')} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
+      {/* shared search — jumps to Clienti; sotto, gli appuntamenti delle clienti trovate */}
+      <div ref={searchRef} style={{ position: 'relative' }}>
+        <div className="dk-search">
+          <Icon name="search" size={18} color="var(--muted-2)" />
+          <input value={search}
+            onChange={(e) => { setSearch(e.target.value); setApptOpen(true); if (tab !== 'clienti') setTab('clienti'); }}
+            onFocus={() => setApptOpen(true)}
+            placeholder={canSeeAgenda ? t('Cerca clienti o appuntamenti…', 'Search clients or appointments…') : t('Cerca clienti…', 'Search clients…')} />
+          {search && <button onClick={() => { setSearch(''); setApptOpen(false); }} style={{ cursor: 'pointer', display: 'grid', placeItems: 'center' }}><Icon name="x" size={15} color="var(--muted-2)" /></button>}
+        </div>
+        {canSeeAgenda && apptOpen && <ApptSearchResults q={search} onPick={pickAppt} t={t} lang={lang} />}
       </div>
 
       {/* notifications */}

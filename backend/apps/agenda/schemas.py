@@ -287,6 +287,24 @@ class AppointmentOut(Schema):
     updated_at: Optional[dt.datetime] = None
 
 
+class AppointmentHitOut(Schema):
+    """Un appuntamento trovato dalla ricerca per cliente (`GET /appointments/search`).
+
+    Quanto basta per riconoscerlo in un elenco e aprirlo in agenda: il
+    dettaglio completo è `GET /appointments/{id}`.
+    """
+
+    id: int
+    start: dt.datetime
+    end: dt.datetime
+    status: str
+    client: ClientMiniOut
+    operator_id: int
+    operator_name: str
+    # I servizi della visita, nell'ordine dell'agenda: «Manicure · Pedicure».
+    services: list[str]
+
+
 class ClientOperatorOut(Schema):
     id: int
     name: str

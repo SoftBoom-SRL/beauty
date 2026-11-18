@@ -15,6 +15,7 @@ from ..models import Appointment
 from ..presenters import _appointment_out
 from ..schemas import (
     AppointmentCreateIn,
+    AppointmentHitOut,
     AppointmentImportIn,
     AppointmentImportOut,
     AppointmentOut,
@@ -31,7 +32,7 @@ from ..schemas import (
 # `appointments` è anche il nome dei queryset: il modulo dei servizi si importa
 # col suffisso, come negli altri moduli delle rotte.
 from ..services import appointments as appointment_services
-from ..services import deposit_holds, deposits, importer, margin, refunds, stay, transitions
+from ..services import deposit_holds, deposits, importer, margin, refunds, search, stay, transitions
 from .params import _get_location
 
 router = Router()
@@ -298,6 +299,31 @@ def deposit_refunded(request, appointment_id: int):
     require_scope(ctx, "sales")
     appointment = salon_get(Appointment, ctx, appointment_id)
     return _appointment_out(refunds.mark_deposit_refunded(appointment, actor=ctx.user), viewer=ctx)
+
+
+@router.get("/appointments/search", auth=staff_auth, response=list[AppointmentHitOut])
+def search_appointments(request, q: str = ""):
+    """Appuntamenti delle clienti che rispondono a `q` (nome, cognome o telefono).
+
+    Prima quelli da oggi in poi (dal più vicino), poi i passati (dal più
+    recente), al massimo 8 per parte; annullati e tolti dall'agenda esclusi.
+    Con meno di 2 caratteri la lista è vuota.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    return [
+        {
+            "id": a.id,
+            "start": a.start,
+            "end": a.end,
+            "status": a.status,
+            "client": {"id": a.client_id, "full_name": a.client.full_name, "phone": a.client.phone},
+            "operator_id": a.operator_id,
+            "operator_name": a.operator.full_name,
+            "services": [it.service.name_it for it in a.items.all()],
+        }
+        for a in search.search_appointments(ctx.salon, q)
+    ]
 
 
 @router.get("/appointments/{int:appointment_id}/stay", auth=staff_auth)
