@@ -1,18 +1,22 @@
 // cart/CartLine.jsx — una riga del carrello del banco (CartTab): nome, prezzo
-// scontato, sconto di riga, omaggio e quantità (o la X per una gift card e un
-// trattamento già pagato). Un pacchetto si sconta, si regala e si moltiplica
-// come un prodotto, senza giacenza.
+// scontato, prezzo unitario (prodotti e trattamenti), sconto di riga, omaggio
+// e quantità (o la X per una gift card e un trattamento già pagato). Un
+// pacchetto o un trattamento si sconta, si regala e si moltiplica come un
+// prodotto, senza giacenza.
 import { Icon, NumInput } from '@youty/shared';
 import { money } from '../lib.js';
+import { canEditPrice } from '../lines.js';
 
 const lineIcon = (l) => (
-  l.kind === 'prepaid' ? 'wallet' : l.line_type === 'gift_card' ? 'gift' : l.line_type === 'package' ? 'tag' : 'box'
+  l.kind === 'prepaid' ? 'wallet' : l.line_type === 'gift_card' ? 'gift' : l.line_type === 'package' ? 'tag'
+    : l.line_type === 'service' ? 'scissors' : 'box'
 );
 
 /* `val`: il valore della riga già scontato; `d`: lo sconto che vale per lei
  * (il suo o quello della vendita, counterDiscountPct). */
 export default function CartLine({ l, val, d, onPatch, onStep, onRemove, t, lang }) {
-  const countable = l.line_type === 'product' || l.line_type === 'package';
+  const countable = l.line_type === 'product' || l.line_type === 'package' || l.line_type === 'service';
+  const priceLabel = l.line_type === 'service' ? t('Prezzo del servizio', 'Service price') : t('Prezzo del prodotto', 'Product price');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: l.is_gift ? '1px solid var(--ok)' : '1px solid transparent' }}>
       <div style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--surface)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
@@ -28,6 +32,14 @@ export default function CartLine({ l, val, d, onPatch, onStep, onRemove, t, lang
           {!l.is_gift && l.qty > 1 ? ' × ' + l.qty : ''}
         </div>
       </div>
+      {canEditPrice(l) && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid var(--hair)', borderRadius: 7, padding: '2px 5px', background: 'var(--surface)', flexShrink: 0 }} title={priceLabel}>
+          <span style={{ color: 'var(--muted-2)', fontWeight: 700, fontSize: 11 }}>€</span>
+          <NumInput min={0} max={99999} value={l.unit_price} aria-label={priceLabel}
+            onChange={(unit_price) => onPatch(l.key, { unit_price })}
+            style={{ width: 46, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
+        </div>
+      )}
       {countable && !l.is_gift && (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, border: '1px solid ' + (l.disc > 0 ? 'var(--clay)' : 'var(--hair)'), borderRadius: 7, padding: '2px 5px', background: 'var(--surface)', flexShrink: 0 }} title={t('Sconto riga', 'Line discount')}>
           <NumInput integer min={0} max={100} value={l.disc}

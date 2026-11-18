@@ -1,5 +1,5 @@
 // sell/OperatorBlock.jsx — il blocco di un'operatrice nel check-out
-// (SellModal): chi è, quanto ha venduto, le sue righe (prezzo dei servizi,
+// (SellModal): chi è, quanto ha venduto, le sue righe (prezzo di servizi e prodotti,
 // sconto su servizi, prodotti e pacchetti, omaggio, togli per le righe
 // aggiunte) e sotto, come `children`,
 // il modo per aggiungerne altre.
@@ -12,6 +12,10 @@ const lineIcon = (l) => (
     : l.line_type === 'gift_card' ? 'gift'
       : l.line_type === 'package' ? 'tag'
         : l.line_type === 'product' ? 'box' : 'scissors'
+);
+
+const priceTitle = (l, t) => (
+  l.line_type === 'product' ? t('Prezzo del prodotto', 'Product price') : t('Prezzo del servizio', 'Service price')
 );
 
 const discountTitle = (l, t) => (
@@ -40,9 +44,9 @@ export default function OperatorBlock({ lines, subtotal, color, initials, label,
               {l.name}{l.line_type === 'gift_card' && l.recipient_name ? ' · ' + l.recipient_name : ''}
             </span>
             {canEditPrice(l) && (
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid var(--hair)', borderRadius: 8, padding: '3px 6px', height: 26, boxSizing: 'border-box', background: 'var(--surface)', flexShrink: 0 }} title={t('Prezzo del servizio', 'Service price')}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid var(--hair)', borderRadius: 8, padding: '3px 6px', height: 26, boxSizing: 'border-box', background: 'var(--surface)', flexShrink: 0 }} title={priceTitle(l, t)}>
                 <span className="t-sm" style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>
-                <NumInput min={0} max={99999} value={l.unit_price} aria-label={t('Prezzo del servizio', 'Service price')}
+                <NumInput min={0} max={99999} value={l.unit_price} aria-label={priceTitle(l, t)}
                   onChange={(price) => onPatch(l.key, pricePatch(l, price))}
                   style={{ width: 52, textAlign: 'right', border: 'none', outline: 'none', background: 'transparent', fontSize: 12.5, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }} />
               </div>

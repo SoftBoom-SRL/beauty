@@ -55,11 +55,13 @@ export const checkoutPrepaidLine = (key, opId, service, sessions, value, lang) =
  *  non si poteva fare il 20% su uno solo (Beauty Boutique, 11/2026). Le gift
  *  card no (il server lo rifiuta: si cambia il valore), gli omaggi neppure. */
 export const canDiscountLine = (l) => l.line_type !== 'gift_card' && !l.is_gift;
-/** Vero se il prezzo della riga del check-out si può cambiare prima di
- *  incassare: i servizi (un ritocco, una cliente abituale), non gli omaggi.
- *  Prima il servizio partiva sempre col prezzo di listino e si poteva solo
- *  scontare in percentuale (Beauty Boutique, 11/2026). */
-export const canEditPrice = (l) => l.line_type === 'service' && !l.is_gift;
+/** Vero se il prezzo della riga si può cambiare prima di incassare (check-out
+ *  e banco): servizi e prodotti, non gli omaggi. Prima il servizio partiva
+ *  sempre col prezzo di listino e si poteva solo scontare in percentuale; poi
+ *  il prezzo si cambiava sui servizi ma non sui prodotti (Beauty Boutique,
+ *  11/2026). Gift card e pacchetti no: la gift card ha il suo valore, il
+ *  pacchetto si sconta. */
+export const canEditPrice = (l) => (l.line_type === 'service' || l.line_type === 'product') && !l.is_gift;
 /** La modifica di una riga col prezzo nuovo (in euro). Una riga di una visita
  *  cambia anche `list_price`: è il prezzo da cui checkoutState (visits.js)
  *  riparte quando si spunta o si toglie un'altra visita del conto, e senza il
@@ -85,13 +87,21 @@ export const visitItemLine = (visitId, it, i) => ({
 });
 
 /* ---- vendita al banco (CartTab) ----
- * { key, line_type: 'product' | 'gift_card' | 'package', product_id | package_id, name,
+ * { key, line_type: 'product' | 'service' | 'gift_card' | 'package', product_id | service_id | package_id, name,
  *   unit_price, qty, is_gift, disc, stock | value, recipient_name, kind?,
  *   gift_service_id?, sessions? }
  * `disc`: lo sconto della riga; senza, vale quello sulla vendita. */
 export const counterProductLine = (key, p, stock) => ({
   key, line_type: 'product', product_id: p.id,
   name: p.name, unit_price: Number(p.sale_price), qty: 1, is_gift: false, disc: 0, stock,
+});
+/* Un trattamento venduto al banco, senza appuntamento: la cliente entra, fa
+ * il servizio e paga, e prima bisognava inventare un appuntamento in agenda
+ * per poterlo incassare (Beauty Boutique, 11/2026). Il servizio va
+ * all'operatrice della vendita, come i prodotti. */
+export const counterServiceLine = (key, s, lang) => ({
+  key, line_type: 'service', service_id: s.id,
+  name: nameIn(s, lang), unit_price: Number(s.price), qty: 1, is_gift: false, disc: 0,
 });
 export const counterGiftLine = (key, value, recipientName, lang) => ({
   key, line_type: 'gift_card', name: giftLineName(value, lang),
@@ -106,9 +116,10 @@ export const counterPrepaidLine = (key, service, sessions, value, lang) => ({
   name: prepaidLineName(service, sessions, lang), value, recipient_name: '', qty: 1, is_gift: false, disc: 0,
 });
 /** Sconto che parte per una riga del banco: quello della riga, altrimenti
- *  quello sulla vendita; niente su gift card e omaggi. I pacchetti si scontano
- *  come i prodotti (il server lo ammette; le gift card no). */
-export const counterDiscountPct = (l, saleDisc) => ((l.line_type !== 'product' && l.line_type !== 'package') || l.is_gift ? 0 : (l.disc > 0 ? l.disc : saleDisc || 0));
+ *  quello sulla vendita; niente su gift card e omaggi. Pacchetti e
+ *  trattamenti si scontano come i prodotti (il server lo ammette; le gift
+ *  card no). */
+export const counterDiscountPct = (l, saleDisc) => (l.line_type === 'gift_card' || l.is_gift ? 0 : (l.disc > 0 ? l.disc : saleDisc || 0));
 
 /** Exclusive Card attiva: i prodotti del conto partono con il suo sconto.
  *  `field` è il campo dello sconto della riga (`discount_pct` al check-out,
