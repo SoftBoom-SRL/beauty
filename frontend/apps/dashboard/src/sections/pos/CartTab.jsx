@@ -1,6 +1,7 @@
 // CartTab — "Prodotti": quick counter sale (walk-in POS), not tied to an appointment.
 // Products from GET /api/inventory/products (retail = sale_price), submit → POST /api/sales/pos.
-// Al banco si vendono anche pacchetti e trattamenti già pagati (sedute della
+// Al banco si vendono anche trattamenti senza appuntamento (ServiceBuilder),
+// pacchetti e trattamenti già pagati (sedute della
 // cliente scelta), si lascia da saldare una parte del conto (con la cliente) e
 // si saldano i conti che la cliente ha lasciato aperti (DuesBanner).
 import { useEffect, useState } from 'react';
@@ -16,6 +17,7 @@ import SaleDone from './cart/SaleDone.jsx';
 import ProductGrid from './cart/ProductGrid.jsx';
 import GiftCardBuilder from './cart/GiftCardBuilder.jsx';
 import CreditBuilder from './cart/CreditBuilder.jsx';
+import ServiceBuilder from './cart/ServiceBuilder.jsx';
 import CartLine from './cart/CartLine.jsx';
 import SaleDiscount from './cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from './useCoupon.js';
@@ -23,7 +25,7 @@ import usePackages from './usePackages.js';
 import useClientCredit from './useClientCredit.js';
 import useExclusiveDiscount from './useExclusiveDiscount.js';
 import {
-  applyExclusiveDiscount, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, needsClient, toApiLine,
+  applyExclusiveDiscount, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, counterServiceLine, needsClient, toApiLine,
 } from './lines.js';
 import useProductCatalog from './useProductCatalog.js';
 import { salesApi } from '../../api/sales.js';
@@ -33,7 +35,7 @@ import {
 } from './lib.js';
 
 export default function CartTab({ onGoHistory }) {
-  const { t, lang, operators, services, opColors, fireToast, hasScope } = useDash();
+  const { t, lang, operators, services, serviceCategories, opColors, fireToast, hasScope } = useDash();
   const canSell = hasScope('sales');
   const packages = usePackages(canSell);
 
@@ -44,7 +46,7 @@ export default function CartTab({ onGoHistory }) {
   });
 
   /* ---- cart ---- */
-  // line: { key, line_type:'product'|'gift_card', product_id, name, unit_price, qty, is_gift, disc, stock, value, recipient_name }
+  // line: { key, line_type:'product'|'service'|'gift_card'|'package', product_id | service_id, name, unit_price, qty, is_gift, disc, stock, value, recipient_name }
   const [cart, setCart] = useState([]);
   const [globalDisc, setGlobalDisc] = useState(0);
   const [clientSel, setClientSel] = useState(null);
@@ -89,6 +91,7 @@ export default function CartTab({ onGoHistory }) {
     setCart((c) => [...c, counterGiftLine('g' + Date.now(), v, giftName, lang)]);
     setGiftName('');
   };
+  const addService = (svc) => setCart((c) => [...c, counterServiceLine('s' + svc.id + '_' + Date.now(), svc, lang)]);
   const addPackage = (pkg) => setCart((c) => [...c, counterPackageLine('k' + pkg.id + '_' + Date.now(), pkg, lang)]);
   const addPrepaid = (service, sessions, amt) => {
     const v = centsToEur(toCents(amt));
@@ -194,7 +197,7 @@ export default function CartTab({ onGoHistory }) {
       {/* LEFT — catalogue */}
       <div>
         <div className="t-sm" style={{ color: 'var(--muted)', marginBottom: 16 }}>
-          {t('Vendita rapida da banco, senza appuntamento. Aggiungi prodotti, poi incassa.', 'Quick counter sale, no appointment. Add products, then take payment.')}
+          {t('Vendita rapida da banco, senza appuntamento. Aggiungi prodotti o trattamenti, poi incassa.', 'Quick counter sale, no appointment. Add products or treatments, then take payment.')}
         </div>
         <div className="dk-search" style={{ width: '100%', marginBottom: 16 }}>
           <Icon name="search" size={18} color="var(--muted-2)" />
@@ -203,6 +206,9 @@ export default function CartTab({ onGoHistory }) {
         </div>
 
         <ProductGrid products={products} list={prodList} cart={cart} searching={searching} onAdd={addProduct} t={t} lang={lang} />
+
+        {/* trattamento fatto senza appuntamento */}
+        <ServiceBuilder services={services} categories={serviceCategories} onAdd={addService} t={t} lang={lang} />
 
         {/* gift-card line builder */}
         <GiftCardBuilder amt={giftAmt} setAmt={setGiftAmt} name={giftName} setName={setGiftName} onAdd={addGiftCard} t={t} />
@@ -248,7 +254,7 @@ export default function CartTab({ onGoHistory }) {
             <div style={{ textAlign: 'center', padding: '36px 12px', color: 'var(--muted-2)' }}>
               <Icon name="box" size={30} color="var(--faint)" />
               <div className="t-sm" style={{ marginTop: 10 }}>{t('Il carrello è vuoto', 'The cart is empty')}</div>
-              <div className="t-sm" style={{ marginTop: 2 }}>{t('Aggiungi prodotti dal catalogo', 'Add products from the catalogue')}</div>
+              <div className="t-sm" style={{ marginTop: 2 }}>{t('Aggiungi prodotti o trattamenti', 'Add products or treatments')}</div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 
 import {
   applyExclusiveDiscount, apptItemLine, canDiscountLine, canEditPrice, checkoutDiscountPct, checkoutGiftLine, checkoutPackageLine, checkoutPrepaidLine, checkoutProductLine,
-  checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine,
+  checkoutServiceLine, counterDiscountPct, counterGiftLine, counterPackageLine, counterPrepaidLine, counterProductLine, counterServiceLine,
   giftLineName, needsClient, packageSummary, prepaidValue, pricePatch, toApiLine, visitItemLine,
 } from '../src/sections/pos/lines.js';
 
@@ -151,7 +151,11 @@ test('check-out: il prezzo del servizio si cambia prima di incassare e parte que
   const svc = apptItemLine(item, 0);
   assert.equal(canEditPrice(svc), true);
   assert.equal(canEditPrice({ ...svc, is_gift: true }), false);
-  assert.equal(canEditPrice(checkoutProductLine('pl1', 7, shampoo)), false);
+  // anche il prodotto (Beauty Boutique, 11/2026); gift card e pacchetti no
+  assert.equal(canEditPrice(checkoutProductLine('pl1', 7, shampoo)), true);
+  assert.equal(canEditPrice(checkoutGiftLine('gl1', 7, 50, '', 'it')), false);
+  const prod = { ...checkoutProductLine('pl1', 7, shampoo), ...pricePatch(checkoutProductLine('pl1', 7, shampoo), 9.9) };
+  assert.equal(toApiLine(prod, 0).unit_price, '9.90');
   const edited = { ...svc, ...pricePatch(svc, 28.5) };
   assert.equal(toApiLine(edited, 0).unit_price, '28.50');
   // la riga di una visita tiene il prezzo nuovo anche come prezzo di partenza
@@ -173,4 +177,20 @@ test('Exclusive Card: i prodotti partono col suo sconto, le righe scontate a man
   assert.deepEqual(off.map((l) => l.disc), [0, 25, 0, 0]);
   const co = applyExclusiveDiscount([{ line_type: 'product', discount_pct: 0 }], 15, 'discount_pct');
   assert.equal(co[0].discount_pct, 15);
+});
+
+test('banco: un trattamento senza appuntamento parte come riga servizio, col suo prezzo e lo sconto', () => {
+  const svc = { id: 5, name_it: 'Manicure', name_en: 'Manicure', price: '25.00' };
+  const line = counterServiceLine('s5_1', svc, 'it');
+  assert.equal(line.line_type, 'service');
+  assert.equal(line.name, 'Manicure');
+  assert.equal(canEditPrice(line), true);
+  // lo sconto sulla vendita vale anche per lui, quello di riga vince
+  assert.equal(counterDiscountPct(line, 10), 10);
+  assert.equal(counterDiscountPct({ ...line, disc: 20 }, 10), 20);
+  assert.equal(counterDiscountPct({ ...line, is_gift: true }, 10), 0);
+  assert.deepEqual(toApiLine({ ...line, unit_price: 22 }, 10), {
+    line_type: 'service', service_id: 5, qty: 1, unit_price: '22.00', discount_pct: 10, is_gift: false,
+  });
+  assert.equal(needsClient([line]), false);
 });
