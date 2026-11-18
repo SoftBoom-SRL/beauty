@@ -30,6 +30,8 @@ export const undoGesture = (entryId) => api.post('/api/agenda/undo', entryId ? {
 
 /* ---- appuntamenti ---- */
 export const getAppointment = (id) => api.get(appt(id));
+// gli appuntamenti delle clienti che rispondono a `q` (nome o telefono): la ricerca della barra in alto
+export const searchAppointments = (q) => api.get('/api/agenda/appointments/search', { params: { q } });
 // la permanenza: gli appuntamenti della cliente attaccati a questo (services/stay.py)
 export const getStay = (id) => api.get(`${appt(id)}/stay`);
 export const createAppointment = (body) => api.post('/api/agenda/appointments', body);

@@ -5,13 +5,15 @@
 // scrivono (useAgendaMutations). Qui restano la barra (col filtro «Team»), il
 // menu dello slot e il montaggio delle viste.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Icon, toDateStr, todayStr, parseISO } from '@youty/shared';
+import { Icon, toDateStr, todayStr, parseISO, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import {
   MONTHS_IT, MONTHS_EN, hoverPlacement, isoAtMin, mondayOf, weekDaysOf, periodLabel, isTodayInWeek,
   visibleDayRows, restingIds, hiddenIdsOf, locationOperators, itemBlocks, HOVER_CLEAR_DAY, LIVE_DEBOUNCE_DAY_MS,
 } from './lib.js';
 import { useEscLayer } from '../../ui/layers.js';
+import { apptIdOf } from '../../shell/apptSearch.js';
+import { getAppointment } from './agendaApi.js';
 import { useClickAway } from '../../hooks/useClickAway.js';
 import { useAgendaNav } from './hooks/useAgendaNav.js';
 import { useStoredFlag } from './hooks/useStoredFlag.js';
@@ -219,6 +221,24 @@ export default function AgendaSection() {
       onShowDate: setDate,
     });
   };
+
+  /* Appuntamento scelto dalla ricerca della barra in alto (deepLink
+   * «appt:<id>»): l'agenda va al suo giorno e ne apre il dettaglio. La ref
+   * tiene l'ultima openApptDetail, che si ricrea a ogni render. */
+  const openApptDetailRef = useRef(openApptDetail);
+  openApptDetailRef.current = openApptDetail;
+  useEffect(() => {
+    const id = apptIdOf(deepLink);
+    if (id == null) return;
+    setDeepLink(null);
+    getAppointment(id)
+      .then((a) => {
+        const day = toDateStr(a.start);
+        if (day) setDate(day);
+        openApptDetailRef.current(a);
+      })
+      .catch((err) => toastApiError(err, fireToast, t));
+  }, [deepLink, setDeepLink, setDate, fireToast, t]);
 
   /* ---- torna indietro (bottone «Indietro», ⌘Z, «Annulla» degli avvisi) ---- */
   const { undoing, undoLast, undoMark, undoAfter } = useUndo({
