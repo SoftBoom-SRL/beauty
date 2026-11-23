@@ -66,8 +66,7 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
     if (!canSave) { fireToast({ msg: missing[0], icon: 'alert' }); return; }
     setSaving(true);
     try {
-      await giftCardsApi.create(giftCardPayload(form));
-      onSaved();
+      onSaved(await giftCardsApi.create(giftCardPayload(form)));
     } catch (err) {
       toastApiError(err, fireToast, t);
       setSaving(false);
@@ -177,6 +176,13 @@ export default function GiftCardModal({ onClose, onSaved, t, lang, fireToast, se
             {t('In agenda il servizio comparirà «Già pagato», con le sedute rimaste; nella sua scheda e nella sua app li trova fra i trattamenti già pagati.',
                'In the agenda the service shows as «Prepaid», with the sessions left; she finds them among her prepaid treatments in her profile and app.')}
           </div>
+          {/* la carta VIP è una sola: il credito nuovo va su quella che ha già */}
+          {type === 'amount' && paid && !imported && (
+            <div data-own-card-hint="" className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 6 }}>
+              {t('Se la cliente ha già la sua carta a importo attiva, il credito si aggiunge a quella invece di creare una seconda carta.',
+                 'If the client already has an active amount card, the credit is added to it instead of creating a second card.')}
+            </div>
+          )}
         </div>
       ) : (
         <React.Fragment>

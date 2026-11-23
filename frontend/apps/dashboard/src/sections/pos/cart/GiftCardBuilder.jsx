@@ -13,6 +13,11 @@ export default function GiftCardBuilder({ amt, setAmt, name, setName, onAdd, t }
       <div style={{ flex: 1, minWidth: 130 }}>
         <div style={{ fontWeight: 700, fontSize: 14 }}>{t('Gift card', 'Gift card')}</div>
         <div className="t-sm" style={{ color: 'var(--muted)' }}>{t('Emetti una carta prepagata', 'Issue a prepaid card')}</div>
+        {/* senza destinatario è della cliente del conto: se ha già la sua carta il server somma lì */}
+        <div className="t-sm" style={{ color: 'var(--muted-2)' }}>
+          {t('Senza destinatario va alla cliente: se ha già la sua carta, il credito si somma a quella',
+             'Without a recipient it goes to the client: if she already has her card, the credit is added to it')}
+        </div>
       </div>
       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, border: '1px solid var(--hair)', borderRadius: 10, padding: '8px 10px', background: 'var(--surface)', width: 86, boxSizing: 'border-box' }}>
         <span style={{ color: 'var(--muted-2)', fontWeight: 700 }}>€</span>

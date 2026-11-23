@@ -229,6 +229,78 @@ def add_vip_bonus(salon, card, paid, *, actor=None) -> Decimal:
     return bonus
 
 
+def own_money_card(salon, client, *, before=None):
+    """La carta a importo della cliente ancora in uso (la «carta VIP»), o None.
+
+    È sua se ne è la destinataria, o se l'ha comprata senza indicare a chi va
+    (come `ownsCredit` nella scheda cliente); pagata, attiva e non scaduta. Con
+    più carte vale la più vecchia: quella che la cliente conosce. `before`:
+    solo carte nate prima (non quelle appena emesse nello stesso conto).
+    """
+    if client is None:
+        return None
+    owned = Q(recipient_client=client) | Q(recipient_client__isnull=True, recipient_name="", buyer_client=client)
+    qs = GiftCard.objects.all() if before is None else GiftCard.objects.filter(created_at__lt=before)
+    return (
+        qs.filter(
+            owned,
+            not_expired_q(timezone.now()),
+            salon=salon,
+            gift_service__isnull=True,
+            payment_status=GiftCard.PaymentStatus.PAID,
+            status=GiftCard.Status.ACTIVE,
+        )
+        .exclude(kind=GiftCard.Kind.PACKAGE)
+        .order_by("created_at", "id")
+        .first()
+    )
+
+
+def _own_card_owner(buyer, recipient, recipient_name):
+    """La cliente per cui è la carta venduta, se la compra per sé; None per un regalo.
+
+    Per sé: destinataria e acquirente sono la stessa scheda, oppure c'è solo
+    l'acquirente e nessun nome di chi la riceve (come `ownsCredit` nella scheda
+    cliente). Con un'altra destinataria è un regalo, e resta una carta nuova.
+    """
+    if recipient is not None:
+        return recipient if buyer is None or buyer.pk == recipient.pk else None
+    return buyer if not recipient_name else None
+
+
+def load_onto_own_card(salon, card, value, *, expires_at=None):
+    """Somma `value` al credito della carta già della cliente invece di emetterne una nuova.
+
+    Beauty Boutique 11/2026: la cliente che rifà la carta VIP prima di finire il
+    credito si ritrovava con due carte, e in cassa doveva spenderle una per
+    volta. Il nuovo credito va sulla carta che ha già. Solo saldo, valore
+    iniziale (così «speso» resta giusto) e scadenza: la vendita e il bonus VIP
+    li scrive chi chiama, nella sua transazione.
+    """
+    value = Decimal(value)
+    card = GiftCard.objects.select_for_update().get(pk=card.pk)
+    if value <= 0 or card.balance + value > MAX_MONEY or card.initial_value + value > MAX_MONEY:
+        raise HttpError(422, "Valore della gift card non valido")
+    card.balance += value
+    card.initial_value += value
+    card.save(update_fields=["balance", "initial_value"])
+    _extend_expiry(card, expires_at)
+    return card
+
+
+def _extend_expiry(card, expires_at) -> None:
+    """La scadenza della carta che riceve credito nuovo: la più lunga delle due.
+
+    Il credito nuovo non deve scadere prima di quanto promesso vendendolo; una
+    carta senza scadenza resta senza, e un credito nuovo senza scadenza la toglie.
+    """
+    if card.expires_at is None:
+        return
+    if expires_at is None or expires_at > card.expires_at:
+        card.expires_at = expires_at
+        card.save(update_fields=["expires_at"])
+
+
 def has_remaining_q() -> Q:
     """Carte che hanno ancora qualcosa da dare: saldo, oppure sedute di un trattamento.
 
@@ -448,6 +520,16 @@ def sell_gift_card(
         paid, paid_method = True, IMPORTED_PAID_METHOD
     elif paid:
         _require_payment_method(paid_method)
+        # La cliente che ha già la sua carta a importo e ne compra un'altra per
+        # sé: il credito va sulla carta che ha (una ricarica, con la sua vendita
+        # e il bonus VIP), non su una seconda carta. Un regalo resta una carta nuova.
+        own = None if gift_service is not None else own_money_card(
+            salon, _own_card_owner(buyer, recipient, recipient_name))
+        if own is not None:
+            with transaction.atomic():
+                card = top_up_gift_card(salon, own, value, method=paid_method, actor=actor)
+                _extend_expiry(card, expires_at)
+            return card
     # Carta e incasso nascono insieme o non nascono: una carta «pagata» senza la
     # sua vendita è esattamente il buco che stiamo chiudendo.
     with transaction.atomic():

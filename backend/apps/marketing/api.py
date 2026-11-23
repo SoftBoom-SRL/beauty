@@ -294,6 +294,12 @@ def list_gift_cards(
 
 @router.post("/gift-cards", auth=staff_auth, response=GiftCardOut)
 def create_gift_card_staff(request, data: GiftCardIn):
+    """Vende una gift card dallo staff (pagata subito, da pagare o credito importato).
+
+    Una carta a importo pagata per una cliente che ha già la sua carta a
+    importo attiva (la «carta VIP») non ne crea una seconda: il credito si
+    somma a quella, come una ricarica, e la risposta è quella carta.
+    """
     ctx = request.auth
     # «Pagata ora» è un incasso: crea vendita e pagamento, quindi lo decide la
     # cassa (`sales`), non il marketing. Il Front desk non poteva vendere una

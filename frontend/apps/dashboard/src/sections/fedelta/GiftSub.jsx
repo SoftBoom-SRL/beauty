@@ -122,9 +122,13 @@ export default function GiftSub() {
     }
   };
 
-  const handleSaved = () => {
+  // La carta della cliente che ne aveva già una è quella vecchia ricaricata:
+  // codice e saldo dicono su quale carta è finito il credito.
+  const handleSaved = (card) => {
     setEdit(null);
-    fireToast({ msg: t('Gift card creata', 'Gift card created'), icon: 'check' });
+    fireToast({ msg: card?.code
+      ? t(`Gift card ${card.code}: saldo ${fmtEurNoFree(card.balance, 'it')}`, `Gift card ${card.code}: balance ${fmtEurNoFree(card.balance, 'en')}`)
+      : t('Gift card creata', 'Gift card created'), icon: 'check' });
     reload();
   };
 
