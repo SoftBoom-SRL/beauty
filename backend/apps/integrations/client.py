@@ -1,147 +1,56 @@
-"""Client HTTP verso Yourang: flusso OAuth (PKCE) + chiamate all'external API.
+"""Client HTTP verso Yourang attraverso il proxy connect.yourang.ai.
 
-Yourang è già in piedi (Authorization Server OIDC + external API /api/external/v1).
-Qui: PKCE/authorize URL, scambio/refresh token, e i wrapper delle rotte che ci
-servono per il sync (contatti, cataloghi, eventi, registrazione webhook).
+Il proxy è l'OAuth client di tutti i portali: custodisce i token di ogni org e
+li rinnova sotto mutex (Yourang ruota il refresh token a ogni uso e brucia la
+famiglia quando due refresh corrono insieme: un solo posto può farlo, ed è il
+proxy). Qui restano l'URL di login, il riscatto del link code e i wrapper delle
+rotte external API che servono al sync e all'assistente vocale.
+
+Le colonne dei token su YourangConnection restano (espansione soltanto): un
+rollback al flusso diretto le ritrova. Questo codice non le legge più.
 """
 
-import base64
-import datetime as dt
-import hashlib
-import secrets
 from urllib.parse import quote, urlencode
 
 import httpx
-import jwt
 from django.conf import settings
 
-from . import crypto
 from .models import YourangConnection
 
 TIMEOUT = 20.0
-REFRESH_MARGIN = dt.timedelta(seconds=60)
-
-# Scope OAuth richiesti (hardcoded come in food/real_estate auth.ts).
-# `contacts:write` autorizza anche le scritture sul catalogo (qualsiasi scope
-# :write rende il token READ_WRITE lato Yourang; non esiste `catalogues:write`).
-# OAUTH_ e non SCOPES: SCOPES nel progetto sono i permessi dello staff
-# (common.permissions), un'altra cosa. `agents:*` serve all'assistente vocale
-# (voice.install): strumenti esterni sull'org e prenotazione interna spenta. Le
-# connessioni nate prima non li hanno: il cassetto chiede di ricollegare.
-OAUTH_SCOPES = (
-    "openid profile email offline_access contacts:read contacts:write events:read"
-    " agents:read agents:write"
-)
 
 
-def _issuer() -> str:
-    return settings.YOURANG_ISSUER_URL.rstrip("/")
+def _proxy_base() -> str:
+    """Base del portale sul proxy: https://connect.yourang.ai/v/<slug>."""
+    return f"{settings.YOURANG_PROXY_URL.rstrip('/')}/v/{settings.YOURANG_PROXY_SLUG}"
 
 
 def _api_base() -> str:
-    return f"{_issuer()}/api/external/v1"
+    # Il proxy inoltra /v/<slug>/api/<path> a /api/external/v1/<path>.
+    return f"{_proxy_base()}/api"
 
 
-def redirect_uri() -> str:
-    return f"{settings.FRONTEND_ORIGIN.rstrip('/')}/oauth-popup/done"
+def proxy_login_url(return_to: str) -> str:
+    """Dove mandare il browser per consenso e login; il proxy torna su
+    `return_to` aggiungendo ?yr_link=. `return_to` deve stare sull'origine del
+    portale registrata nel proxy (portal_origin), o il proxy risponde 400."""
+    return f"{_proxy_base()}/auth/login?{urlencode({'return_to': return_to})}"
 
 
-# OIDC discovery: gli endpoint authorize/token vanno letti dal documento, NON
-# assunti (l'authorization_endpoint di Yourang sta sul frontend, non sull'issuer).
-_discovery_cache: dict[str, dict] = {}
+def redeem_link_code(code: str) -> dict:
+    """Scambia il codice monouso (?yr_link=) con l'identità dietro di esso.
 
-
-def _discovery() -> dict:
-    issuer = _issuer()
-    if issuer not in _discovery_cache:
-        resp = httpx.get(f"{issuer}/.well-known/openid-configuration", timeout=TIMEOUT)
-        resp.raise_for_status()
-        _discovery_cache[issuer] = resp.json()
-    return _discovery_cache[issuer]
-
-
-# ---- PKCE + authorize URL --------------------------------------------------
-
-
-def make_pkce() -> tuple[str, str]:
-    """Ritorna (code_verifier, code_challenge) — challenge = base64url(sha256(verifier))."""
-    verifier = secrets.token_urlsafe(64)[:96]
-    digest = hashlib.sha256(verifier.encode()).digest()
-    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-    return verifier, challenge
-
-
-def build_authorize_url(state: str, code_challenge: str, nonce: str) -> str:
-    params = {
-        "response_type": "code",
-        "client_id": settings.YOURANG_CLIENT_ID,
-        "redirect_uri": redirect_uri(),
-        "scope": OAUTH_SCOPES,
-        "state": state,
-        "nonce": nonce,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    return f"{_discovery()['authorization_endpoint']}?{urlencode(params)}"
-
-
-# ---- Token endpoint --------------------------------------------------------
-
-
-def _token_request(data: dict) -> dict:
-    data = {
-        **data,
-        "client_id": settings.YOURANG_CLIENT_ID,
-        "client_secret": settings.YOURANG_CLIENT_SECRET,
-    }
-    resp = httpx.post(_discovery()["token_endpoint"], data=data, timeout=TIMEOUT)
+    Server-to-server con l'API key, che non tocca mai il browser. Ritorna
+    {sub, email, email_verified, name, org_id}.
+    """
+    resp = httpx.post(
+        f"{_proxy_base()}/auth/link",
+        json={"code": code},
+        headers={"Authorization": f"Bearer {settings.YOURANG_PROXY_API_KEY}"},
+        timeout=TIMEOUT,
+    )
     resp.raise_for_status()
     return resp.json()
-
-
-def exchange_code(code: str, code_verifier: str) -> dict:
-    return _token_request(
-        {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri(),
-            "code_verifier": code_verifier,
-        }
-    )
-
-
-def _refresh(refresh_token: str) -> dict:
-    return _token_request(
-        {"grant_type": "refresh_token", "refresh_token": refresh_token}
-    )
-
-
-def claims_from_token(token: str | None) -> dict:
-    """Decodifica i claim di un JWT SENZA verificarne la firma (token appena
-    ottenuto dal token endpoint via TLS = canale fidato). Usato per `org`
-    dall'access token e per sub/email/name dall'id_token OIDC."""
-    if not token:
-        return {}
-    try:
-        return jwt.decode(token, options={"verify_signature": False})
-    except jwt.PyJWTError:
-        return {}
-
-
-def org_id_from_access_token(access_token: str) -> str:
-    """Legge il claim `org` senza verificare la firma (token appena ottenuto via TLS)."""
-    return str(claims_from_token(access_token).get("org") or "")
-
-
-def store_tokens(conn: YourangConnection, token_resp: dict) -> None:
-    """Persiste (cifrati) i token di una risposta del token endpoint."""
-    conn.access_token_enc = crypto.encrypt(token_resp["access_token"])
-    if token_resp.get("refresh_token"):  # rotation: aggiorna solo se presente
-        conn.refresh_token_enc = crypto.encrypt(token_resp["refresh_token"])
-    expires_in = int(token_resp.get("expires_in", 3600))
-    conn.expires_at = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=expires_in)
-    if token_resp.get("scope"):
-        conn.scope = token_resp["scope"]
 
 
 # ---- Client autenticato ----------------------------------------------------
@@ -167,24 +76,15 @@ class YourangClient:
         if http is not None:
             http.close()
 
-    def _access_token(self) -> str:
-        conn = self.conn
-        expired = (
-            conn.expires_at is None
-            or dt.datetime.now(dt.timezone.utc) >= conn.expires_at - REFRESH_MARGIN
-        )
-        if expired:
-            refresh_token = crypto.decrypt(conn.refresh_token_enc)
-            if not refresh_token:
-                raise RuntimeError("Nessun refresh token: riconnessione necessaria")
-            store_tokens(conn, _refresh(refresh_token))
-            conn.save(
-                update_fields=["access_token_enc", "refresh_token_enc", "expires_at", "scope"]
-            )
-        return crypto.decrypt(conn.access_token_enc)
-
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        headers = {"Authorization": f"Bearer {self._access_token()}"}
+        # X-Yourang-Org è un selettore, non un'asserzione: il proxy usa solo un
+        # grant che quell'org ha già concesso, un'org mai collegata riceve 401.
+        if not self.conn.yourang_org_id:
+            raise RuntimeError("Connessione Yourang senza organizzazione: ricollegare")
+        headers = {
+            "Authorization": f"Bearer {settings.YOURANG_PROXY_API_KEY}",
+            "X-Yourang-Org": self.conn.yourang_org_id,
+        }
         send = self._http.request if self._http is not None else httpx.request
         resp = send(
             method, f"{_api_base()}{path}", headers=headers, timeout=TIMEOUT, **kwargs
@@ -281,13 +181,3 @@ class YourangClient:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 404:  # agente senza quello strumento
                 raise
-
-    # -- webhook --
-    def register_webhook(self, target_url: str, event_types: list[str]) -> str:
-        resp = self._request(
-            "PUT",
-            "/webhook-subscription",
-            json={"target_url": target_url, "event_types": event_types},
-        )
-        data = self._data(resp) or {}
-        return data.get("signing_secret", "")
