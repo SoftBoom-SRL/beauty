@@ -11,7 +11,7 @@ from apps.sales.models import Payment, Sale
 
 from ..gift_cards import redeem_gift_card
 from ..models import GiftCard
-from .base import GiftCardTestBase
+from .base import GiftCardTestBase, _client
 
 
 class VipCardTests(GiftCardTestBase):
@@ -170,3 +170,96 @@ class VipBonusTests(GiftCardTestBase):
         self.assertEqual(put([{"min_amount": "100", "bonus": "10"}, {"min_amount": "100", "bonus": "20"}]).status_code, 400)
         self.assertEqual(put([]).status_code, 200)
         self.assertEqual(SalonSettings.objects.get(salon=self.salon).gift_card_bonus_rules, [])
+
+
+class OneVipCardTests(GiftCardTestBase):
+    """Beauty Boutique 11/2026: la cliente che rifà la carta VIP prima di finire
+    il credito deve avere UNA carta, col credito vecchio più il nuovo; prima ne
+    nasceva una seconda e il credito restava diviso."""
+
+    _sell = VipCardTests._sell
+    _cash_in = VipCardTests._cash_in
+
+    def _till(self, *lines, client=None):
+        from unittest.mock import patch
+
+        from apps.sales.services import finalize_sale
+        from apps.sales.tests.base import PATCH_LOYALTY, _blocks
+
+        total = sum(Decimal(str(line["value"])) * line.get("qty", 1) for line in lines)
+        with patch(PATCH_LOYALTY):
+            return finalize_sale(
+                self.salon, kind=Sale.Kind.POS, client=client or self.sofia,
+                blocks=_blocks([{"line_type": "gift_card", "qty": 1, **line} for line in lines]),
+                payments=[{"method": "cash", "amount": total}],
+            )
+
+    def test_selling_her_card_again_adds_to_the_one_she_has(self):
+        card = self._sell(value="100.00")
+        redeem_gift_card(self.salon, card.code, Decimal("30"))
+        again = self._sell(value="200.00", paid_method="card")
+        self.assertEqual(again.pk, card.pk)
+        self.assertEqual(GiftCard.objects.filter(salon=self.salon).count(), 1)
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("270.00"))
+        self.assertEqual(card.initial_value, Decimal("300.00"))
+        self.assertEqual(self._cash_in(), Decimal("300.00"))   # 100 + 200, il denaro entra lo stesso
+        self.assertEqual(Payment.objects.get(method="card").amount, Decimal("200.00"))
+
+    def test_the_bonus_applies_to_the_new_credit(self):
+        SalonSettings.objects.update_or_create(salon=self.salon, defaults={"gift_card_bonus_rules": [
+            {"min_amount": "500.00", "bonus": "100.00"},
+        ]})
+        card = self._sell(value="50.00")
+        self._sell(value="500.00")
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("650.00"))
+
+    def test_at_the_till_the_new_credit_goes_on_her_card(self):
+        card = self._sell(value="100.00")
+        sale = self._till({"value": Decimal("150.00")})
+        self.assertEqual(GiftCard.objects.filter(salon=self.salon).count(), 1)
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("250.00"))
+        self.assertEqual(sale.lines.get().gift_card_id, card.pk)
+        self.assertEqual(self._cash_in(), Decimal("250.00"))
+        moves = self._get(f"/api/marketing/gift-cards/{card.id}/movements")
+        self.assertEqual(sorted(Decimal(m["amount"]) for m in moves if m["kind"] == "load"),
+                         [Decimal("100.00"), Decimal("150.00")])
+
+    def test_gifts_stay_separate_cards(self):
+        card = self._sell(value="100.00")
+        self._till({"value": Decimal("50.00"), "recipient_name": "Giulia"})
+        self._till({"value": Decimal("50.00"), "qty": 2})
+        laura = _client(self.salon, "Laura", "+393339998877")
+        self._sell(kind="gift", value="40.00", buyer_client_id=self.sofia.id, recipient_client_id=laura.id)
+        self.assertEqual(GiftCard.objects.filter(salon=self.salon).count(), 5)
+        card.refresh_from_db()
+        self.assertEqual(card.balance, Decimal("100.00"))
+
+    def test_a_spent_expired_or_unpaid_card_does_not_take_the_credit(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        spent = self._sell(value="20.00")
+        redeem_gift_card(self.salon, spent.code, Decimal("20"))
+        unpaid = self._sell(value="30.00", paid=False, paid_method="")
+        old = self._sell(value="40.00")
+        GiftCard.objects.filter(pk=old.pk).update(expires_at=timezone.now() - timedelta(days=1))
+        new = self._sell(value="60.00")
+        self.assertNotIn(new.pk, {spent.pk, unpaid.pk, old.pk})
+        self.assertEqual(new.balance, Decimal("60.00"))
+
+    def test_the_longer_expiry_wins(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        card = self._sell(value="100.00")
+        soon = timezone.now() + timedelta(days=10)
+        GiftCard.objects.filter(pk=card.pk).update(expires_at=soon)
+        later = (timezone.now() + timedelta(days=365)).replace(microsecond=0)
+        self._sell(value="50.00", expires_at=later.isoformat())
+        card.refresh_from_db()
+        self.assertEqual(card.expires_at, later)

@@ -186,7 +186,7 @@ def _prepare_lines(blocks: list[dict], packages: dict | None = None) -> tuple[li
                 # si calcola sul pezzo: la somma delle righe è il totale.
                 unit_amount = line_amount(1, unit_price, discount_pct, is_gift)
                 for _ in range(qty):
-                    prepared.append({**entry, "qty": 1, "amount": unit_amount})
+                    prepared.append({**entry, "qty": 1, "amount": unit_amount, "several": True})
                 total += unit_amount * qty
                 continue
             prepared.append(entry)
@@ -382,9 +382,34 @@ def _sell_gift_card(salon, sale, line, data: dict, *, client, gift_services: dic
     più avanti: la carta è sua, comprata e ricevuta da lei, e in agenda e in
     cassa si legge «Già pagato» invece di «Regalo».
     """
-    from apps.marketing.gift_cards import create_gift_card  # lazy
+    from apps.marketing.gift_cards import add_vip_bonus, create_gift_card  # lazy
 
     prepaid = data["gift_kind"] == "prepaid"
+    for_herself = not (data["is_gift"] or data["gift_service_id"] or data["recipient_name"] or data.get("several"))
+    if for_herself:
+        from apps.marketing.gift_cards import load_onto_own_card, own_money_card  # lazy
+
+        # Una carta a importo senza destinataria: è per la cliente del conto. Se
+        # ha già la sua carta (la «carta VIP») il credito si somma a quella
+        # invece di emetterne una seconda (Beauty Boutique 11/2026); la riga di
+        # vendita punta alla carta caricata, come una ricarica. Più carte uguali
+        # nella stessa riga sono regali da consegnare: restano carte nuove, e
+        # così quelle emesse in questo stesso conto (`before`).
+        own = own_money_card(salon, client, before=sale.created_at)
+        if own is not None:
+            card = load_onto_own_card(salon, own, data["unit_price"])
+            line.gift_card = card
+            line.save(update_fields=["gift_card"])
+            add_vip_bonus(salon, card, line.amount, actor=actor)
+            log_activity(
+                salon,
+                "giftcard.paid",
+                f"Ricarica gift card {card.code}: +€{data['unit_price']} (cassa), saldo €{card.balance}",
+                actor=actor,
+                payload={"gift_card_id": card.id, "amount": str(data["unit_price"]), "method": paid_method,
+                         "top_up": True, "sale_id": sale.id},
+            )
+            return
     # Una carta per riga: `_prepare_lines` ha già spezzato le quantità
     # maggiori di uno, così ogni carta emessa ha la sua riga di vendita che la
     # collega.
@@ -405,8 +430,6 @@ def _sell_gift_card(salon, sale, line, data: dict, *, client, gift_services: dic
     line.gift_card = card
     line.save(update_fields=["gift_card"])
     if card is not None and card.payment_status == card.PaymentStatus.PAID:
-        from apps.marketing.gift_cards import add_vip_bonus  # lazy
-
         # Il bonus della carta VIP sul pagato della riga (dopo sconto e
         # buono): la vendita resta quella, il credito sale del bonus.
         add_vip_bonus(salon, card, line.amount, actor=actor)
