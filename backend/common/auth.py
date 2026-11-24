@@ -108,7 +108,12 @@ class StaffAuth(HttpBearer):
         # lazy: evita cicli in fase di load. Le regole della sessione (membership
         # viva, versione della password, permessi del ruolo) sono quelle di
         # accounts.sessions, le stesse del rinnovo e dello stream live.
-        from apps.accounts.sessions import find_membership, membership_scopes, tv_matches
+        from apps.accounts.sessions import (
+            acts_as_owner,
+            find_membership,
+            membership_scopes,
+            tv_matches,
+        )
 
         membership = find_membership(payload["sub"], payload["salon"])
         if membership is None:
@@ -125,7 +130,7 @@ class StaffAuth(HttpBearer):
             salon=membership.salon,
             membership=membership,
             scopes=scopes,
-            is_owner=membership.is_owner,
+            is_owner=acts_as_owner(membership),
         )
 
 

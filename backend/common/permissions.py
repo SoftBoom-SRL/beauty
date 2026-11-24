@@ -41,6 +41,7 @@ def require_scope(ctx, scope: str) -> None:
 
 
 def require_owner(ctx) -> None:
+    """Titolare o supporto Yourang (vedi `accounts.sessions.acts_as_owner`)."""
     if not ctx.is_owner:
         raise HttpError(403, "Funzione riservata al titolare")
 
