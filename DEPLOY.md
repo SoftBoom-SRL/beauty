@@ -685,7 +685,7 @@ Con queste quattro `python manage.py check --deploy` non segnala più nulla.
 
 ## Job schedulati (Coolify → *Scheduled Tasks* sulla risorsa `beauty-api`)
 
-Quattro comandi vanno programmati. Senza di loro il gestionale continua a funzionare
+Cinque comandi vanno programmati. Senza di loro il gestionale continua a funzionare
 ma alcune funzioni restano ferme, e il sintomo non punta alla causa.
 
 | Comando | Cadenza | Cosa succede se manca |
@@ -694,12 +694,35 @@ ma alcune funzioni restano ferme, e il sintomo non punta alla causa.
 | `python manage.py process_deposit_holds` | ogni 5 minuti | Le caparre scadute non liberano mai lo slot. In dashboard sembra funzionare, perché ogni apertura dell'agenda esegue il controllo sul salone visualizzato — ma solo su quello, e solo finché qualcuno guarda. |
 | `python manage.py sync_yourang` | ogni ora | Clienti e servizi smettono di riallinearsi con Yourang quando un webhook va perso; anche la prima sincronizzazione interrotta da un riavvio si completa solo da qui. |
 | `python manage.py recompute_reliability` | ogni notte | L'affidabilità salvata non risale quando un no-show esce dalla finestra dei 12 mesi: i filtri dell'elenco clienti la leggono vecchia. Scheda e regole caparra la ricalcolano da sole, quindi il sintomo è solo nell'elenco. |
+| `python manage.py run_automations` | ogni 5 minuti | Le automazioni con un messaggio WhatsApp (nuovo appuntamento, promemoria, dopo la visita) non mandano niente: la regola resta attiva in dashboard e nessuna cliente riceve il messaggio. Serve anche `YOURANG_WHATSAPP_SCOPES` (vedi *Automazioni WhatsApp*). |
 
 Lo stato della consegna messaggi è visibile al titolare in
 *Impostazioni → Notifiche*, che legge `GET /api/core/outbox/status`: dice se
 `YOURANG_API_URL` è configurato, quanti eventi sono in coda e da quando. È il
 posto da guardare per primo quando «gli OTP non arrivano»: distingue la variabile
 mancante (`configured: false`) dal job che non gira (coda che si allunga).
+
+## Automazioni WhatsApp
+
+Un'automazione può inviare un modello WhatsApp approvato sull'organizzazione
+Yourang del salone (`apps/automations/whatsapp.py`). Per accenderle, in
+quest'ordine:
+
+1. Su Yourang (deve avere `GET /api/external/v1/whatsapp/templates`), il client
+   OAuth `beauty-crm` deve ammettere gli scope WhatsApp. Lo fa chi ha accesso
+   al database di Yourang:
+   ```sql
+   UPDATE oauth_client
+      SET allowed_scopes = allowed_scopes || '["whatsapp:read", "whatsapp:write"]'::jsonb
+    WHERE client_id = 'beauty-crm' AND NOT allowed_scopes ? 'whatsapp:write';
+   ```
+2. Qui, `YOURANG_WHATSAPP_SCOPES=1`. **Mai prima del punto 1**: Yourang rifiuta
+   l'intero login se il client chiede uno scope non ammesso, e nessun salone
+   riuscirebbe più a collegarsi.
+3. Il job `run_automations` ogni 5 minuti (vedi *Job schedulati*).
+
+I saloni collegati prima ricollegano Yourang una volta (il costruttore delle
+automazioni lo chiede): il loro token non ha gli scope WhatsApp.
 
 ## Note
 

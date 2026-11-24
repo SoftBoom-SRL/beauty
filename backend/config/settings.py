@@ -304,6 +304,12 @@ YOURANG_API_KEY = os.getenv("YOURANG_API_KEY", "")
 YOURANG_ISSUER_URL = os.getenv("YOURANG_ISSUER_URL", "")  # es. https://api.yourang.ai
 YOURANG_CLIENT_ID = os.getenv("YOURANG_CLIENT_ID", "")
 YOURANG_CLIENT_SECRET = os.getenv("YOURANG_CLIENT_SECRET", "")
+# Chiede a Yourang anche gli scope `whatsapp:*` (modelli WhatsApp delle
+# automazioni). Spento di serie: Yourang rifiuta l'INTERO login se il client
+# chiede uno scope che non gli è concesso, quindi lo si accende solo dopo che il
+# client `beauty-crm` su Yourang ha `whatsapp:read` e `whatsapp:write` fra gli
+# scope ammessi (vedi DEPLOY.md, «Automazioni WhatsApp»).
+YOURANG_WHATSAPP_SCOPES = os.getenv("YOURANG_WHATSAPP_SCOPES", "").lower() in ("1", "true", "yes")
 # URL pubblico del webhook receiver (POST /api/integrations/yourang/webhook).
 YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 # Domini del supporto Yourang: chi entra con «Accedi con Yourang» e un'email

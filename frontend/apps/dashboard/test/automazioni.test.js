@@ -79,3 +79,18 @@ test('«Copia» dell\'URL del webhook: «URL copiato» solo se la copia riesce, 
   }
   assert.deepEqual(written, [URL, URL]);
 });
+
+// YR-1391: il messaggio è un modello approvato su Yourang; l'anteprima mette i
+// valori d'esempio dei campi scelti al posto di {{1}}, {{2}}…
+test('YR-1391: anteprima del modello WhatsApp con i campi scelti', async () => {
+  const { renderTemplate, defaultTemplateFields } = await import('../src/sections/automazioni/catalog.js');
+  const tpl = {
+    body: 'Ciao {{1}}, ti aspettiamo il {{2}} alle {{ 3 }}.',
+    parameters: [{ key: 'body:1' }, { key: 'body:2' }, { key: 'body:3' }, { key: 'button:0' }],
+  };
+  assert.deepEqual(defaultTemplateFields([{}, {}, {}]), ['first_name', 'date', 'time']);
+  // il nome dato su Yourang vince sulla posizione: {{2}} «ora» è l'ora, non la data
+  assert.deepEqual(defaultTemplateFields([{ label: 'nome' }, { label: 'ora' }]), ['first_name', 'time']);
+  assert.equal(renderTemplate(tpl, ['first_name', 'date', 'time', 'salon']), 'Ciao Sofia, ti aspettiamo il 14/11/2026 alle 15:30.');
+  assert.equal(renderTemplate(null, []), '');
+});

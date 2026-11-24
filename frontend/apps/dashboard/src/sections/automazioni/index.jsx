@@ -107,7 +107,7 @@ export default function AutomazioniSection() {
               {loading
                 ? <div className="skel" style={{ height: 16, width: 140 }} />
                 : <div className="t-meta" style={{ color: 'var(--clay-ink)' }}>{activeCount} {t('attive', 'active')} · {rules.length} {t('totali', 'total')}</div>}
-              <div className="t-body" style={{ color: 'var(--muted)', marginTop: 4 }}>{t('Decidi quando partono e a chi. Canale e messaggio su Yourang.', 'Decide when they fire and to whom. Channel and message on Yourang.')}</div>
+              <div className="t-body" style={{ color: 'var(--muted)', marginTop: 4 }}>{t('Decidi quando partono, a chi e quale messaggio WhatsApp inviano.', 'Decide when they fire, to whom and which WhatsApp message they send.')}</div>
             </div>
             {canWrite && !loading && (
               <button className="dk-btn dk-btn--clay" style={{ height: 38, padding: '0 14px', fontSize: 13.5, flexShrink: 0 }} onClick={() => setSel('new')}>

@@ -14,6 +14,11 @@ class AutomationIn(Schema):
     conditions: dict = {}
     trigger_origin: str = "yourang"
     active: bool = True
+    # Modello WhatsApp approvato su Yourang (vuoto = nessun invio) e i campi di
+    # youty che ne riempiono i valori, in ordine (vedi GET /whatsapp-templates).
+    template_name: str = ""
+    template_language: str = ""
+    template_parameters: list[str] = []
 
 
 class AutomationOut(Schema):
@@ -29,6 +34,9 @@ class AutomationOut(Schema):
     webhook_token: str
     webhook_url: str
     message_preview: str
+    template_name: str
+    template_language: str
+    template_parameters: list[str]
     active: bool
     created_at: datetime
     updated_at: datetime
@@ -65,3 +73,38 @@ class EventsCatalogOut(Schema):
 class WebhookTriggerOut(Schema):
     ok: bool = True
     automation_id: int
+
+
+class TemplateParameterOut(Schema):
+    key: str
+    label: Optional[str] = None
+
+
+class WhatsAppTemplateOut(Schema):
+    name: str
+    language: str
+    category: str
+    body: Optional[str] = None
+    parameters: list[TemplateParameterOut]
+
+
+class ParameterFieldOut(Schema):
+    value: str
+    label_it: str
+    label_en: str
+
+
+class WhatsAppTemplatesOut(Schema):
+    """Modelli WhatsApp approvati su Yourang, per il costruttore.
+
+    `state`: `ok`; `not_connected` (salone non collegato a Yourang);
+    `needs_reconnect` (collegato prima dei permessi WhatsApp: ricollegare);
+    `unavailable` (invio WhatsApp non ancora abilitato su questo server);
+    `yourang_error` (Yourang non risponde). `events` sono gli eventi che
+    possono inviare un modello, `fields` i campi che ne riempiono i valori.
+    """
+
+    state: str
+    templates: list[WhatsAppTemplateOut]
+    events: list[str]
+    fields: list[ParameterFieldOut]

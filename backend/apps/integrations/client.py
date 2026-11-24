@@ -32,6 +32,15 @@ OAUTH_SCOPES = (
     "openid profile email offline_access contacts:read contacts:write events:read"
     " agents:read agents:write"
 )
+# I modelli WhatsApp delle automazioni (lettura dei modelli, invio): chiesti
+# solo con YOURANG_WHATSAPP_SCOPES acceso, vedi settings.
+WHATSAPP_SCOPES = "whatsapp:read whatsapp:write"
+
+
+def oauth_scopes() -> str:
+    if settings.YOURANG_WHATSAPP_SCOPES:
+        return f"{OAUTH_SCOPES} {WHATSAPP_SCOPES}"
+    return OAUTH_SCOPES
 
 
 def _issuer() -> str:
@@ -76,7 +85,7 @@ def build_authorize_url(state: str, code_challenge: str, nonce: str) -> str:
         "response_type": "code",
         "client_id": settings.YOURANG_CLIENT_ID,
         "redirect_uri": redirect_uri(),
-        "scope": OAUTH_SCOPES,
+        "scope": oauth_scopes(),
         "state": state,
         "nonce": nonce,
         "code_challenge": code_challenge,
@@ -184,8 +193,8 @@ class YourangClient:
         return crypto.decrypt(conn.access_token_enc)
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        headers = {"Authorization": f"Bearer {self._access_token()}"}
-        send = self._http.request if self._http is not None else httpx.request
+        headers = {**kwargs.pop("headers", {}), "Authorization": f"Bearer {self._access_token()}"}
+        send =self._http.request if self._http is not None else httpx.request
         resp = send(
             method, f"{_api_base()}{path}", headers=headers, timeout=TIMEOUT, **kwargs
         )
@@ -195,6 +204,39 @@ class YourangClient:
     @staticmethod
     def _data(resp: httpx.Response):
         return resp.json().get("data")
+
+    # -- WhatsApp (automazioni) --
+    def list_whatsapp_templates(self) -> list[dict]:
+        """I modelli APPROVATI dell'organizzazione, con i valori che ogni invio chiede."""
+        rows, offset = [], 0
+        while True:
+            resp = self._request(
+                "GET", "/whatsapp/templates",
+                params={"status": "APPROVED", "limit": 100, "offset": offset},
+            )
+            page = self._data(resp) or []
+            rows.extend(page)
+            total = (resp.json().get("meta") or {}).get("total_items", 0)
+            offset += len(page)
+            if not page or offset >= total:
+                return rows
+
+    def send_whatsapp_template(
+        self, to_phone: str, name: str, language: str, parameters: list[str], idempotency_key: str
+    ) -> dict:
+        """Invia un modello. La chiave di idempotenza rende innocuo un nuovo tentativo:
+        Yourang restituisce il messaggio già inviato invece di mandarne un secondo."""
+        resp = self._request(
+            "POST", "/whatsapp/messages/template",
+            json={
+                "to_phone": to_phone,
+                "template_name": name,
+                "template_language": language,
+                "template_parameters": parameters,
+            },
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return self._data(resp)
 
     # -- contatti --
     def list_contacts(self, limit: int = 100, offset: int = 0) -> list[dict]:

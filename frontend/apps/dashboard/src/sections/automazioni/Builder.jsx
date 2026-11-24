@@ -2,8 +2,9 @@
 // Maps 1:1 onto AutomationIn: name, event, offset_direction/offset_value/offset_unit,
 // send_time (null = right away), conditions {op, rules:[{field,cmp,value}]},
 // trigger_origin (yourang | webhook), active.
-// Execution (channel + message) lives on Yourang — shown read-only, with a live
-// client-side WhatsApp preview (token substitution) as a nicety.
+// template_name/template_language/template_parameters: the WhatsApp template
+// approved on Yourang that the rule sends, and the youty fields filling it
+// (MessageCard.jsx). The run_automations job sends it through Yourang's API.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { API_URL, Icon, Toggle, toastApiError } from '@youty/shared';
 import { DkSeg } from '../../ui/index.js';
@@ -11,10 +12,11 @@ import { mergeRuleDraft } from './draft.js';
 import { useDash } from '../../ctx.jsx';
 import DkCondRow, { defaultRule } from './DkCondRow.jsx';
 import { DkStepper, DkCopyField, DkTrigStep, MiniMetric, DkEventMenu } from './controls.jsx';
+import MessageCard from './MessageCard.jsx';
 import { automationsApi } from '../../api/automations.js';
 import {
   eventIcon, eventHint, OFFSET_UNITS, offsetPhrase,
-  dkRender, EVENT_SAMPLE_MESSAGE, catLabel,
+  catLabel,
 } from './catalog.js';
 
 let CID = 0;
@@ -35,6 +37,9 @@ function initDraft(rule, catalog) {
     conds: withIds(rule && rule.conditions && rule.conditions.rules),
     trigger_origin: rule ? rule.trigger_origin : 'yourang',
     active: rule ? rule.active : true,
+    template_name: rule ? rule.template_name || '' : '',
+    template_language: rule ? rule.template_language || '' : '',
+    template_parameters: rule ? rule.template_parameters || [] : [],
   };
 }
 
@@ -52,6 +57,11 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
   const [draft, setDraft] = useState(() => initDraft(rule, catalog));
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  // modelli WhatsApp di Yourang: letti una volta all'apertura del costruttore
+  const [wa, setWa] = useState(null);
+  useEffect(() => {
+    automationsApi.whatsappTemplates().then(setWa).catch(() => setWa({ state: 'yourang_error', templates: [], events: [], fields: [] }));
+  }, []);
 
   /* La regola cambia sotto il costruttore: interruttore della lista, un'altra
    * postazione, il rinomina di un'etichetta che il server riscrive nelle
@@ -105,6 +115,9 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
         : {},
       trigger_origin: draft.trigger_origin,
       active: draft.active,
+      template_name: draft.template_name,
+      template_language: draft.template_language,
+      template_parameters: draft.template_parameters,
     };
     setSaving(true);
     try {
@@ -120,11 +133,6 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
       setSaving(false);
     }
   };
-
-  /* ---- live WhatsApp preview (client-side nicety; real template lives on Yourang) ---- */
-  const sampleMsg = (rule && rule.message_preview && rule.message_preview.trim())
-    || t(EVENT_SAMPLE_MESSAGE[draft.event] || { it: '', en: '' });
-  const msgPreview = dkRender(sampleMsg);
 
   const webhookFullUrl = rule && rule.webhook_url ? API_URL + rule.webhook_url : null;
 
@@ -292,13 +300,9 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontWeight: 700, fontSize: 15.5 }}>{t('Operatività · Yourang', 'Operations · Yourang')}</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', background: 'var(--paper-2)', padding: '2px 8px', borderRadius: 99 }}><Icon name="lock" size={11} color="var(--muted)" />{t('Sola lettura', 'Read-only')}</span>
             </div>
-            <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('L’esecuzione (canale, invio, dinamiche) è gestita da Yourang. Qui sono sincronizzati.', 'Execution (channel, send, dynamics) is handled by Yourang. Synced here.')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted)', marginTop: 3 }}>{t('Il messaggio parte su WhatsApp tramite Yourang; i modelli si creano e si fanno approvare su Yourang.', 'The message goes out on WhatsApp through Yourang; templates are created and approved on Yourang.')}</div>
           </div>
-          <button className="dk-btn dk-btn--primary" style={{ height: 40, flexShrink: 0 }} onClick={() => fireToast({ msg: t('Apertura di Yourang per canale e messaggio…', 'Opening Yourang for channel and message…'), icon: 'ext' })}>
-            <Icon name="ext" size={16} color="#fff" />{t('Apri su Yourang', 'Open in Yourang')}
-          </button>
         </div>
 
         {/* TRIGGER ORIGIN */}
@@ -338,28 +342,15 @@ export default function Builder({ rule, catalog, canWrite, onSaved }) {
           )}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 14 }}>
-          {/* active channel — fixed WhatsApp, executed by Yourang */}
-          <div className="dk-card" style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', background: 'var(--surface)' }}>
-            <div className="t-meta" style={{ marginBottom: 10 }}>{t('Canale attivo', 'Active channel')}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 9, background: 'color-mix(in srgb, #3F9D58 14%, transparent)', display: 'grid', placeItems: 'center' }}><Icon name="whatsapp" size={17} color="#3F9D58" /></div>
-              <span style={{ fontWeight: 700, fontSize: 14.5 }}>WhatsApp</span>
-            </div>
-            <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="refresh" size={12} color="var(--muted-2)" />{t('Sincronizzato', 'Synced')}</div>
-          </div>
-          {/* live message preview (token substitution) */}
-          <div className="dk-card" style={{ padding: 14, boxShadow: 'none', border: '1px solid var(--hair)', background: 'var(--surface)' }}>
-            <div className="t-meta" style={{ marginBottom: 10 }}>{t('Anteprima messaggio', 'Message preview')}</div>
-            <div style={{ display: 'flex', gap: 9 }}>
-              <div style={{ width: 26, height: 26, borderRadius: 99, background: 'var(--brand, #7C4A57)', display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 800, fontSize: 12, flexShrink: 0 }}>P</div>
-              <div style={{ flex: 1, minWidth: 0, background: 'var(--paper-2)', borderRadius: '4px 12px 12px 12px', padding: '8px 11px', fontSize: 13, lineHeight: 1.45, color: 'var(--ink-2)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                {msgPreview || t('Il testo del messaggio verrà sincronizzato da Yourang.', 'The message text will be synced from Yourang.')}
-              </div>
-            </div>
-            <div className="t-sm" style={{ color: 'var(--muted-2)', marginTop: 10 }}>{t('Testo e variabili si modificano su Yourang', 'Text and variables are edited on Yourang')}</div>
-          </div>
-        </div>
+        <MessageCard
+          wa={wa}
+          event={draft.event}
+          value={{ template_name: draft.template_name, template_language: draft.template_language, template_parameters: draft.template_parameters }}
+          onChange={(v) => setDraft((d) => ({ ...d, ...v }))}
+          canWrite={canWrite}
+          t={t}
+          lang={lang}
+        />
       </div>
     </div>
   );
