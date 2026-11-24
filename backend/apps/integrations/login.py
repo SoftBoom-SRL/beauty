@@ -30,13 +30,12 @@ diventava titolare.
 
 import logging
 
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils.text import slugify
 
 from apps.accounts.models import Membership, Role, User
 from apps.accounts.provisioning import create_salon_foundation
-from apps.accounts.sessions import session_payload
+from apps.accounts.sessions import SUPPORT_ROLE, is_support_email, session_payload
 from apps.accounts.team import make_owner
 from apps.core.services import log_activity
 from apps.core.models import Salon
@@ -212,13 +211,6 @@ def _enter(
         _grant_support_role(membership)
         membership = _membership_for(salon, user)
     return membership, conn
-
-
-SUPPORT_ROLE = "Supporto Yourang"
-
-
-def is_support_email(email: str) -> bool:
-    return email.rpartition("@")[2].lower() in settings.YOURANG_SUPPORT_EMAIL_DOMAINS
 
 
 def _grant_support_role(membership: Membership) -> None:

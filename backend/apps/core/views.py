@@ -126,7 +126,7 @@ def stream_access(info: dict):
     restava valido fino a fine stream.
     """
     # lazy: evita cicli in fase di load
-    from apps.accounts.sessions import find_membership, membership_scopes, tv_matches
+    from apps.accounts.sessions import acts_as_owner, find_membership, membership_scopes, tv_matches
 
     membership = find_membership(info.get("user_id"), info.get("salon_id"), related=("user", "role"))
     if membership is None:
@@ -134,7 +134,7 @@ def stream_access(info: dict):
     if not tv_matches(membership, info.get("tv", 0)):
         return None
     scopes = sorted(membership_scopes(membership))
-    return bool(membership.is_owner), scopes
+    return acts_as_owner(membership), scopes
 
 
 def _window_rows(salon_id: int, cursor: int, horizon):

@@ -34,7 +34,7 @@ from apps.core.models import Salon
 from apps.integrations import crypto
 from apps.integrations.models import YourangConnection, YourangOAuthState
 from common.permissions import SCOPES
-from common.testing import bearer, post_json
+from common.testing import bearer, post_json, put_json
 
 from .base import TEST_KEY
 
@@ -559,7 +559,7 @@ class SupportAccessTests(_FlowCase):
     def test_joining_after_the_client_gives_full_access(self):
         client = self._login("org-nails", "nails@yahoo.com", "owner", "Nails Avenue")
         session = self._login("org-nails", "maria@yourang.ai", "admin")
-        self.assertFalse(session["is_owner"])
+        self.assertTrue(session["is_owner"])  # la dashboard apre anche le funzioni del titolare
         self.assertEqual(sorted(session["scopes"]), sorted(SCOPES))
         support = self._support(client["salon"]["id"], "maria@yourang.ai")
         self.assertEqual(support.role.name, "Supporto Yourang")
@@ -580,6 +580,43 @@ class SupportAccessTests(_FlowCase):
         Membership.objects.filter(user__email="maria@yourang.ai").update(role=None)
         self._login("org-nails", "maria@yourang.ai", "admin")
         self.assertEqual(self._support(client["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
+
+    def _support_auth(self):
+        client = self._login("org-nails", "nails@yahoo.com", "owner")
+        self._login("org-nails", "maria@yourang.ai", "admin")
+        salon = Salon.objects.get(id=client["salon"]["id"])
+        return salon, bearer(self._support(salon.id, "maria@yourang.ai").user, salon)
+
+    def test_support_passes_owner_checks(self):
+        """Prima: tutti gli scope, ma impostazioni, sedi, brand… «riservate al titolare»."""
+        salon, auth = self._support_auth()
+        r = put_json(self.client, "/api/core/settings", {"brand_color": "#112233"}, **auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(self.client.delete("/api/integrations/yourang/connection", **auth).status_code, 200)
+        self.assertFalse(YourangConnection.objects.filter(salon=salon).exists())
+
+    def test_support_can_hand_the_salon_to_a_member(self):
+        salon, auth = self._support_auth()
+        self._login("org-nails", "op@nails.it", "member")
+        target = Membership.objects.get(salon=salon, user__email="op@nails.it")
+        r = post_json(self.client, f"/api/auth/members/{target.id}/transfer-ownership", {}, **auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(
+            list(Membership.objects.filter(salon=salon, is_owner=True).values_list("id", flat=True)),
+            [target.id],
+        )
+
+    def test_the_support_role_given_to_an_employee_does_not_make_her_owner(self):
+        client = self._login("org-nails", "nails@yahoo.com", "owner")
+        self._login("org-nails", "maria@yourang.ai", "admin")
+        session = self._login("org-nails", "op@nails.it", "member")
+        self.assertFalse(session["is_owner"])
+        role = Role.objects.get(salon_id=client["salon"]["id"], name="Supporto Yourang")
+        Membership.objects.filter(user__email="op@nails.it").update(role=role)
+        salon = Salon.objects.get(id=client["salon"]["id"])
+        auth = bearer(User.objects.get(email="op@nails.it"), salon)
+        r = put_json(self.client, "/api/core/settings", {"brand_color": "#112233"}, **auth)
+        self.assertEqual(r.status_code, 403)
 
     def test_only_verified_support_emails(self):
         from apps.integrations.login import login_with_yourang

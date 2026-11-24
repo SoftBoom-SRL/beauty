@@ -137,7 +137,9 @@ def transfer_ownership(request, member_id: int):
     if target.id == ctx.membership.id:
         raise HttpError(400, "Sei già il titolare")
     try:
-        make_owner(target, from_membership=ctx.membership)
+        # Il supporto Yourang (titolare solo per i permessi) non ha una
+        # titolarità sua da cedere: la passa da quella del salone.
+        make_owner(target, from_membership=ctx.membership if ctx.membership.is_owner else None)
     except NotOwner:
         raise HttpError(403, "Solo il titolare può cedere la titolarità")
     log_activity(

@@ -9,6 +9,7 @@ chiamante decide cosa rispondere quando la sessione non vale (None, un 401 con
 il suo messaggio, lo stream che si chiude) e come legge i claim del token.
 """
 
+from django.conf import settings
 from django.db.models import Case, IntegerField, Value, When
 
 from .models import Membership
@@ -54,6 +55,34 @@ def membership_scopes(membership) -> list:
     return (membership.role.scopes or []) if membership.role else []
 
 
+SUPPORT_ROLE = "Supporto Yourang"
+
+
+def is_support_email(email: str) -> bool:
+    return email.rpartition("@")[2].lower() in settings.YOURANG_SUPPORT_EMAIL_DOMAINS
+
+
+def acts_as_owner(membership) -> bool:
+    """Titolare, oppure supporto Yourang: TUTTI i permessi, anche quelli del titolare.
+
+    Il ruolo «Supporto Yourang» dava tutti gli scope ma non le funzioni del
+    titolare (impostazioni del salone, sedi, caparre, brand, bonus, Stripe,
+    Yourang, cessione…): il collega entrato dopo il cliente si fermava a
+    «Funzione riservata al titolare». Serve il ruolo di sistema E un'email dei
+    domini del supporto: il salone che assegna quel ruolo a una dipendente non
+    la fa titolare.
+    """
+    if membership.is_owner:
+        return True
+    role = membership.role
+    return (
+        role is not None
+        and role.is_system
+        and role.name == SUPPORT_ROLE
+        and is_support_email(membership.user.email)
+    )
+
+
 def user_out(user) -> dict:
     return {
         "id": user.id,
@@ -73,7 +102,7 @@ def session_payload(membership, tokens: dict | None = None) -> dict:
         "user": user_out(membership.user),
         "salon": {"id": salon.id, "name": salon.name, "slug": salon.slug},
         "scopes": sorted(membership_scopes(membership)),
-        "is_owner": membership.is_owner,
+        "is_owner": acts_as_owner(membership),
     }
     if tokens:
         out.update(tokens)
