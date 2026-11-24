@@ -18,8 +18,10 @@ from .schemas import (
     AutomationOut,
     EventsCatalogOut,
     WebhookTriggerOut,
+    WhatsAppTemplatesOut,
 )
 from .services import definition, publish_definition
+from .whatsapp import PARAMETER_FIELDS, SENDING_EVENTS, TemplatesUnavailable, apply_template, available_templates
 
 router = Router(tags=["automations"])
 
@@ -113,6 +115,26 @@ def _validated(data: AutomationIn) -> dict:
     return payload
 
 
+def _with_template(salon, payload: dict, current: Automation | None = None) -> dict:
+    """Il payload con il modello WhatsApp controllato (vedi `whatsapp.apply_template`).
+
+    Un salvataggio che non cambia il modello non lo rilegge da Yourang: si può
+    rinominare o spegnere un'automazione anche con Yourang irraggiungibile.
+    """
+    unchanged = current is not None and (
+        payload.get("template_name") == current.template_name
+        and payload.get("template_language") == current.template_language
+        and payload.get("template_parameters") == current.template_parameters
+        and payload.get("event") == current.event
+    )
+    if unchanged:
+        return payload
+    error = apply_template(salon, payload)
+    if error:
+        raise HttpError(400, error)
+    return payload
+
+
 @router.get("/", auth=staff_auth, response=list[AutomationOut])
 def list_automations(request):
     ctx = request.auth
@@ -136,7 +158,7 @@ def create_automation(request, data: AutomationIn):
     require_scope(ctx, "marketing")
     from apps.agenda.services.locking import lock_salon  # lazy
 
-    payload = _validated(data)
+    payload = _with_template(ctx.salon, _validated(data))
     # Sotto il lock del salone, come l'eliminazione di un'etichetta
     # (`delete_label` in clients), che sotto lo stesso lock controlla che
     # nessuna automazione la citi: senza, un'automazione a metà salvataggio
@@ -163,7 +185,7 @@ def update_automation(request, automation_id: int, data: AutomationIn):
     automation = salon_get(Automation, ctx, automation_id)
     from apps.agenda.services.locking import lock_salon  # lazy
 
-    payload = _validated(data)
+    payload = _with_template(ctx.salon, _validated(data), automation)
     # Il lock del salone, come nella creazione, poi la riga, riletta: dalla
     # copia letta a inizio richiesta, un'automazione eliminata nel frattempo
     # da un'altra postazione faceva 500.
@@ -174,8 +196,9 @@ def update_automation(request, automation_id: int, data: AutomationIn):
             raise HttpError(404, "Automazione non trovata")
         for name, value in payload.items():
             setattr(automation, name, value)
-        # Solo i campi della maschera: `message_preview` lo sincronizza Yourang,
-        # e il save completo di una copia vecchia lo riscriveva.
+        # Solo i campi della maschera (più quelli del modello che
+        # `_with_template` ha completato): il save completo di una copia
+        # vecchia riscriveva il resto.
         automation.save(update_fields=[*payload, "updated_at"])
         log_activity(
             ctx.salon,
@@ -242,6 +265,25 @@ def events_catalog(request):
         "events": _catalog_items(EVENTS),
         "operators": _catalog_items(OPERATORS),
         "fields": _catalog_items(FILTER_FIELDS),
+    }
+
+
+@router.get("/whatsapp-templates", auth=staff_auth, response=WhatsAppTemplatesOut)
+def whatsapp_templates(request):
+    """Modelli WhatsApp approvati su Yourang che un'automazione può inviare."""
+    ctx = request.auth
+    try:
+        templates, state = available_templates(ctx.salon), "ok"
+    except TemplatesUnavailable as exc:
+        templates, state = [], str(exc)
+    return {
+        "state": state,
+        "templates": templates,
+        "events": list(SENDING_EVENTS),
+        "fields": [
+            {"value": key, "label_it": it, "label_en": en}
+            for key, (it, en) in PARAMETER_FIELDS.items()
+        ],
     }
 
 

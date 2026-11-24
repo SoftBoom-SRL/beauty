@@ -11,4 +11,6 @@ export const automationsApi = {
   /* accende o spegne: POST senza corpo */
   toggle: (id) => api.post(`/api/automations/${id}/toggle`),
   eventsCatalog: () => api.get('/api/automations/events-catalog'),
+  /* modelli WhatsApp approvati su Yourang, eventi che possono inviarli, campi */
+  whatsappTemplates: () => api.get('/api/automations/whatsapp-templates'),
 };

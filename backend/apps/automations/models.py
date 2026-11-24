@@ -48,7 +48,14 @@ class Automation(models.Model):
         max_length=10, choices=TriggerOrigin.choices, default=TriggerOrigin.YOURANG
     )
     webhook_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    message_preview = models.TextField(blank=True)  # sincronizzata da Yourang, sola lettura via API
+    message_preview = models.TextField(blank=True)  # testo del modello scelto, sola lettura via API
+    # Modello WhatsApp (approvato su Yourang) che l'automazione invia, e i campi
+    # di youty che ne riempiono i valori, nell'ordine che Yourang chiede
+    # (vedi automations.whatsapp.PARAMETER_FIELDS). Vuoto = nessun invio.
+    template_name = models.CharField(max_length=512, blank=True)
+    template_language = models.CharField(max_length=16, blank=True)
+    template_category = models.CharField(max_length=32, blank=True)
+    template_parameters = models.JSONField(default=list, blank=True)
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -58,3 +65,42 @@ class Automation(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class AutomationSend(models.Model):
+    """Un invio di un'automazione: uno solo per cliente e occasione.
+
+    `key` dice l'occasione (l'appuntamento, e per i promemoria anche il suo
+    orario: un appuntamento spostato riceve il promemoria del nuovo orario).
+    Il vincolo di unicità è ciò che impedisce il doppio messaggio quando due
+    giri si sovrappongono; un invio fallito si ritenta qualche volta con la
+    stessa chiave di idempotenza, quindi Yourang non lo manda due volte.
+    """
+
+    class Status(models.TextChoices):
+        SENDING = "sending", "In invio"
+        SENT = "sent", "Inviato"
+        FAILED = "failed", "Fallito"
+        SKIPPED = "skipped", "Saltato"
+
+    automation = models.ForeignKey(Automation, on_delete=models.CASCADE, related_name="sends")
+    client = models.ForeignKey("clients.Client", on_delete=models.CASCADE, related_name="automation_sends")
+    appointment = models.ForeignKey(
+        "agenda.Appointment", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="automation_sends",
+    )
+    key = models.CharField(max_length=120)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.SENDING)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    error = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["automation", "key"], name="automation_send_once"),
+        ]
+
+    def __str__(self):
+        return f"{self.automation_id}:{self.key} ({self.status})"

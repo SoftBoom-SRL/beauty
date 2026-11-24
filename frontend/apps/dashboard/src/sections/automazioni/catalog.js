@@ -45,30 +45,6 @@ export function offsetPhrase(dir, n, unitId, lang) {
   return `${n} ${ul} ${d}`;
 }
 
-/* ---- live WhatsApp-preview token substitution (client-side nicety only —
- * the real message template + variables are authored and sent from Yourang) ---- */
-export const DK_SAMPLE = {
-  '{nome}': 'Sofia', '{name}': 'Sofia',
-  '{data}': 'gio 14 nov', '{date}': 'Thu 14 Nov',
-  '{ora}': '15:30', '{time}': '15:30',
-  '{servizio}': 'semipermanente', '{service}': 'gel polish',
-  '{link}': 'theparlour.it/r',
-};
-export const dkRender = (s) => (s || '').replace(/\{[^}]+\}/g, (m) => DK_SAMPLE[m] || m);
-
-// Illustrative sample body per event — shown only until Yourang has synced a real
-// `message_preview` onto the rule (that field is read-only from our API).
-export const EVENT_SAMPLE_MESSAGE = {
-  new_client: { it: 'Ciao {nome}! Benvenuta da The Parlour 💛', en: 'Hi {name}! Welcome to The Parlour 💛' },
-  appointment_created: { it: 'Appuntamento confermato per {data} alle {ora}.', en: 'Appointment confirmed for {date} at {time}.' },
-  appointment_upcoming: { it: 'Promemoria: il tuo appuntamento per {servizio} è {data} alle {ora}.', en: 'Reminder: your {service} appointment is {date} at {time}.' },
-  visit_completed: { it: 'Grazie per la visita, {nome}! Com’è andata?', en: 'Thanks for stopping by, {name}! How did it go?' },
-  birthday: { it: 'Buon compleanno {nome}! Un pensiero speciale per te 🎂', en: 'Happy birthday {name}! A little gift for you 🎂' },
-  client_inactive: { it: 'Ci manchi, {nome}! Torna a trovarci con uno sconto speciale.', en: 'We miss you, {name}! Come back with a special discount.' },
-  no_show: { it: 'Ciao {nome}, ci dispiace per l’appuntamento mancato. Vuoi riprenotare?', en: 'Hi {name}, sorry we missed you. Want to rebook?' },
-  slot_freed: { it: 'Si è liberato un posto {data} alle {ora}: prenota su {link}', en: 'A slot opened up {date} at {time}: book now at {link}' },
-};
-
 /* ---- value-input kind per condition field (from events-catalog `fields`) ----
  * mirrors apps.clients.services.client_facts: reliability/visits/noshow_count are
  * numbers, total_spent is money, categories is a list of label names (matched via
@@ -83,3 +59,37 @@ export const FIELD_KINDS = {
 export const fieldKind = (value) => FIELD_KINDS[value] || 'text';
 
 export const catLabel = (item, lang) => (item ? (lang === 'en' ? item.label_en : item.label_it) : '');
+
+/* ---- modelli WhatsApp (YR-1391) ----
+ * Il modello approvato su Yourang ha {{1}}, {{2}}… nel testo e, dopo, i link
+ * dinamici dei pulsanti: `parameters` li elenca in quell'ordine, e la regola
+ * salva per ognuno il campo di youty che lo riempie. */
+export const TEMPLATE_SAMPLE = {
+  first_name: 'Sofia', full_name: 'Sofia Ricci', date: '14/11/2026', time: '15:30',
+  services: 'Semipermanente', operator: 'Giulia', salon: 'The Parlour',
+};
+// Il campo proposto per ogni valore, finché il titolare non sceglie: dal nome
+// che l'autore gli ha dato su Yourang («nome», «ora»…), altrimenti per posizione.
+const DEFAULT_FIELDS = ['first_name', 'date', 'time', 'services', 'operator', 'salon', 'full_name'];
+const LABEL_FIELDS = [
+  [/cognome|full|complet/i, 'full_name'], [/nome|name/i, 'first_name'], [/\bor[ae]\b|orario|time|hour/i, 'time'],
+  [/data|giorno|date|day/i, 'date'], [/serviz|trattament|service/i, 'services'],
+  [/operat|estetist|staff/i, 'operator'], [/salon|centro|negozio|shop/i, 'salon'],
+];
+export const defaultTemplateFields = (parameters) => parameters.map((p, i) => {
+  const hit = LABEL_FIELDS.find(([re]) => re.test(p.label || ''));
+  return hit ? hit[1] : DEFAULT_FIELDS[i % DEFAULT_FIELDS.length];
+});
+
+/** Testo del modello con i valori d'esempio dei campi scelti. */
+export function renderTemplate(template, fields) {
+  if (!template || !template.body) return '';
+  const byNumber = {};
+  (template.parameters || []).forEach((p, i) => {
+    const m = /^body:(\d+)$/.exec(p.key);
+    if (m) byNumber[m[1]] = TEMPLATE_SAMPLE[fields[i]] || '…';
+  });
+  return template.body.replace(/\{\{\s*(\d+)\s*\}\}/g, (all, n) => byNumber[n] ?? all);
+}
+
+export const templateKey = (name, language) => (name ? `${name}|${language}` : '');

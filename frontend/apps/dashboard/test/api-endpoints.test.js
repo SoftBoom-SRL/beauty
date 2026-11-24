@@ -197,6 +197,7 @@ const CASES = [
   [() => automationsApi.remove(151), ['DELETE', '/api/automations/151']],
   [() => automationsApi.toggle(151), ['POST', '/api/automations/151/toggle']],
   [() => automationsApi.eventsCatalog(), ['GET', '/api/automations/events-catalog']],
+  [() => automationsApi.whatsappTemplates(), ['GET', '/api/automations/whatsapp-templates']],
   // analisi dati
   [() => insightsApi.kpis({ period: 'month' }), ['GET', '/api/insights/kpis', { params: { period: 'month' } }]],
   [() => insightsApi.revenueSeries(P), ['GET', '/api/insights/revenue-series', { params: P }]],
