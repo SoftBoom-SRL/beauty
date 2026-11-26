@@ -1,5 +1,6 @@
 // ProfileHeader.jsx — la testata della scheda cliente (ClientProfile): foto,
-// nome, genere, compleanno vicino, lista d'attesa, quanto resta da saldare e i
+// nome, genere, compleanno vicino, lista d'attesa, quanto resta da saldare, la
+// scadenza della Exclusive Card (ExclusiveBadge) e i
 // pulsanti di contatto. Senza numero o email i pulsanti restano e dicono con
 // un avviso perché non possono aprire niente; la cliente senza un numero suo
 // che si contatta tramite un'altra («tramite Laura») si chiama e si scrive al
@@ -7,6 +8,7 @@
 import { Avatar, Icon, fmtEur } from '@youty/shared';
 import { initialsOf, waHref, daysToBirthday, phoneLine, reachPhone, amountDue } from './helpers.js';
 import { genderLabel, genderGlyph } from '../../ui/GenderPicker.jsx';
+import ExclusiveBadge from './ExclusiveBadge.jsx';
 
 const btnA = { textDecoration: 'none' }; // anchor-as-button
 const pill = { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 99, fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap' };
@@ -38,6 +40,7 @@ export default function ProfileHeader({ c, onWaitlist, canWrite, archived, openE
               <Icon name="wallet" size={12} color="var(--danger)" />{t(`Da saldare ${fmtEur(due, lang)}`, `${fmtEur(due, lang)} to pay`)}
             </span>
           )}
+          <ExclusiveBadge clientId={c.id} pill={pill} t={t} lang={lang} />
           {bdays != null && bdays <= 14 && (
             <span style={{ ...pill, background: 'var(--warn-tint)', color: 'var(--warn)' }}>
               <Icon name="cake" size={12} color="var(--warn)" />{bdays === 0 ? t('Compleanno oggi!', 'Birthday today!') : bdays === 1 ? t('Compleanno domani', 'Birthday tomorrow') : t(`Compleanno tra ${bdays} giorni`, `Birthday in ${bdays} days`)}
