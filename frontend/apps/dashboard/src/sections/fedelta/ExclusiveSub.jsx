@@ -1,18 +1,24 @@
 // ExclusiveSub.jsx — Promozioni → Exclusive Card: le iscritte con la scadenza,
 // filtro «in scadenza» (entro 30 giorni) per chiamarle a rinnovare. Si iscrive
-// e si rinnova dalla scheda cliente (Portafoglio); quote e sconto in
-// Impostazioni → Exclusive Card.
+// e si rinnova dalla scheda cliente (Portafoglio) e anche da qui con «Nuova
+// Exclusive Card»: chi apriva questa sezione per crearne una non trovava il
+// pulsante. Quote e sconto in Impostazioni → Exclusive Card.
 import { useState } from 'react';
-import { EmptyState, toastApiError } from '@youty/shared';
+import { EmptyState, Icon, toastApiError } from '@youty/shared';
 import { useDash } from '../../ctx.jsx';
 import { useResource } from '../../hooks/useResource.js';
 import { exclusiveApi } from '../../api/marketing.js';
 import { dateLabel } from '../clienti/helpers.js';
+import ExclusiveCardBox from '../clienti/tabs/ExclusiveCardBox.jsx';
+import ClientPicker from './ClientPicker.jsx';
 
 export default function ExclusiveSub() {
-  const { t, lang, settings, fireToast } = useDash();
+  const { t, lang, settings, hasScope, fireToast } = useDash();
   const [status, setStatus] = useState('expiring');
-  const { data, loading } = useResource(() => exclusiveApi.list(status ? { status } : {}), [status], {
+  const [rev, setRev] = useState(0);
+  const [adding, setAdding] = useState(null);   // null chiuso, {} senza cliente, { client } scelta
+  const canSell = !!settings?.exclusive_card?.enabled && hasScope('sales');
+  const { data, loading } = useResource(() => exclusiveApi.list(status ? { status } : {}), [status, rev], {
     fallback: [], onError: (err) => toastApiError(err, fireToast, t),
   });
   const rows = data || [];
@@ -32,6 +38,28 @@ export default function ExclusiveSub() {
           {t('La Exclusive Card non è attiva: si attiva in Impostazioni → Exclusive Card.', 'The Exclusive Card is off: turn it on in Settings → Exclusive Card.')}
         </div>
       )}
+      {canSell && (adding ? (
+        <div data-exclusive-new="" className="dk-card" style={{ padding: '14px 16px', boxShadow: 'none', border: '1px solid var(--hair)', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <div style={{ flex: 1, fontWeight: 700 }}>{t('Nuova Exclusive Card', 'New Exclusive Card')}</div>
+            <button className="dk-iconbtn" aria-label={t('Chiudi', 'Close')} onClick={() => setAdding(null)}><Icon name="x" size={18} /></button>
+          </div>
+          <ClientPicker client={adding.client || null} onChange={(client) => setAdding({ client })}
+            placeholder={t('Cerca la cliente da iscrivere…', 'Search the client to enrol…')} t={t} />
+          {adding.client && (
+            <div style={{ marginTop: 12 }}>
+              <ExclusiveCardBox key={adding.client.id} clientId={adding.client.id} autoOpen
+                onSubscribed={() => { setAdding(null); setRev((n) => n + 1); }} />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <button className="dk-btn dk-btn--clay" onClick={() => setAdding({})}>
+            <Icon name="plus" size={16} color="#fff" />{t('Nuova Exclusive Card', 'New Exclusive Card')}
+          </button>
+        </div>
+      ))}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
         {filters.map(([k, l]) => (
           <button key={k || 'all'} type="button" className="dk-pill" aria-pressed={status === k} onClick={() => setStatus(k)}
