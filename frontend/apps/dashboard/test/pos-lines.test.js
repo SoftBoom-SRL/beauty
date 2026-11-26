@@ -75,6 +75,17 @@ test('sconti: omaggi a zero; al banco vale quello della riga, altrimenti quello 
   assert.equal(counterDiscountPct({ line_type: 'gift_card', disc: 0 }, 20), 0);
 });
 
+test('check-out: lo sconto su tutto il conto vale per le righe senza uno sconto proprio', () => {
+  const svc = { line_type: 'service', is_gift: false, discount_pct: 0 };
+  assert.equal(checkoutDiscountPct(svc, 10), 10);
+  assert.equal(checkoutDiscountPct({ ...svc, discount_pct: 25 }, 10), 25);
+  assert.equal(checkoutDiscountPct({ ...svc, line_type: 'product' }, 10), 10);
+  assert.equal(checkoutDiscountPct({ ...svc, line_type: 'package' }, 10), 10);
+  assert.equal(checkoutDiscountPct({ ...svc, is_gift: true }, 10), 0);
+  assert.equal(checkoutDiscountPct({ line_type: 'gift_card', is_gift: false, discount_pct: 0 }, 10), 0);
+  assert.equal(checkoutDiscountPct(svc), 0);
+});
+
 test('verso l’API: servizio, prodotto e gift card, con il prezzo in centesimi esatti', () => {
   assert.deepEqual(toApiLine({ line_type: 'service', service_id: 3, qty: 1, unit_price: 35, is_gift: false }, 0),
     { line_type: 'service', service_id: 3, qty: 1, unit_price: '35.00', discount_pct: 0, is_gift: false });

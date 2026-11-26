@@ -26,6 +26,7 @@ import GiftCardForm from '../sell/GiftCardForm.jsx';
 import PackageForm from '../sell/PackageForm.jsx';
 import PrepaidForm from '../sell/PrepaidForm.jsx';
 import TotalsBox from '../sell/TotalsBox.jsx';
+import SaleDiscount from '../cart/SaleDiscount.jsx';
 import { useCoupon, useCouponRoom } from '../useCoupon.js';
 import usePackages from '../usePackages.js';
 import useClientCredit from '../useClientCredit.js';
@@ -123,9 +124,16 @@ export default function SellModal({ appointment, onDone, onClose }) {
   const cp = useCoupon(t);
   const { coupon } = cp;
 
+  /* Sconto su tutto il conto: vale per le righe senza uno sconto proprio
+   * (checkoutDiscountPct). Con tre servizi nella visita bisognava scontarli
+   * uno per uno (Beauty Boutique, 11/2026). `billLines` sono le righe con lo
+   * sconto che parte davvero: totali, pagamento e richiesta usano quelle. */
+  const [saleDisc, setSaleDisc] = useState(0);
+  const billLines = lines.map((l) => ({ ...l, discount_pct: checkoutDiscountPct(l, saleDisc) }));
+
   /* Buono applicato e conto che cambia sotto di lui: si toglie (14-12, vedi
    * useCouponRoom). */
-  const couponRoomCents = saleTotals(lines, null).couponBaseCents;
+  const couponRoomCents = saleTotals(billLines, null).couponBaseCents;
   useCouponRoom(cp, couponRoomCents, t);
 
   if (!appt) return null;
@@ -152,7 +160,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
     if (o?.initials) return o.initials;
     return (opLabel(opId).split(' ').map((w) => w[0]).join('') || '?').slice(0, 2).toUpperCase();
   };
-  const linesOf = (opId) => lines.filter((l) => l.operator_id === opId);
+  const linesOf = (opId) => billLines.filter((l) => l.operator_id === opId);
   const patchLine = (key, patch) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const removeLine = (key) => setLines((ls) => ls.filter((l) => l.key !== key));
   const closeForms = () => { setPick(null); setPickQ(''); setGiftForm(null); setPkgForm(null); setPrepaidForm(null); };
@@ -234,7 +242,7 @@ export default function SellModal({ appointment, onDone, onClose }) {
       const body = {
         blocks: blockIds.map((opId) => ({
           operator_id: opId,
-          lines: linesOf(opId).map((l) => toApiLine(l, checkoutDiscountPct(l))),
+          lines: linesOf(opId).map((l) => toApiLine(l, l.discount_pct)),
         })),
         payments: resolvePayments(pay, dueCents),
         ...(coupon ? { coupon_code: coupon.code } : {}),
@@ -337,6 +345,10 @@ export default function SellModal({ appointment, onDone, onClose }) {
               </div>
             </div>
           )}
+          {/* sconto su tutto il conto: le righe con uno sconto proprio tengono il loro */}
+          <div style={{ marginBottom: 12 }}>
+            <SaleDiscount value={saleDisc} onChange={setSaleDisc} label={t('Sconto su tutto il conto', 'Discount on the whole bill')} t={t} />
+          </div>
           {/* buono sconto: si verifica prima, così il pagamento parte dal dovuto giusto */}
           <CouponField cp={cp} onApply={applyCoupon} discount={discount}
             label={t('Buono sconto', 'Voucher')} placeholder={t('Codice del buono (facoltativo)', 'Voucher code (optional)')}

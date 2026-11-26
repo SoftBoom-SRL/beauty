@@ -1,12 +1,13 @@
-// cart/SaleDiscount.jsx — lo sconto su tutta la vendita del banco (CartTab):
-// le scelte rapide 10/15/20% o un numero a mano. Vale per le righe prodotto
-// che non hanno uno sconto proprio (counterDiscountPct).
+// cart/SaleDiscount.jsx — lo sconto su tutta la vendita: al banco (CartTab) e
+// al check-out di una visita (SellModal). Le scelte rapide 10/15/20% o un
+// numero a mano. Vale per le righe che non hanno uno sconto proprio
+// (counterDiscountPct, checkoutDiscountPct).
 import { NumInput } from '@youty/shared';
 
-export default function SaleDiscount({ value, onChange, t }) {
+export default function SaleDiscount({ value, onChange, label, t }) {
   return (
     <>
-      <div className="t-meta" style={{ margin: '18px 0 8px' }}>{t('Sconto sulla vendita', 'Sale discount')}</div>
+      <div className="t-meta" style={{ margin: '18px 0 8px' }}>{label || t('Sconto sulla vendita', 'Sale discount')}</div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {[0, 10, 15, 20].map((p) => {
           const on = value === p;
