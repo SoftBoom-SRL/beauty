@@ -2,7 +2,9 @@
 // iscritta fino a quando, e il pulsante per iscriverla o rinnovarla con la
 // quota che dice il server (rinnovo anticipato più basso, l'anno si aggiunge
 // alla scadenza attuale). La quota entra in cassa come vendita al banco.
-// Senza la carta attiva in Impostazioni non compare.
+// Senza la carta attiva in Impostazioni non compare. La usa anche
+// Promozioni → Exclusive Card per iscrivere una cliente scelta lì: `onSubscribed`
+// aggiorna l'elenco, `autoOpen` apre subito il pagamento.
 import { useState } from 'react';
 import { Icon, fmtEurNoFree, toastApiError } from '@youty/shared';
 import { useDash } from '../../../ctx.jsx';
@@ -12,11 +14,11 @@ import { payMethods } from '../../pos/lib.js';
 import ReceiptToggle from '../../pos/ReceiptToggle.jsx';
 import { dateLabel } from '../helpers.js';
 
-export default function ExclusiveCardBox({ clientId }) {
+export default function ExclusiveCardBox({ clientId, onSubscribed, autoOpen = false }) {
   const { t, lang, settings, hasScope, fireToast } = useDash();
   const conf = settings?.exclusive_card;
   const [rev, setRev] = useState(0);
-  const [form, setForm] = useState(null);   // { method, receipt, busy } mentre si incassa
+  const [form, setForm] = useState(autoOpen ? { method: 'card', receipt: true, busy: false } : null);   // { method, receipt, busy } mentre si incassa
   const { data } = useResource(() => exclusiveApi.ofClient(clientId), [clientId, rev], { enabled: !!conf?.enabled, fallback: null });
   if (!conf?.enabled) return null;
 
@@ -29,6 +31,7 @@ export default function ExclusiveCardBox({ clientId }) {
       fireToast({ msg: t(`Exclusive Card attiva fino al ${dateLabel(res.expires_on, 'it')}`, `Exclusive Card active until ${dateLabel(res.expires_on, 'en')}`), icon: 'check' });
       setForm(null);
       setRev((n) => n + 1);
+      onSubscribed?.(res);
     } catch (err) {
       toastApiError(err, fireToast, t);
       setForm((f) => ({ ...f, busy: false }));
