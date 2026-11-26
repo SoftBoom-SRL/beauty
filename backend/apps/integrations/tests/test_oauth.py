@@ -28,6 +28,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.accounts.models import Membership, Role, User
+from apps.accounts.sessions import is_support_email
 from apps.catalog.models import Service, ServiceCategory
 from apps.clients.models import Client
 from apps.core.models import Salon
@@ -580,6 +581,16 @@ class SupportAccessTests(_FlowCase):
         Membership.objects.filter(user__email="maria@yourang.ai").update(role=None)
         self._login("org-nails", "maria@yourang.ai", "admin")
         self.assertEqual(self._support(client["salon"]["id"], "maria@yourang.ai").role.name, "Supporto Yourang")
+
+    @override_settings(YOURANG_SUPPORT_EMAIL_DOMAINS=["yourang.ai", "collega.yourang@gmail.com"])
+    def test_a_colleague_outside_the_domains_is_listed_by_address(self):
+        client = self._login("org-nails", "nails@yahoo.com", "owner")
+        session = self._login("org-nails", "Collega.Yourang@gmail.com", "admin")
+        self.assertTrue(session["is_owner"])
+        support = self._support(client["salon"]["id"], session["user"]["email"])
+        self.assertEqual(support.role.name, "Supporto Yourang")
+        # L'indirizzo non apre il suo dominio: gmail.com resta un cliente qualunque.
+        self.assertFalse(is_support_email("altro@gmail.com"))
 
     def _support_auth(self):
         client = self._login("org-nails", "nails@yahoo.com", "owner")

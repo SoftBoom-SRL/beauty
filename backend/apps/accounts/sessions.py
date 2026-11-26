@@ -59,7 +59,10 @@ SUPPORT_ROLE = "Supporto Yourang"
 
 
 def is_support_email(email: str) -> bool:
-    return email.rpartition("@")[2].lower() in settings.YOURANG_SUPPORT_EMAIL_DOMAINS
+    """Un dominio della lista (yourang.ai) o un indirizzo intero (nome@gmail.com)."""
+    email = email.lower()
+    allowed = settings.YOURANG_SUPPORT_EMAIL_DOMAINS
+    return email in allowed or email.rpartition("@")[2] in allowed
 
 
 def acts_as_owner(membership) -> bool:

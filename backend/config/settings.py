@@ -315,6 +315,7 @@ YOURANG_WEBHOOK_RECEIVER_URL = os.getenv("YOURANG_WEBHOOK_RECEIVER_URL", "")
 # Domini del supporto Yourang: chi entra con «Accedi con Yourang» e un'email
 # verificata di questi domini ha sempre accesso completo al salone (ruolo
 # «Supporto Yourang»), anche dopo che il cliente ne è diventato titolare.
+# Accetta anche indirizzi interi (con la @) per i colleghi fuori dominio.
 YOURANG_SUPPORT_EMAIL_DOMAINS = [
     d.strip().lower()
     for d in os.getenv("YOURANG_SUPPORT_EMAIL_DOMAINS", "yourang.ai,reddoak.com").split(",")
