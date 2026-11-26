@@ -70,8 +70,12 @@ export const pricePatch = (l, price) => ({
   unit_price: price,
   ...(l.visit_id != null ? { list_price: price } : {}),
 });
-/** Sconto che parte per una riga del check-out: niente sugli omaggi. */
-export const checkoutDiscountPct = (l) => (l.is_gift ? 0 : (l.discount_pct || 0));
+/** Sconto che parte per una riga del check-out: quello della riga, altrimenti
+ *  quello su tutto il conto (`saleDisc`); niente su omaggi e gift card. Lo
+ *  sconto sul totale c'era solo al banco, e al check-out di una visita con più
+ *  servizi bisognava scontarli uno per uno (Beauty Boutique, 11/2026). */
+export const checkoutDiscountPct = (l, saleDisc = 0) => (
+  !canDiscountLine(l) ? 0 : (l.discount_pct > 0 ? l.discount_pct : saleDisc || 0));
 
 /* ---- conto unico (SellModal) ----
  * Le righe di una visita: come apptItemLine, con la visita da cui vengono
