@@ -470,7 +470,7 @@ export default function ApptDetailModal({ appointment, onMutate, onClose, onShow
   /* ---- RESCHEDULE flow ---- */
   if (flow === 'reschedule') {
     return (
-      <RescheduleFlow appt={appt} t={t} lang={lang} fireToast={fireToast} busy={busy} setBusy={setBusy}
+      <RescheduleFlow appt={appt} stay={stay} t={t} lang={lang} fireToast={fireToast} busy={busy} setBusy={setBusy}
         onBack={() => setFlow(null)} onClose={onClose} onDone={onClose} onMutate={onMutate} />
     );
   }

@@ -15,6 +15,7 @@ la stessa in agenda (`frontend …/lib/stay.js`) e in cassa.
 
 import datetime as dt
 
+from django.db import transaction
 from django.utils import timezone
 
 from ..models import Appointment
@@ -63,3 +64,42 @@ def bill_id(appointment):
     """Il conto in cui è stata incassata la visita: il suo, o quello unico di un'altra."""
     sale = getattr(appointment, "sale", None)
     return sale.pk if sale is not None else appointment.paid_in_sale_id
+
+
+def movable_mates(appointment) -> list[Appointment]:
+    """Gli altri appuntamenti della permanenza che si spostano con lui: quelli
+    ancora da cominciare e non incassati (chi è già in salone o ha pagato resta
+    dov'è)."""
+    return [
+        a for a in stay_of(appointment)
+        if a.pk != appointment.pk and a.status == Appointment.Status.CONFIRMED and bill_id(a) is None
+    ]
+
+
+@transaction.atomic
+def move_stay(appointment, new_start, *, operator=None, from_operator=None, actor=None, force=False):
+    """Sposta la visita e, dello stesso scarto, gli altri appuntamenti della sua permanenza.
+
+    Mani alle 10 con Sole e piedi alle 11 con Mara, spostati a giovedì: prima
+    si riprogrammava un appuntamento per volta, cercando a mano l'orario di
+    ognuno (Beauty Boutique, 11/2026). Ognuno resta con la sua operatrice e la
+    distanza dagli altri; o si spostano tutti o nessuno (un 409 annulla
+    tutto). Lo scarto in avanti sposta prima gli ultimi, all'indietro prima i
+    primi: spostati di mezz'ora nello stesso giorno, il primo finiva sul posto
+    ancora occupato dal secondo con la stessa operatrice.
+    → (appointment spostato, gli altri spostati)
+    """
+    from .appointments import move_appointment  # lazy: i test lo sostituiscono
+
+    delta = new_start - appointment.start
+    mates = movable_mates(appointment)
+    group = sorted([appointment, *mates], key=lambda a: (a.start, a.pk), reverse=delta > dt.timedelta(0))
+    moved = {}
+    for a in group:
+        main = a.pk == appointment.pk
+        moved[a.pk] = move_appointment(
+            a, a.start + delta,
+            operator=operator if main else None, from_operator=from_operator if main else None,
+            actor=actor, force=force, client_overlap_ok=True, any_operator=True,
+        )
+    return moved[appointment.pk], [moved[a.pk] for a in mates]

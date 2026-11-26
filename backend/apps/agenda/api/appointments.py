@@ -24,6 +24,8 @@ from ..schemas import (
     DepositCashedIn,
     MarginOut,
     MoveIn,
+    MoveStayIn,
+    MoveStayOut,
     ReasonIn,
     RestoreIn,
     SplitIn,
@@ -96,32 +98,57 @@ def import_appointments(request, data: AppointmentImportIn):
     return result
 
 
+def _move_operators(ctx, appointment, data):
+    """(operatrice nuova, colonna di partenza) di uno spostamento; (None, None) senza riassegnazione.
+
+    `active=True` vale solo per la NUOVA assegnazione. La colonna di partenza
+    può essere di un'operatrice disattivata — l'agenda la mostra apposta, in
+    una colonna a parte, per poterne riassegnare gli appuntamenti — e
+    pretenderla attiva faceva rispondere 404 a ogni riassegnazione da lì.
+    Quando l'operatrice indicata è già quella di partenza non c'è niente da
+    riassegnare.
+    """
+    source_id = data.from_operator_id or appointment.operator_id
+    if not data.operator_id or data.operator_id == source_id:
+        return None, None
+    from apps.staff.models import Operator  # lazy
+
+    operator = salon_get(Operator, ctx, data.operator_id, active=True)
+    from_operator = salon_get(Operator, ctx, data.from_operator_id) if data.from_operator_id else None
+    return operator, from_operator
+
+
 @router.post("/appointments/{int:appointment_id}/move", auth=staff_auth, response=AppointmentOut)
 def move_appointment(request, appointment_id: int, data: MoveIn):
     ctx = request.auth
     require_scope(ctx, "agenda")
     appointment = salon_get(Appointment, ctx, appointment_id)
-
-    operator = None
-    from_operator = None
-    # `active=True` vale solo per la NUOVA assegnazione. La colonna di partenza
-    # può essere di un'operatrice disattivata — l'agenda la mostra apposta, in
-    # una colonna a parte, per poterne riassegnare gli appuntamenti — e
-    # pretenderla attiva faceva rispondere 404 a ogni riassegnazione da lì.
-    # Quando l'operatrice indicata è già quella di partenza non c'è niente da
-    # riassegnare.
-    source_id = data.from_operator_id or appointment.operator_id
-    if data.operator_id and data.operator_id != source_id:
-        from apps.staff.models import Operator  # lazy
-
-        operator = salon_get(Operator, ctx, data.operator_id, active=True)
-        if data.from_operator_id:
-            from_operator = salon_get(Operator, ctx, data.from_operator_id)
+    operator, from_operator = _move_operators(ctx, appointment, data)
     appointment = appointment_services.move_appointment(
         appointment, data.start, operator=operator, from_operator=from_operator,
         actor=ctx.user, force=data.force, client_overlap_ok=True, any_operator=True,
     )
     return _appointment_out(appointment, viewer=ctx)
+
+
+@router.post("/appointments/{int:appointment_id}/move-stay", auth=staff_auth, response=MoveStayOut)
+def move_appointment_stay(request, appointment_id: int, data: MoveStayIn):
+    """Sposta la visita insieme agli altri appuntamenti della sua permanenza (services.stay).
+
+    Tutti dello stesso scarto, ognuno con la sua operatrice; si spostano solo
+    quelli ancora da cominciare e non incassati. O tutti o nessuno: uno slot
+    occupato (409) lascia tutto com'era, e con `force` si sposta comunque.
+    `operator_id`/`from_operator_id` valgono solo per questa visita, come in /move.
+    """
+    ctx = request.auth
+    require_scope(ctx, "agenda")
+    appointment = salon_get(Appointment, ctx, appointment_id)
+    operator, from_operator = _move_operators(ctx, appointment, data)
+    appointment, mates = stay.move_stay(
+        appointment, data.start, operator=operator, from_operator=from_operator,
+        actor=ctx.user, force=data.force,
+    )
+    return {"appointment": _appointment_out(appointment, viewer=ctx), "moved_ids": [a.pk for a in mates]}
 
 
 @router.post("/appointments/{int:appointment_id}/split", auth=staff_auth, response=SplitOut)

@@ -3,6 +3,9 @@
 // mano, e lo spostamento (POST /move). Uno slot libero preso nel frattempo
 // ferma lo spostamento finché non si preme di nuovo «Sposta qui» (allora si
 // forza); un orario a mano fuori dagli slot si forza subito, se serve.
+// Con altri appuntamenti della stessa permanenza (`stay`, GET …/stay) si
+// spostano anche loro, dello stesso scarto (POST /move-stay): prima si
+// riprogrammava un appuntamento per volta (Beauty Boutique, 11/2026).
 // `busy`/`setBusy` sono del pannello, che resta aperto sotto.
 import React, { useEffect, useRef, useState } from 'react';
 import { toastApiError, Icon, timeLabel, minutesOfDay, fmtDateIt, todayStr, toDateStr } from '@youty/shared';
@@ -10,11 +13,15 @@ import DkPanel from '../../../ui/DkPanel.jsx';
 import { aStartMin, isoAtMin, hmToMin } from '../lib.js';
 import { apptVersion, slotReassignment } from './rules.js';
 import { withForceRetry } from '../lib/retry.js';
+import { movableStayMates } from '../lib/stay.js';
 import * as agendaApi from '../agendaApi.js';
 
 /* ---- Riprogramma: pick a new slot via availability, then POST /move ---- */
-export default function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone, onMutate }) {
+export default function RescheduleFlow({ appt, stay, t, lang, fireToast, busy, setBusy, onBack, onClose, onDone, onMutate }) {
   const [manual, setManual] = useState('');
+  const mates = movableStayMates(appt, stay);
+  const [together, setTogether] = useState(true);   // spostare anche gli altri della permanenza
+  const withMates = together && mates.length > 0;
   const [needForce, setNeedForce] = useState(false); // orario fuori dagli slot liberi o appena occupato
   const needForceRef = useRef(false);
   needForceRef.current = needForce;
@@ -70,7 +77,8 @@ export default function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy
     try {
       // Sempre prima senza forzare: un orario a mano fuori dalla griglia
       // degli slot ma libero restava segnato «forzato» per niente.
-      const out = await withForceRetry((force) => agendaApi.moveAppointment(appt.id, { ...body, force }), {
+      const send = withMates ? agendaApi.moveStay : agendaApi.moveAppointment;
+      const out = await withForceRetry((force) => send(appt.id, { ...body, force }), {
         retry: () => {
           if (needForce) return true;
           // Era fra gli orari liberi: nel frattempo lo ha preso qualcun altro.
@@ -83,9 +91,12 @@ export default function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy
         },
       });
       if (out.stopped) return;
-      const { res, forced } = out;
+      const { forced } = out;
+      const res = withMates ? out.res.appointment : out.res;
+      const others = withMates ? out.res.moved_ids.length : 0;
       fireToast({
         msg: t('Appuntamento riprogrammato alle ' + when, 'Rescheduled to ' + when)
+          + (others ? t(` · spostati con lui altri ${others}`, ` · ${others} more moved with it`) : '')
           + (forced ? t(' · forzato', ' · forced') : '')
           + (re.extra ? t(' · controlla chi fa i servizi: una sola operatrice non più disponibile si riassegna per volta', ' · check who performs the services: only one unavailable stylist is reassigned at a time') : ''),
         icon: forced || re.extra ? 'alert' : 'calendar',
@@ -123,6 +134,19 @@ export default function RescheduleFlow({ appt, t, lang, fireToast, busy, setBusy
         </div>
         <input type="date" value={date} min={todayStr()} onChange={(e) => setDate(e.target.value || todayStr())} style={{ border: '1px solid var(--hair)', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontFamily: 'var(--sans)', outline: 'none', cursor: 'pointer', color: 'var(--ink)' }} />
       </div>
+      {mates.length > 0 && (
+        <label data-move-stay="" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16, padding: '10px 14px', borderRadius: 12, border: '1.5px solid ' + (together ? 'var(--clay)' : 'var(--hair)'), cursor: 'pointer' }}>
+          <input type="checkbox" checked={together} onChange={(e) => setTogether(e.target.checked)} style={{ marginTop: 3 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>{t('Sposta tutta la seduta', 'Move the whole visit')}</div>
+            <div className="t-sm" style={{ color: 'var(--muted)', fontSize: 12 }}>
+              {t('Si spostano anche ', 'Also moves ')}
+              {mates.map((v) => timeLabel(minutesOfDay(v.start)) + ' ' + (v.items || []).map((it) => it.service_name).join(' + ')).join(', ')}
+              {t(', alla stessa distanza e con le stesse operatrici.', ', at the same distance and with the same stylists.')}
+            </div>
+          </div>
+        </label>
+      )}
       <div className="t-meta" style={{ marginBottom: 9 }}>{t('Orari disponibili', 'Available times')}</div>
       {slots === null ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

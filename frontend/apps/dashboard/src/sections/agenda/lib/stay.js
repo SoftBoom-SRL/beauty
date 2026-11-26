@@ -91,3 +91,10 @@ export function stayMatesLabels(stays, list, id, opNameOf = () => '') {
 /** Gli appuntamenti da evidenziare insieme: la permanenza di quello aperto e
  *  di quello sotto il puntatore. */
 export const linkedIds = (stays, ...ids) => new Set(ids.flatMap((id) => (id != null && stays.get(id)?.ids) || []));
+
+/** Gli altri appuntamenti della permanenza (GET …/stay) che «Riprogramma»
+ *  sposta insieme a `appt`: ancora da cominciare e non incassati, come
+ *  `movable_mates` del server. Prima si riprogrammava un appuntamento per
+ *  volta (Beauty Boutique, 11/2026). */
+export const movableStayMates = (appt, stay) => (stay || []).filter(
+  (v) => appt && v.id !== appt.id && v.status === 'confirmed' && v.bill_id == null);
