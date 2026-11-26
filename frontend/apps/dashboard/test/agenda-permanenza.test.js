@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { dayStays, linkedIds, stayIndex, stayMateIds, stayMatesLabels } from '../src/sections/agenda/lib/stay.js';
+import { dayStays, linkedIds, movableStayMates, stayIndex, stayMateIds, stayMatesLabels } from '../src/sections/agenda/lib/stay.js';
 
 const at = (h, m = 0) => `2026-10-17T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+02:00`;
 const appt = (id, client, start, dur, extra = {}) => ({ id, client: { id: client }, start, total_duration_min: dur, status: 'confirmed', items: [], ...extra });
@@ -53,4 +53,17 @@ test('l\'anteprima dice con chi e quando; si evidenziano insieme quella aperta e
   assert.deepEqual(stayMatesLabels(s, list, 2), ['10:00 Manicure · Sole']);
   assert.deepEqual([...linkedIds(s, 2, null)], [1, 2]);
   assert.deepEqual([...linkedIds(s, null, 99)], []);
+});
+
+test('«Sposta tutta la seduta»: si spostano con lei gli altri ancora da cominciare e non incassati', () => {
+  const main = { id: 1 };
+  const stay = [
+    { id: 1, status: 'confirmed', bill_id: null },
+    { id: 2, status: 'confirmed', bill_id: null },
+    { id: 3, status: 'checked_in', bill_id: null },   // già in salone: resta
+    { id: 4, status: 'confirmed', bill_id: 9 },       // già incassato: resta
+  ];
+  assert.deepEqual(movableStayMates(main, stay).map((v) => v.id), [2]);
+  assert.deepEqual(movableStayMates(main, null), []);
+  assert.deepEqual(movableStayMates(main, [{ id: 1, status: 'confirmed', bill_id: null }]), []);
 });

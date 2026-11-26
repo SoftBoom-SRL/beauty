@@ -114,6 +114,10 @@ class MoveIn(Schema):
     _start_aware = aware_start_validator()
 
 
+class MoveStayIn(MoveIn):
+    """Come lo spostamento, per la visita e gli altri appuntamenti della sua permanenza."""
+
+
 class SplitIn(Schema):
     """Stacca un servizio da un appuntamento multi-servizio e lo sposta altrove.
 
@@ -496,3 +500,10 @@ class DayMoneyOut(Schema):
     to_collect: Decimal
     visits: int
     closed: int
+
+
+class MoveStayOut(Schema):
+    """La visita spostata e gli id degli altri appuntamenti della permanenza spostati con lei."""
+
+    appointment: AppointmentOut
+    moved_ids: list[int]

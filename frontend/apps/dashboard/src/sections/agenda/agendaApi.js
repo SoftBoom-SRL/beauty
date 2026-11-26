@@ -39,6 +39,8 @@ export const createAppointment = (body) => api.post('/api/agenda/appointments', 
 export const importAppointments = (body) => api.post('/api/agenda/appointments/import', body);
 export const updateAppointment = (id, body) => api.put(appt(id), body);
 export const moveAppointment = (id, body) => api.post(`${appt(id)}/move`, body);
+/** La visita e gli altri appuntamenti della sua permanenza, dello stesso scarto: { appointment, moved_ids }. */
+export const moveStay = (id, body) => api.post(`${appt(id)}/move-stay`, body);
 export const splitAppointment = (id, body) => api.post(`${appt(id)}/split`, body);
 export const restoreAppointment = (id, force) => api.post(`${appt(id)}/restore`, { force });
 /** check-in, start, no-show, cancel: il comando è l'ultimo pezzo del percorso. */
