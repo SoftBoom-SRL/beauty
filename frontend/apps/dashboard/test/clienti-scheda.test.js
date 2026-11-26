@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { clientChanges, consentStamp } from '../src/sections/clienti/helpers.js';
+import { clientChanges, consentStamp, exclusiveBadge } from '../src/sections/clienti/helpers.js';
 
 /* La scheda come l'ha letta la reception aprendo «Modifica». */
 const opened = {
@@ -93,4 +93,17 @@ test('nessuna data registrata (o illeggibile): nessuna promessa', () => {
   assert.equal(consentStamp({ card_charge: true }, 'card_charge'), null);
   assert.equal(consentStamp({ privacy: true, privacy_at: 'ieri' }, 'privacy'), null);
   assert.equal(consentStamp(undefined, 'privacy'), null);
+});
+
+/* La Exclusive Card in testata: la scadenza si vedeva solo nel Portafoglio
+ * (Beauty Boutique, 11/2026). */
+test('Exclusive Card in testata: niente senza iscrizione, poi attiva, in scadenza o scaduta', () => {
+  const t = (it) => it;
+  assert.equal(exclusiveBadge(null, t, 'it'), null);
+  assert.deepEqual(exclusiveBadge({ expires_on: '2027-05-10', active: true, days_left: 165 }, t, 'it'),
+    { tone: 'ok', text: 'Exclusive Card fino al 10 mag 2027' });
+  assert.equal(exclusiveBadge({ expires_on: '2026-12-20', active: true, days_left: 24 }, t, 'it').tone, 'warn');
+  assert.equal(exclusiveBadge({ expires_on: '2026-12-20', active: true, days_left: 24 }, t, 'it').text, 'Exclusive Card scade il 20 dic 2026');
+  assert.deepEqual(exclusiveBadge({ expires_on: '2026-10-01', active: false, days_left: -56 }, t, 'it'),
+    { tone: 'off', text: 'Exclusive Card scaduta il 1 ott 2026' });
 });

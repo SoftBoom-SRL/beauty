@@ -364,3 +364,17 @@ export function daysToBirthday(v, today = todayStr()) {
   if (next < t0) next = Date.UTC(y + 1, b.m - 1, b.d);
   return Math.round((next - t0) / 86400000);
 }
+
+/** La Exclusive Card nella testata della scheda: la scadenza si leggeva solo
+ *  aprendo il Portafoglio, e in reception non la vedeva nessuno (Beauty
+ *  Boutique, 11/2026). `m` è `membership` di GET …/exclusive-cards/client/{id};
+ *  → null senza iscrizione, altrimenti { tone: 'ok' | 'warn' | 'off', text }.
+ *  Entro 30 giorni dalla scadenza il segno si fa arancione, per proporre il
+ *  rinnovo anticipato. */
+export function exclusiveBadge(m, t, lang) {
+  if (!m || !m.expires_on) return null;
+  const day = dateLabel(m.expires_on, lang);
+  if (!m.active) return { tone: 'off', text: t(`Exclusive Card scaduta il ${day}`, `Exclusive Card expired on ${day}`) };
+  if (m.days_left != null && m.days_left <= 30) return { tone: 'warn', text: t(`Exclusive Card scade il ${day}`, `Exclusive Card expires on ${day}`) };
+  return { tone: 'ok', text: t(`Exclusive Card fino al ${day}`, `Exclusive Card until ${day}`) };
+}
